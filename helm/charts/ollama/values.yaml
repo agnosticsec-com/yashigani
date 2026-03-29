@@ -1,0 +1,27 @@
+enabled: true
+image:
+  repository: ollama/ollama
+  tag: "latest"
+  pullPolicy: IfNotPresent
+replicaCount: 2
+resources:
+  requests:
+    cpu: "500m"
+    memory: "2Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+service:
+  port: 11434
+  type: ClusterIP
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClass: ""
+hpa:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+model: "qwen2.5:3b"
+env:
+  ollamaHost: "0.0.0.0"

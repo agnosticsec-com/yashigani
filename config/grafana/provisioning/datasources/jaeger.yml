@@ -1,0 +1,23 @@
+apiVersion: 1
+datasources:
+  - name: Jaeger
+    type: jaeger
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    isDefault: false
+    version: 1
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+        filterBySpanID: false
+        customQuery: false
+        query: '{service="${__tags.service}"}'
+      tracesToMetrics:
+        datasourceUid: prometheus
+        tags: [{key: "service.name", value: "service"}]
+        queries:
+          - name: "Request Rate"
+            query: "rate(yashigani_gateway_requests_total[$__rate_interval])"

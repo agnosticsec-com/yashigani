@@ -1,0 +1,15 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: yashigani-policy-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-policy
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app: yashigani-policy
+{{- end }}

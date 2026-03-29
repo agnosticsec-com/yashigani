@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-prometheus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-prometheus
+    app.kubernetes.io/name: yashigani-prometheus
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: yashigani-prometheus
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: yashigani-prometheus
+        app.kubernetes.io/name: yashigani-prometheus
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      serviceAccountName: yashigani
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time={{ .Values.retention }}"
+            - "--web.enable-remote-write-receiver"
+            - "--web.listen-address=0.0.0.0:9090"
+          ports:
+            - containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: prometheus-data
+              mountPath: /prometheus
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: yashigani-prometheus-config
+        - name: prometheus-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: yashigani-prometheus-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

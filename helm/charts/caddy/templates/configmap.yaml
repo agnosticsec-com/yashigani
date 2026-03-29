@@ -1,0 +1,43 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-caddy-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-caddy
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  Caddyfile: |
+    # Yashigani Caddy config for Kubernetes
+    # In K8s, TLS is handled by cert-manager + nginx-ingress.
+    # This config uses self-signed certs (Caddy internal CA).
+    # Set global.tlsMode=nginx and caddy.enabled=false to use nginx-ingress instead.
+
+    {
+      auto_https off
+    }
+
+    :80 {
+      redir https://{host}{uri} permanent
+    }
+
+    :443 {
+      tls internal
+
+      # Route /admin/* to backoffice
+      handle /admin/* {
+        reverse_proxy yashigani-backoffice:8443
+      }
+
+      # Route /metrics-federate to prometheus (basic auth — configure externally)
+      handle /metrics-federate {
+        reverse_proxy yashigani-prometheus:9090
+      }
+
+      # All other traffic to gateway
+      handle {
+        reverse_proxy yashigani-gateway:8080
+      }
+    }
+{{- end }}

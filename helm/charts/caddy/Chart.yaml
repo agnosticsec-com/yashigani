@@ -1,0 +1,6 @@
+apiVersion: v2
+name: caddy
+description: Yashigani Caddy TLS edge proxy (optional in K8s)
+type: application
+version: 0.4.0
+appVersion: "0.4.0"

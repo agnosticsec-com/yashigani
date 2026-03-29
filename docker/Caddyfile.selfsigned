@@ -1,0 +1,64 @@
+# Yashigani — Caddy TLS edge (self-signed certificate mode)
+#
+# ╔══════════════════════════════════════════════════════════╗
+# ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
+# ║  Browsers will show a certificate warning.               ║
+# ║  DO NOT use in production or with real credentials.      ║
+# ╚══════════════════════════════════════════════════════════╝
+#
+# Caddy generates a self-signed certificate automatically for localhost
+# and any IP address. No setup required.
+
+{
+    # Disable ACME entirely in self-signed mode
+    local_certs
+    auto_https off
+}
+
+# Serve on HTTPS with self-signed cert
+https://{env.YASHIGANI_TLS_DOMAIN}:443 {
+    tls internal {
+        protocols tls1.2 tls1.3
+    }
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options        "DENY"
+        Referrer-Policy        "no-referrer"
+        -Server
+    }
+
+    handle /admin/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /metrics-federate* {
+        basicauth {
+            {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
+        }
+        reverse_proxy prometheus:9090
+    }
+
+    # ── Agent-to-agent routing — /agents/* ─────────────────────────────────
+    handle /agents/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+}
+
+# Also serve on HTTP for local convenience (self-signed mode only)
+http://{env.YASHIGANI_TLS_DOMAIN}:80 {
+    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+}

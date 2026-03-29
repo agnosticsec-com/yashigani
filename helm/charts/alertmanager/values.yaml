@@ -1,0 +1,25 @@
+replicaCount: 1
+
+image:
+  repository: prom/alertmanager
+  tag: "v0.27.0"
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+persistence:
+  size: 2Gi
+  storageClass: ""
+
+config:
+  existingSecretName: "yashigani-alertmanager-config"
+  configKey: "alertmanager.yml"
+
+secrets:
+  existingSecretName: "yashigani-alertmanager-secrets"

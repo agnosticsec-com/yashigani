@@ -1,0 +1,1527 @@
+# Yashigani v0.8.0 — Installation and Configuration Guide
+
+**Version:** 0.8.0
+**Last updated:** 2026-03-28
+**Applies to:** Docker Compose and Kubernetes (Helm) deployments
+
+---
+
+## Table of Contents
+
+1. [Prerequisites](#1-prerequisites)
+2. [Quick Start (Demo — 5 Minutes)](#2-quick-start-demo--5-minutes)
+3. [Installer Walk-Through (Interactive)](#3-installer-walk-through-interactive)
+4. [Manual Installation (Full Detail)](#4-manual-installation-full-detail)
+5. [License Activation](#5-license-activation)
+6. [KMS Configuration](#6-kms-configuration)
+7. [Inspection Pipeline Configuration](#7-inspection-pipeline-configuration)
+8. [SSO Configuration (Professional/Enterprise)](#8-sso-configuration-professionalenterprise)
+9. [SIEM Integration](#9-siem-integration)
+10. [Alertmanager Configuration](#10-alertmanager-configuration)
+10a. [Direct Webhook Alert Sinks (v0.7.0)](#10a-direct-webhook-alert-sinks-v070)
+11. [Agent Registration](#11-agent-registration)
+12. [Rate Limiting Configuration](#12-rate-limiting-configuration)
+13. [Kubernetes Deployment](#13-kubernetes-deployment)
+14. [Production Hardening Checklist](#14-production-hardening-checklist)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Upgrade Procedure](#16-upgrade-procedure)
+17. [Optional Agent Bundles (v0.8.0)](#17-optional-agent-bundles-v080)
+
+---
+
+## 1. Prerequisites
+
+### 1.1 Hardware Requirements
+
+| Resource | Demo / Dev | Production |
+|---|---|---|
+| CPU | 2 cores | 4+ cores |
+| RAM | 4 GB | 8 GB (16 GB with Ollama GPU) |
+| Disk | 20 GB | 50+ GB |
+| OS | Any (Linux / macOS / VM) | Linux x86_64 or arm64 |
+
+> **Note:** If you enable GPU acceleration for Ollama (recommended for production), the host must have a CUDA-capable NVIDIA GPU (driver 525+) or Apple Silicon with Docker Desktop 4.x+. Expect an additional 4–8 GB VRAM per loaded model.
+
+### 1.2 Software Requirements
+
+Install the following before proceeding:
+
+**Linux:**
+
+```bash
+# Docker Engine 24+
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Docker Compose v2 (bundled with Docker Engine 24+ as a plugin)
+docker compose version  # must be >= 2.0.0
+
+# Git
+sudo apt-get install -y git   # Debian/Ubuntu
+sudo dnf install -y git       # RHEL/Fedora
+```
+
+**macOS:**
+
+1. Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (version 4.x or later — includes Docker Compose v2).
+2. Install Git via Homebrew: `brew install git`
+3. In Docker Desktop preferences, increase memory to at least 6 GB and disk to at least 30 GB.
+
+**Verify your environment:**
+
+```bash
+docker --version        # Docker version 24.x or later
+docker compose version  # Docker Compose version v2.x or later
+git --version           # git version 2.x or later
+```
+
+### 1.3 Network Requirements
+
+Before starting, confirm the following network conditions are met:
+
+- **Ports 80 and 443** must be open and reachable from the internet if using ACME (Let's Encrypt) TLS mode. Port 80 is used for the ACME HTTP-01 challenge; port 443 is your application traffic. If your load balancer or upstream firewall handles 80→443 redirect externally, port 80 must still reach the host for the initial certificate issuance.
+- **DNS A record** (or AAAA for IPv6) pointing your fully qualified domain name (FQDN) to the server's public IP address. This is mandatory for ACME mode. Allow up to 5 minutes for DNS propagation before starting the stack.
+- **Outbound HTTPS** (port 443) must be permitted from the host for Let's Encrypt ACME endpoints and for Ollama model pulls from `ollama.ai` and Hugging Face registries.
+- **Internal Docker networking** is isolated by default. All non-edge services (gateway, backoffice, policy, redis, postgres, etc.) attach to an internal bridge network with `internal: true`. Only Caddy (ports 80/443) is exposed to the host.
+
+> **Warning:** Do not expose Redis (6379), Postgres (5432), or Prometheus (9090) ports to the host in production. These services are intentionally not bound to host interfaces in the default `docker-compose.yml`.
+
+---
+
+## 2. Quick Start (Demo — 5 Minutes)
+
+For a fast local demo with a self-signed certificate, use the one-liner installer:
+
+```bash
+curl -sSL https://get.yashigani.io | bash -s -- \
+    --domain localhost \
+    --tls-mode selfsigned \
+    --upstream-url http://your-mcp-server:8080 \
+    --non-interactive
+```
+
+This downloads the stack, generates your `.env`, starts all containers, and prints your first-run credentials.
+
+If you prefer to review every file before running anything, use the manual quick start instead:
+
+**Step 1.** Clone the repository:
+
+```bash
+git clone https://github.com/agnosticsec-com/yashigani
+cd yashigani
+```
+
+**Step 2.** Copy and minimally configure the environment file:
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` in your editor and set at minimum:
+
+```dotenv
+YASHIGANI_TLS_DOMAIN=localhost
+YASHIGANI_TLS_MODE=selfsigned
+UPSTREAM_MCP_URL=http://your-mcp-server:8080
+```
+
+**Step 3.** Start the stack:
+
+```bash
+docker compose up -d
+```
+
+**Step 4.** Retrieve your first-run credentials:
+
+```bash
+docker compose logs backoffice | grep -A 30 "FIRST-RUN"
+```
+
+Your admin password, Redis password, Postgres password, Grafana admin password, and Prometheus basic-auth hash are all printed in this block. Save them immediately — they are shown only once in the logs.
+
+**Step 5.** Open the admin panel in your browser at `https://localhost/admin`. Accept the self-signed certificate warning. Log in with the credentials from Step 4.
+
+> **Note:** Self-signed mode is for local development and demos only. It uses Caddy's internal CA, which browsers will not trust by default. For production, always use `acme` or `ca` mode.
+
+---
+
+## 3. Installer Walk-Through (Interactive)
+
+Running `./install.sh` without flags launches an interactive wizard. It performs 12 steps:
+
+**Step 1 — Preflight checks.** Verifies Docker Engine version, Docker Compose version, available disk space, and available RAM. Aborts with a clear error if requirements are not met.
+
+**Step 2 — Deployment mode.** Asks whether you are deploying to Docker Compose or Kubernetes (Helm). Choose **Docker Compose** for standalone hosts; choose **Kubernetes** if you have an existing cluster and `kubectl` configured.
+
+**Step 3 — Deployment stream.** Choose one of:
+- `opensource` — All open-source components. No license required.
+- `corporate` — Adds enterprise auth (SAML/OIDC/SCIM), audit log export, and KMS integrations. Requires a license.
+- `saas` — Multi-tenant SaaS configuration. Requires a license and specific infra prerequisites. Contact sales before selecting this.
+
+**Step 4 — Domain and TLS mode.** Enter your FQDN (e.g., `mcp-gateway.example.com`). Then choose:
+- `acme` — Let's Encrypt. Use this if the host is publicly reachable and you have DNS set up.
+- `ca` — Mount your own certificate. Use for enterprise internal deployments.
+- `selfsigned` — Caddy internal CA. Use for local dev/demo only.
+
+**Step 5 — Upstream MCP URL.** The installer asks for the URL of your backend MCP server that Yashigani will proxy requests to. Example: `http://mcp-server.internal:8080`. This maps to `UPSTREAM_MCP_URL`. You can enter multiple comma-separated URLs for load balancing.
+
+**Step 6 — KMS provider.** Choose how secrets are stored:
+- `docker` — Docker secrets on local filesystem. Default and simplest.
+- `aws` — AWS Secrets Manager. Recommended for AWS-hosted deployments.
+- `azure` — Azure Key Vault.
+- `gcp` — GCP Secret Manager.
+- `keeper` — Keeper Secrets Manager.
+- `vault` — HashiCorp Vault (self-hosted, dev mode only — not for production).
+
+**Step 7 — Inspection pipeline backend.** Choose the LLM used for the second-pass injection analysis:
+- `ollama` — Fully local. No data leaves the host. Choose this for air-gapped or privacy-sensitive deployments.
+- `anthropic` — Claude Haiku. Fast and accurate. Requires API key.
+- `gemini` — Gemini 1.5 Flash. Requires API key.
+- `azure_openai` — GPT-4o-mini via Azure. Requires Azure OpenAI resource.
+
+The installer prompts you for API keys immediately if you select a cloud backend, and stores them in the KMS provider you chose in Step 6.
+
+**Step 8 — Injection threshold.** Sets `YASHIGANI_INJECT_THRESHOLD`. Default `0.85`. Range `0.70`–`0.99`. Lower = more sensitive (more false positives). Higher = more permissive (may miss subtle injections). The default 0.85 is appropriate for most production environments.
+
+**Step 9 — SIEM mode.** Choose one of `none`, `splunk`, `elasticsearch`, or `wazuh`. If you choose `wazuh`, the installer adds the Wazuh Compose override file automatically.
+
+**Step 10 — License key.** Enter the path to your `.ysg` license file if you have one, or press Enter to skip for Community tier. The installer copies the file to `docker/secrets/license_key`.
+
+**Step 11 — Admin account.** Set `YASHIGANI_ADMIN_USERNAME` to your admin email address. The first-run bootstrap generates a random 36-character password for this account.
+
+**Step 12 — Launch.** The installer runs `docker compose up -d`, tails `backoffice` logs until the FIRST-RUN block appears, and then prints your credentials and the URL to the admin panel.
+
+> **Tip:** You can re-run `./install.sh` at any time to change settings. It will detect an existing `.env` and ask if you want to update individual sections without redeploying everything.
+
+---
+
+## 4. Manual Installation (Full Detail)
+
+This section is for operators who prefer full control over every configuration option.
+
+### 4.1 Clone and Verify
+
+**Step 1.** Clone the repository and enter the project directory:
+
+```bash
+git clone https://github.com/agnosticsec-com/yashigani
+cd yashigani
+```
+
+**Step 2.** Verify the release tag matches the version you intend to deploy:
+
+```bash
+git tag --list | grep "v0.6"
+git checkout v0.6.0
+```
+
+**Step 3.** Verify file integrity (if the project provides checksums):
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+### 4.2 Configure `.env`
+
+Copy the example file and open it for editing:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+The following tables document every significant variable, grouped by category.
+
+---
+
+#### Core Settings
+
+| Variable | Required | Valid Values | Production Recommendation | Demo Recommendation |
+|---|---|---|---|---|
+| `YASHIGANI_DEPLOYMENT_STREAM` | Yes | `opensource`, `corporate`, `saas` | `corporate` or `saas` | `opensource` |
+| `YASHIGANI_ADMIN_USERNAME` | Yes | email address | your admin email | `admin@localhost` |
+| `YASHIGANI_AGENT_TOKEN_MIN_LENGTH` | No | integer, min 64 | `128` | `64` |
+| `YASHIGANI_AUDIT_RETENTION_DAYS` | No | integer | `365` | `30` |
+
+---
+
+#### TLS Settings
+
+| Variable | Required | Valid Values | Production Recommendation | Demo Recommendation |
+|---|---|---|---|---|
+| `YASHIGANI_TLS_DOMAIN` | Yes | FQDN or `localhost` | your public FQDN | `localhost` |
+| `YASHIGANI_TLS_MODE` | Yes | `acme`, `ca`, `selfsigned` | `acme` or `ca` | `selfsigned` |
+
+---
+
+#### Gateway Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `UPSTREAM_MCP_URL` | Yes | HTTP/HTTPS URL | Your backend MCP server. Use internal DNS in Docker environments. |
+| `YASHIGANI_INJECT_THRESHOLD` | No | `0.70`–`0.99` | Default `0.85`. Tune based on false positive/negative tolerance. |
+
+---
+
+#### Auth and Identity Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `YASHIGANI_DEPLOYMENT_STREAM` | Yes | `opensource`, `corporate`, `saas` | Controls feature flags including SSO and SCIM. |
+
+---
+
+#### KMS Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `YASHIGANI_KSM_PROVIDER` | No | `docker`, `aws`, `azure`, `gcp`, `keeper`, `vault` | Default: `docker`. Set to match your secret backend. |
+| `AWS_ACCESS_KEY_ID` | If `aws` | IAM key | Or use instance role (no key needed). |
+| `AWS_SECRET_ACCESS_KEY` | If `aws` | IAM secret | Or use instance role. |
+| `AWS_DEFAULT_REGION` | If `aws` | AWS region | e.g., `us-east-1` |
+| `AZURE_KEYVAULT_URL` | If `azure` | Vault URL | e.g., `https://my-vault.vault.azure.net` |
+| `AZURE_CLIENT_ID` | If `azure` (no MI) | UUID | Service principal client ID. |
+| `AZURE_CLIENT_SECRET` | If `azure` (no MI) | secret string | Service principal secret. |
+| `AZURE_TENANT_ID` | If `azure` | UUID | Azure AD tenant. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | If `gcp` | file path | Path to GCP service account JSON. |
+| `VAULT_ADDR` | If `vault` | URL | e.g., `http://vault:8200` |
+
+---
+
+#### Inspection Pipeline Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `YASHIGANI_INSPECTION_DEFAULT_BACKEND` | No | `ollama`, `anthropic`, `gemini`, `azure_openai` | Default: `ollama` |
+| `YASHIGANI_INSPECTION_FALLBACK_CHAIN` | No | comma-separated backends | e.g., `ollama,gemini,fail_closed` |
+| `OLLAMA_MODEL` | No | any Ollama model tag | Default: `qwen2.5:3b` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP gRPC URL | Default: `http://otel-collector:4317` |
+| `FASTTEXT_MODEL_PATH` | No | file path | Default: `/app/models/fasttext_classifier.bin` |
+
+---
+
+#### Postgres Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `YASHIGANI_DB_DSN` | No | PostgreSQL DSN | Auto-constructed from the `postgres_password` secret on first run. Override only if using an external Postgres instance. |
+
+---
+
+#### Observability Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | URL | Default: `http://otel-collector:4317` |
+
+---
+
+#### SIEM Settings
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `YASHIGANI_SIEM_MODE` | No | `none`, `splunk`, `elasticsearch`, `wazuh` | Default: `none` |
+
+---
+
+#### Licensing
+
+| Variable | Required | Valid Values | Notes |
+|---|---|---|---|
+| `YASHIGANI_LICENSE_FILE` | No | file path | Omit for Community tier. Set to `/run/secrets/license_key` if using Docker secret. |
+
+---
+
+### 4.3 TLS Configuration
+
+#### ACME Mode (Production — Let's Encrypt)
+
+This is the default and recommended mode for any publicly accessible deployment.
+
+**Step 1.** Confirm your DNS A record is live:
+
+```bash
+dig +short your-domain.example.com
+# Should return your server's public IP
+```
+
+**Step 2.** Confirm ports 80 and 443 are reachable:
+
+```bash
+# From an external host or using a public checker:
+curl -I http://your-domain.example.com
+```
+
+**Step 3.** Set in `.env`:
+
+```dotenv
+YASHIGANI_TLS_DOMAIN=your-domain.example.com
+YASHIGANI_TLS_MODE=acme
+```
+
+That is all. Caddy handles certificate issuance via ACME HTTP-01 challenge on port 80 and automatic renewal 30 days before expiry.
+
+> **Warning:** If port 80 is blocked by your firewall or cloud security group, Caddy cannot complete the ACME HTTP-01 challenge and TLS startup will fail. Check your security group/firewall rules before starting.
+
+---
+
+#### CA Mode (Enterprise/Internal)
+
+Use this mode when your organization has an internal CA or you have purchased a certificate from a public CA.
+
+**Step 1.** Create the TLS directory:
+
+```bash
+mkdir -p docker/tls
+```
+
+**Step 2.** Copy your certificate and private key:
+
+```bash
+cp /path/to/your/server.crt docker/tls/server.crt
+cp /path/to/your/server.key docker/tls/server.key
+chmod 600 docker/tls/server.key
+```
+
+The certificate file must include the full chain (server cert + intermediate CA certs, concatenated in PEM format).
+
+**Step 3.** Set in `.env`:
+
+```dotenv
+YASHIGANI_TLS_DOMAIN=your-domain.example.com
+YASHIGANI_TLS_MODE=ca
+```
+
+> **Note:** Certificate renewal in CA mode is your responsibility. Set a calendar reminder at least 30 days before expiry. To rotate the certificate: replace the files in `docker/tls/`, then run `docker compose restart caddy`.
+
+---
+
+#### Self-Signed Mode (Demo/Local)
+
+**Step 1.** Set in `.env`:
+
+```dotenv
+YASHIGANI_TLS_DOMAIN=localhost
+YASHIGANI_TLS_MODE=selfsigned
+```
+
+No certificate files are needed. Caddy generates a certificate from its own internal CA.
+
+> **Warning:** Self-signed certificates will trigger browser certificate warnings. Users must manually accept the risk. Never use this mode for any environment accessible to end users.
+
+---
+
+### 4.4 Start the Stack
+
+**Step 1.** Pull all images before starting (recommended to avoid timeout issues on slow connections):
+
+```bash
+docker compose pull
+```
+
+**Step 2.** Start all services in detached mode:
+
+```bash
+docker compose up -d
+```
+
+**Step 3.** Confirm all containers started successfully:
+
+```bash
+docker compose ps
+```
+
+All services should show status `running` or `healthy`. The `ollama-init` service may show `exited (0)` after successfully pulling the model — this is expected.
+
+**Step 4.** Watch the backoffice logs for the first-run credential block:
+
+```bash
+docker compose logs -f backoffice
+```
+
+Wait until you see the `FIRST-RUN` block (typically within 30–90 seconds on a fast disk).
+
+---
+
+### 4.5 Postgres Bootstrap
+
+On first start, the backoffice service automatically runs `scripts/bootstrap_postgres.py`. This script performs the following actions:
+
+1. **Generates a 36-character random password** for the `yashigani_app` Postgres role. The password is written to `docker/secrets/postgres_password` and injected as a Docker secret.
+2. **Constructs the DB DSN** (`YASHIGANI_DB_DSN`) from the generated password and the service hostname.
+3. **Creates the `yashigani_app` role** in Postgres with limited privileges (no superuser, no create database).
+4. **Runs all Alembic migrations** in order, creating the full schema (`yashigani` database, all tables, indexes, and constraint definitions).
+5. **Seeds initial configuration** rows (default OPA policy, default rate limits, default audit retention settings).
+
+If this process fails (e.g., because Postgres is not yet ready), backoffice will retry with exponential backoff for up to 5 minutes before exiting. Check `docker compose logs backoffice` and `docker compose logs postgres` together if the backoffice container restarts repeatedly.
+
+> **Tip:** If you are connecting to an external Postgres instance rather than the bundled container, set `YASHIGANI_DB_DSN` explicitly in `.env` before starting. The bootstrap script will skip password generation and use your provided DSN directly, but will still run Alembic migrations.
+
+---
+
+### 4.6 First-Run Credentials
+
+After a successful bootstrap, retrieve all generated credentials with:
+
+```bash
+docker compose logs backoffice | grep -A 30 "FIRST-RUN"
+```
+
+The block looks like this:
+
+```
+FIRST-RUN CREDENTIALS — SAVE THESE NOW, SHOWN ONCE
+====================================================
+Admin account:        admin@example.com
+Admin password:       <36-char-random>
+Redis password:       <36-char-random>
+Postgres password:    <36-char-random>
+Grafana admin pass:   <36-char-random>
+Prometheus basic auth hash:  <bcrypt hash>
+====================================================
+```
+
+These passwords are stored in `docker/secrets/`. You should:
+
+1. Copy all credentials to your password manager or secrets vault immediately.
+2. Log in to the admin panel at `https://your-domain/admin`.
+3. Navigate to Admin → Account → Change Password to set a memorable password (or SSO once configured).
+4. Enroll TOTP (Admin → Account → Two-Factor Authentication) before sharing admin access with anyone else.
+
+> **Warning:** The credentials are printed to logs only once. If you lose them before saving, you can retrieve each value from the corresponding file in `docker/secrets/` on the host filesystem. However, treat those files as sensitive — ensure they are readable only by the Docker daemon user.
+
+---
+
+## 5. License Activation
+
+### 5.1 Community Tier
+
+No action required. Community tier is active by default with no license file. Feature limits apply: 20 agents, 50 end users, 10 admin seats, no SSO. Licensed under Apache 2.0.
+
+### 5.2 Starter, Professional, Professional Plus, and Enterprise Tiers
+
+A `.ysg` license file is provided by Yashigani after purchase. Activate it using any of the following methods:
+
+**Method A — Via installer:**
+
+```bash
+./install.sh --license-key /path/to/your/license.ysg
+```
+
+**Method B — Via admin panel (post-install):**
+
+1. Log in to the admin panel.
+2. Navigate to Admin → License → Upload License.
+3. Upload your `.ysg` file and click Activate.
+4. The panel confirms activation and shows your tier, seat count, and expiry date.
+
+**Method C — Via Docker secret (before starting):**
+
+```bash
+mkdir -p docker/secrets
+cp /path/to/your/license.ysg docker/secrets/license_key
+```
+
+Then in `.env`:
+
+```dotenv
+YASHIGANI_LICENSE_FILE=/run/secrets/license_key
+```
+
+**Method D — Via environment variable:**
+
+```dotenv
+YASHIGANI_LICENSE_FILE=/absolute/path/to/license.ysg
+```
+
+### 5.3 What Changes After License Activation
+
+| Feature | Community | Starter | Professional | Professional Plus | Enterprise |
+|---|---|---|---|---|---|
+| Agent limit | 20 | 100 | 500 | 2,000 | Unlimited |
+| End user limit | 50 | 250 | 1,000 | 10,000 | Unlimited |
+| Admin seat limit | 10 | 25 | 50 | 200 | Unlimited |
+| Organization limit | 1 | 1 | 1 | 5 | Unlimited |
+| OIDC SSO | No | Yes | Yes | Yes | Yes |
+| SAML v2 SSO | No | No | Yes | Yes | Yes |
+| SCIM Provisioning | No | No | Yes | Yes | Yes |
+| KMS integrations | Docker only | All | All | All | All |
+| Audit log export | No | Yes | Yes | Yes | Yes |
+| Annual price | Free | $1,200 | $4,800 | $14,400 | Custom |
+| SLA support | Community (Apache 2.0) | Email | Business hours | Business hours+ | 24/7 named |
+
+---
+
+## 6. KMS Configuration
+
+Yashigani stores all sensitive credentials (API keys, passwords, tokens) through its Key Management Service (KMS) abstraction layer. The provider is set via `YASHIGANI_KSM_PROVIDER`.
+
+### 6.1 Docker Secrets (Default, Community)
+
+No configuration required. Secrets are stored as files in `docker/secrets/` on the host and mounted read-only into containers at `/run/secrets/`. The backoffice bootstrap manages creation and rotation.
+
+Verify secrets are present after first run:
+
+```bash
+ls -la docker/secrets/
+```
+
+### 6.2 AWS Secrets Manager
+
+**Step 1.** Set the provider and credentials in `.env`:
+
+```dotenv
+YASHIGANI_KSM_PROVIDER=aws
+AWS_DEFAULT_REGION=us-east-1
+```
+
+**Step 2a.** If running on an EC2 instance with an IAM instance role, no additional credentials are needed. Ensure the instance role has the following IAM policy:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "secretsmanager:GetSecretValue",
+    "secretsmanager:PutSecretValue",
+    "secretsmanager:CreateSecret",
+    "secretsmanager:DeleteSecret"
+  ],
+  "Resource": "arn:aws:secretsmanager:us-east-1:*:secret:yashigani/*"
+}
+```
+
+**Step 2b.** If using static credentials (not recommended for production):
+
+```dotenv
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+```
+
+All secrets are stored under the prefix `yashigani/` in Secrets Manager.
+
+### 6.3 Azure Key Vault
+
+**Step 1.** Create a Key Vault in Azure and note its URL.
+
+**Step 2.** Set in `.env`:
+
+```dotenv
+YASHIGANI_KSM_PROVIDER=azure
+AZURE_KEYVAULT_URL=https://your-vault.vault.azure.net
+```
+
+**Step 3a.** If using managed identity (recommended for Azure-hosted deployments), assign the `Key Vault Secrets Officer` role to the VM's managed identity. No additional credentials needed.
+
+**Step 3b.** If using a service principal:
+
+```dotenv
+AZURE_CLIENT_ID=your-sp-client-id
+AZURE_CLIENT_SECRET=your-sp-client-secret
+AZURE_TENANT_ID=your-tenant-id
+```
+
+### 6.4 GCP Secret Manager
+
+**Step 1.** Enable the Secret Manager API in your GCP project.
+
+**Step 2.** Create a service account with the `Secret Manager Admin` role and download the JSON key.
+
+**Step 3.** Place the key in Docker secrets:
+
+```bash
+cp /path/to/gcp-sa-key.json docker/secrets/gcp_sa_key.json
+```
+
+**Step 4.** Set in `.env`:
+
+```dotenv
+YASHIGANI_KSM_PROVIDER=gcp
+GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp_sa_key.json
+```
+
+### 6.5 HashiCorp Vault (Optional Profile)
+
+> **Warning:** The bundled Vault container runs in dev mode (`vault server -dev`). Dev mode stores all data in memory — it is lost when the container restarts. Use this for local testing only. For production, deploy Vault externally and point `VAULT_ADDR` at your external Vault cluster.
+
+**Step 1.** Prepare AppRole credentials:
+
+```bash
+# Place these files before starting with --profile vault
+echo "your-vault-role-id" > docker/secrets/vault_role_id
+echo "your-vault-secret-id" > docker/secrets/vault_secret_id
+chmod 600 docker/secrets/vault_role_id docker/secrets/vault_secret_id
+```
+
+**Step 2.** Set in `.env`:
+
+```dotenv
+YASHIGANI_KSM_PROVIDER=vault
+VAULT_ADDR=http://vault:8200
+```
+
+**Step 3.** Start the stack with the vault profile:
+
+```bash
+docker compose --profile vault up -d
+```
+
+---
+
+## 7. Inspection Pipeline Configuration
+
+Yashigani uses a two-stage pipeline to detect prompt injection attacks:
+
+- **Stage 1 — FastText first-pass:** A lightweight FastText binary classifier (`fasttext_classifier.bin`) performs a high-speed first-pass scan. This runs on every request with sub-millisecond latency and eliminates clear benign requests from further analysis.
+- **Stage 2 — LLM second-pass:** Requests that exceed the FastText suspicion threshold are forwarded to a full LLM for semantic analysis. The LLM is configured via `YASHIGANI_INSPECTION_DEFAULT_BACKEND`.
+
+### 7.1 Ollama (Default — Fully Local)
+
+Ollama runs as a Docker service. An `ollama-init` helper container pulls the configured model on first start.
+
+**Default model:** `qwen2.5:3b` — a fast, accurate 3B-parameter model that runs well on CPU with 4–6 GB RAM.
+
+**Step 1.** To change the model, update `.env`:
+
+```dotenv
+OLLAMA_MODEL=llama3.2:3b
+```
+
+Any model tag from [ollama.com/library](https://ollama.com/library) is valid.
+
+**Step 2.** Monitor the model pull on first start:
+
+```bash
+docker compose logs -f ollama-init
+```
+
+The pull can take 2–10 minutes depending on your internet connection and model size.
+
+**Step 3 (optional) — GPU acceleration:**
+
+Open `docker-compose.yml` and uncomment the `deploy.resources` block under the `ollama` service:
+
+```yaml
+ollama:
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+```
+
+Then restart Ollama:
+
+```bash
+docker compose up -d ollama
+```
+
+### 7.2 Cloud Backends (Anthropic, Gemini, Azure OpenAI)
+
+Cloud backends are supported on all tiers.
+
+**Step 1.** Register your API key via the admin panel: Admin → KMS → Add Secret. Use the following secret name conventions:
+
+| Backend | Secret Name |
+|---|---|
+| Anthropic | `anthropic_api_key` |
+| Gemini | `gemini_api_key` |
+| Azure OpenAI | `azure_openai_key` |
+
+**Step 2.** For Azure OpenAI, also set these in `.env`:
+
+```dotenv
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+```
+
+**Step 3.** Set the default backend in `.env`:
+
+```dotenv
+YASHIGANI_INSPECTION_DEFAULT_BACKEND=anthropic
+```
+
+### 7.3 Fallback Chain
+
+Configure a fallback chain to ensure inspection continues if a backend is unavailable:
+
+```dotenv
+YASHIGANI_INSPECTION_FALLBACK_CHAIN=ollama,gemini,fail_closed
+```
+
+The gateway tries each backend in order. `fail_closed` means that if all configured backends are unavailable, all requests are blocked until a backend becomes healthy. Omit `fail_closed` to allow requests through when all backends are down (not recommended for production).
+
+### 7.4 Injection Threshold
+
+```dotenv
+YASHIGANI_INJECT_THRESHOLD=0.85
+```
+
+- Values closer to `0.70` increase sensitivity — more potential injections are caught, but benign requests may be incorrectly blocked.
+- Values closer to `0.99` increase permissiveness — fewer false positives, but subtle injections may pass.
+- The default of `0.85` is calibrated against Yashigani's internal benchmark dataset and is appropriate for most deployments.
+
+> **Tip:** Start with the default threshold and monitor the Grafana dashboard (Admin → Grafana → Injection Analysis) for false positive and false negative rates over your first week of traffic. Adjust by 0.02–0.03 increments based on observed data.
+
+---
+
+## 8. SSO Configuration (Starter / Professional / Enterprise)
+
+SSO requires a Professional or Enterprise license. Ensure your license is activated before proceeding.
+
+### 8.1 SAML v2
+
+**Step 1.** Retrieve Yashigani's SP metadata from your running instance:
+
+```bash
+curl -k https://your-domain/admin/sso/saml/metadata -o yashigani-sp-metadata.xml
+```
+
+**Step 2.** Import `yashigani-sp-metadata.xml` into your identity provider (Okta, Azure AD, Google Workspace, Ping, etc.) as a new SAML application.
+
+**Step 3.** Configure the following attribute mappings in your IdP:
+
+| SAML Attribute | Yashigani Mapping |
+|---|---|
+| `email` or `NameID` | User email |
+| `firstName` | First name |
+| `lastName` | Last name |
+| `groups` | RBAC group membership |
+
+**Step 4.** Download the IdP metadata XML from your IdP.
+
+**Step 5.** Upload the IdP metadata in Yashigani: Admin → SSO → SAML → Upload IdP Metadata.
+
+**Step 6.** Test the SAML flow: Admin → SSO → SAML → Test Configuration. This opens a new browser tab and attempts a SAML authentication round-trip. A green checkmark confirms success.
+
+### 8.2 OpenID Connect
+
+**Step 1.** Register Yashigani as an OIDC client with your IdP. Use the following redirect URI:
+
+```
+https://your-domain/admin/oidc/callback
+```
+
+Note the `client_id` and `client_secret` assigned by your IdP.
+
+**Step 2.** Store the client secret in KMS via admin panel: Admin → KMS → Add Secret → Name: `oidc_client_secret`.
+
+**Step 3.** Configure OIDC in the admin panel: Admin → SSO → OIDC.
+
+Enter:
+- **Issuer URL:** e.g., `https://accounts.google.com` or `https://login.microsoftonline.com/tenant-id/v2.0`
+- **Client ID:** from Step 1
+- **Scopes:** `openid email profile` (add `groups` if your IdP supports group claims)
+
+**Step 4.** Click Save and then Test Configuration to verify.
+
+### 8.3 SCIM Provisioning
+
+SCIM allows your IdP to automatically provision and deprovision users and groups in Yashigani.
+
+**Step 1.** Generate a SCIM bearer token: Admin → SSO → SCIM → Generate Token. Copy the token — it is shown only once.
+
+**Step 2.** In your IdP's SCIM provisioning settings, configure:
+- **SCIM Endpoint:** `https://your-domain/scim/v2`
+- **Bearer Token:** the token from Step 1
+- **Supported Operations:** Create, Update, Deactivate
+
+**Step 3.** Test the SCIM connection in your IdP. Then enable automatic provisioning.
+
+> **Note:** SCIM provisioning does not override manually created local accounts. If a user exists in both SCIM and local accounts, SCIM takes precedence for attribute updates.
+
+---
+
+## 9. SIEM Integration
+
+### 9.1 None (Default)
+
+No action required. Audit events are stored in Postgres only. Retention is controlled by `YASHIGANI_AUDIT_RETENTION_DAYS` (default: 90 days).
+
+### 9.2 Splunk HEC
+
+**Step 1.** In Yashigani admin: Admin → Audit → SIEM Integration → Add Integration → Splunk HEC.
+
+**Step 2.** Enter:
+- **HEC URL:** e.g., `https://splunk.example.com:8088/services/collector`
+- **HEC Token:** stored automatically in KMS — enter the token value and Yashigani stores it securely
+- **Index:** e.g., `yashigani_audit`
+- **Source type:** `_json` or a custom source type
+
+**Step 3.** Click Save and then Send Test Event to verify connectivity.
+
+### 9.3 Elasticsearch
+
+**Step 1.** Admin → Audit → SIEM Integration → Add Integration → Elasticsearch.
+
+**Step 2.** Enter:
+- **Elasticsearch URL:** e.g., `https://elastic.example.com:9200`
+- **API Key:** stored in KMS
+- **Index Pattern:** e.g., `yashigani-audit-{yyyy.MM.dd}`
+
+**Step 3.** Click Save and Send Test Event.
+
+### 9.4 Wazuh (Self-Hosted, Auto-Deploy)
+
+**Step 1.** Start the stack with the Wazuh Compose override:
+
+```bash
+docker compose \
+  -f docker/docker-compose.yml \
+  -f docker/docker-compose.wazuh.yml \
+  up -d
+```
+
+**Step 2.** Retrieve the auto-generated Wazuh credentials:
+
+```bash
+docker compose logs wazuh-manager | grep -A 10 "WAZUH CREDENTIALS"
+```
+
+> **Warning:** All Wazuh service passwords are auto-generated using the same 36-character policy as the rest of Yashigani's bootstrap. Save them immediately — same procedure as Section 4.6.
+
+**Step 3.** Access the Wazuh dashboard at: `https://your-domain/admin/wazuh`
+
+Log in with the credentials from Step 2.
+
+**Step 4.** In `.env`, configure the SIEM mode:
+
+```dotenv
+YASHIGANI_SIEM_MODE=wazuh
+```
+
+---
+
+## 10. Alertmanager Configuration
+
+Alertmanager routes Prometheus alerts to notification channels. Edit `config/alertmanager.yml` to configure receivers.
+
+### 10.1 Slack
+
+```yaml
+receivers:
+  - name: slack-warnings
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#yashigani-alerts'
+        send_resolved: true
+```
+
+### 10.2 Email (SMTP)
+
+```yaml
+receivers:
+  - name: email-ops
+    email_configs:
+      - to: 'ops-team@example.com'
+        from: 'yashigani-alerts@example.com'
+        smarthost: 'smtp.example.com:587'
+        auth_username: 'yashigani-alerts@example.com'
+        auth_password_file: '/run/secrets/smtp_password'
+        require_tls: true
+```
+
+Store the SMTP password in `docker/secrets/smtp_password`.
+
+### 10.3 PagerDuty
+
+```yaml
+receivers:
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - service_key_file: '/run/secrets/pagerduty_key'
+        description: '{{ .CommonAnnotations.summary }}'
+```
+
+Store the PagerDuty integration key in `docker/secrets/pagerduty_key`.
+
+### 10.4 SMS via Twilio
+
+```yaml
+receivers:
+  - name: sms-critical
+    webhook_configs:
+      - url: 'http://gateway:8080/internal/twilio-sms'
+        http_config:
+          bearer_token_file: '/run/secrets/twilio_token'
+```
+
+### 10.5 Three-Channel Escalation Policy
+
+The default `config/alertmanager.yml` ships with a three-tier escalation structure:
+
+- **Warning severity:** Routes to `slack-warnings` + `email-ops`. No page.
+- **Critical severity:** Routes to `slack-warnings` + `email-ops` + `pagerduty-critical`. Also triggers SMS if Twilio is configured.
+- **Resolved:** Sends resolved notifications to all channels that received the firing alert.
+
+After editing `config/alertmanager.yml`, reload without restarting the container:
+
+```bash
+docker compose exec alertmanager \
+  wget -q --post-data='' -O - http://localhost:9093/-/reload
+```
+
+---
+
+## 10a. Direct Webhook Alert Sinks (v0.7.0)
+
+In addition to the Alertmanager pipeline (section 10), Yashigani v0.7.0 introduced lightweight **direct webhook alerting** to Slack, Microsoft Teams, and PagerDuty. These sinks are configured entirely within the backoffice and fire on security-critical events within the same request cycle — no separate Alertmanager configuration required.
+
+Direct sinks are ideal for small deployments or teams that need immediate security event notifications without standing up the full observability stack.
+
+### 10a.1 Configure via Backoffice
+
+Navigate to Admin → Settings → Alert Sinks.
+
+| Field | Description |
+|-------|-------------|
+| Slack incoming webhook URL | Create at api.slack.com → Apps → Incoming Webhooks |
+| Microsoft Teams webhook URL | Create in Teams → Channel → Connectors → Incoming Webhook |
+| PagerDuty routing key | Events API v2 key from PagerDuty → Service → Integrations |
+
+Leave any field empty to disable that sink. All three can be active simultaneously.
+
+### 10a.2 Configure via API
+
+```bash
+curl -X PUT https://your-domain/admin/alerts/config \
+  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "slack_webhook_url": "https://hooks.slack.com/services/T.../B.../...",
+    "teams_webhook_url": "https://outlook.office.com/webhook/...",
+    "pagerduty_routing_key": "your-pd-routing-key",
+    "alert_on_credential_exfil": true,
+    "alert_on_anomaly_threshold": true,
+    "license_expiry_warning_days": 14,
+    "license_limit_warning_pct": 90
+  }'
+```
+
+### 10a.3 Test a Sink
+
+```bash
+curl -X POST https://your-domain/admin/alerts/test/slack \
+  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE"
+```
+
+Replace `slack` with `teams` or `pagerduty` for the other sinks. Returns `{"status": "delivered", "sink": "slack"}` on success.
+
+### 10a.4 Trigger Events
+
+| Event | Trigger condition |
+|-------|------------------|
+| Credential exfil | Fired immediately on detection within the inspection pipeline (v0.7.1) |
+| Licence expiry warning | Fired once per calendar day when `days_until_expiry ≤ license_expiry_warning_days` (v0.7.1) |
+
+> **Note:** Direct alert sinks complement Alertmanager — they are not a replacement. Alertmanager remains the recommended path for metric-based alerts, multi-team routing, and deduplication. Direct sinks are for security event push notifications.
+
+---
+
+## 11. Agent Registration
+
+### 11.1 Via Admin Panel
+
+**Step 1.** Navigate to Admin → Agents → Register Agent.
+
+**Step 2.** Fill in:
+- **Name:** A unique identifier for this agent (e.g., `code-assistant`, `data-analyst`).
+- **Description:** Human-readable description.
+- **Upstream Path Prefix:** The path prefix in the MCP server that this agent's tools are registered under (e.g., `/tools/code`).
+
+**Step 3.** Click Register. The auto-generated token is displayed. This is the only time the full token is shown. Copy it to your secrets manager immediately.
+
+**Step 4.** Configure your MCP client to include the token in its `Authorization: Bearer` header when connecting to Yashigani's gateway.
+
+### 11.2 Via API
+
+```bash
+curl -X POST https://your-domain/admin/agents \
+  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-agent",
+    "description": "Production code assistant agent",
+    "path_prefix": "/tools/code",
+    "allowed_cidrs": ["10.0.0.0/8", "192.168.1.0/24"]
+  }'
+```
+
+The response includes the generated token and a `quick_start` snippet:
+
+```json
+{
+  "id": "agt_abc123",
+  "name": "my-agent",
+  "token": "ey...full-64-char-token...",
+  "created_at": "2026-03-27T12:00:00Z",
+  "quick_start": {
+    "curl": "curl -X POST https://<your-gateway-url>/mcp \\\n  -H 'Authorization: Bearer ey...' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":1}'",
+    "python_httpx": "import httpx\nclient = httpx.Client(\n    base_url='https://<your-gateway-url>',\n    headers={'Authorization': 'Bearer ey...'}\n)\nresp = client.post('/mcp', json={'jsonrpc':'2.0','method':'tools/list','id':1})",
+    "health_check": "curl https://<your-gateway-url>/health -H 'Authorization: Bearer ey...'"
+  }
+}
+```
+
+> **Note:** Token minimum length is controlled by `YASHIGANI_AGENT_TOKEN_MIN_LENGTH` (default: 64). Tokens shorter than this value are rejected. For high-security environments, set this to 128.
+
+### 11.4 IP Allowlisting (v0.7.0)
+
+Restrict which source IPs can use an agent token by setting `allowed_cidrs` at registration time or via the edit form. An empty list (default) means no IP restriction — any source IP may use the token once it passes PSK verification.
+
+```json
+{
+  "allowed_cidrs": ["10.0.0.0/8", "172.16.0.0/12"]
+}
+```
+
+When a request arrives from an IP outside the allowlist, the gateway returns HTTP 403 and writes an `IPAllowlistViolationEvent` to the audit log including the violating IP and agent ID. IPv4 and IPv6 CIDR notation are both supported.
+
+### 11.3 Tier Limits
+
+- **Community:** 20 agents · 50 end users · 10 admin seats. Returns HTTP 402 when any limit is reached.
+- **Starter:** 100 agents · 250 end users · 25 admin seats. OIDC SSO enabled.
+- **Professional:** 500 agents · 1,000 end users · 50 admin seats. Full SSO (SAML + OIDC + SCIM).
+- **Professional Plus:** 2,000 agents · 10,000 end users · 200 admin seats · 5 orgs.
+- **Enterprise:** Unlimited on all dimensions.
+
+---
+
+## 12. Rate Limiting Configuration
+
+Rate limiting is implemented in Redis using a sliding window algorithm.
+
+### 12.1 Global Rate Limits
+
+Configure global defaults in the admin panel: Admin → Rate Limiting.
+
+Set:
+- **Requests per minute per agent token** (default: 100)
+- **Requests per minute per source IP** (default: 200)
+- **Burst allowance** (default: 20% above the per-minute rate)
+
+### 12.2 Per-Endpoint Overrides
+
+Some MCP tool endpoints have different latency and cost profiles and should have tighter or looser limits.
+
+Admin → Rate Limiting → Endpoint Overrides → Add Override.
+
+Enter:
+- **Path pattern:** e.g., `/tools/execute` or `/tools/*`
+- **Requests per minute:** override value
+- **Applies to:** All agents, or a specific agent
+
+### 12.3 RBAC Group Overrides
+
+Privileged user groups (e.g., `admin`, `power-users`) can be granted higher rate limits.
+
+Admin → RBAC → Groups → select group → Set Rate Limit Override.
+
+Enter the per-minute request limit for members of this group.
+
+### 12.4 Adaptive Throttle Thresholds (v0.7.0)
+
+The adaptive rate limiter reduces effective limits when the Resource Pressure Index (RPI) exceeds configurable thresholds. These thresholds are now runtime-configurable without a gateway restart:
+
+| Threshold | Default | Effect |
+|-----------|---------|--------|
+| `rpi_scale_medium` | 0.80 | Requests scaled to 80% of limit |
+| `rpi_scale_high` | 0.50 | Requests scaled to 50% of limit |
+| `rpi_scale_critical` | 0.25 | Requests scaled to 25% of limit |
+
+Update via Admin → Rate Limiting → Adaptive Thresholds. Changes take effect on the next request cycle. All threshold changes are written to the audit log as `RateLimitThresholdChangedEvent` with previous and new values.
+
+> **Tip:** After any rate limit change, verify it is in effect by watching the Redis key for your agent: `docker compose exec redis redis-cli keys "rl:*"`. Changes take effect within 60 seconds.
+
+---
+
+## 13. Kubernetes Deployment
+
+### 13.1 Prerequisites
+
+- `kubectl` configured and pointing at your target cluster.
+- Helm v3.10+.
+- cert-manager installed in the cluster (recommended for TLS).
+- An ingress controller (nginx-ingress recommended).
+
+### 13.2 Install via Installer Script
+
+```bash
+./install.sh --mode k8s --namespace yashigani
+```
+
+The installer detects the `--mode k8s` flag and runs the Helm flow instead of Docker Compose.
+
+### 13.3 Manual Helm Install
+
+**Step 1.** Update Helm dependencies:
+
+```bash
+helm dependency update helm/yashigani
+```
+
+**Step 2.** Install or upgrade the release:
+
+```bash
+helm upgrade --install yashigani helm/yashigani \
+  --namespace yashigani \
+  --create-namespace \
+  --set gateway.env.upstreamUrl=http://mcp-server.default.svc.cluster.local:8080 \
+  --set global.tlsDomain=yashigani.example.com \
+  --set global.tlsMode=acme
+```
+
+**Step 3.** Monitor the rollout:
+
+```bash
+kubectl rollout status deployment/yashigani-backoffice -n yashigani
+kubectl rollout status deployment/yashigani-gateway -n yashigani
+```
+
+**Step 4.** Retrieve first-run credentials:
+
+```bash
+kubectl logs -n yashigani \
+  -l app.kubernetes.io/component=backoffice \
+  --tail=200 | grep -A 30 "FIRST-RUN"
+```
+
+### 13.4 Key Helm Values
+
+| Helm Value | Description | Example |
+|---|---|---|
+| `global.tlsDomain` | Your FQDN | `yashigani.example.com` |
+| `global.tlsMode` | TLS mode | `acme` |
+| `gateway.env.upstreamUrl` | MCP backend URL | `http://mcp-server:8080` |
+| `gateway.image.tag` | Gateway image tag | `v0.6.0` |
+| `backoffice.image.tag` | Backoffice image tag | `v0.6.0` |
+| `redis.existingSecretName` | Use existing Redis secret | `my-redis-secret` |
+| `caddy.enabled` | Enable/disable Caddy | `false` (if using nginx-ingress) |
+| `ollama.enabled` | Enable/disable local Ollama | `false` (if using cloud backend) |
+
+### 13.5 Using nginx-ingress Instead of Caddy
+
+In Kubernetes, Caddy is typically replaced by an ingress controller. Set:
+
+```bash
+helm upgrade --install yashigani helm/yashigani \
+  --namespace yashigani \
+  --set caddy.enabled=false \
+  --set ingress.enabled=true \
+  --set ingress.className=nginx \
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.certManagerIssuer=letsencrypt-prod
+```
+
+---
+
+## 14. Production Hardening Checklist
+
+Run through this checklist before exposing Yashigani to production traffic.
+
+### Security
+
+- [ ] TLS mode is `acme` or `ca` — confirm `selfsigned` is not set
+- [ ] Admin password has been changed from the first-run generated value
+- [ ] TOTP (two-factor authentication) is enrolled for all admin accounts
+- [ ] Minimum 2 admin accounts are configured (avoids single point of lockout)
+- [ ] Redis password is set and present in `docker/secrets/redis_password`
+- [ ] Postgres password is set and not the default
+- [ ] KMS provider is set to a managed service (`aws`, `azure`, `gcp`) — not `docker` for production
+- [ ] Container seccomp profiles are enabled (verify: `docker inspect yashigani-gateway-1 | grep -i seccomp`)
+- [ ] AppArmor profiles are applied on Linux hosts
+- [ ] No non-edge service ports are bound to `0.0.0.0` on the host
+
+### Configuration
+
+- [ ] `YASHIGANI_DEPLOY_STREAM` is set correctly (`corporate` or `saas` for licensed deployments)
+- [ ] `YASHIGANI_AUDIT_RETENTION_DAYS` is configured per your compliance requirements
+- [ ] OPA policy in `config/policy.rego` has been reviewed and customized for your use case
+- [ ] `YASHIGANI_INJECT_THRESHOLD` is tuned based on observed traffic (default 0.85 is a starting point)
+- [ ] Rate limits are configured appropriately for expected traffic volume
+- [ ] License key is activated (Admin → License) for Professional/Enterprise features
+
+### Observability
+
+- [ ] Prometheus is accessible at `https://your-domain/metrics-federate` (with basic auth)
+- [ ] Grafana dashboards load correctly at `https://your-domain/admin/grafana`
+- [ ] Jaeger trace UI loads at `https://your-domain/admin/jaeger`
+- [ ] Alertmanager receivers are configured (not just the default null receiver)
+- [ ] A test alert has been sent to verify each notification channel
+
+### Data and Backup
+
+- [ ] Ollama model is pulled and the ollama service reports `healthy`
+- [ ] SIEM integration is configured and a test event has been sent successfully
+- [ ] Backup is configured for the `postgres_data` Docker volume (e.g., pg_dump cron, Velero in K8s)
+- [ ] Backup for `redis_data` volume is configured (or Redis is configured as non-persistent cache-only)
+
+---
+
+## 15. Troubleshooting
+
+### Gateway won't start
+
+**Symptom:** `yashigani-gateway-1` exits immediately or enters a restart loop.
+
+**Check:**
+
+```bash
+docker compose logs gateway
+```
+
+**Common causes:**
+- `UPSTREAM_MCP_URL` is not set or the URL is unreachable. Verify the MCP server is running and accessible from within the Docker network: `docker compose exec gateway curl -v $UPSTREAM_MCP_URL`
+- Postgres is not yet healthy. Gateway waits for Postgres but has a finite retry limit. Check: `docker compose logs postgres`
+
+---
+
+### Caddy ACME fails (TLS certificate not issued)
+
+**Symptom:** Caddy logs contain `error obtaining certificate` or `ACME challenge failed`.
+
+**Check:**
+
+```bash
+docker compose logs caddy
+```
+
+**Common causes:**
+- DNS A record is not pointing to the server's public IP. Run `dig +short your-domain.example.com` from an external resolver.
+- Port 80 is blocked by a firewall or cloud security group.
+- Another process is using port 80 on the host.
+
+---
+
+### Ollama model not loaded
+
+**Symptom:** Inspection requests fail with `backend unavailable: ollama`.
+
+**Check:**
+
+```bash
+docker compose logs ollama-init
+docker compose logs ollama
+```
+
+**Common causes:**
+- `ollama-init` timed out during model pull. Re-run it: `docker compose restart ollama-init`
+- Insufficient disk space for the model. Check: `df -h /var/lib/docker`
+- Ollama container is running but the model is not loaded. Manually pull: `docker compose exec ollama ollama pull qwen2.5:3b`
+
+---
+
+### Backoffice login fails
+
+**Symptom:** Cannot log in to the admin panel with the generated credentials.
+
+**Check:**
+
+```bash
+docker compose logs backoffice | grep -i "FIRST-RUN\|error\|password"
+```
+
+**Common causes:**
+- You are using the wrong credentials. The first-run block is printed only once — search the logs carefully.
+- The admin account email in `YASHIGANI_ADMIN_USERNAME` has a typo. Check `.env`.
+- A previous partial bootstrap left the database in an inconsistent state. Reset by removing the `postgres_data` volume (warning: deletes all data): `docker compose down -v && docker compose up -d`
+
+---
+
+### Rate limiting not working
+
+**Symptom:** Requests are not being rate-limited even at high request rates.
+
+**Check:**
+
+```bash
+docker compose exec redis redis-cli ping
+docker compose exec redis redis-cli keys "rl:*"
+```
+
+**Common causes:**
+- Redis is unhealthy. Restart it: `docker compose restart redis`
+- Rate limiting is configured but the agent token is not being sent by the client (rate limiting is per-token). Verify the `Authorization: Bearer` header is present in requests.
+
+---
+
+### SSO login fails (SAML or OIDC)
+
+**Symptom:** Users are redirected back to the login page after authenticating with the IdP.
+
+**Check:**
+
+```bash
+docker compose logs backoffice | grep -i "sso\|saml\|oidc\|auth"
+```
+
+**Common causes:**
+- IdP metadata is outdated. Re-download and re-upload in Admin → SSO.
+- The SAML assertion audience does not match Yashigani's entity ID. Verify the SP metadata URL in your IdP configuration matches `https://your-domain/admin/sso/saml/metadata`.
+- For OIDC: the redirect URI registered with the IdP does not exactly match `https://your-domain/admin/oidc/callback`.
+
+---
+
+### License not activating
+
+**Symptom:** After uploading the license, it shows as invalid or the tier does not update.
+
+**Common causes:**
+- The license `.ysg` file is corrupted or incomplete. Verify the file size matches what was provided.
+- The license is issued for a different organization domain than `YASHIGANI_ADMIN_USERNAME`. The license domain must match the admin email domain.
+- The license has expired. Check the expiry date with: `openssl cms -verify -noverify -in license.ysg -inform DER -noout -text`
+
+---
+
+### Postgres migrations failed
+
+**Symptom:** Backoffice logs show Alembic errors; the admin panel returns 500 errors.
+
+**Check:**
+
+```bash
+docker compose logs backoffice | grep -i "alembic\|migration\|error"
+```
+
+**Common causes:**
+- Postgres was not ready when backoffice started and the retry limit was exceeded. Restart backoffice after confirming Postgres is healthy: `docker compose restart backoffice`
+- A migration was previously run against a different schema version. Contact support with the full Alembic error message.
+
+---
+
+## 16. Upgrade Procedure
+
+### 16.1 Via Installer (Recommended)
+
+```bash
+./install.sh --upgrade
+```
+
+The installer pulls the latest images, checks for breaking `.env` changes, backs up your current `.env` to `.env.bak`, and restarts the stack. Alembic migrations run automatically.
+
+### 16.2 Manual Upgrade
+
+**Step 1.** Pull the latest changes from Git (if running from source):
+
+```bash
+git fetch origin
+git checkout v0.6.1   # replace with target version
+```
+
+**Step 2.** Pull updated images:
+
+```bash
+docker compose pull
+```
+
+**Step 3.** Restart the stack, removing any containers whose image or configuration has changed:
+
+```bash
+docker compose up -d --remove-orphans
+```
+
+**Step 4.** Verify Alembic migrations ran successfully:
+
+```bash
+docker compose logs backoffice | grep -i "alembic\|migration\|upgrade"
+```
+
+A successful migration looks like:
+
+```
+INFO  [alembic.runtime.migration] Running upgrade abc123 -> def456, add_rbac_group_overrides
+INFO  [alembic.runtime.migration] Running upgrade def456 -> ghi789, add_scim_tokens
+```
+
+**Step 5.** Confirm all services are healthy:
+
+```bash
+docker compose ps
+```
+
+**Step 6.** Log in to the admin panel and verify the version shown in Admin → About matches the new version.
+
+> **Warning:** Never skip Alembic migrations by manually editing the database. The `alembic_version` table must always reflect the true schema state. If you need to roll back a migration, use `docker compose exec backoffice alembic downgrade -1` and consult the changelog for breaking changes.
+
+> **Tip:** Before any upgrade in production, take a snapshot of the `postgres_data` volume: `docker run --rm -v yashigani_postgres_data:/data -v $(pwd):/backup alpine tar czf /backup/postgres-backup-$(date +%Y%m%d).tar.gz -C /data .`
+
+---
+
+## 17. Optional Agent Bundles (v0.8.0)
+
+> **Disclaimer:** These third-party agent containers are provided **AS IS** by Agnostic Security as a courtesy integration. Image digests are pinned to upstream-tagged releases and updated as part of the Yashigani release cycle. **All support, bug reports, and feature requests must go to the upstream maintainers.** Agnostic Security accepts no support obligation for these integrations.
+
+Four optional agent containers are available as opt-in installs. They are **not installed by default**.
+
+| Agent | Stack | License | Integration |
+|-------|-------|---------|-------------|
+| LangGraph | Python | Apache 2.0 | MCP → Yashigani → tools |
+| Goose | Python | Apache 2.0 | MCP → Yashigani → tools |
+| CrewAI | Python | MIT | MCP → Yashigani → tools |
+| OpenClaw | Node.js 24 | TBD (verify at openclaw.ai) | OpenClaw Gateway (:18789) → Yashigani → LLMs |
+
+### 17.1 Docker Compose — Opt-In via Profiles
+
+Enable bundles at install time using `--agent-bundles`:
+
+```bash
+./install.sh --agent-bundles langgraph,goose
+```
+
+Or activate manually after install:
+
+```bash
+docker compose --profile langgraph up -d
+docker compose --profile goose up -d
+docker compose --profile crewai up -d
+docker compose --profile openclaw up -d
+```
+
+> **OpenClaw note:** The Node.js 24 image is approximately 800 MB — significantly larger than the Python agent images (~200 MB). Ensure you have sufficient disk space before enabling OpenClaw. OpenClaw runs its own Gateway on port **18789**, which must be reachable by incoming messaging channel webhooks.
+
+### 17.2 Kubernetes (Helm) — Values Toggles
+
+Enable per agent via Helm values:
+
+```bash
+helm upgrade yashigani ./helm/yashigani \
+  --set agentBundles.langgraph.enabled=true \
+  --set agentBundles.goose.enabled=true
+```
+
+Or in your values override file:
+
+```yaml
+agentBundles:
+  langgraph:
+    enabled: true
+  goose:
+    enabled: true
+  openclaw:
+    enabled: true
+    # OpenClaw exposes port 18789 via its own Gateway service
+```
+
+### 17.3 Backoffice API
+
+The backoffice exposes bundle metadata and the disclaimer via:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /admin/agent-bundles` | List all bundles with metadata and disclaimer |
+| `GET /admin/agent-bundles/disclaimer` | Disclaimer text for UI banner rendering |
+
+### 17.4 Agent Token Auto-Registration
+
+When an agent bundle container starts, it uses the token in its secret file to register itself with Yashigani's agent registry. The installer generates these tokens and places them in:
+
+- **Compose:** `docker/secrets/{name}_token`
+- **Helm:** Kubernetes Secret `yashigani-{name}-token` (must be pre-created before install)
+
+Each bundle is assigned a **restricted RBAC policy** by default — it can only reach LLM provider paths and is not granted access to internal Yashigani management endpoints.
+
+---
+
+*Yashigani v0.8.0 — Installation and Configuration Guide — 2026-03-28*

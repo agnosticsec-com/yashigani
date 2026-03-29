@@ -1,0 +1,40 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: '${YASHIGANI_ENV:-development}'
+
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []   # Grafana handles alerting — Alertmanager not required
+
+scrape_configs:
+
+  - job_name: yashigani_gateway
+    static_configs:
+      - targets: ['gateway:8080']
+    metrics_path: /internal/metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: gateway
+
+  - job_name: yashigani_backoffice
+    static_configs:
+      - targets: ['backoffice:8443']
+    metrics_path: /internal/metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: backoffice
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

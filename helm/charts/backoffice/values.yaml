@@ -1,0 +1,35 @@
+enabled: true
+image:
+  repository: yashigani-backoffice
+  tag: "0.4.0"
+  pullPolicy: IfNotPresent
+replicaCount: 2
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+service:
+  port: 8443
+  type: ClusterIP
+existingSecretName: yashigani-backoffice-secrets
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+pdb:
+  enabled: true
+  minAvailable: 1
+env:
+  redisHost: "redis"
+  redisPort: "6379"
+  opaUrl: "http://policy:8181"
+  adminMinTotal: "2"
+  adminMinActive: "2"
+  adminSoftTarget: "3"
+  inspectionDefaultBackend: "ollama"
+  inspectionFallbackChain: "ollama,gemini,fail_closed"

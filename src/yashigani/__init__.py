@@ -1,0 +1,15 @@
+"""
+Yashigani — Security enforcement gateway for MCP servers and agentic AI systems.
+
+Modules:
+  yashigani.gateway     — Reverse proxy with inspection and OPA policy enforcement
+  yashigani.backoffice  — Admin control plane (local auth, port 8443)
+  yashigani.inspection  — Prompt injection classifier and sanitization pipeline
+  yashigani.chs         — Credential Handle Service (opaque UUID handles)
+  yashigani.kms         — KSM provider abstraction (Keeper, AWS, Azure, GCP, Docker)
+  yashigani.audit       — Hybrid audit log (volume + multi-SIEM forwarding)
+  yashigani.auth        — Local auth: Argon2id passwords, TOTP, session store
+  yashigani.sso         — SAMLv2 and OIDC identity provider integration
+"""
+
+__version__ = "0.8.0"

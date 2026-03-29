@@ -1,0 +1,6 @@
+apiVersion: v2
+name: vault
+description: HashiCorp Vault dev-mode KMS for Yashigani (NOT FOR PRODUCTION)
+type: application
+version: 0.5.0
+appVersion: "1.16.0"

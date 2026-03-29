@@ -1,0 +1,309 @@
+"""
+Yashigani Gateway — Agent-to-agent request router.
+
+Called after AgentAuthMiddleware has authenticated the caller.
+Looks up the target agent in the registry and proxies the request
+to its configured upstream_url.
+
+Path format: /agents/{target_agent_id}/{remainder_path}
+
+Writes AGENT_CALL_ALLOWED, AGENT_CALL_DENIED_RBAC, or AGENT_NOT_FOUND
+audit events. Updates Prometheus agent metrics.
+
+OPA enforcement (ASVS V4.2 — local policy only, fail-closed):
+  - Builds an agent-to-agent input document.
+  - Queries OPA at /v1/data/yashigani/agent_call_allowed.
+  - On deny or OPA unreachable: returns HTTP 403 and writes
+    AgentCallDeniedRBACEvent.
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+import httpx
+from fastapi import Request, Response
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
+
+_HOP_BY_HOP = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade",
+})
+
+_OPA_AGENT_ALLOWED_PATH = "/v1/data/yashigani/agent_call_allowed"
+
+
+async def route_agent_call(request: Request, path: str, state: dict) -> Response:
+    """
+    Handle an authenticated agent-to-agent request.
+
+    Steps:
+    1. Parse target_agent_id and remainder_path from path
+    2. Look up target agent in registry — must be active
+    3. If not found / inactive: return 404 + AGENT_NOT_FOUND audit event
+    4. Look up caller agent in registry to get caller's groups
+    5. Query OPA for agent_call_allowed — fail-closed on error
+    6. If OPA denies: return 403 + AGENT_CALL_DENIED_RBAC audit event
+    7. Forward request to upstream_url/remainder_path
+    8. Write AGENT_CALL_ALLOWED audit event and update Prometheus metrics
+    9. Return upstream response to caller (strip hop-by-hop headers)
+    """
+    registry = state.get("agent_registry")
+    audit_writer = state.get("audit_writer")
+    config = state.get("config")
+
+    # Normalise path to always start with /
+    if not path.startswith("/"):
+        path = "/" + path
+
+    # Parse /agents/{target_agent_id}/{remainder}
+    prefix = "/agents/"
+    if not path.startswith(prefix):
+        return JSONResponse(status_code=400, content={"error": "INVALID_AGENT_PATH"})
+
+    remainder = path[len(prefix):]
+    parts = remainder.split("/", 1)
+    target_agent_id = parts[0]
+    remainder_path = "/" + parts[1] if len(parts) > 1 else "/"
+
+    caller_agent_id = getattr(request.state, "agent_id", "unknown")
+
+    # Registry must be available
+    if registry is None:
+        logger.error("route_agent_call: agent_registry not in state")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "AGENT_REGISTRY_UNAVAILABLE"},
+        )
+
+    # Look up target agent — must exist and be active
+    target_agent = registry.get(target_agent_id)
+    if target_agent is None or target_agent.get("status") != "active":
+        _write_not_found_audit(
+            audit_writer=audit_writer,
+            caller_agent_id=caller_agent_id,
+            target_agent_id=target_agent_id,
+            path=path,
+        )
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "AGENT_NOT_FOUND",
+                "target_agent_id": target_agent_id,
+            },
+        )
+
+    # Look up caller agent to get their RBAC groups
+    caller_agent = registry.get(caller_agent_id) or {}
+    caller_groups = caller_agent.get("groups", [])
+
+    # ── OPA enforcement (fail-closed) ─────────────────────────────────────────
+    opa_url = config.opa_url if config is not None else "http://policy:8181"
+    opa_input = {
+        "principal": {
+            "type": "agent",
+            "agent_id": caller_agent_id,
+            "groups": caller_groups,
+        },
+        "target_agent": {
+            "agent_id": target_agent_id,
+            "allowed_caller_groups": target_agent.get("allowed_caller_groups", []),
+            "allowed_paths": target_agent.get("allowed_paths", []),
+        },
+        "request": {
+            "method": request.method,
+            "remainder_path": remainder_path,
+        },
+    }
+
+    opa_allowed, opa_reason = await _opa_agent_check(opa_url, opa_input)
+
+    if not opa_allowed:
+        _write_denied_rbac_audit(
+            audit_writer=audit_writer,
+            caller_agent_id=caller_agent_id,
+            target_agent_id=target_agent_id,
+            path=path,
+            opa_reason=opa_reason,
+        )
+        try:
+            from yashigani.metrics.registry import agent_calls_total
+            agent_calls_total.labels(
+                caller_agent_id=caller_agent_id,
+                target_agent_id=target_agent_id,
+                outcome="denied_rbac",
+            ).inc()
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "AGENT_CALL_DENIED",
+                "reason": opa_reason,
+                "target_agent_id": target_agent_id,
+            },
+        )
+
+    upstream_url = target_agent["upstream_url"]
+
+    # Forward request to upstream
+    start = time.monotonic()
+    try:
+        body = await request.body()
+        # Build forwarded headers — strip hop-by-hop and host; inject trace headers
+        headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in _HOP_BY_HOP and k.lower() != "host"
+        }
+        headers["X-Yashigani-Caller-Agent-Id"] = caller_agent_id
+        headers["X-Yashigani-Request-Id"] = getattr(request.state, "request_id", "")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            upstream_resp = await client.request(
+                method=request.method,
+                url=upstream_url.rstrip("/") + remainder_path,
+                content=body,
+                headers=headers,
+            )
+    except Exception as exc:
+        logger.error(
+            "route_agent_call: upstream unreachable for %s → %s%s: %s",
+            caller_agent_id, target_agent_id, remainder_path, exc,
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "AGENT_UPSTREAM_UNREACHABLE",
+                "detail": str(exc),
+                "target_agent_id": target_agent_id,
+            },
+        )
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # Prometheus metrics
+    try:
+        from yashigani.metrics.registry import (
+            agent_calls_total,
+            agent_call_duration_seconds,
+        )
+        agent_calls_total.labels(
+            caller_agent_id=caller_agent_id,
+            target_agent_id=target_agent_id,
+            outcome="allowed",
+        ).inc()
+        agent_call_duration_seconds.labels(
+            caller_agent_id=caller_agent_id,
+            target_agent_id=target_agent_id,
+        ).observe(elapsed_ms / 1000)
+    except Exception:
+        pass
+
+    # Audit event
+    if audit_writer is not None:
+        try:
+            from yashigani.audit.schema import AgentCallAllowedEvent
+            audit_writer.write(AgentCallAllowedEvent(
+                caller_agent_id=caller_agent_id,
+                target_agent_id=target_agent_id,
+                path=path,
+                remainder_path=remainder_path,
+                pipeline_action="forwarded",
+                classification="CLEAN",
+            ))
+        except Exception as exc:
+            logger.error("route_agent_call: failed to write allowed audit event: %s", exc)
+
+    # Build response — strip hop-by-hop headers
+    resp_headers = {
+        k: v for k, v in upstream_resp.headers.items()
+        if k.lower() not in _HOP_BY_HOP
+    }
+
+    return Response(
+        content=upstream_resp.content,
+        status_code=upstream_resp.status_code,
+        headers=resp_headers,
+        media_type=upstream_resp.headers.get("content-type"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# OPA agent call check
+# ---------------------------------------------------------------------------
+
+async def _opa_agent_check(opa_url: str, opa_input: dict) -> tuple[bool, str]:
+    """
+    Query OPA for agent_call_allowed decision.
+    Returns (allowed: bool, reason: str).
+    Fail-closed: any OPA error returns (False, "opa_unreachable").
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                opa_url.rstrip("/") + _OPA_AGENT_ALLOWED_PATH,
+                json={"input": opa_input},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            allowed = bool(data.get("result", False))
+            if allowed:
+                return True, ""
+            # Try to get deny reason
+            return False, "opa_denied"
+    except Exception as exc:
+        logger.error(
+            "route_agent_call: OPA unreachable for agent check "
+            "(caller=%s → target=%s): %s — denying (fail-closed)",
+            opa_input.get("principal", {}).get("agent_id", "unknown"),
+            opa_input.get("target_agent", {}).get("agent_id", "unknown"),
+            exc,
+        )
+        return False, "opa_unreachable"
+
+
+# ---------------------------------------------------------------------------
+# Audit helpers
+# ---------------------------------------------------------------------------
+
+def _write_not_found_audit(
+    audit_writer,
+    caller_agent_id: str,
+    target_agent_id: str,
+    path: str,
+) -> None:
+    if audit_writer is None:
+        return
+    try:
+        from yashigani.audit.schema import AgentNotFoundEvent
+        audit_writer.write(AgentNotFoundEvent(
+            caller_agent_id=caller_agent_id,
+            target_agent_id_requested=target_agent_id,
+            path=path,
+        ))
+    except Exception as exc:
+        logger.error("route_agent_call: failed to write not-found audit event: %s", exc)
+
+
+def _write_denied_rbac_audit(
+    audit_writer,
+    caller_agent_id: str,
+    target_agent_id: str,
+    path: str,
+    opa_reason: str,
+) -> None:
+    if audit_writer is None:
+        return
+    try:
+        from yashigani.audit.schema import AgentCallDeniedRBACEvent
+        audit_writer.write(AgentCallDeniedRBACEvent(
+            caller_agent_id=caller_agent_id,
+            target_agent_id=target_agent_id,
+            path=path,
+            opa_reason=opa_reason,
+        ))
+    except Exception as exc:
+        logger.error("route_agent_call: failed to write denied-rbac audit event: %s", exc)

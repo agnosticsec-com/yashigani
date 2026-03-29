@@ -1,0 +1,35 @@
+enabled: true
+image:
+  repository: yashigani-gateway
+  tag: "0.4.0"
+  pullPolicy: IfNotPresent
+replicaCount: 2
+resources:
+  requests:
+    cpu: "250m"
+    memory: "256Mi"
+  limits:
+    cpu: "1"
+    memory: "512Mi"
+service:
+  port: 8080
+  type: ClusterIP
+existingSecretName: yashigani-gateway-secrets
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+pdb:
+  enabled: true
+  minAvailable: 1
+env:
+  upstreamUrl: ""
+  opaUrl: "http://policy:8181"
+  ollamaUrl: "http://ollama:11434"
+  redisHost: "redis"
+  redisPort: "6379"
+  agentRoutingEnabled: "true"
+  agentPathPrefix: "/agents"
+  agentTokenMinLength: "64"

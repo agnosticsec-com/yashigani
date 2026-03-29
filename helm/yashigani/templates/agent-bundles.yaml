@@ -1,0 +1,93 @@
+{{/*
+  Yashigani v0.8.0 — Optional Agent Bundle Deployments + Services
+
+  Each bundle is controlled by .Values.agentBundles.<name>.enabled.
+  Disabled by default — opt-in only.
+
+  DISCLAIMER: These integrations are provided AS IS by Agnostic Security.
+  Image digests are pinned per release. All support goes to upstream maintainers.
+*/}}
+
+{{- $root := . -}}
+
+{{- range $bundleID, $bundle := .Values.agentBundles }}
+{{- if $bundle.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ printf "yashigani-%s" $bundleID }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $bundleID }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: agent-bundle
+    app.kubernetes.io/managed-by: Helm
+    yashigani.io/bundle: {{ $bundleID | quote }}
+  annotations:
+    yashigani.io/disclaimer: "Third-party agent bundle — no support from Agnostic Security. See upstream project."
+spec:
+  replicas: {{ $bundle.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $bundleID }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $bundleID }}
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        app.kubernetes.io/component: agent-bundle
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ $bundleID }}
+          image: "{{ $bundle.image.repository }}:{{ $bundle.image.tag | default "latest" }}"
+          imagePullPolicy: {{ $bundle.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            {{- range $key, $value := $bundle.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- if and $bundle.tokenSecretName $bundle.tokenSecretKey }}
+            - name: YASHIGANI_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $bundle.tokenSecretName }}
+                  key: {{ $bundle.tokenSecretKey }}
+            {{- end }}
+          resources:
+            {{- toYaml $bundle.resources | nindent 12 }}
+{{- if $bundle.service }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "yashigani-%s" $bundleID }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $bundleID }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: agent-bundle
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: {{ $bundle.service.type | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/name: {{ $bundleID }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+  ports:
+    - name: gateway
+      port: {{ $bundle.service.port }}
+      targetPort: {{ $bundle.service.port }}
+      protocol: TCP
+{{- end }}
+{{- end }}
+{{- end }}

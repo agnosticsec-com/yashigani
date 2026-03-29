@@ -1,0 +1,24 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-caddy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-caddy
+    app.kubernetes.io/name: yashigani-caddy
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: yashigani-caddy
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ .Values.service.httpPort }}
+      targetPort: 80
+    - name: https
+      protocol: TCP
+      port: {{ .Values.service.port }}
+      targetPort: 443
+{{- end }}

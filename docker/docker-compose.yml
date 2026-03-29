@@ -1,0 +1,634 @@
+---
+# Yashigani v0.8.0 — Docker Compose stack
+#
+# Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
+#           redis, ollama, prometheus, grafana
+#
+# Usage:
+#   cp .env.example .env          # fill in required values
+#   docker compose up -d
+#
+# First run: all service passwords are auto-generated and printed to stdout
+# by the backoffice bootstrap process. Check: docker compose logs backoffice
+#
+# TLS modes (YASHIGANI_TLS_MODE):
+#   acme        — Let's Encrypt (default, requires public DNS)
+#   ca          — CA-signed cert (mount ./tls/server.crt + ./tls/server.key)
+#   selfsigned  — local/demo only, self-signed (Caddy internal CA)
+
+version: "3.9"
+
+x-common-env: &common-env
+  YASHIGANI_ENV: ${YASHIGANI_ENV:-development}
+  YASHIGANI_KSM_PROVIDER: ${YASHIGANI_KSM_PROVIDER:-docker}
+  YASHIGANI_AUDIT_LOG_PATH: /data/audit/audit.log
+  YASHIGANI_AUDIT_MAX_FILE_SIZE_MB: ${YASHIGANI_AUDIT_MAX_FILE_SIZE_MB:-100}
+  YASHIGANI_AUDIT_RETENTION_DAYS: ${YASHIGANI_AUDIT_RETENTION_DAYS:-90}
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Caddy — TLS edge proxy
+  # Routes /admin/* to backoffice, /metrics-federate to prometheus (authed),
+  # everything else to gateway.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      YASHIGANI_TLS_DOMAIN: ${YASHIGANI_TLS_DOMAIN:?set YASHIGANI_TLS_DOMAIN}
+      CADDY_ACME_EMAIL: ${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}
+      PROMETHEUS_BASICAUTH_USER: ${PROMETHEUS_BASICAUTH_USER:-prometheus}
+      PROMETHEUS_BASICAUTH_HASH: ${PROMETHEUS_BASICAUTH_HASH:?run bootstrap to get this value}
+    volumes:
+      - ./Caddyfile.${YASHIGANI_TLS_MODE:-acme}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./tls:/etc/caddy/tls:ro    # only used in ca mode
+    depends_on:
+      gateway:
+        condition: service_healthy
+      backoffice:
+        condition: service_started
+    networks:
+      - external
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Gateway — MCP reverse proxy (data plane)
+  # ---------------------------------------------------------------------------
+  gateway:
+    image: yashigani/gateway:${YASHIGANI_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gateway
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      YASHIGANI_UPSTREAM_URL: ${UPSTREAM_MCP_URL:?set UPSTREAM_MCP_URL}
+      YASHIGANI_OPA_URL: http://policy:8181
+      OLLAMA_BASE_URL: http://ollama:11434
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      YASHIGANI_SECRETS_DIR: /run/secrets
+      YASHIGANI_AGENT_ROUTING_ENABLED: "true"
+      YASHIGANI_AGENT_PATH_PREFIX: "/agents"
+      YASHIGANI_AGENT_TOKEN_MIN_LENGTH: "64"
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:$${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
+      YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
+    volumes:
+      - audit_data:/data/audit
+      - bootstrap_data:/data/bootstrap
+    secrets:
+      - redis_password
+      - postgres_password
+    depends_on:
+      redis:
+        condition: service_healthy
+      policy:
+        condition: service_started
+      ollama:
+        condition: service_started
+      pgbouncer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Backoffice — Admin control plane (generates first-run credentials)
+  # ---------------------------------------------------------------------------
+  backoffice:
+    image: yashigani/backoffice:${YASHIGANI_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backoffice
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      YASHIGANI_OPA_URL: http://policy:8181
+      YASHIGANI_ADMIN_USERNAME: ${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}
+      YASHIGANI_ADMIN_MIN_TOTAL: "2"
+      YASHIGANI_ADMIN_MIN_ACTIVE: "2"
+      YASHIGANI_ADMIN_SOFT_TARGET: "3"
+      YASHIGANI_SECRETS_DIR: /run/secrets
+      YASHIGANI_INSPECTION_DEFAULT_BACKEND: ${YASHIGANI_INSPECTION_DEFAULT_BACKEND:-ollama}
+      YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,gemini,fail_closed}
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:$${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
+      YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
+    volumes:
+      - audit_data:/data/audit
+      - bootstrap_data:/data/bootstrap
+      - secrets_volume:/run/secrets
+    secrets:
+      - postgres_password
+      - license_key
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Policy — OPA (Open Policy Agent) — always local, never cloud-delegated
+  # ---------------------------------------------------------------------------
+  policy:
+    image: openpolicyagent/opa:latest-rootless
+    restart: unless-stopped
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "--log-level=error"
+      - "/policies"
+    volumes:
+      - ../policy:/policies:ro
+      - ../policy/data:/policies/data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Redis — session store + TOTP provisioning tokens + rate limiter counters
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      sh -c 'redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --requirepass "$$(cat /run/secrets/redis_password)"'
+    volumes:
+      - redis_data:/data
+      - secrets_volume:/run/secrets:ro
+    healthcheck:
+      test: >
+        sh -c 'redis-cli -a "$$(cat /run/secrets/redis_password)" ping'
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      backoffice:
+        condition: service_started   # backoffice writes the secret first
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Ollama — local LLM inference (never a cloud call for security classification)
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+    # Uncomment for NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # Model bootstrap — pull classifier model on first start
+  ollama-init:
+    image: ollama/ollama:latest
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until curl -sf http://ollama:11434/api/tags >/dev/null 2>&1; do
+          echo "waiting for ollama..."; sleep 3
+        done
+        ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — metrics collection
+  # Exposed externally only via Caddy /metrics-federate (basic auth)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}"
+      - "--web.enable-remote-write-receiver"
+      - "--web.listen-address=0.0.0.0:9090"
+    volumes:
+      - ../config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../config/prometheus_alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Grafana — dashboards and alerting
+  # Admin password auto-generated at bootstrap (check backoffice logs)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-grafana-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "https://${YASHIGANI_TLS_DOMAIN}/admin/grafana"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ../config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - secrets_volume:/run/secrets:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      backoffice:
+        condition: service_started
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — primary durable store (tenants, audit, inference, RBAC)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yashigani
+      POSTGRES_USER: yashigani_app
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - secrets_volume:/run/secrets:ro
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yashigani_app -d yashigani"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # PgBouncer — transaction-mode connection pooler
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: bitnami/pgbouncer:1.22
+    restart: unless-stopped
+    environment:
+      POSTGRESQL_HOST: postgres
+      POSTGRESQL_PORT: "5432"
+      POSTGRESQL_DATABASE: yashigani
+      POSTGRESQL_USERNAME: yashigani_app
+      POSTGRESQL_PASSWORD_FILE: /run/secrets/postgres_password
+      PGBOUNCER_AUTH_TYPE: scram-sha-256
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: "100"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "20"
+    volumes:
+      - secrets_volume:/run/secrets:ro
+      - ./pgbouncer/pgbouncer.ini:/bitnami/pgbouncer/conf/pgbouncer.ini:ro
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Alertmanager — alert routing (email → SMS → PagerDuty)
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ../config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+      - secrets_volume:/run/secrets:ro
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Loki — log aggregation backend
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.0.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ../config/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Promtail — ships Docker container logs to Loki
+  # ---------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:3.0.0
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector — OTLP receiver, Jaeger exporter
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.100.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel/otel-collector.yml"]
+    volumes:
+      - ../config/otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+    depends_on:
+      - jaeger
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Jaeger — distributed trace UI
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: memory
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:14269/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Vault — HashiCorp Vault dev-mode KMS (opt-in: --profile vault)
+  # WARNING: dev-mode — data NOT persisted. NOT for production.
+  # ---------------------------------------------------------------------------
+  vault:
+    image: hashicorp/vault:1.16
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    volumes:
+      - secrets_volume:/run/secrets:ro
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    profiles:
+      - vault
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL AGENT BUNDLES
+  # Provided as a courtesy by Agnostic Security.
+  # Images are pinned to upstream-tagged digests and updated with each
+  # Yashigani release. All support goes to the upstream maintainers.
+  # Enable at install time or via:
+  #   docker compose --profile langgraph up -d
+  #   docker compose --profile goose up -d
+  #   docker compose --profile crewai up -d
+  #   docker compose --profile openclaw up -d
+  #
+  # DISCLAIMER: These integrations carry no support obligation from
+  # Agnostic Security. Direct issues to the upstream project teams.
+  # ---------------------------------------------------------------------------
+
+  # LangGraph — Python MCP-native multi-agent orchestration (Apache 2.0)
+  # https://github.com/langchain-ai/langgraph
+  langgraph:
+    # Image digest pinned per Yashigani release — do not change manually
+    image: langchain/langgraph-api:latest
+    restart: unless-stopped
+    environment:
+      LANGGRAPH_YASHIGANI_URL: http://gateway:8080
+      LANGGRAPH_AGENT_TOKEN_FILE: /run/secrets/langgraph_token
+    volumes:
+      - secrets_volume:/run/secrets:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+    profiles:
+      - langgraph
+
+  # Goose — Python MCP-native developer assistant (Apache 2.0)
+  # https://github.com/block/goose
+  goose:
+    # Image digest pinned per Yashigani release — do not change manually
+    image: ghcr.io/block/goose:latest
+    restart: unless-stopped
+    environment:
+      GOOSE_YASHIGANI_URL: http://gateway:8080
+      GOOSE_AGENT_TOKEN_FILE: /run/secrets/goose_token
+    volumes:
+      - secrets_volume:/run/secrets:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+    profiles:
+      - goose
+
+  # CrewAI — Python multi-agent orchestration (MIT)
+  # https://github.com/crewAIInc/crewAI
+  crewai:
+    # Image digest pinned per Yashigani release — do not change manually
+    image: crewai/crewai:latest
+    restart: unless-stopped
+    environment:
+      CREWAI_YASHIGANI_URL: http://gateway:8080
+      CREWAI_AGENT_TOKEN_FILE: /run/secrets/crewai_token
+    volumes:
+      - secrets_volume:/run/secrets:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+    profiles:
+      - crewai
+
+  # OpenClaw — Node.js 24 personal AI with 30+ messaging channel integrations
+  # https://openclaw.ai  |  https://github.com/openclaw/openclaw
+  # NOTE: Node.js 24 image is larger than the Python agent images (~800 MB vs ~200 MB).
+  # OpenClaw runs its own Gateway on port 18789. Integration pattern:
+  #   OpenClaw Gateway (:18789) → Yashigani Gateway → LLM providers
+  openclaw:
+    # Image digest pinned per Yashigani release — do not change manually
+    image: openclaw/openclaw:latest
+    restart: unless-stopped
+    ports:
+      - "18789:18789"
+    environment:
+      # Point OpenClaw's outbound LLM proxy at Yashigani
+      OPENCLAW_UPSTREAM_URL: http://gateway:8080
+      OPENCLAW_AGENT_TOKEN_FILE: /run/secrets/openclaw_token
+      # Server mode: disables audio, camera, location, and voice-wake nodes
+      OPENCLAW_SERVER_MODE: "true"
+      OPENCLAW_DISABLE_AUDIO: "true"
+      OPENCLAW_DISABLE_CAMERA: "true"
+      OPENCLAW_DISABLE_LOCATION: "true"
+      OPENCLAW_DISABLE_VOICE_WAKE: "true"
+    volumes:
+      - openclaw_data:/data
+      - secrets_volume:/run/secrets:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+      - external      # Gateway port 18789 must be reachable by messaging channel webhooks
+    profiles:
+      - openclaw
+
+# ---------------------------------------------------------------------------
+# Named volumes
+# ---------------------------------------------------------------------------
+volumes:
+  audit_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${AUDIT_DATA_PATH:-./data/audit}
+  bootstrap_data:
+    driver: local
+  secrets_volume:
+    driver: local        # shared between backoffice (writes) and other services (reads)
+  redis_data:
+    driver: local
+  ollama_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+  postgres_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+  loki_data:
+    driver: local
+  # Agent bundle volumes
+  openclaw_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Docker secrets (populated by backoffice bootstrap)
+# ---------------------------------------------------------------------------
+secrets:
+  redis_password:
+    file: ./secrets/redis_password
+  postgres_password:
+    file: ./secrets/postgres_password
+  license_key:
+    file: ./secrets/license_key   # optional — absent = Community edition; installer copies .ysg here
+  # Agent bundle tokens — auto-generated and registered in Yashigani on first start
+  langgraph_token:
+    file: ./secrets/langgraph_token
+  goose_token:
+    file: ./secrets/goose_token
+  crewai_token:
+    file: ./secrets/crewai_token
+  openclaw_token:
+    file: ./secrets/openclaw_token
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  internal:
+    driver: bridge
+    internal: true
+  external:
+    driver: bridge

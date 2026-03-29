@@ -1,0 +1,22 @@
+# Production environment overrides
+global:
+  environment: production
+
+gateway:
+  replicaCount: 2
+  hpa:
+    minReplicas: 2
+    maxReplicas: 10
+
+backoffice:
+  replicaCount: 2
+  hpa:
+    minReplicas: 2
+    maxReplicas: 4
+
+topologySpread:
+  enabled: true
+  policy: DoNotSchedule
+
+keda:
+  enabled: true

@@ -1,0 +1,81 @@
+#include <tunables/global>
+
+profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/openssl>
+  #include <abstractions/python>
+
+  # Allow read access to system config
+  /etc/ r,
+  /etc/** r,
+  /usr/ r,
+  /usr/** r,
+  /lib/ r,
+  /lib/** r,
+  /lib64/ r,
+  /lib64/** r,
+
+  # Application code and assets
+  /app/ r,
+  /app/** r,
+  /app/models/** r,
+
+  # Writable directories (tmpfs mounts)
+  /tmp/ rw,
+  /tmp/** rw,
+  /data/audit/ rw,
+  /data/audit/** rw,
+
+  # Python runtime
+  /usr/local/lib/python*/** r,
+  /usr/local/bin/python* ix,
+  /usr/local/bin/uvicorn ix,
+
+  # Secrets (read-only)
+  /run/secrets/ r,
+  /run/secrets/** r,
+
+  # Proc — allow reads needed for Python runtime
+  @{PROC}/sys/kernel/ngroups_max r,
+  @{PROC}/sys/kernel/cap_last_cap r,
+  @{PROC}/@{pid}/status r,
+  @{PROC}/@{pid}/maps r,
+  @{PROC}/@{pid}/fd/ r,
+  @{PROC}/@{pid}/task/ r,
+  @{PROC}/sys/net/core/somaxconn r,
+
+  # Deny dangerous operations
+  deny @{PROC}/sys/kernel/modules_disabled w,
+  deny /proc/sysrq-trigger w,
+  deny /sys/firmware/** w,
+  deny /sys/kernel/** w,
+  deny /dev/mem r,
+  deny /dev/kmem r,
+  deny /dev/port r,
+
+  # Network — TCP/UDP only, no raw sockets
+  network tcp,
+  network udp,
+  network unix,
+  deny network raw,
+  deny network packet,
+  deny network bluetooth,
+  deny network netlink,
+
+  # Capabilities — deny dangerous ones
+  deny capability sys_admin,
+  deny capability sys_module,
+  deny capability sys_rawio,
+  deny capability sys_ptrace,
+  deny capability sys_boot,
+  deny capability mac_admin,
+  deny capability mac_override,
+  deny capability net_admin,
+  deny capability net_raw,
+  deny capability setpcap,
+
+  # ptrace — deny all
+  deny ptrace,
+  deny ptrace peer=**,
+}

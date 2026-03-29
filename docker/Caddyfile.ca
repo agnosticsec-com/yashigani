@@ -1,0 +1,62 @@
+# Yashigani — Caddy TLS edge (CA-signed certificate mode)
+# Use this for enterprise / on-prem deployments with an internal CA.
+#
+# Before starting:
+#   1. Place your certificate chain at ./tls/server.crt
+#   2. Place your private key at ./tls/server.key
+#   3. Set YASHIGANI_TLS_DOMAIN in .env
+#
+# Caddy will NOT attempt ACME in this mode.
+# Certificate renewal is the operator's responsibility (or use certbot separately).
+
+{env.YASHIGANI_TLS_DOMAIN} {
+    # ── TLS policy — CA-signed certificate ──────────────────────────────────
+    tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key {
+        protocols tls1.2 tls1.3
+    }
+
+    # ── Security headers ────────────────────────────────────────────────────
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "no-referrer"
+        -Server
+    }
+
+    # ── Admin backoffice — /admin/* ─────────────────────────────────────────
+    handle /admin/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Prometheus federation — admin-authenticated ─────────────────────────
+    handle /metrics-federate* {
+        basicauth {
+            {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
+        }
+        reverse_proxy prometheus:9090
+    }
+
+    # ── Agent-to-agent routing — /agents/* ─────────────────────────────────
+    handle /agents/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Gateway (data plane) — all other traffic ────────────────────────────
+    handle {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+}
+
+http://{env.YASHIGANI_TLS_DOMAIN} {
+    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+}

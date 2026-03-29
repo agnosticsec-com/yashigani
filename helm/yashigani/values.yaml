@@ -1,0 +1,441 @@
+# Yashigani v0.8.0 — Umbrella Chart Top-Level Values
+# All sub-chart values are namespaced under their service name.
+
+global:
+  imageRegistry: "ghcr.io"
+  imageOwner: "yashigani"
+  tlsDomain: "yashigani.example.com"
+  # tlsMode: caddy | nginx (cert-manager + nginx-ingress)
+  tlsMode: "nginx"
+  certManagerIssuer: "letsencrypt-prod"
+  acmeEmail: "admin@example.com"
+  environment: "production"
+  useExternalSecrets: false
+
+  keda:
+    enabled: true
+
+  topologySpread:
+    enabled: true
+    policy: DoNotSchedule
+    maxSkew: 1
+
+  pdb:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Gateway — MCP reverse proxy (data plane)
+# ---------------------------------------------------------------------------
+gateway:
+  enabled: true
+  image:
+    repository: yashigani-gateway
+    tag: "0.5.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+  service:
+    port: 8080
+    type: ClusterIP
+  existingSecretName: yashigani-gateway-secrets
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+  env:
+    upstreamUrl: ""
+    opaUrl: "http://policy:8181"
+    ollamaUrl: "http://ollama:11434"
+    redisHost: "redis"
+    redisPort: "6379"
+    agentRoutingEnabled: "true"
+    agentPathPrefix: "/agents"
+    agentTokenMinLength: "64"
+    # v0.5.0
+    deploymentStream: "opensource"
+    otelEndpoint: "http://otel-collector:4317"
+    fasttextModelPath: "/app/models/fasttext_classifier.bin"
+
+# ---------------------------------------------------------------------------
+# Backoffice — Admin control plane
+# ---------------------------------------------------------------------------
+backoffice:
+  enabled: true
+  image:
+    repository: yashigani-backoffice
+    tag: "0.5.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  service:
+    port: 8443
+    type: ClusterIP
+  existingSecretName: yashigani-backoffice-secrets
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Policy — Open Policy Agent
+# ---------------------------------------------------------------------------
+policy:
+  enabled: true
+  image:
+    repository: openpolicyagent/opa
+    tag: "latest-rootless"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  service:
+    port: 8181
+    type: ClusterIP
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 60
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Redis — session store + rate limiter
+# ---------------------------------------------------------------------------
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    port: 6379
+    type: ClusterIP
+  existingSecretName: yashigani-redis-secrets
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  # Phase 9 adds cluster mode — single-node for now
+  cluster:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# Ollama — local LLM inference (StatefulSet, 2 replicas for HA)
+# ---------------------------------------------------------------------------
+ollama:
+  enabled: true
+  image:
+    repository: ollama/ollama
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+  service:
+    port: 11434
+    type: ClusterIP
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
+  model: "qwen2.5:3b"
+  env:
+    ollamaHost: "0.0.0.0"
+
+# ---------------------------------------------------------------------------
+# Prometheus — metrics collection
+# ---------------------------------------------------------------------------
+prometheus:
+  enabled: true
+  image:
+    repository: prom/prometheus
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+  service:
+    port: 9090
+    type: ClusterIP
+  retention: "30d"
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# Grafana — dashboards and alerting
+# ---------------------------------------------------------------------------
+grafana:
+  enabled: true
+  image:
+    repository: grafana/grafana
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    port: 3000
+    type: ClusterIP
+  existingSecretName: yashigani-grafana-secrets
+  adminUser: "grafana-admin"
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# Alertmanager — alert routing (v0.5.0)
+# ---------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+  image:
+    repository: prom/alertmanager
+    tag: "v0.27.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+  service:
+    port: 9093
+    type: ClusterIP
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# Loki — log aggregation (v0.5.0)
+# ---------------------------------------------------------------------------
+loki:
+  enabled: true
+  image:
+    repository: grafana/loki
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  service:
+    port: 3100
+    type: ClusterIP
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# Jaeger — distributed tracing UI (v0.5.0)
+# ---------------------------------------------------------------------------
+jaeger:
+  enabled: true
+  image:
+    repository: jaegertracing/all-in-one
+    tag: "1.57"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    port: 16686
+    type: ClusterIP
+
+# ---------------------------------------------------------------------------
+# Caddy — TLS edge proxy (optional in K8s — prefer nginx-ingress + cert-manager)
+# ---------------------------------------------------------------------------
+caddy:
+  enabled: false
+  # note: "In Kubernetes, consider using nginx-ingress + cert-manager instead of Caddy.
+  #        Set caddy.enabled=false and configure an Ingress resource."
+  image:
+    repository: caddy
+    tag: "2-alpine"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "128Mi"
+  service:
+    port: 443
+    httpPort: 80
+    type: LoadBalancer
+
+# ---------------------------------------------------------------------------
+# Optional Agent Bundles (v0.8.0)
+#
+# All four agents are DISABLED by default.  Enable per-agent with:
+#   helm upgrade yashigani ./helm/yashigani \
+#     --set agentBundles.langgraph.enabled=true
+#
+# DISCLAIMER: These integrations are provided AS IS by Agnostic Security.
+# Image digests are pinned and updated with each Yashigani release.
+# All support goes to the upstream maintainers.
+# ---------------------------------------------------------------------------
+agentBundles:
+
+  langgraph:
+    enabled: false
+    image:
+      # Digest pinned per Yashigani release — do not override manually
+      repository: langchain/langgraph-api
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicaCount: 1
+    env:
+      LANGGRAPH_YASHIGANI_URL: "http://yashigani-gateway:8080"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    # Secret name that holds the agent registration token
+    tokenSecretName: "yashigani-langgraph-token"
+    tokenSecretKey: "token"
+
+  goose:
+    enabled: false
+    image:
+      repository: ghcr.io/block/goose
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicaCount: 1
+    env:
+      GOOSE_YASHIGANI_URL: "http://yashigani-gateway:8080"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    tokenSecretName: "yashigani-goose-token"
+    tokenSecretKey: "token"
+
+  crewai:
+    enabled: false
+    image:
+      repository: crewai/crewai
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicaCount: 1
+    env:
+      CREWAI_YASHIGANI_URL: "http://yashigani-gateway:8080"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    tokenSecretName: "yashigani-crewai-token"
+    tokenSecretKey: "token"
+
+  openclaw:
+    # NOTE: Node.js 24 image — approximately 800 MB (larger than Python agent images).
+    # OpenClaw runs its own Gateway on port 18789.
+    # Integration: OpenClaw Gateway -> Yashigani Gateway -> LLM providers.
+    # License: TBD — verify at openclaw.ai before production use.
+    enabled: false
+    image:
+      repository: openclaw/openclaw
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicaCount: 1
+    env:
+      OPENCLAW_UPSTREAM_URL: "http://yashigani-gateway:8080"
+      OPENCLAW_SERVER_MODE: "true"
+      OPENCLAW_DISABLE_AUDIO: "true"
+      OPENCLAW_DISABLE_CAMERA: "true"
+      OPENCLAW_DISABLE_LOCATION: "true"
+      OPENCLAW_DISABLE_VOICE_WAKE: "true"
+    service:
+      # Expose OpenClaw's own gateway port for incoming messaging webhooks
+      port: 18789
+      type: ClusterIP
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
+    tokenSecretName: "yashigani-openclaw-token"
+    tokenSecretKey: "token"

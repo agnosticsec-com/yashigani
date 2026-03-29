@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-gateway
+    app.kubernetes.io/name: yashigani-gateway
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: yashigani-gateway
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ .Values.service.port }}
+      targetPort: 8080

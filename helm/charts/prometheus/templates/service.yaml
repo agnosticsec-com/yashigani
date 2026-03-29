@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-prometheus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-prometheus
+    app.kubernetes.io/name: yashigani-prometheus
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: yashigani-prometheus
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ .Values.service.port }}
+      targetPort: 9090

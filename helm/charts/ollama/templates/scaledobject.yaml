@@ -1,0 +1,26 @@
+{{- if .Values.global.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: yashigani-ollama
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-ollama
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: yashigani-ollama
+  minReplicaCount: {{ .Values.hpa.minReplicas }}
+  maxReplicaCount: {{ .Values.hpa.maxReplicas }}
+  cooldownPeriod: 600
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus:9090
+        metricName: yashigani_ollama_inference_latency_p95
+        query: |
+          histogram_quantile(0.95, sum(rate(yashigani_inspection_backend_latency_seconds_bucket[5m])) by (le))
+        threshold: "5"
+{{- end }}

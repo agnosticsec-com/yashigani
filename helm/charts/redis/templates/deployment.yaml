@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-redis
+    app.kubernetes.io/name: yashigani-redis
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yashigani-redis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: yashigani-redis
+        app.kubernetes.io/name: yashigani-redis
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      serviceAccountName: yashigani
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: redis
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - sh
+            - -c
+            - |
+              redis-server \
+                --save "" \
+                --appendonly no \
+                --maxmemory 256mb \
+                --maxmemory-policy allkeys-lru \
+                --requirepass "$(cat /run/secrets/redis_password)"
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+          env: []
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$(cat /run/secrets/redis_password)" ping
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$(cat /run/secrets/redis_password)" ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: redis-password
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: redis-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: yashigani-redis-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: redis-password
+          secret:
+            secretName: {{ .Values.existingSecretName }}
+            items:
+              - key: redis-password
+                path: redis_password

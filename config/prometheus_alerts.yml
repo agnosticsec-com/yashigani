@@ -1,0 +1,283 @@
+groups:
+  # ---------------------------------------------------------------------------
+  # Security alerts — CRITICAL
+  # ---------------------------------------------------------------------------
+  - name: yashigani.security
+    rules:
+
+      - alert: CredentialExfilDetected
+        expr: increase(yashigani_inspection_classifications_total{label="CREDENTIAL_EXFIL"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Credential exfiltration attempt detected"
+          description: "{{ $value }} CREDENTIAL_EXFIL classification(s) in the last 5 minutes. Immediate review required."
+
+      - alert: PromptInjectionSpike
+        expr: increase(yashigani_inspection_classifications_total{label="PROMPT_INJECTION_ONLY"}[5m]) > 5
+        for: 1m
+        labels:
+          severity: high
+        annotations:
+          summary: "HIGH: Prompt injection spike detected"
+          description: "{{ $value }} PROMPT_INJECTION_ONLY detections in 5 minutes. Possible coordinated attack."
+
+      - alert: RateLimitDDoSSuspected
+        expr: increase(yashigani_ratelimit_violations_total[1m]) > 100
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "HIGH: Possible DDoS — sustained rate limit violations"
+          description: "{{ $value }} rate limit violations per minute sustained for 2 minutes."
+
+      - alert: OPADenySpike
+        expr: increase(yashigani_gateway_requests_total{action="DENIED"}[5m]) > 20
+        for: 1m
+        labels:
+          severity: high
+        annotations:
+          summary: "HIGH: OPA policy denials spike"
+          description: "{{ $value }} OPA DENIED requests in 5 minutes."
+
+  # ---------------------------------------------------------------------------
+  # KSM rotation alerts — CRITICAL
+  # ---------------------------------------------------------------------------
+  - name: yashigani.kms
+    rules:
+
+      - alert: KSMRotationFailed
+        expr: increase(yashigani_kms_rotations_total{outcome="failure"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: "KSM secret rotation failed"
+          description: "A scheduled or manual KSM rotation has failed. Check rotation logs."
+
+      - alert: KSMRotationCritical
+        expr: increase(yashigani_kms_rotations_total{outcome="critical"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: KSM rotation exhausted all retries"
+          description: "KSM rotation failed after 3 retries. Secret may be stale."
+
+      - alert: KSMRotationOverdue
+        expr: (time() - yashigani_kms_rotation_last_success_timestamp_seconds) > 90000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KSM rotation overdue (>25 hours since last success)"
+          description: "Last successful rotation was {{ $value | humanizeDuration }} ago."
+
+  # ---------------------------------------------------------------------------
+  # Resource pressure alerts
+  # ---------------------------------------------------------------------------
+  - name: yashigani.resources
+    rules:
+
+      - alert: ResourcePressureCritical
+        expr: yashigani_resource_pressure_index > 0.8
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Resource pressure index above 0.8"
+          description: "RPI is {{ $value | humanizePercentage }}. CHS TTLs at floor (2 min). Rate limits at 25%."
+
+      - alert: ResourcePressureHigh
+        expr: yashigani_resource_pressure_index > 0.6
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Resource pressure high (RPI > 0.6)"
+          description: "RPI is {{ $value | humanizePercentage }}. Rate limits at 50%."
+
+      - alert: GPUPressureCritical
+        expr: yashigani_resource_gpu_pressure > 0.9
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU under extreme pressure (>90%)"
+          description: "GPU pressure is {{ $value | humanizePercentage }}. Inspection latency may degrade."
+
+      - alert: MemoryPressureHigh
+        expr: yashigani_resource_memory_pressure > 0.85
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container memory pressure above 85%"
+          description: "Memory pressure is {{ $value | humanizePercentage }}. Risk of OOM."
+
+  # ---------------------------------------------------------------------------
+  # Auth alerts
+  # ---------------------------------------------------------------------------
+  - name: yashigani.auth
+    rules:
+
+      - alert: AdminAccountLockout
+        expr: increase(yashigani_auth_lockouts_total{account_tier="admin"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: "Admin account locked out"
+          description: "An admin account has been locked after repeated failures. Possible credential attack."
+
+      - alert: AuthLoginFailureSpike
+        expr: increase(yashigani_auth_login_attempts_total{outcome="failure"}[5m]) > 10
+        for: 1m
+        labels:
+          severity: high
+        annotations:
+          summary: "Admin login failure spike"
+          description: "{{ $value }} failed admin login attempts in 5 minutes."
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure alerts
+  # ---------------------------------------------------------------------------
+  - name: yashigani.infra
+    rules:
+
+      - alert: GatewayDown
+        expr: up{job="yashigani_gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Yashigani gateway is down"
+          description: "The gateway has not responded to Prometheus scrapes for 1 minute."
+
+      - alert: BackofficeDown
+        expr: up{job="yashigani_backoffice"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Yashigani backoffice is down"
+
+      - alert: OllamaUnreachable
+        expr: yashigani_inspection_classifications_total offset 5m == yashigani_inspection_classifications_total
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ollama may be unreachable — no new classifications in 10 minutes"
+
+      - alert: AuditSIEMDeliveryFailing
+        expr: increase(yashigani_audit_siem_deliveries_total{outcome="failure"}[15m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SIEM delivery failures detected"
+          description: "{{ $value }} SIEM delivery failures in 15 minutes for target {{ $labels.target_name }}."
+
+  # ---------------------------------------------------------------------------
+  # CI/CD alerts
+  # ---------------------------------------------------------------------------
+  - name: yashigani.cicd
+    rules:
+
+      - alert: ContainerImageHighCVE
+        expr: yashigani_trivy_high_cve_count > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: HIGH/CRITICAL CVEs detected in container image"
+          description: "{{ $value }} HIGH or CRITICAL CVE(s) found in image {{ $labels.image }}. Immediate patching required."
+
+      - alert: CoverageDroppedBelow80
+        expr: yashigani_test_coverage_percent < 80
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Test coverage dropped below 80%"
+          description: "Current test coverage is {{ $value | humanizePercentage }}. CI gate may fail on next push."
+
+      - alert: DailySecurityScanFailed
+        expr: increase(yashigani_security_scan_failures_total[24h]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRITICAL: Daily security scan has failed"
+          description: "{{ $value }} security scan failure(s) in the last 24 hours. Investigate security.yml workflow."
+
+  - name: yashigani_gateway_v050
+    rules:
+      - alert: GatewayError4xxSpike
+        expr: rate(yashigani_gateway_upstream_status_total{status_code=~"4.."}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 4xx error rate on gateway"
+          description: "4xx rate is {{ $value | humanize }}/s over 5m (threshold: 10/s)"
+          runbook_url: "https://wiki.internal/yashigani/runbooks/4xx-spike"
+
+      - alert: GatewayError5xxSpike
+        expr: rate(yashigani_gateway_upstream_status_total{status_code=~"5.."}[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical 5xx error rate on gateway"
+          description: "5xx rate is {{ $value | humanize }}/s over 5m (threshold: 5/s)"
+          runbook_url: "https://wiki.internal/yashigani/runbooks/5xx-spike"
+
+      - alert: DBConnectionPoolExhausted
+        expr: pgbouncer_pools_cl_active / pgbouncer_pools_pool_size > 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PgBouncer connection pool near exhaustion"
+          description: "Pool utilization is {{ $value | humanizePercentage }} (threshold: 90%)"
+          runbook_url: "https://wiki.internal/yashigani/runbooks/db-pool"
+
+      - alert: InferencePayloadLogLag
+        expr: yashigani_inference_payload_log_queue_depth > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inference audit write queue is backing up"
+          description: "Queue depth: {{ $value }} (threshold: 1000)"
+          runbook_url: "https://wiki.internal/yashigani/runbooks/audit-lag"
+
+      - alert: RepeatedSmallCallsSpike
+        expr: rate(yashigani_repeated_small_calls_total[1m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Repeated small call anomaly spike detected"
+          description: "Rate: {{ $value | humanize }}/min per tenant (threshold: 5/min)"
+          runbook_url: "https://wiki.internal/yashigani/runbooks/small-calls"
+
+  # ── v0.7.0: DB Partition Monitoring ──────────────────────────────────────
+  - name: yashigani.partitions
+    rules:
+      - alert: AuditPartitionMissing
+        expr: yashigani_audit_partition_missing == 1
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit log partition missing — writes will fail at month rollover"
+          description: >
+            The audit_events partition for an upcoming month does not exist.
+            Audit log writes WILL FAIL when the calendar month rolls over without it.
+            Immediate action required: run scripts/partition_maintenance.py.
+            See IC-10 / O-05 in QA_REPORT.md and PLAN_v0.7.0.md for context.
+          runbook_url: "https://wiki.internal/yashigani/runbooks/partition-maintenance"

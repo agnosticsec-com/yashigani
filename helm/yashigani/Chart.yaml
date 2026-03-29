@@ -1,0 +1,48 @@
+apiVersion: v2
+name: yashigani
+description: Security enforcement gateway for MCP servers and agentic AI systems
+type: application
+version: 0.8.0
+appVersion: "0.8.0"
+keywords:
+  - mcp
+  - security
+  - gateway
+  - ai
+maintainers:
+  - name: Yashigani Platform Team
+home: https://github.com/agnosticsec-com/yashigani
+dependencies:
+  - name: gateway
+    version: "0.8.0"
+    repository: "file://../../charts/gateway"
+  - name: backoffice
+    version: "0.8.0"
+    repository: "file://../../charts/backoffice"
+  - name: policy
+    version: "0.8.0"
+    repository: "file://../../charts/policy"
+  - name: redis
+    version: "0.8.0"
+    repository: "file://../../charts/redis"
+  - name: ollama
+    version: "0.8.0"
+    repository: "file://../../charts/ollama"
+  - name: prometheus
+    version: "0.8.0"
+    repository: "file://../../charts/prometheus"
+  - name: grafana
+    version: "0.8.0"
+    repository: "file://../../charts/grafana"
+  - name: caddy
+    version: "0.8.0"
+    repository: "file://../../charts/caddy"
+  - name: alertmanager
+    version: "0.8.0"
+    repository: "file://../../charts/alertmanager"
+  - name: loki
+    version: "0.8.0"
+    repository: "file://../../charts/loki"
+  - name: jaeger
+    version: "0.8.0"
+    repository: "file://../../charts/jaeger"

@@ -1,0 +1,44 @@
+# Podman rootless overrides — applied automatically by install.sh when RUNTIME=podman
+# Usage: podman compose -f docker/docker-compose.yml -f docker/docker-compose.podman-override.yml up -d
+version: "3.9"
+
+services:
+  gateway:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  backoffice:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  policy:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  redis:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  ollama:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  prometheus:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  grafana:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  caddy:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id

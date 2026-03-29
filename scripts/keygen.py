@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""
+Yashigani License Signing Infrastructure — Key Generation
+=========================================================
+YASHIGANI-INTERNAL ONLY — never commit the private key output.
+
+Generates an ECDSA P-256 keypair for license signing.
+
+Usage:
+    python scripts/keygen.py --out-dir keys/
+
+Output:
+    keys/yashigani_license_private.pem  — KEEP SECRET, never commit
+    keys/yashigani_license_public.pem   — embed in verifier.py
+
+The public key PEM replaces the PLACEHOLDER in:
+    src/yashigani/licensing/verifier.py  (_PUBLIC_KEY_PEM constant)
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate Yashigani ECDSA P-256 license signing keypair"
+    )
+    parser.add_argument(
+        "--out-dir",
+        default="keys",
+        help="Output directory for keypair (default: keys/)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing keys",
+    )
+    args = parser.parse_args()
+
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ec import generate_private_key, SECP256R1
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PrivateFormat, PublicFormat, NoEncryption,
+        )
+    except ImportError:
+        print("ERROR: cryptography package required. pip install cryptography>=42", file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    priv_path = out_dir / "yashigani_license_private.pem"
+    pub_path = out_dir / "yashigani_license_public.pem"
+
+    if priv_path.exists() and not args.force:
+        print(f"ERROR: {priv_path} already exists. Use --force to overwrite.", file=sys.stderr)
+        sys.exit(1)
+
+    # Generate ECDSA P-256 keypair
+    private_key = generate_private_key(SECP256R1())
+
+    priv_pem = private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    )
+    pub_pem = private_key.public_key().public_bytes(
+        encoding=Encoding.PEM,
+        format=PublicFormat.SubjectPublicKeyInfo,
+    )
+
+    # Write with restricted permissions
+    priv_path.write_bytes(priv_pem)
+    os.chmod(priv_path, 0o600)
+
+    pub_path.write_bytes(pub_pem)
+    os.chmod(pub_path, 0o644)
+
+    print(f"Private key: {priv_path}  (chmod 600 — NEVER COMMIT)")
+    print(f"Public key:  {pub_path}")
+    print()
+    print("Next step: embed the public key in src/yashigani/licensing/verifier.py")
+    print(f"  Replace the _PUBLIC_KEY_PEM placeholder with:\n\n{pub_pem.decode()}")
+    print()
+    print("WARNING: Add keys/ to .gitignore immediately.")
+
+
+if __name__ == "__main__":
+    main()

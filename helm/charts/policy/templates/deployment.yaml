@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-policy
+    app.kubernetes.io/name: yashigani-policy
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: yashigani-policy
+  template:
+    metadata:
+      labels:
+        app: yashigani-policy
+        app.kubernetes.io/name: yashigani-policy
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      serviceAccountName: yashigani
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- if .Values.global.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.global.topologySpread.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.global.topologySpread.policy }}
+          labelSelector:
+            matchLabels:
+              app: yashigani-policy
+        - maxSkew: {{ .Values.global.topologySpread.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.global.topologySpread.policy }}
+          labelSelector:
+            matchLabels:
+              app: yashigani-policy
+      {{- end }}
+      containers:
+        - name: opa
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - "run"
+            - "--server"
+            - "--addr=0.0.0.0:8181"
+            - "--log-level=error"
+            - "/policies"
+          ports:
+            - containerPort: 8181
+              protocol: TCP
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8181
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health?bundle=true
+              port: 8181
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: policies
+          configMap:
+            name: yashigani-opa-policies
+        - name: tmp
+          emptyDir: {}

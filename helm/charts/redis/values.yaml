@@ -1,0 +1,25 @@
+enabled: true
+image:
+  repository: redis
+  tag: "7-alpine"
+  pullPolicy: IfNotPresent
+replicaCount: 1
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+service:
+  port: 6379
+  type: ClusterIP
+existingSecretName: yashigani-redis-secrets
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+# Phase 9 adds cluster mode — single-node for now.
+# Set cluster.enabled=true after running scripts/redis-migrate.sh
+cluster:
+  enabled: false

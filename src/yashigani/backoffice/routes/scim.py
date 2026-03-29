@@ -1,0 +1,420 @@
+"""
+Yashigani Backoffice — SCIM 2.0 inbound provisioning routes.
+
+Implements a subset of the SCIM 2.0 protocol (RFC 7643 / RFC 7644) for
+inbound synchronisation from an external Identity Provider (IdP).
+
+Supported operations:
+  Users:  GET (list + filter), POST (provision), DELETE (deprovision)
+  Groups: GET (list), POST (create), PATCH (add/remove members), DELETE
+
+This is read-only from the IdP's perspective — no SCIM write-back is
+performed.  All provisioning operations modify the RBACStore (Redis db/3)
+and trigger an OPA data push.
+
+Security:
+  All endpoints require an admin session.  The SCIM base path is served
+  on the backoffice app (port 8443) and is never exposed via Caddy.
+"""
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Optional, Any
+
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel
+
+from yashigani.backoffice.auth import require_admin_session, AdminSession
+from yashigani.backoffice.state import backoffice_state
+from yashigani.backoffice.routes.rbac import _push
+from yashigani.rbac.model import RBACGroup, ResourcePattern
+from yashigani.licensing.enforcer import (
+    require_feature,
+    LicenseFeatureGated,
+    license_feature_gated_response,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# SCIM schema URNs
+_URN_USER  = "urn:ietf:params:scim:schemas:core:2.0:User"
+_URN_GROUP = "urn:ietf:params:scim:schemas:core:2.0:Group"
+_URN_LIST  = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+_URN_PATCH = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+
+
+# ---------------------------------------------------------------------------
+# SCIM Pydantic models
+# ---------------------------------------------------------------------------
+
+class ScimName(BaseModel):
+    formatted: Optional[str] = None
+    givenName: Optional[str] = None
+    familyName: Optional[str] = None
+
+
+class ScimEmail(BaseModel):
+    value: str
+    primary: bool = True
+    type: str = "work"
+
+
+class ScimUserRequest(BaseModel):
+    schemas: list[str] = [_URN_USER]
+    userName: str
+    name: Optional[ScimName] = None
+    emails: Optional[list[ScimEmail]] = None
+    active: bool = True
+
+
+class ScimGroupMember(BaseModel):
+    value: str          # group_id or user email used as $ref
+    display: Optional[str] = None
+
+
+class ScimGroupRequest(BaseModel):
+    schemas: list[str] = [_URN_GROUP]
+    displayName: str
+    members: Optional[list[ScimGroupMember]] = None
+
+
+class ScimPatchOperation(BaseModel):
+    op: str                              # "add" | "remove" | "replace"
+    path: Optional[str] = None
+    value: Optional[Any] = None
+
+
+class ScimPatchRequest(BaseModel):
+    schemas: list[str] = [_URN_PATCH]
+    Operations: list[ScimPatchOperation]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_store():
+    store = backoffice_state.rbac_store
+    if store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "rbac_store_not_configured"},
+        )
+    return store
+
+
+def _user_resource(email: str, groups: list[RBACGroup]) -> dict:
+    return {
+        "schemas": [_URN_USER],
+        "id": email,
+        "userName": email,
+        "emails": [{"value": email, "primary": True, "type": "work"}],
+        "groups": [{"value": g.id, "display": g.display_name} for g in groups],
+        "active": True,
+        "meta": {"resourceType": "User"},
+    }
+
+
+def _group_resource(group: RBACGroup) -> dict:
+    return {
+        "schemas": [_URN_GROUP],
+        "id": group.id,
+        "displayName": group.display_name,
+        "members": [
+            {"value": email, "display": email}
+            for email in sorted(group.members)
+        ],
+        "meta": {"resourceType": "Group"},
+    }
+
+
+def _list_response(resources: list[dict]) -> dict:
+    return {
+        "schemas": [_URN_LIST],
+        "totalResults": len(resources),
+        "startIndex": 1,
+        "itemsPerPage": len(resources),
+        "Resources": resources,
+    }
+
+
+def _parse_filter_email(filter_str: str) -> Optional[str]:
+    """
+    Parse a simple SCIM filter: 'userName eq "user@example.com"'
+    Returns the email value or None if the filter cannot be parsed.
+    """
+    try:
+        parts = filter_str.strip().split()
+        if len(parts) == 3 and parts[0].lower() == "username" and parts[1].lower() == "eq":
+            return parts[2].strip('"\'')
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# User endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/Users")
+async def scim_list_users(
+    request: Request,
+    session: AdminSession = require_admin_session,
+):
+    store = _get_store()
+    filter_param = request.query_params.get("filter", "")
+    all_groups = store.list_groups()
+
+    # Build an index: email → [group, ...]
+    user_index: dict[str, list[RBACGroup]] = {}
+    for group in all_groups:
+        for email in group.members:
+            user_index.setdefault(email, []).append(group)
+
+    if filter_param:
+        target_email = _parse_filter_email(filter_param)
+        if target_email and target_email in user_index:
+            resources = [_user_resource(target_email, user_index[target_email])]
+        elif target_email:
+            resources = []
+        else:
+            # Unsupported filter — return all (safe fallback)
+            resources = [_user_resource(e, g) for e, g in user_index.items()]
+    else:
+        resources = [_user_resource(e, g) for e, g in user_index.items()]
+
+    return _list_response(resources)
+
+
+@router.post("/Users", status_code=status.HTTP_201_CREATED)
+async def scim_provision_user(
+    body: ScimUserRequest,
+    session: AdminSession = require_admin_session,
+):
+    """
+    Provision a user.  If the user is already a member of groups, this is
+    a no-op (idempotent).  The userName field is treated as the user's email.
+    Membership is assigned separately via SCIM Group PATCH.
+    """
+    try:
+        require_feature("scim")
+    except LicenseFeatureGated as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=402, content=license_feature_gated_response(exc))
+    store = _get_store()
+    email = body.userName
+
+    existing_groups = store.get_user_groups(email)
+    return _user_resource(email, existing_groups)
+
+
+@router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def scim_deprovision_user(
+    user_id: str,
+    session: AdminSession = require_admin_session,
+):
+    """
+    Deprovision a user by removing them from all groups.
+    user_id is treated as the user's email address.
+    """
+    try:
+        require_feature("scim")
+    except LicenseFeatureGated as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=402, content=license_feature_gated_response(exc))
+    store = _get_store()
+    email = user_id
+
+    groups = store.get_user_groups(email)
+    for group in groups:
+        try:
+            store.remove_member(group.id, email)
+        except KeyError:
+            pass
+
+    from yashigani.audit.schema import RBACMemberEvent, EventType
+    for group in groups:
+        backoffice_state.audit_writer.write(RBACMemberEvent(
+            event_type=EventType.RBAC_MEMBER_REMOVED,
+            group_id=group.id,
+            email=email,
+            admin_account=f"scim:{session.account_id}",
+        ))
+
+    if groups:
+        _push(store, f"scim:{session.account_id}")
+
+
+# ---------------------------------------------------------------------------
+# Group endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/Groups")
+async def scim_list_groups(session: AdminSession = require_admin_session):
+    store = _get_store()
+    return _list_response([_group_resource(g) for g in store.list_groups()])
+
+
+@router.post("/Groups", status_code=status.HTTP_201_CREATED)
+async def scim_create_group(
+    body: ScimGroupRequest,
+    session: AdminSession = require_admin_session,
+):
+    try:
+        require_feature("scim")
+    except LicenseFeatureGated as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=402, content=license_feature_gated_response(exc))
+    store = _get_store()
+
+    # Extract member emails from SCIM members list
+    initial_members: set[str] = set()
+    if body.members:
+        for m in body.members:
+            # value is expected to be an email address in this implementation
+            if "@" in m.value:
+                initial_members.add(m.value)
+
+    group = RBACGroup(
+        id=str(uuid.uuid4()),
+        display_name=body.displayName,
+        members=initial_members,
+        allowed_resources=[],   # patterns must be configured via the RBAC admin API
+    )
+    store.add_group(group)
+
+    from yashigani.audit.schema import RBACGroupEvent, EventType
+    backoffice_state.audit_writer.write(RBACGroupEvent(
+        event_type=EventType.RBAC_GROUP_CREATED,
+        group_id=group.id,
+        group_name=group.display_name,
+        admin_account=f"scim:{session.account_id}",
+        change_detail=f"created via SCIM with {len(initial_members)} initial members",
+    ))
+    _push(store, f"scim:{session.account_id}")
+    return _group_resource(group)
+
+
+@router.patch("/Groups/{group_id}")
+async def scim_patch_group(
+    group_id: str,
+    body: ScimPatchRequest,
+    session: AdminSession = require_admin_session,
+):
+    """
+    SCIM PATCH — supports add/remove on the 'members' attribute.
+
+    Each Operation value for 'members' must be a list of:
+        [{"value": "<email>", "display": "<optional>"}, ...]
+    """
+    try:
+        require_feature("scim")
+    except LicenseFeatureGated as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=402, content=license_feature_gated_response(exc))
+    store = _get_store()
+    group = store.get_group(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail={"error": "group_not_found"})
+
+    added: list[str] = []
+    removed: list[str] = []
+
+    for op in body.Operations:
+        op_name = op.op.lower()
+        path = (op.path or "").lower()
+
+        # Only handle the 'members' path; ignore unsupported paths silently
+        if path and path != "members":
+            continue
+
+        values = op.value if isinstance(op.value, list) else [op.value] if op.value else []
+
+        if op_name == "add":
+            for item in values:
+                email = item.get("value", "") if isinstance(item, dict) else str(item)
+                if "@" in email:
+                    try:
+                        store.add_member(group_id, email)
+                        added.append(email)
+                    except KeyError:
+                        pass
+
+        elif op_name == "remove":
+            for item in values:
+                email = item.get("value", "") if isinstance(item, dict) else str(item)
+                if "@" in email:
+                    try:
+                        store.remove_member(group_id, email)
+                        removed.append(email)
+                    except KeyError:
+                        pass
+
+        elif op_name == "replace":
+            # Replace replaces the full members list
+            new_emails: set[str] = set()
+            for item in values:
+                email = item.get("value", "") if isinstance(item, dict) else str(item)
+                if "@" in email:
+                    new_emails.add(email)
+            # Remove members no longer in the list
+            for email in list(group.members - new_emails):
+                try:
+                    store.remove_member(group_id, email)
+                    removed.append(email)
+                except KeyError:
+                    pass
+            # Add new members
+            for email in new_emails - group.members:
+                try:
+                    store.add_member(group_id, email)
+                    added.append(email)
+                except KeyError:
+                    pass
+
+    # Re-fetch after mutations
+    group = store.get_group(group_id)
+
+    from yashigani.audit.schema import RBACGroupEvent, EventType
+    if added or removed:
+        backoffice_state.audit_writer.write(RBACGroupEvent(
+            event_type=EventType.RBAC_GROUP_UPDATED,
+            group_id=group_id,
+            group_name=group.display_name if group else group_id,
+            admin_account=f"scim:{session.account_id}",
+            change_detail=f"SCIM PATCH: +{len(added)} members, -{len(removed)} members",
+        ))
+        _push(store, f"scim:{session.account_id}")
+
+    return _group_resource(group) if group else {}
+
+
+@router.delete("/Groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def scim_delete_group(
+    group_id: str,
+    session: AdminSession = require_admin_session,
+):
+    try:
+        require_feature("scim")
+    except LicenseFeatureGated as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=402, content=license_feature_gated_response(exc))
+    store = _get_store()
+    group = store.get_group(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail={"error": "group_not_found"})
+
+    store.remove_group(group_id)
+
+    from yashigani.audit.schema import RBACGroupEvent, EventType
+    backoffice_state.audit_writer.write(RBACGroupEvent(
+        event_type=EventType.RBAC_GROUP_DELETED,
+        group_id=group_id,
+        group_name=group.display_name,
+        admin_account=f"scim:{session.account_id}",
+        change_detail=f"deleted via SCIM (had {len(group.members)} members)",
+    ))
+    _push(store, f"scim:{session.account_id}")

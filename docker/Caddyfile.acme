@@ -1,0 +1,69 @@
+# Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
+# Set YASHIGANI_TLS_DOMAIN in your .env before starting.
+# Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
+#
+# Requirements:
+#   - Port 80 and 443 reachable from the internet (HTTP-01 challenge)
+#   - Or port 443 reachable (TLS-ALPN-01)
+#   - YASHIGANI_TLS_DOMAIN must resolve to this server's public IP
+#
+# TLS policy: TLS 1.2 minimum, TLS 1.3 preferred.
+# Cipher suites: Caddy defaults (ECDHE + AES-GCM / ChaCha20-Poly1305 only).
+# HSTS: max-age 1 year, includeSubDomains.
+# OCSP stapling: enabled automatically by Caddy.
+
+{env.YASHIGANI_TLS_DOMAIN} {
+    # ── TLS policy ──────────────────────────────────────────────────────────
+    tls {
+        protocols tls1.2 tls1.3
+        # ACME email for expiry notifications (auto-configured from admin email)
+        # Set CADDY_ACME_EMAIL in .env
+    }
+
+    # ── Security headers ────────────────────────────────────────────────────
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "no-referrer"
+        -Server
+    }
+
+    # ── Admin backoffice — /admin/* ─────────────────────────────────────────
+    handle /admin/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Prometheus federation — admin-authenticated ─────────────────────────
+    handle /metrics-federate* {
+        basicauth {
+            # Populated at bootstrap from generated prometheus_password secret
+            {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
+        }
+        reverse_proxy prometheus:9090
+    }
+
+    # ── Agent-to-agent routing — /agents/* ─────────────────────────────────
+    handle /agents/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Gateway (data plane) — all other traffic ────────────────────────────
+    handle {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+}
+
+# Redirect HTTP → HTTPS
+http://{env.YASHIGANI_TLS_DOMAIN} {
+    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+}

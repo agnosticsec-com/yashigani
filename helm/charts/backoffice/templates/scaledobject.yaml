@@ -1,0 +1,25 @@
+{{- if .Values.global.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: yashigani-backoffice
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-backoffice
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  scaleTargetRef:
+    name: yashigani-backoffice
+  minReplicaCount: {{ .Values.hpa.minReplicas }}
+  maxReplicaCount: {{ .Values.hpa.maxReplicas }}
+  cooldownPeriod: 300
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.hpa.targetCPUUtilizationPercentage }}"
+    - type: memory
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.hpa.targetMemoryUtilizationPercentage }}"
+{{- end }}
