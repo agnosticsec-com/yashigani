@@ -10,9 +10,9 @@
 </html>
 
 ---
----
 
 **Yashigani is the security enforcement gateway for MCP servers and agentic AI systems.**
+---
 
 It sits as a reverse proxy between AI agents and MCP tool servers. Every request is authenticated, inspected, policy-checked, and audited before reaching a tool. Every response is inspected before being returned.
 
