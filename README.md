@@ -2,25 +2,10 @@
 ---
 
 <html>
-<head>
-<style>
-div {
-  display: flex;
-  justify-content: center;
-}
-
-img {
-  width: 50%;
-}
-</style>
-</head>
 <body>
-
-
 <div>
   <img src="https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png" alt="Yashigani" style="width:50%">
 </div>
-
 </body>
 </html>
 
