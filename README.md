@@ -1,6 +1,30 @@
 # Yashigani
 ---
-https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png
+
+<html>
+<head>
+<style>
+div {
+  display: flex;
+  justify-content: center;
+}
+
+img {
+  width: 50%;
+}
+</style>
+</head>
+<body>
+
+
+<div>
+  <img src="https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png" alt="Yashigani" style="width:50%">
+</div>
+
+</body>
+</html>
+
+
 
 **Yashigani is the security enforcement gateway for MCP servers and agentic AI systems.**
 
