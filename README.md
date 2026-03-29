@@ -1,5 +1,6 @@
 # Yashigani
 ---
+https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png
 
 **Yashigani is the security enforcement gateway for MCP servers and agentic AI systems.**
 
