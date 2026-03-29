@@ -1,4 +1,5 @@
 # Yashigani
+---
 
 **Yashigani is the security enforcement gateway for MCP servers and agentic AI systems.**
 
