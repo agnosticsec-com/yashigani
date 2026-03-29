@@ -1,0 +1,26 @@
+# Staging environment overrides
+global:
+  environment: staging
+
+gateway:
+  replicaCount: 1
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits:   { cpu: "500m", memory: "256Mi" }
+  hpa:
+    minReplicas: 1
+    maxReplicas: 3
+
+backoffice:
+  replicaCount: 1
+
+ollama:
+  resources:
+    requests: { cpu: "250m", memory: "1Gi" }
+    limits:   { cpu: "2",    memory: "4Gi" }
+
+topologySpread:
+  enabled: false
+
+keda:
+  enabled: false

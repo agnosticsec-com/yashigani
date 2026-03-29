@@ -1,0 +1,52 @@
+# Promtail — ships Docker container logs to Loki
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    batchwait: 1s
+    batchsize: 1048576
+    timeout: 10s
+    backoff_config:
+      min_period: 100ms
+      max_period: 10s
+      max_retries: 10
+
+scrape_configs:
+  - job_name: containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_name]
+        regex: /(.*)
+        target_label: container
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
+        target_label: project
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
+    pipeline_stages:
+      - json:
+          expressions:
+            level: levelname
+            msg: message
+            logger: name
+            ts: asctime
+      - labels:
+          level:
+          logger:
+      - timestamp:
+          source: ts
+          format: "2006-01-02T15:04:05"
+      - output:
+          source: msg

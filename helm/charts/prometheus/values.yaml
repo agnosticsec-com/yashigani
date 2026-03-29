@@ -1,0 +1,21 @@
+enabled: true
+image:
+  repository: prom/prometheus
+  tag: "latest"
+  pullPolicy: IfNotPresent
+replicaCount: 1
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "1"
+    memory: "2Gi"
+service:
+  port: 9090
+  type: ClusterIP
+retention: "30d"
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: ""

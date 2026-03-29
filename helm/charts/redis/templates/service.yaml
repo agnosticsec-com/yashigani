@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-redis
+    app.kubernetes.io/name: yashigani-redis
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: yashigani-redis
+  ports:
+    - name: redis
+      protocol: TCP
+      port: {{ .Values.service.port }}
+      targetPort: 6379

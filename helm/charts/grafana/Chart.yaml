@@ -1,0 +1,6 @@
+apiVersion: v2
+name: grafana
+description: Yashigani Grafana dashboards and alerting
+type: application
+version: 0.4.0
+appVersion: "0.4.0"

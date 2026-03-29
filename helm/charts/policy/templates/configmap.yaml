@@ -1,0 +1,26 @@
+# OPA policies are mounted from the policy/ directory.
+# In K8s, use an init container or CI step to build policies into the image.
+# For development, mount the policy ConfigMap from files.
+#
+# To populate this ConfigMap with your actual policies, run:
+#   kubectl create configmap yashigani-opa-policies \
+#     --from-file=policy/ -n <namespace> --dry-run=client -o yaml \
+#     | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-opa-policies
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-policy
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  # Placeholder — replace with actual policy files via CI or kustomize overlay.
+  # Example:
+  #   authz.rego: |
+  #     package yashigani.authz
+  #     default allow = false
+  README: |
+    OPA policies are managed externally.
+    Load policies via CI or an init container that copies from the policy/ directory.
+    See helm/README.md for instructions.

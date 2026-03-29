@@ -1,0 +1,22 @@
+enabled: true
+image:
+  repository: grafana/grafana
+  tag: "latest"
+  pullPolicy: IfNotPresent
+replicaCount: 1
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+service:
+  port: 3000
+  type: ClusterIP
+existingSecretName: yashigani-grafana-secrets
+adminUser: "grafana-admin"
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: ""

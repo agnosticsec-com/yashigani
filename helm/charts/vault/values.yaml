@@ -1,0 +1,21 @@
+# WARNING: Dev mode — all data stored in memory. NOT for production.
+# For production, use the official HashiCorp Vault Helm chart.
+enabled: false
+
+image:
+  repository: hashicorp/vault
+  tag: "1.16"
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+devMode:
+  enabled: true
+  rootTokenSecretName: "yashigani-vault-root-token"
+  rootTokenSecretKey: "token"

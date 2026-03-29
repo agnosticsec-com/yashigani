@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-prometheus-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-prometheus
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+      - /etc/prometheus/alerts.yml
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'yashigani-gateway'
+        static_configs:
+          - targets: ['yashigani-gateway:8080']
+        metrics_path: /metrics
+
+      - job_name: 'yashigani-backoffice'
+        static_configs:
+          - targets: ['yashigani-backoffice:8443']
+        metrics_path: /metrics
+
+      - job_name: 'yashigani-policy'
+        static_configs:
+          - targets: ['yashigani-policy:8181']
+        metrics_path: /metrics
+
+  alerts.yml: |
+    groups:
+      - name: yashigani
+        rules:
+          - alert: GatewayHighErrorRate
+            expr: |
+              sum(rate(yashigani_gateway_requests_total{status=~"5.."}[5m]))
+              / sum(rate(yashigani_gateway_requests_total[5m])) > 0.05
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Gateway error rate above 5%"
+
+          - alert: OllamaInferenceLatencyHigh
+            expr: |
+              histogram_quantile(0.95, sum(rate(yashigani_inspection_backend_latency_seconds_bucket[5m])) by (le)) > 5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Ollama p95 inference latency above 5s"
+
+          - alert: RedisDown
+            expr: up{job="yashigani-redis"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Redis is unreachable"

@@ -1,0 +1,31 @@
+{{- if .Values.global.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: yashigani-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-gateway
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  scaleTargetRef:
+    name: yashigani-gateway
+  minReplicaCount: {{ .Values.hpa.minReplicas }}
+  maxReplicaCount: {{ .Values.hpa.maxReplicas }}
+  cooldownPeriod: 300
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.hpa.targetCPUUtilizationPercentage }}"
+    - type: memory
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.hpa.targetMemoryUtilizationPercentage }}"
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus:9090
+        metricName: yashigani_gateway_rps
+        query: sum(rate(yashigani_gateway_requests_total[1m]))
+        threshold: "50"
+{{- end }}

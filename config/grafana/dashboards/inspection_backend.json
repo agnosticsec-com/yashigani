@@ -1,0 +1,190 @@
+{
+  "uid": "yashigani-inspection-backend",
+  "title": "Yashigani — Inspection Backend",
+  "tags": ["yashigani", "inspection", "backends"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Backend",
+      "description": "Currently active inspection classification backend.",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "label_replace(yashigani_inspection_active_backend == 1, \"backend\", \"$1\", \"backend\", \"(.+)\")",
+          "legendFormat": "{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "orientation": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "name"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "blue", "value": null}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Fail-Closed Triggers (24h)",
+      "description": "Number of times all backends were exhausted and fail-closed was triggered in the last 24 hours.",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "increase(yashigani_inspection_backend_exhausted_total[24h])",
+          "legendFormat": "Fail-Closed Events",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 5}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Backend Request Rate",
+      "description": "Classification requests per second by backend and outcome.",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(yashigani_inspection_backend_requests_total[5m])",
+          "legendFormat": "{{backend}} / {{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {"lineWidth": 2, "fillOpacity": 10}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom"}
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Backend Latency p50 / p95",
+      "description": "Inspection backend classification latency percentiles by backend.",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(yashigani_inspection_backend_latency_seconds_bucket[5m]))",
+          "legendFormat": "p50 {{backend}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(yashigani_inspection_backend_latency_seconds_bucket[5m]))",
+          "legendFormat": "p95 {{backend}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {"lineWidth": 2, "fillOpacity": 5}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom"}
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Backend Error Rate",
+      "description": "Rate of error and timeout outcomes per backend.",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(yashigani_inspection_backend_requests_total{outcome=~\"error|timeout|failure\"}[5m])",
+          "legendFormat": "{{backend}} / {{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "thresholdsStyle": {"mode": "line"}
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 0.1}
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom"}
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Fallback Events",
+      "description": "Backend fallback transitions — triggered when the active backend is unavailable.",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "rate(yashigani_inspection_backend_fallbacks_total[5m])",
+          "legendFormat": "{{failed_backend}} → {{next_backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {"mode": "palette-classic"},
+          "custom": {"lineWidth": 2, "fillOpacity": 10}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "table", "placement": "bottom"}
+      }
+    }
+  ]
+}

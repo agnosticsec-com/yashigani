@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/part-of: yashigani
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jaeger
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+            - name: SPAN_STORAGE_TYPE
+              value: "memory"
+          ports:
+            - containerPort: 16686
+              name: ui
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 14269
+              name: admin
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 14269
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources: {{- toYaml .Values.resources | nindent 12 }}

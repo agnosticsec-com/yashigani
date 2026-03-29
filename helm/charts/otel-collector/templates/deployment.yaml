@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: yashigani
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: otel-collector
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config=/etc/otel/otel-collector.yml"]
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+              readOnly: true
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.config.existingSecretName }}

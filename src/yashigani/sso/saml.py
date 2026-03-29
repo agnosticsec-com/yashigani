@@ -1,0 +1,147 @@
+"""
+Yashigani SSO — SAMLv2 Service Provider.
+Validates assertions from the IdP and resolves user identity.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+from yashigani.licensing.enforcer import require_feature
+
+logger = logging.getLogger(__name__)
+
+
+def _import_saml():
+    try:
+        from onelogin.saml2.auth import OneLogin_Saml2_Auth
+        from onelogin.saml2.settings import OneLogin_Saml2_Settings
+        return OneLogin_Saml2_Auth, OneLogin_Saml2_Settings
+    except ImportError as exc:
+        raise ImportError(
+            "python3-saml is required for SAMLv2. "
+            "Install with: pip install python3-saml"
+        ) from exc
+
+
+@dataclass
+class SAMLConfig:
+    sp_entity_id: str
+    sp_acs_url: str             # Assertion Consumer Service URL
+    sp_sls_url: str             # Single Logout Service URL
+    idp_entity_id: str
+    idp_sso_url: str
+    idp_sls_url: str
+    idp_x509_cert: str          # IdP signing certificate (PEM, no headers)
+    sp_private_key: str         # SP private key (PEM, no headers)
+    sp_certificate: str         # SP certificate (PEM, no headers)
+    name_id_format: str = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+
+
+@dataclass
+class SAMLUserInfo:
+    subject: str                # NameID value
+    email: Optional[str]
+    attributes: dict            # all assertion attributes
+    session_index: Optional[str]
+
+
+class SAMLProvider:
+    """
+    SAMLv2 Service Provider using python3-saml (OneLogin).
+    """
+
+    def __init__(self, config: SAMLConfig) -> None:
+        self._config = config
+
+    def get_login_url(self, request_data: dict) -> str:
+        """Build the IdP redirect URL for SP-initiated SSO."""
+        require_feature("saml")
+        auth = self._build_auth(request_data)
+        return auth.login()
+
+    def process_response(self, request_data: dict) -> SAMLUserInfo:
+        """
+        Process the IdP SAMLResponse (POST binding).
+        Validates signature and returns SAMLUserInfo on success.
+        """
+        require_feature("saml")
+        auth = self._build_auth(request_data)
+        auth.process_response()
+        errors = auth.get_errors()
+        if errors:
+            raise ValueError(
+                f"SAML response errors: {errors}. "
+                f"Reason: {auth.get_last_error_reason()}"
+            )
+        if not auth.is_authenticated():
+            raise ValueError("SAML authentication failed — not authenticated after response")
+
+        attrs = auth.get_attributes()
+        name_id = auth.get_nameid()
+        email = None
+        if "email" in attrs:
+            email = attrs["email"][0]
+        elif "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress" in attrs:
+            email = attrs["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"][0]
+
+        return SAMLUserInfo(
+            subject=name_id,
+            email=email,
+            attributes={k: v[0] if len(v) == 1 else v for k, v in attrs.items()},
+            session_index=auth.get_session_index(),
+        )
+
+    # -- Internal ------------------------------------------------------------
+
+    def _build_auth(self, request_data: dict):
+        OneLogin_Saml2_Auth, _ = _import_saml()
+        settings = self._build_settings()
+        return OneLogin_Saml2_Auth(request_data, custom_base_path=None, settings=settings)
+
+    def _build_settings(self) -> dict:
+        c = self._config
+        return {
+            "strict": True,
+            "debug": False,
+            "sp": {
+                "entityId": c.sp_entity_id,
+                "assertionConsumerService": {
+                    "url": c.sp_acs_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
+                },
+                "singleLogoutService": {
+                    "url": c.sp_sls_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+                },
+                "NameIDFormat": c.name_id_format,
+                "x509cert": c.sp_certificate,
+                "privateKey": c.sp_private_key,
+            },
+            "idp": {
+                "entityId": c.idp_entity_id,
+                "singleSignOnService": {
+                    "url": c.idp_sso_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+                },
+                "singleLogoutService": {
+                    "url": c.idp_sls_url,
+                    "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
+                },
+                "x509cert": c.idp_x509_cert,
+            },
+            "security": {
+                "nameIdEncrypted": False,
+                "authnRequestsSigned": True,
+                "logoutRequestSigned": True,
+                "logoutResponseSigned": True,
+                "signMetadata": True,
+                "wantMessagesSigned": True,
+                "wantAssertionsSigned": True,
+                "wantNameIdEncrypted": False,
+                "requestedAuthnContext": True,
+                "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+                "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
+            },
+        }

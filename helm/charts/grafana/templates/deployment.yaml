@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-grafana
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-grafana
+    app.kubernetes.io/name: yashigani-grafana
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: yashigani-grafana
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: yashigani-grafana
+        app.kubernetes.io/name: yashigani-grafana
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      serviceAccountName: yashigani
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 472
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: {{ .Values.adminUser | quote }}
+            - name: GF_SECURITY_ADMIN_PASSWORD__FILE
+              value: /run/secrets/grafana_admin_password
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+            - name: grafana-provisioning
+              mountPath: /etc/grafana/provisioning/datasources
+              subPath: datasources.yaml
+              readOnly: true
+            - name: grafana-provisioning
+              mountPath: /etc/grafana/provisioning/dashboards
+              subPath: dashboards.yaml
+              readOnly: true
+            - name: grafana-secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: grafana-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: yashigani-grafana-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: grafana-provisioning
+          configMap:
+            name: yashigani-grafana-provisioning
+        - name: grafana-secrets
+          secret:
+            secretName: {{ .Values.existingSecretName }}
+            items:
+              - key: grafana-admin-password
+                path: grafana_admin_password

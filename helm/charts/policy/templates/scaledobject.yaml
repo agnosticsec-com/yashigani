@@ -1,0 +1,21 @@
+{{- if .Values.global.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: yashigani-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-policy
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  scaleTargetRef:
+    name: yashigani-policy
+  minReplicaCount: {{ .Values.hpa.minReplicas }}
+  maxReplicaCount: {{ .Values.hpa.maxReplicas }}
+  cooldownPeriod: 300
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "{{ .Values.hpa.targetCPUUtilizationPercentage }}"
+{{- end }}

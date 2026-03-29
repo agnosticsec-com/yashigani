@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# scripts/health-check.sh — Yashigani v0.6.0
+# Post-install health verification with retries and spinner.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# ---------------------------------------------------------------------------
+# Parse flags
+# ---------------------------------------------------------------------------
+TIMEOUT=120
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout) shift; TIMEOUT="${1:-120}" ;;
+    --help)
+      cat <<'EOF'
+Usage: scripts/health-check.sh [OPTIONS]
+
+Post-install health check for all Yashigani services.
+Polls each service with 5s retries up to --timeout seconds.
+
+Options:
+  --timeout SECONDS   Maximum wait time per service (default: 120)
+  --help              Print this message
+
+Services checked:
+  Gateway   /healthz                    → HTTP 200
+  Backoffice /healthz                   → HTTP 200
+  Postgres  pg_isready                  → ready
+  Redis     redis-cli ping              → PONG
+  OPA       /health                     → {"status":"ok"}
+  Ollama    /api/tags                   → HTTP 200
+
+Reads YASHIGANI_TLS_DOMAIN from .env in project root (if present).
+EOF
+      exit 0
+      ;;
+    *) printf "Unknown option: %s\nRun with --help for usage.\n" "$1" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+# ---------------------------------------------------------------------------
+# Source platform detection (for color vars)
+# ---------------------------------------------------------------------------
+# shellcheck source=scripts/platform-detect.sh
+source "${SCRIPT_DIR}/platform-detect.sh"
+
+# ---------------------------------------------------------------------------
+# Load .env for domain info
+# ---------------------------------------------------------------------------
+YASHIGANI_TLS_DOMAIN="${YASHIGANI_TLS_DOMAIN:-}"
+if [ -f "${PROJECT_ROOT}/.env" ]; then
+  # shellcheck disable=SC1090
+  set -o allexport
+  # Source only safe KEY=VALUE pairs, ignoring comments and blanks
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ''|\#*) continue ;;
+    esac
+    # Strip inline comments from value
+    value="${value%%#*}"
+    # Strip surrounding quotes
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    # Trim trailing whitespace
+    value="${value%"${value##*[![:space:]]}"}"
+    export "$key"="$value" 2>/dev/null || true
+  done < "${PROJECT_ROOT}/.env"
+  set +o allexport
+fi
+DOMAIN="${YASHIGANI_TLS_DOMAIN:-localhost}"
+
+# ---------------------------------------------------------------------------
+# Color/print helpers
+# ---------------------------------------------------------------------------
+_ok()    { printf "${YSG_GREEN}[OK]${YSG_RESET}    %s\n"  "$*"; }
+_fail()  { printf "${YSG_RED}[FAIL]${YSG_RESET}  %s\n"    "$*" >&2; }
+_info()  { printf "${YSG_BLUE}[INFO]${YSG_RESET}  %s\n"   "$*"; }
+_warn()  { printf "${YSG_YELLOW}[WARN]${YSG_RESET}  %s\n" "$*"; }
+
+# ---------------------------------------------------------------------------
+# Spinner
+# ---------------------------------------------------------------------------
+_spinner_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+_spin_pid=""
+
+_spinner_start() {
+  local label="$1"
+  if [ -t 1 ]; then
+    (
+      i=0
+      while true; do
+        char="${_spinner_chars:$(( i % ${#_spinner_chars} )):1}"
+        printf "\r  %s  %s... " "$char" "$label"
+        i=$(( i + 1 ))
+        sleep 0.1
+      done
+    ) &
+    _spin_pid=$!
+  fi
+}
+
+_spinner_stop() {
+  if [ -n "${_spin_pid:-}" ] && kill -0 "$_spin_pid" 2>/dev/null; then
+    kill "$_spin_pid" 2>/dev/null || true
+    wait "$_spin_pid" 2>/dev/null || true
+    _spin_pid=""
+    [ -t 1 ] && printf "\r%60s\r" " "
+  fi
+}
+trap '_spinner_stop' EXIT
+
+# ---------------------------------------------------------------------------
+# Retry-with-timeout helper
+# $1 = service label
+# $2 = check command (string, evaluated)
+# Returns 0 on success, 1 on timeout
+# ---------------------------------------------------------------------------
+_wait_for() {
+  local label="$1"
+  local check_cmd="$2"
+  local deadline=$(( $(date +%s) + TIMEOUT ))
+
+  _spinner_start "$label"
+
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if eval "$check_cmd" >/dev/null 2>&1; then
+      _spinner_stop
+      _ok "$label"
+      return 0
+    fi
+    sleep 5
+  done
+
+  _spinner_stop
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Individual checks
+# ---------------------------------------------------------------------------
+FAILED_SERVICES=()
+
+_check_http() {
+  local label="$1"
+  local url="$2"
+  local extra_args="${3:-}"
+
+  if ! _wait_for "$label" \
+    "curl --silent --fail --max-time 5 ${extra_args} '${url}' -o /dev/null"; then
+    _fail "$label — timed out after ${TIMEOUT}s: ${url}"
+    FAILED_SERVICES+=("$label")
+  fi
+}
+
+_check_compose_exec() {
+  local label="$1"
+  local service="$2"
+  local cmd="$3"
+  local expect="${4:-}"
+
+  local check
+  if [ -n "$expect" ]; then
+    check="docker compose -f '${PROJECT_ROOT}/docker-compose.yml' \
+      exec -T ${service} ${cmd} 2>/dev/null | grep -q '${expect}'"
+  else
+    check="docker compose -f '${PROJECT_ROOT}/docker-compose.yml' \
+      exec -T ${service} ${cmd}"
+  fi
+
+  if ! _wait_for "$label" "$check"; then
+    _fail "$label — timed out after ${TIMEOUT}s"
+    FAILED_SERVICES+=("$label")
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Run checks
+# ---------------------------------------------------------------------------
+_info "Starting health checks (timeout: ${TIMEOUT}s per service)..."
+printf "\n"
+
+# 1. Gateway /healthz
+_check_http "Gateway" "https://${DOMAIN}/healthz"
+
+# 2. Backoffice /healthz
+# Try via Caddy /admin path first, fall back to direct
+if ! _wait_for "Backoffice" \
+  "curl --silent --fail --max-time 5 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
+  _info "Trying Backoffice direct (no TLS)..."
+  _check_http "Backoffice" "http://localhost:8080/healthz"
+fi
+
+# 3. Postgres
+_check_compose_exec "Postgres" "postgres" \
+  "pg_isready -U yashigani_app" "accepting connections"
+
+# 4. Redis
+_check_compose_exec "Redis" "redis" \
+  "redis-cli ping" "PONG"
+
+# 5. OPA
+_check_http "OPA" "http://localhost:8181/health" \
+  "-H 'Content-Type: application/json'"
+
+# 6. Ollama
+_check_http "Ollama" "http://localhost:11434/api/tags"
+
+# ---------------------------------------------------------------------------
+# On failure: print logs for each failed service
+# ---------------------------------------------------------------------------
+if [ "${#FAILED_SERVICES[@]}" -gt 0 ]; then
+  printf "\n${YSG_RED}The following services failed health checks:${YSG_RESET}\n"
+  for svc in "${FAILED_SERVICES[@]}"; do
+    printf "  - %s\n" "$svc"
+  done
+
+  printf "\n${YSG_YELLOW}Tailing last 20 lines of logs for failed services:${YSG_RESET}\n"
+  for svc in "${FAILED_SERVICES[@]}"; do
+    # Map display name to compose service name
+    local_svc_lower="$(printf '%s' "$svc" | tr '[:upper:]' '[:lower:]')"
+    printf "\n--- %s logs ---\n" "$svc"
+    docker compose -f "${PROJECT_ROOT}/docker-compose.yml" \
+      logs --tail=20 "$local_svc_lower" 2>/dev/null || \
+      printf "(could not retrieve logs for %s)\n" "$local_svc_lower"
+  done
+
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Success banner
+# ---------------------------------------------------------------------------
+
+# Determine license tier from env
+LICENSE_TIER="${YASHIGANI_LICENSE_TIER:-Community (10 agents max)}"
+
+printf "\n"
+printf "╔══════════════════════════════════════════╗\n"
+printf "║   Yashigani v0.6.0 — Installation OK    ║\n"
+printf "╠══════════════════════════════════════════╣\n"
+printf "║ %-8s %-33s║\n" "URL:"     "https://${DOMAIN}"
+printf "║ %-8s %-33s║\n" "Admin:"   "https://${DOMAIN}/admin"
+printf "║ %-8s %-33s║\n" "Grafana:" "https://${DOMAIN}/grafana"
+printf "║ %-8s %-33s║\n" "Tier:"    "${LICENSE_TIER}"
+printf "╠══════════════════════════════════════════╣\n"
+printf "║ Credentials printed at first run:       ║\n"
+printf "║   docker compose logs backoffice        ║\n"
+printf "╚══════════════════════════════════════════╝\n"
+printf "\n"
+
+_ok "All services healthy."
+exit 0

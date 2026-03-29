@@ -1,0 +1,93 @@
+# Yashigani v0.5.0 — Alertmanager configuration
+# Notification channels are configured via Admin → Alerts → Notifications.
+# Secrets (webhook URLs, PagerDuty keys) are mounted from /run/secrets.
+# Each channel is optional and independently toggled; unconfigured channels are skipped.
+global:
+  resolve_timeout: 5m
+  smtp_require_tls: true
+  pagerduty_url: https://events.pagerduty.com/v2/enqueue
+
+route:
+  group_by: [alertname, tenant_id]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: slack-warning
+  routes:
+    - match:
+        severity: critical
+      receiver: critical-combined
+      continue: false
+    - match:
+        severity: warning
+      receiver: slack-warning
+      continue: false
+
+receivers:
+
+  - name: slack-warning
+    slack_configs:
+      - api_url_file: /run/secrets/slack_webhook_url
+        channel: "#yashigani-alerts"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          {{ if .Labels.tenant_id }}*Tenant:* {{ .Labels.tenant_id }}{{ end }}
+          {{ end }}
+        color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+
+  - name: email-warning
+    email_configs:
+      - to_file: /run/secrets/alert_email_to
+        from: alertmanager@yashigani.local
+        smarthost_file: /run/secrets/smtp_smarthost
+        auth_username_file: /run/secrets/smtp_username
+        auth_password_file: /run/secrets/smtp_password
+        send_resolved: true
+        headers:
+          subject: '[{{ .Status | toUpper }}] Yashigani Alert: {{ .GroupLabels.alertname }}'
+        html: |
+          <p>{{ range .Alerts }}<b>{{ .Annotations.summary }}</b><br/>{{ .Annotations.description }}<br/>{{ end }}</p>
+
+  - name: critical-combined
+    slack_configs:
+      - api_url_file: /run/secrets/slack_webhook_url
+        channel: "#yashigani-oncall"
+        send_resolved: true
+        title: '[CRITICAL] {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ if .Labels.tenant_id }}*Tenant:* {{ .Labels.tenant_id }}{{ end }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        color: danger
+    email_configs:
+      - to_file: /run/secrets/alert_email_to
+        from: alertmanager@yashigani.local
+        smarthost_file: /run/secrets/smtp_smarthost
+        auth_username_file: /run/secrets/smtp_username
+        auth_password_file: /run/secrets/smtp_password
+        send_resolved: true
+        headers:
+          subject: '[CRITICAL] Yashigani: {{ .GroupLabels.alertname }}'
+    pagerduty_configs:
+      - routing_key_file: /run/secrets/pagerduty_integration_key
+        description: '{{ .GroupLabels.alertname }}: {{ (index .Alerts 0).Annotations.summary }}'
+        severity: critical
+        details:
+          alert_count: '{{ len .Alerts }}'
+          tenant_ids: '{{ range .Alerts }}{{ .Labels.tenant_id }} {{ end }}'
+
+inhibit_rules:
+  # If a 5xx spike is firing, suppress the 4xx spike alert (they often co-occur)
+  - source_match:
+      alertname: GatewayError5xxSpike
+    target_match:
+      alertname: GatewayError4xxSpike
+    equal: [instance]

@@ -1,0 +1,64 @@
+{{- /*
+Yashigani v0.7.0 — DB partition maintenance CronJob (P1-B)
+
+Runs scripts/partition_maintenance.py on the 1st of every month at 02:00 UTC
+to pre-create the next 3 months of audit_events and inference_events partitions.
+Safe to run at any time; CREATE TABLE IF NOT EXISTS prevents double-creation.
+*/ -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "yashigani.fullname" . }}-partition-maintenance
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-maintenance
+  annotations:
+    yashigani.io/version: {{ .Chart.AppVersion | quote }}
+spec:
+  schedule: "0 2 1 * *"     # 02:00 UTC on the 1st of every month
+  concurrencyPolicy: Forbid  # never run two instances simultaneously
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "yashigani.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: db-maintenance
+        spec:
+          serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+            - name: partition-maintenance
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - python
+                - scripts/partition_maintenance.py
+                - --months-ahead
+                - "3"
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "yashigani.fullname" . }}-db-credentials
+                      key: url
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "256Mi"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

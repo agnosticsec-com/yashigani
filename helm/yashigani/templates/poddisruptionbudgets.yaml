@@ -1,0 +1,35 @@
+{{- if .Values.global.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: yashigani-gateway-pdb
+  namespace: {{ .Release.Namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: yashigani-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: yashigani-backoffice-pdb
+  namespace: {{ .Release.Namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: yashigani-backoffice
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: yashigani-policy-pdb
+  namespace: {{ .Release.Namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: yashigani-policy
+{{- end }}

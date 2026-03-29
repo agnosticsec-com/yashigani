@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-backoffice
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-backoffice
+    app.kubernetes.io/name: yashigani-backoffice
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: yashigani-backoffice
+  template:
+    metadata:
+      labels:
+        app: yashigani-backoffice
+        app.kubernetes.io/name: yashigani-backoffice
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      serviceAccountName: yashigani
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: Localhost
+          localhostProfile: yashigani-gateway.json
+      {{- if .Values.global.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.global.topologySpread.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ .Values.global.topologySpread.policy }}
+          labelSelector:
+            matchLabels:
+              app: yashigani-backoffice
+        - maxSkew: {{ .Values.global.topologySpread.maxSkew }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ .Values.global.topologySpread.policy }}
+          labelSelector:
+            matchLabels:
+              app: yashigani-backoffice
+      {{- end }}
+      containers:
+        - name: backoffice
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8443
+              protocol: TCP
+          env:
+            - name: REDIS_HOST
+              value: {{ .Values.env.redisHost | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.env.redisPort | quote }}
+            - name: YASHIGANI_OPA_URL
+              value: {{ .Values.env.opaUrl | quote }}
+            - name: YASHIGANI_ADMIN_MIN_TOTAL
+              value: {{ .Values.env.adminMinTotal | quote }}
+            - name: YASHIGANI_ADMIN_MIN_ACTIVE
+              value: {{ .Values.env.adminMinActive | quote }}
+            - name: YASHIGANI_ADMIN_SOFT_TARGET
+              value: {{ .Values.env.adminSoftTarget | quote }}
+            - name: YASHIGANI_INSPECTION_DEFAULT_BACKEND
+              value: {{ .Values.env.inspectionDefaultBackend | quote }}
+            - name: YASHIGANI_INSPECTION_FALLBACK_CHAIN
+              value: {{ .Values.env.inspectionFallbackChain | quote }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecretName }}
+                  key: redis-password
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8443
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: audit-buffer
+              mountPath: /data/audit
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        - name: audit-buffer
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi

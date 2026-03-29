@@ -1,0 +1,15 @@
+replicaCount: 1
+image:
+  repository: jaegertracing/all-in-one
+  tag: "1.57"
+  pullPolicy: IfNotPresent
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+persistence:
+  size: 5Gi
+  storageClass: ""

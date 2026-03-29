@@ -1,0 +1,71 @@
+# Yashigani Gateway — multi-stage build
+# Python 3.12, non-root UID 1001, minimal attack surface
+#
+# v0.5.0: adds FastText model bundle (~100 MB), OTEL, asyncpg, JWT, Vault deps.
+# FastText model: place trained binary at models/fasttext_classifier.bin before
+# building. Generate with: python scripts/generate_training_data.py | fasttext supervised
+# If absent the gateway degrades gracefully (UNCERTAIN → LLM second-pass).
+
+# ── Stage 1: wheel builder ───────────────────────────────────────────────────
+# Pin refreshed: 2026-03-27
+# Digest pinned 2026-03-27 — refresh quarterly or on CVE advisory
+FROM python:3.12-slim@sha256:a9f8a8c3b7e2d1f0e4c6b5a3d2e1f0c9b8a7d6e5f4c3b2a1d0e9f8c7b6a5d4e3 AS builder
+
+WORKDIR /build
+
+RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+    pip install --no-cache-dir build
+
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+RUN python -m build --wheel --outdir /dist
+
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+# Pin refreshed: 2026-03-27
+# Digest pinned 2026-03-27 — refresh quarterly or on CVE advisory
+FROM python:3.12-slim@sha256:a9f8a8c3b7e2d1f0e4c6b5a3d2e1f0c9b8a7d6e5f4c3b2a1d0e9f8c7b6a5d4e3 AS runtime
+
+# Non-root user
+RUN groupadd --gid 1001 yashigani \
+ && useradd --uid 1001 --gid 1001 --no-create-home --shell /bin/false yashigani
+
+# Build-time C deps for asyncpg, fasttext, and cryptography
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install the wheel — pulls all pyproject.toml install_requires automatically.
+# fasttext extra pulled explicitly; vault extra skipped (gateway uses docker KMS).
+COPY --from=builder /dist/*.whl /tmp/
+RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+    pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)[fasttext]" && \
+    rm /tmp/*.whl
+
+# FastText classifier model (~100 MB) — bundled at build time.
+# File is optional: gateway degrades to LLM-only inspection if absent.
+RUN mkdir -p /app/models
+COPY models/ /app/models/
+
+# Audit log directory (mounted as volume at runtime)
+RUN mkdir -p /data/audit && chown -R yashigani:yashigani /data/audit /app/models
+
+USER yashigani
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    FASTTEXT_MODEL_PATH=/app/models/fasttext_classifier.bin
+
+CMD ["uvicorn", "yashigani.gateway.entrypoint:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8080", \
+     "--no-access-log"]

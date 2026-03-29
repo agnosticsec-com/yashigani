@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .Release.Name }}-delete-legacy-hpa"
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: yashigani
+      containers:
+        - name: kubectl
+          image: bitnami/kubectl:latest
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /bin/sh
+            - -c
+            - |
+              kubectl delete hpa --all -n {{ .Release.Namespace }} --ignore-not-found=true
+              echo "Legacy HPA cleanup complete"

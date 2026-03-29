@@ -1,0 +1,24 @@
+enabled: true
+image:
+  repository: openpolicyagent/opa
+  tag: "latest-rootless"
+  pullPolicy: IfNotPresent
+replicaCount: 2
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+service:
+  port: 8181
+  type: ClusterIP
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+pdb:
+  enabled: true
+  minAvailable: 1

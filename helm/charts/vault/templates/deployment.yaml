@@ -1,0 +1,49 @@
+{{- if .Values.enabled }}
+# WARNING: Dev-mode Vault — data NOT persisted. NOT for production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/part-of: yashigani
+  annotations:
+    yashigani.io/warning: "dev-mode-only-not-for-production"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vault
+      annotations:
+        yashigani.io/warning: "dev-mode-vault-not-for-production"
+    spec:
+      containers:
+        - name: vault
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["server", "-dev"]
+          env:
+            - name: VAULT_DEV_LISTEN_ADDRESS
+              value: "0.0.0.0:8200"
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.devMode.rootTokenSecretName }}
+                  key: {{ .Values.devMode.rootTokenSecretKey }}
+          ports:
+            - containerPort: 8200
+              name: http
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]
+          livenessProbe:
+            exec:
+              command: ["vault", "status"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+{{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: policy
+description: Yashigani OPA policy engine
+type: application
+version: 0.4.0
+appVersion: "0.4.0"

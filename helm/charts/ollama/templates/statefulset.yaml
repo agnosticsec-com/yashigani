@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: yashigani-ollama
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-ollama
+    app.kubernetes.io/name: yashigani-ollama
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: ollama-headless
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: yashigani-ollama
+  template:
+    metadata:
+      labels:
+        app: yashigani-ollama
+        app.kubernetes.io/name: yashigani-ollama
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    spec:
+      serviceAccountName: yashigani
+      securityContext:
+        runAsNonRoot: false
+        fsGroup: 0
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: accelerator
+                    operator: In
+                    values:
+                      - nvidia
+      {{- if .Values.global.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.global.topologySpread.maxSkew }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: yashigani-ollama
+      {{- end }}
+      containers:
+        - name: ollama
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 11434
+              protocol: TCP
+          env:
+            - name: OLLAMA_HOST
+              value: {{ .Values.env.ollamaHost | quote }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            failureThreshold: 24
+            periodSeconds: 5
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+  volumeClaimTemplates:
+    - metadata:
+        name: ollama-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}

@@ -1,0 +1,15 @@
+replicaCount: 1
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.100.0"
+  pullPolicy: IfNotPresent
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+config:
+  existingSecretName: "yashigani-otel-config"
+  configKey: "otel-collector.yml"

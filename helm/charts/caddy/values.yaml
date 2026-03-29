@@ -1,0 +1,19 @@
+enabled: false
+# note: "In Kubernetes, consider using nginx-ingress + cert-manager instead of Caddy.
+#        Set caddy.enabled=false and configure an Ingress resource (global.tlsMode=nginx)."
+image:
+  repository: caddy
+  tag: "2-alpine"
+  pullPolicy: IfNotPresent
+replicaCount: 1
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "250m"
+    memory: "128Mi"
+service:
+  port: 443
+  httpPort: 80
+  type: LoadBalancer

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: yashigani-policy
+    app.kubernetes.io/name: yashigani-policy
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: yashigani-policy
+  ports:
+    - name: http
+      protocol: TCP
+      port: {{ .Values.service.port }}
+      targetPort: 8181
