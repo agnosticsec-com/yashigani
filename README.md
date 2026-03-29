@@ -45,11 +45,13 @@ Yashigani is production-ready at v0.8.0. The full security stack is implemented 
 - One-command activation per agent at install time or via Helm value toggle
 
 **Licensing:**
+---
 ECDSA P-256 offline verification — no license server, no call-home. Works air-gapped.
 
 **Pricing:**
+---
 Open-core with five tiers:
-
+---
 | Tier | Agents | End Users | Admin Seats | Annual Price |
 |------|--------|-----------|-------------|-------------|
 | Community | 20 | 50 | 10 | Free (Apache 2.0) |
@@ -59,5 +61,6 @@ Open-core with five tiers:
 | Enterprise | Unlimited | Unlimited | Unlimited | TBD |
 
 **Our commitment to the Open-Source Projects used:**
+---
 Agnistic security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they registered as non-for-profit organizations.
 We might also decide to sponsor other Open-Source projects that we use in some way.
