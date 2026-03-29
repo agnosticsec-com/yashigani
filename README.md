@@ -4,12 +4,13 @@
 <html>
 <body>
 <div>
-  <img src="https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png" alt="Yashigani" aling=center style="width:50%">
+  <img src="https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png" alt="Yashigani" aling="center" style="width:50%">
 </div>
 </body>
 </html>
 
-
+---
+---
 
 **Yashigani is the security enforcement gateway for MCP servers and agentic AI systems.**
 
