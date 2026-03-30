@@ -1,8 +1,8 @@
 # Yashigani Security Gateway
 ## Product Features and Objectives
 
-**Current Version:** v0.8.0
-**Document Date:** 2026-03-28
+**Current Version:** v0.8.3
+**Document Date:** 2026-03-30
 **Classification:** Public — Product Overview
 
 ---
@@ -151,10 +151,11 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.5.0 | Data plane hardening + observability | PostgreSQL 16 RLS + AES-256-GCM, pg_partman, PgBouncer, JWT introspection (JWKS waterfall), multi-sink audit, OTEL/Jaeger, FastText ML, Vault KMS, Loki, Alertmanager, per-endpoint rate limiting, response caching, Wazuh, anomaly detection, inference logging, container hardening, structured JSON logging |
 | v0.6.0 | Universal installer + licensing | Linux/macOS/cloud/VM installer, 3-tier licensing (Community/Professional/Enterprise), ECDSA P-256 license verification, feature gates |
 | v0.6.1 | Tier restructuring + open-source licensing | 4-tier model (Community/Professional/Professional Plus/Enterprise), Apache 2.0 community license, CLA framework |
-| v0.6.2 | Starter tier + three-dimensional limits | 5-tier model adds Starter ($1,200/yr, OIDC-only), max_end_users + max_admin_seats split, v3 license payload schema |
+| v0.6.2 | Starter tier + three-dimensional limits | 5-tier model adds Starter (OIDC-only, see agnosticsec.com/pricing), max_end_users + max_admin_seats split, v3 license payload schema |
 | v0.7.0 | Operational hardening + OPA Policy Assistant | ECDSA P-256 key active, DB partition automation + monitoring, OPA Policy Assistant (NL → RBAC JSON), MCP quick-start snippets, direct webhook alerting (Slack/Teams/PagerDuty), CIDR IP allowlisting per agent, path matching parity fix, runtime-configurable rate limit thresholds |
 | v0.7.1 | Alert wiring + partition bootstrap | Direct alert dispatch on credential exfil + licence expiry monitor, partition bootstrap migration (2026-05 → 2027-06), full DB health unit test suite |
 | v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / CrewAI / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
+| v0.8.3 | Installer patch — platform detection + GPU + Podman + update.sh | Fixed `DETECTED_*` → `YSG_*` variable mismatch (platform summary), GPU detection (Apple Silicon M-series, NVIDIA CUDA, AMD ROCm, lspci fallback), model recommendations by VRAM, macOS `df` fix in preflight, Podman as first-class runtime, Docker Desktop detection on macOS, user shell detection via `$SHELL`, interactive fallback prompts, secrets check updated for Podman/Docker Desktop, new `update.sh` for in-place updates |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -299,7 +300,10 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 
 ### 5.8 Infrastructure and Deployment
 
-- Universal installer (Linux, macOS, cloud VM, bare-metal; auto-detects OS, arch, cloud provider)
+- Universal installer (Linux, macOS, cloud VM, bare-metal; auto-detects OS, arch, cloud provider, GPU, and container runtime)
+- GPU detection at install time: Apple Silicon M-series, NVIDIA (CUDA), AMD (ROCm), lspci fallback; model recommendations printed based on detected VRAM (v0.8.3)
+- Podman supported as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.3)
+- Interactive fallback prompts when detection fails; `update.sh` for in-place updates with rollback (v0.8.3)
 - Docker Compose single-node deployment
 - Kubernetes Helm charts (production-ready)
 - KEDA horizontal autoscaling
@@ -505,11 +509,11 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.8.0 is the current production release. The v0.8.x series introduces the optional agent bundle ecosystem — a courtesy integration layer that lets operators deploy LangGraph, Goose, CrewAI, and OpenClaw alongside Yashigani with a single opt-in prompt. All four agents connect through Yashigani's gateway, ensuring every LLM call they make is inspected, audited, and policy-enforced. The agent bundle feature requires no changes to Yashigani's data plane; it is purely additive infrastructure delivered via Compose profiles and Helm value toggles.
+Yashigani v0.8.3 is the current production release. The v0.8.x series introduced the optional agent bundle ecosystem — a courtesy integration layer that lets operators deploy LangGraph, Goose, CrewAI, and OpenClaw alongside Yashigani with a single opt-in prompt. All four agents connect through Yashigani's gateway, ensuring every LLM call they make is inspected, audited, and policy-enforced. The agent bundle feature requires no changes to Yashigani's data plane; it is purely additive infrastructure delivered via Compose profiles and Helm value toggles.
 
-v0.8.0 also closes the agent detail page UX gap: operators can now retrieve copy-paste quick-start snippets from the backoffice after initial registration (without needing the plaintext token, which is only visible once). Rate limiting panel improvements add a `last_changed` timestamp to the config response so operators can determine when thresholds were last tuned.
+v0.8.3 is a patch release that closes installer reliability gaps: it corrects the `DETECTED_*` → `YSG_*` variable mismatch that caused platform summary fields to display "unknown", adds GPU hardware detection with model recommendations by VRAM, adds Podman as a first-class runtime, resolves a macOS `df -BG` incompatibility in `preflight.sh`, and ships `update.sh` for safe in-place updates with automatic rollback.
 
-The progression from v0.1.0 through v0.8.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
+The progression from v0.1.0 through v0.8.3 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
@@ -518,6 +522,19 @@ The progression from v0.1.0 through v0.8.0 reflects a deliberate security maturi
 - **`GET /admin/agent-bundles`** — bundle catalogue with metadata and disclaimer for UI banner
 - **`GET /admin/agents/{id}/quickstart`** — copy-paste snippet endpoint on agent detail page
 - **Rate limiting `last_changed` timestamp** — `GET /admin/ratelimit/config` now includes when thresholds were last updated
+
+### v0.8.3 Delivered
+
+- **Platform detection fix** — corrected `DETECTED_*` → `YSG_*` variable mismatch in `install.sh`; platform summary now correctly reports OS, architecture, and runtime
+- **GPU detection** — `platform-detect.sh` identifies Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA (nvidia-smi, CUDA), AMD (rocm-smi, ROCm), and unknown discrete GPUs (lspci fallback)
+- **Model recommendations** — platform summary prints Ollama model size recommendations based on detected GPU VRAM
+- **macOS `df` fix** — `preflight.sh` now uses portable `df -k` with macOS-compatible arithmetic instead of `df -BG` (GNU-only flag)
+- **Podman support** — Podman is now a first-class supported runtime in preflight checks and secrets handling
+- **Docker Desktop detection** — installer checks `/Applications/Docker.app` on macOS before falling back to command-line detection
+- **User shell detection** — installer reads `$SHELL` (the user's login shell) rather than the script executor's bash version
+- **Interactive fallback prompts** — if OS, runtime, or GPU detection fails, the installer presents selection menus rather than aborting
+- **Secrets check updated** — secrets validation covers Podman and Docker Desktop on macOS
+- **`update.sh`** — new script for updating existing Yashigani installations: backs up current state, pulls latest images, restarts the stack, and rolls back automatically on failure
 
 ### v0.8.1+ Priorities (deferred from v0.8.0)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/preflight.sh — Yashigani v0.8.2
+# scripts/preflight.sh — Yashigani v0.8.3
 # Pre-install requirement checks. Exits 1 if any REQUIRED check fails.
 
 set -euo pipefail
@@ -76,26 +76,56 @@ _warn_check() {
 # Check helpers
 # ---------------------------------------------------------------------------
 
-# 1. Shell version
+# 1. Shell version — checks the USER's login shell, not the script executor
 _check_shell_version() {
+  # Detect the user's actual login shell
+  local user_shell="${SHELL:-/bin/sh}"
+  local user_shell_name
+  user_shell_name="$(basename "$user_shell")"
+
+  # Get the version of the user's login shell
+  local shell_ver=""
+  case "$user_shell_name" in
+    zsh)
+      shell_ver="$("$user_shell" --version 2>/dev/null | awk '{print $2}' || echo "")"
+      if [ -n "$shell_ver" ]; then
+        local major="${shell_ver%%.*}"
+        if [ "$major" -ge 5 ]; then
+          _pass "User shell" "zsh ${shell_ver} (${user_shell})"
+        else
+          _warn_check "User shell" "zsh ${shell_ver} — 5.0+ recommended"
+        fi
+      else
+        _pass "User shell" "zsh (${user_shell})"
+      fi
+      ;;
+    bash)
+      shell_ver="$("$user_shell" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")"
+      if [ -n "$shell_ver" ]; then
+        local major="${shell_ver%%.*}"
+        if [ "$major" -ge 4 ]; then
+          _pass "User shell" "bash ${shell_ver} (${user_shell})"
+        elif [ "$YSG_OS" = "macos" ]; then
+          _warn_check "User shell" "bash ${shell_ver} (macOS default — consider: brew install bash)"
+        else
+          _fail "User shell" "bash ${shell_ver} — need >= 4"
+        fi
+      else
+        _pass "User shell" "bash (${user_shell})"
+      fi
+      ;;
+    *)
+      _warn_check "User shell" "${user_shell_name} (${user_shell}) — bash or zsh recommended"
+      ;;
+  esac
+
+  # Also note what's running this script (informational only, not a pass/fail)
   if [ -n "${BASH_VERSION:-}" ]; then
-    local major
-    major="${BASH_VERSION%%.*}"
-    if [ "$major" -ge 4 ]; then
-      _pass "Bash version" "bash ${BASH_VERSION}"
-    else
-      _fail "Bash version" "bash ${BASH_VERSION} — need >= 4"
+    local script_major="${BASH_VERSION%%.*}"
+    if [ "$script_major" -lt 4 ] && [ "$YSG_OS" = "macos" ]; then
+      # macOS /bin/bash is 3.2 — that's fine, the installer handles it
+      true
     fi
-  elif [ -n "${ZSH_VERSION:-}" ]; then
-    local major
-    major="${ZSH_VERSION%%.*}"
-    if [ "$major" -ge 5 ]; then
-      _pass "Shell version" "zsh ${ZSH_VERSION}"
-    else
-      _fail "Shell version" "zsh ${ZSH_VERSION} — need >= 5"
-    fi
-  else
-    _fail "Shell version" "unknown shell — bash >= 4 or zsh >= 5 required"
   fi
 }
 
@@ -114,9 +144,14 @@ _check_docker_daemon() {
     docker)
       if docker info >/dev/null 2>&1; then
         _pass "Container runtime" "Docker — running"
+      elif [ "$YSG_OS" = "macos" ] && [ -d "/Applications/Docker.app" ]; then
+        _warn_check "Container runtime" "Docker Desktop installed but daemon not responding — open Docker Desktop"
       else
         _fail "Container runtime" "Docker found but daemon not reachable — is Docker running?"
       fi
+      ;;
+    docker_desktop_no_cli)
+      _warn_check "Container runtime" "Docker Desktop installed but CLI not in PATH — enable CLI integration in Docker Desktop Settings > General"
       ;;
     podman)
       if podman info >/dev/null 2>&1; then
@@ -128,7 +163,11 @@ _check_docker_daemon() {
       fi
       ;;
     none)
-      _fail "Container runtime" "no container runtime found — install Docker or Podman"
+      if [ "$YSG_OS" = "macos" ]; then
+        _fail "Container runtime" "no runtime found — install Docker Desktop from docker.com/products/docker-desktop"
+      else
+        _fail "Container runtime" "no container runtime found — install Docker or Podman"
+      fi
       ;;
   esac
 }
@@ -271,16 +310,32 @@ _check_ram() {
   fi
 }
 
-# 9. /run/secrets writable
+# 9. Secrets mechanism
 _check_secrets() {
-  if [ -d /run/secrets ] && [ -w /run/secrets ]; then
-    _pass "Docker secrets" "/run/secrets writable"
-  elif docker info >/dev/null 2>&1; then
-    # Docker daemon reachable — secrets mechanism available via swarm/compose
-    _pass "Docker secrets" "Docker secrets mechanism available"
-  else
-    _fail "Docker secrets" "/run/secrets not writable and Docker not reachable"
-  fi
+  case "${YSG_RUNTIME:-docker}" in
+    podman)
+      # Podman uses podman secret or environment-based secrets — no /run/secrets needed
+      if command -v podman >/dev/null 2>&1; then
+        _pass "Secrets" "Podman secrets mechanism available"
+      else
+        _warn_check "Secrets" "Podman not found — secrets will use environment variables"
+      fi
+      ;;
+    docker|docker_desktop_no_cli)
+      if [ -d /run/secrets ] && [ -w /run/secrets ]; then
+        _pass "Secrets" "/run/secrets writable"
+      elif docker info >/dev/null 2>&1; then
+        _pass "Secrets" "Docker secrets mechanism available"
+      elif [ "$YSG_OS" = "macos" ]; then
+        _pass "Secrets" "Docker Desktop manages secrets internally"
+      else
+        _fail "Secrets" "/run/secrets not writable and Docker not reachable"
+      fi
+      ;;
+    *)
+      _warn_check "Secrets" "unknown runtime — secrets will use environment variables"
+      ;;
+  esac
 }
 
 # 10. DNS check (conditional on TLS_MODE=acme)
