@@ -16,7 +16,7 @@
 #   ca          — CA-signed cert (mount ./tls/server.crt + ./tls/server.key)
 #   selfsigned  — local/demo only, self-signed (Caddy internal CA)
 
-version: "3.9"
+# version field removed — obsolete in Docker Compose v2+
 
 x-common-env: &common-env
   YASHIGANI_ENV: ${YASHIGANI_ENV:-development}
@@ -187,9 +187,8 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-    depends_on:
-      backoffice:
-        condition: service_started   # backoffice writes the secret first
+    # No depends_on — redis_password is written by the installer to docker/secrets/
+    # before compose starts. Removed backoffice dependency to break cycle.
     networks:
       - internal
 
