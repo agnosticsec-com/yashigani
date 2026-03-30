@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/platform-detect.sh — Yashigani v0.6.0
+# scripts/platform-detect.sh — Yashigani v0.8.2
 # Full platform detection. Source this script; exports YSG_* environment variables.
 
 set -euo pipefail
@@ -234,6 +234,74 @@ _detect_k8s() {
 }
 
 # ---------------------------------------------------------------------------
+# GPU detection
+# ---------------------------------------------------------------------------
+_detect_gpu() {
+  local os="$1"
+  local gpu_type="none"
+  local gpu_name=""
+  local gpu_vram_mb=0
+  local gpu_compute="none"
+
+  # --- Apple Silicon (macOS M-series) ---
+  if [ "$os" = "macos" ]; then
+    local chip
+    chip="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "")"
+    if echo "$chip" | grep -qi "Apple"; then
+      gpu_type="apple_metal"
+      gpu_name="$chip"
+      local ram_bytes
+      ram_bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+      gpu_vram_mb=$(( ram_bytes / 1024 / 1024 ))
+      gpu_compute="metal"
+      case "$chip" in
+        *M1*)     gpu_compute="metal,ane_16core" ;;
+        *M2*)     gpu_compute="metal,ane_16core" ;;
+        *M3*)     gpu_compute="metal,ane_16core,ray_tracing" ;;
+        *M4*)     gpu_compute="metal,ane_16core,ray_tracing" ;;
+      esac
+    fi
+  fi
+
+  # --- NVIDIA ---
+  if [ "$gpu_type" = "none" ] && command -v nvidia-smi >/dev/null 2>&1; then
+    if nvidia-smi >/dev/null 2>&1; then
+      gpu_type="nvidia"
+      gpu_name="$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader 2>/dev/null | head -1 || echo "NVIDIA GPU")"
+      gpu_vram_mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")"
+      local driver_ver
+      driver_ver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo "")"
+      gpu_compute="cuda"
+      [ -n "$driver_ver" ] && gpu_compute="cuda,driver_${driver_ver}"
+    fi
+  fi
+
+  # --- AMD ROCm ---
+  if [ "$gpu_type" = "none" ] && command -v rocm-smi >/dev/null 2>&1; then
+    if rocm-smi >/dev/null 2>&1; then
+      gpu_type="amd_rocm"
+      gpu_name="$(rocm-smi --showproductname 2>/dev/null | grep -i "card series" | head -1 | awk -F: '{gsub(/^[ \t]+/,"",$2); print $2}' || echo "AMD GPU")"
+      gpu_compute="rocm"
+    fi
+  fi
+
+  # --- Fallback: lspci (Linux only) ---
+  if [ "$gpu_type" = "none" ] && command -v lspci >/dev/null 2>&1; then
+    if lspci 2>/dev/null | grep -qi "nvidia"; then
+      gpu_type="nvidia_no_driver"
+      gpu_name="$(lspci 2>/dev/null | grep -i nvidia | head -1 | sed 's/.*: //')"
+      gpu_compute="none (install NVIDIA drivers)"
+    elif lspci 2>/dev/null | grep -qiE "amd.*(radeon|instinct)"; then
+      gpu_type="amd_no_driver"
+      gpu_name="$(lspci 2>/dev/null | grep -iE 'amd.*(radeon|instinct)' | head -1 | sed 's/.*: //')"
+      gpu_compute="none (install ROCm)"
+    fi
+  fi
+
+  echo "${gpu_type}|${gpu_name}|${gpu_vram_mb}|${gpu_compute}"
+}
+
+# ---------------------------------------------------------------------------
 # Run all detections
 # ---------------------------------------------------------------------------
 YSG_OS="$(_detect_os)"
@@ -245,19 +313,32 @@ YSG_RUNTIME="$(_detect_runtime)"
 YSG_COMPOSE="$(_detect_compose)"
 YSG_K8S="$(_detect_k8s)"
 
+# GPU detection
+_gpu_result="$(_detect_gpu "$YSG_OS")"
+YSG_GPU_TYPE="$(echo "$_gpu_result"   | cut -d'|' -f1)"
+YSG_GPU_NAME="$(echo "$_gpu_result"   | cut -d'|' -f2)"
+YSG_GPU_VRAM_MB="$(echo "$_gpu_result" | cut -d'|' -f3)"
+YSG_GPU_COMPUTE="$(echo "$_gpu_result" | cut -d'|' -f4)"
+unset _gpu_result
+
 export YSG_OS YSG_DISTRO YSG_ARCH YSG_CLOUD YSG_VM YSG_RUNTIME YSG_COMPOSE YSG_K8S
+export YSG_GPU_TYPE YSG_GPU_NAME YSG_GPU_VRAM_MB YSG_GPU_COMPUTE
 
 # ---------------------------------------------------------------------------
 # Verbose output
 # ---------------------------------------------------------------------------
 if [ "${YSG_DETECT_VERBOSE:-0}" = "1" ]; then
   printf "${YSG_BLUE}Platform detection results:${YSG_RESET}\n"
-  printf "  %-20s %s\n" "YSG_OS"      "$YSG_OS"
-  printf "  %-20s %s\n" "YSG_DISTRO"  "$YSG_DISTRO"
-  printf "  %-20s %s\n" "YSG_ARCH"    "$YSG_ARCH"
-  printf "  %-20s %s\n" "YSG_CLOUD"   "$YSG_CLOUD"
-  printf "  %-20s %s\n" "YSG_VM"      "$YSG_VM"
-  printf "  %-20s %s\n" "YSG_RUNTIME" "$YSG_RUNTIME"
-  printf "  %-20s %s\n" "YSG_COMPOSE" "$YSG_COMPOSE"
-  printf "  %-20s %s\n" "YSG_K8S"     "$YSG_K8S"
+  printf "  %-20s %s\n" "YSG_OS"         "$YSG_OS"
+  printf "  %-20s %s\n" "YSG_DISTRO"     "$YSG_DISTRO"
+  printf "  %-20s %s\n" "YSG_ARCH"       "$YSG_ARCH"
+  printf "  %-20s %s\n" "YSG_CLOUD"      "$YSG_CLOUD"
+  printf "  %-20s %s\n" "YSG_VM"         "$YSG_VM"
+  printf "  %-20s %s\n" "YSG_RUNTIME"    "$YSG_RUNTIME"
+  printf "  %-20s %s\n" "YSG_COMPOSE"    "$YSG_COMPOSE"
+  printf "  %-20s %s\n" "YSG_K8S"        "$YSG_K8S"
+  printf "  %-20s %s\n" "YSG_GPU_TYPE"   "$YSG_GPU_TYPE"
+  printf "  %-20s %s\n" "YSG_GPU_NAME"   "$YSG_GPU_NAME"
+  printf "  %-20s %s\n" "YSG_GPU_VRAM_MB" "$YSG_GPU_VRAM_MB"
+  printf "  %-20s %s\n" "YSG_GPU_COMPUTE" "$YSG_GPU_COMPUTE"
 fi

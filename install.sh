@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="0.8.0"
+YASHIGANI_VERSION="0.8.2"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -471,9 +471,13 @@ source_platform_detect() {
   if [[ "$DRY_RUN" == "true" ]]; then
     dry_print "source $detect_script"
     # Provide fallback values so later steps do not break
-    DETECTED_OS="${DETECTED_OS:-linux}"
-    DETECTED_ARCH="${DETECTED_ARCH:-x86_64}"
-    DETECTED_RUNTIME="${DETECTED_RUNTIME:-docker}"
+    YSG_OS="${YSG_OS:-linux}"
+    YSG_ARCH="${YSG_ARCH:-x86_64}"
+    YSG_RUNTIME="${YSG_RUNTIME:-docker}"
+    YSG_GPU_TYPE="${YSG_GPU_TYPE:-none}"
+    YSG_GPU_NAME="${YSG_GPU_NAME:-}"
+    YSG_GPU_VRAM_MB="${YSG_GPU_VRAM_MB:-0}"
+    YSG_GPU_COMPUTE="${YSG_GPU_COMPUTE:-none}"
     return 0
   fi
 
@@ -494,17 +498,133 @@ print_platform_summary() {
   set_step "3" "Platform summary"
   log_step "3/${TOTAL_STEPS}" "Platform summary"
 
+  # --- Interactive fallback if detection failed ---
+  if [[ "$NON_INTERACTIVE" != "true" && -t 0 ]]; then
+    _interactive_platform_fallback
+  fi
+
   printf "\n"
-  printf "  %-22s %s\n" "OS:"           "${DETECTED_OS:-unknown}"
-  printf "  %-22s %s\n" "Architecture:" "${DETECTED_ARCH:-unknown}"
-  printf "  %-22s %s\n" "Runtime:"      "${DETECTED_RUNTIME:-unknown}"
+  printf "  %-22s %s\n" "OS:"           "${YSG_OS:-unknown} (${YSG_DISTRO:-unknown})"
+  printf "  %-22s %s\n" "Architecture:" "${YSG_ARCH:-unknown}"
+  printf "  %-22s %s\n" "Runtime:"      "${YSG_RUNTIME:-unknown} (compose: ${YSG_COMPOSE:-unknown})"
   printf "  %-22s %s\n" "Deploy mode:"  "$MODE"
   printf "  %-22s %s\n" "Domain:"       "${DOMAIN:-(not set)}"
   printf "  %-22s %s\n" "TLS mode:"     "$TLS_MODE"
   if [[ "$MODE" == "k8s" ]]; then
     printf "  %-22s %s\n" "Namespace:"  "$NAMESPACE"
   fi
+  if [[ "${YSG_GPU_TYPE:-none}" != "none" ]]; then
+    printf "  %-22s %s\n" "GPU:"        "${YSG_GPU_NAME:-detected}"
+    printf "  %-22s %s\n" "GPU memory:" "$(_format_gpu_vram)"
+    printf "  %-22s %s\n" "GPU compute:" "${YSG_GPU_COMPUTE:-unknown}"
+  else
+    printf "  %-22s %s\n" "GPU:"        "none detected"
+  fi
   printf "\n"
+  _print_model_recommendations
+}
+
+_format_gpu_vram() {
+  local vram_mb="${YSG_GPU_VRAM_MB:-0}"
+  if [ "$vram_mb" -ge 1024 ]; then
+    printf "%.1f GB" "$(awk "BEGIN { printf \"%.1f\", ${vram_mb}/1024 }")"
+  else
+    printf "%d MB" "$vram_mb"
+  fi
+}
+
+_print_model_recommendations() {
+  local vram="${YSG_GPU_VRAM_MB:-0}"
+  if [ "$vram" -eq 0 ]; then return; fi
+  printf "  ${C_BOLD}Recommended local models for your hardware:${C_RESET}\n"
+  if [ "$vram" -ge 49152 ]; then
+    printf "    - qwen3:235b-a22b, llama4:scout, deepseek-v3 (large models)\n"
+  elif [ "$vram" -ge 32768 ]; then
+    printf "    - qwen3:30b-a3b, llama4:scout, mistral-large\n"
+  elif [ "$vram" -ge 16384 ]; then
+    printf "    - qwen3:30b-a3b, llama3.1:8b, mistral:7b\n"
+  elif [ "$vram" -ge 8192 ]; then
+    printf "    - qwen2.5:3b (inspection), llama3.1:8b\n"
+  else
+    printf "    - qwen2.5:3b (inspection only), CPU inference for others\n"
+  fi
+  printf "\n"
+}
+
+_interactive_platform_fallback() {
+  local needs_prompt=false
+  if [[ "${YSG_OS:-unknown}" == "unknown" || "${YSG_RUNTIME:-none}" == "none" ]]; then
+    needs_prompt=true
+  fi
+  if [[ "$needs_prompt" != "true" && "${YSG_GPU_TYPE:-none}" != "none" ]]; then
+    return
+  fi
+  if [[ "$needs_prompt" == "true" ]]; then
+    printf "\n"
+    log_warn "Some platform values could not be detected automatically."
+    printf "\n"
+  fi
+  if [[ "${YSG_OS:-unknown}" == "unknown" ]]; then
+    printf "  Could not detect your operating system. Please select:\n"
+    printf "    1) Linux (Ubuntu / Debian)\n"
+    printf "    2) Linux (RHEL / CentOS / Fedora)\n"
+    printf "    3) Linux (Alpine)\n"
+    printf "    4) Linux (Arch)\n"
+    printf "    5) macOS\n"
+    printf "  Choice [1-5]: "
+    read -r os_choice
+    case "$os_choice" in
+      1) YSG_OS=linux; YSG_DISTRO=ubuntu ;; 2) YSG_OS=linux; YSG_DISTRO=rhel ;;
+      3) YSG_OS=linux; YSG_DISTRO=alpine ;; 4) YSG_OS=linux; YSG_DISTRO=arch ;;
+      5) YSG_OS=macos; YSG_DISTRO=macos ;;
+      *) log_warn "Invalid — defaulting to Linux"; YSG_OS=linux; YSG_DISTRO=ubuntu ;;
+    esac
+    printf "\n"
+  fi
+  if [[ "${YSG_RUNTIME:-none}" == "none" || "${YSG_RUNTIME:-}" == "unknown" ]]; then
+    printf "  Could not detect a container runtime. Please select:\n"
+    printf "    1) Docker (Docker Engine / Docker Desktop)\n"
+    printf "    2) Podman\n"
+    printf "  Choice [1-2]: "
+    read -r rt_choice
+    case "$rt_choice" in
+      1) YSG_RUNTIME=docker ;; 2) YSG_RUNTIME=podman ;;
+      *) log_warn "Invalid — defaulting to Docker"; YSG_RUNTIME=docker ;;
+    esac
+    printf "\n"
+  fi
+  if [[ "${YSG_GPU_TYPE:-none}" == "none" ]]; then
+    printf "  No GPU was detected automatically. Do you have a GPU?\n"
+    printf "    1) NVIDIA GPU (CUDA)\n"
+    printf "    2) Apple Silicon (M1 / M2 / M3 / M4)\n"
+    printf "    3) AMD GPU (ROCm)\n"
+    printf "    4) No GPU / CPU only\n"
+    printf "  Choice [1-4]: "
+    read -r gpu_choice
+    case "$gpu_choice" in
+      1)
+        YSG_GPU_TYPE=nvidia; YSG_GPU_COMPUTE=cuda; YSG_GPU_NAME="NVIDIA (user-reported)"
+        printf "  Enter GPU VRAM in GB (e.g. 8, 16, 24, 48): "; read -r vram_gb
+        YSG_GPU_VRAM_MB=$(( ${vram_gb:-0} * 1024 )) ;;
+      2)
+        YSG_GPU_TYPE=apple_metal; YSG_GPU_COMPUTE=metal
+        if command -v sysctl >/dev/null 2>&1; then
+          local ram_bytes; ram_bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+          YSG_GPU_VRAM_MB=$(( ram_bytes / 1024 / 1024 ))
+          YSG_GPU_NAME="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")"
+        else
+          YSG_GPU_NAME="Apple Silicon (user-reported)"
+          printf "  Enter total system RAM in GB: "; read -r ram_gb
+          YSG_GPU_VRAM_MB=$(( ${ram_gb:-8} * 1024 ))
+        fi ;;
+      3)
+        YSG_GPU_TYPE=amd_rocm; YSG_GPU_COMPUTE=rocm; YSG_GPU_NAME="AMD GPU (user-reported)"
+        printf "  Enter GPU VRAM in GB: "; read -r vram_gb
+        YSG_GPU_VRAM_MB=$(( ${vram_gb:-0} * 1024 )) ;;
+      4|*) YSG_GPU_TYPE=none ;;
+    esac
+    printf "\n"
+  fi
 }
 
 # =============================================================================
