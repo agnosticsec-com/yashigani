@@ -317,21 +317,17 @@ services:
   # PgBouncer — transaction-mode connection pooler
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: bitnami/pgbouncer:1.22
+    image: edoburu/pgbouncer:latest
     restart: unless-stopped
     environment:
-      POSTGRESQL_HOST: postgres
-      POSTGRESQL_PORT: "5432"
-      POSTGRESQL_DATABASE: yashigani
-      POSTGRESQL_USERNAME: yashigani_app
-      POSTGRESQL_PASSWORD_FILE: /run/secrets/postgres_password
-      PGBOUNCER_AUTH_TYPE: scram-sha-256
-      PGBOUNCER_POOL_MODE: transaction
-      PGBOUNCER_MAX_CLIENT_CONN: "100"
-      PGBOUNCER_DEFAULT_POOL_SIZE: "20"
+      DATABASE_URL: postgresql://yashigani_app@postgres:5432/yashigani
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "100"
+      DEFAULT_POOL_SIZE: "20"
     volumes:
       - secrets_volume:/run/secrets:ro
-      - ./pgbouncer/pgbouncer.ini:/bitnami/pgbouncer/conf/pgbouncer.ini:ro
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
     secrets:
       - postgres_password
     depends_on:
