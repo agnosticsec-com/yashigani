@@ -44,6 +44,8 @@ class BackofficeState:
     license_state: Optional[Any] = None         # LicenseState (v0.6.0)
     alert_config: Optional[Any] = None          # AlertConfigRequest (v0.7.0)
     ratelimit_config_last_changed: Optional[str] = None  # ISO-8601 UTC (v0.8.0)
+    webauthn_service: Optional[Any] = None               # WebAuthnService (v0.9.0)
+    event_bus: Optional[Any] = None                      # EventBus (v0.9.0)
     opa_url: str = "http://policy:8181"
     ollama_url: str = "http://ollama:11434"
     # Admin minimum enforcement

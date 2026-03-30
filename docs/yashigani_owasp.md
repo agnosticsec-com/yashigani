@@ -1,8 +1,8 @@
 # Yashigani Security Gateway — OWASP Compliance Mapping
 
-**Document Version:** 1.2
+**Document Version:** 1.4
 **Date:** 2026-03-30
-**Codebase version:** v0.8.4
+**Codebase version:** v0.9.1
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
 
@@ -89,9 +89,10 @@ Coverage ratings:
 | V2.4.2 — Verify that OIDC tokens are validated | L2 | OIDC ID token validation enforces signature verification, issuer, audience, and expiry checks against the configured JWKS endpoint | FULL |
 | V2.5.1 — Verify that JWT tokens use only permitted algorithms | L2 | JWT introspection rejects alg:none unconditionally; only RS256, RS384, RS512, ES256, ES384, ES512 are permitted; HS* (HMAC-based) algorithms are rejected | FULL |
 | V2.5.2 — Verify that JWKS key material is validated | L2 | JWKS waterfall: primary JWKS endpoint, fallback to secondary, then static key file; key rotation is handled automatically on 401 from upstream | FULL |
+| V2.1.7 — Verify that submitted passwords are checked against a set of breached passwords | L1 | `password.py` checks every password change against the HIBP k-Anonymity breach database; raises `PasswordBreachedError` if the password is found in a known breach; the installer also checks all generated passwords against HIBP before writing to disk; fail-open if API unreachable (v0.9.1) | FULL |
 | V2.6.1 — Verify that agent/API token credentials meet minimum entropy requirements | L2 | Agent bearer tokens must meet a minimum length of 64 characters; tokens below this threshold are rejected at registration time | FULL |
 
-**Chapter Notes:** The combination of Argon2id hashing, mandatory TOTP, and strict JWT algorithm enforcement provides strong authentication coverage. The SAML and OIDC integrations allow Yashigani to participate in enterprise SSO ecosystems without weakening its own authentication posture.
+**Chapter Notes:** The combination of Argon2id hashing, mandatory TOTP, strict JWT algorithm enforcement, and HIBP breach checking provides strong authentication coverage. The SAML and OIDC integrations allow Yashigani to participate in enterprise SSO ecosystems without weakening its own authentication posture. HIBP integration (v0.9.1) satisfies ASVS V2.1.7 at both the installer level (all generated credentials screened) and the runtime level (every password change screened).
 
 ---
 
@@ -141,7 +142,7 @@ Coverage ratings:
 | ASVS Requirement | Level | Yashigani Control | Coverage |
 |---|---|---|---|
 | V6.1.1 — Verify that sensitive data at rest is encrypted | L2 | AES-256-GCM column encryption via pgcrypto on all sensitive PostgreSQL columns; encryption keys managed via integrated secrets backends | FULL |
-| V6.2.1 — Verify that strong, current algorithms are used | L2 | AES-256-GCM for symmetric encryption; ECDSA P-256 for license signing; Argon2id for password hashing; no deprecated algorithms (MD5, SHA1, DES, 3DES) permitted | FULL |
+| V6.2.1 — Verify that strong, current algorithms are used | L2 | AES-256-GCM for symmetric encryption; ML-DSA-65 (FIPS 204, post-quantum) for licence signing; hybrid TLS X25519+ML-KEM-768 prepared (pending Caddy 2.10); SHA-384 Merkle chain for audit integrity; Argon2id for password hashing; no deprecated algorithms (MD5, SHA1, DES, 3DES) permitted | FULL |
 | V6.2.2 — Verify that random number generation is cryptographically secure | L2 | All security-sensitive random values (session tokens, API keys, nonces) use the OS CSPRNG (os.urandom / secrets module) | FULL |
 | V6.3.1 — Verify that cryptographic keys are protected | L2 | Keys are managed via external secrets backends: Docker Secrets, Keeper, AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, HashiCorp Vault; no keys stored in environment variables in production mode | FULL |
 | V6.4.1 — Verify that key rotation is supported | L2 | Secrets backend integrations support key versioning and rotation; JWKS key rotation is automatic on upstream 401 response | PARTIAL |
@@ -178,7 +179,7 @@ Coverage ratings:
 
 | ASVS Requirement | Level | Yashigani Control | Coverage |
 |---|---|---|---|
-| V9.1.1 — Verify that TLS is required for all external communications | L1 | Caddy handles TLS termination; TLS 1.2 is the minimum version; TLS 1.0 and 1.1 are disabled; plain HTTP is redirected to HTTPS | FULL |
+| V9.1.1 — Verify that TLS is required for all external communications | L1 | Caddy handles TLS termination; TLS 1.2 is the minimum version; TLS 1.0 and 1.1 are disabled; plain HTTP is redirected to HTTPS; hybrid X25519+ML-KEM-768 key exchange config included (pending Caddy 2.10) (v0.9.0) | FULL |
 | V9.1.2 — Verify that HSTS is enabled | L2 | HSTS header (Strict-Transport-Security: max-age=31536000; includeSubDomains) is served by Caddy and enforced by backoffice security middleware | FULL |
 | V9.1.3 — Verify that certificate management is automated | L2 | Three certificate modes supported: ACME (automatic Let's Encrypt), CA-signed (operator-provided), and self-signed (development); ACME renewal is fully automated via Caddy | FULL |
 | V9.2.1 — Verify that internal service communications are protected | L2 | Internal service-to-service communication (gateway to OPA, gateway to PostgreSQL, gateway to Redis) uses network isolation; container network policies restrict cross-service reachability | PARTIAL |
@@ -633,7 +634,7 @@ Ollama runs locally within the deployment environment. Model weights for the sec
 
 Inspection backend API keys (for Anthropic, Gemini, Azure OpenAI) are stored in the secrets backend and are never logged or exposed in responses. CHS ensures that the payloads sent to these backends do not contain operator credentials that could be used to access operator-specific fine-tuned models.
 
-License verification for Yashigani itself uses ECDSA P-256 offline verification with no network call, preventing license-related network traffic that could reveal deployment information.
+License verification for Yashigani itself uses ML-DSA-65 (FIPS 204) offline verification with no network call, preventing license-related network traffic that could reveal deployment information. ML-DSA-65 is a NIST-standardized post-quantum digital signature algorithm, providing resistance against both classical and quantum adversaries.
 
 **Residual Risk:** Yashigani protects the inspection backends' API credentials and prevents unauthorized access to the Ollama local model. It does not protect the customer's own AI models that are deployed in the MCP servers behind the gateway — those models' security is the responsibility of the upstream MCP server operators.
 
@@ -684,7 +685,7 @@ This table maps Yashigani's coverage across the three OWASP frameworks, noting w
 | Credential Handle Service (CHS) | V5, V8 | API3 | LLM06 | Yes | Yes | Yes | Yes | Yes |
 | AES-256-GCM column encryption | V6 | API8 | LLM06 | Yes | Yes | Yes | Yes | Yes |
 | Argon2id password hashing | V6 | API2 | — | Yes | Yes | Yes | Yes | Yes |
-| ECDSA P-256 license signing | V6 | API8 | — | Yes | Yes | Yes | Yes | Yes |
+| ML-DSA-65 (FIPS 204) licence signing (v0.9.0) | V6 | API8 | — | Yes | Yes | Yes | Yes | Yes |
 | Generic error responses | V7 | API8 | — | Yes | Yes | Yes | Yes | Yes |
 | Structured audit log (file) | V7 | API9 | LLM08 | Yes | Yes | Yes | Yes | Yes |
 | Audit log to PostgreSQL | V7 | API9 | LLM08 | Yes | Yes | Yes | Yes | Yes |
@@ -842,7 +843,7 @@ The following improvements from v0.7.0 and v0.7.1 directly affect OWASP complian
 
 | Change | OWASP Relevance | Effect |
 |--------|-----------------|--------|
-| **ECDSA P-256 public key active** | ASVS V2, V14 | License tier enforcement is now fully active; Community tier limits enforced for the first time |
+| **ML-DSA-65 (FIPS 204) key active** | ASVS V6, V14 | Post-quantum licence signing active; replaces ECDSA P-256; `cryptography>=44` required |
 | **CIDR-based IP allowlisting per agent** (v0.7.0) | ASVS V4.1.3, API Security API5 | Provides defense-in-depth for agent token compromise; a stolen token from an unexpected IP is blocked and audited |
 | **Path matching fix — IC-6** (v0.7.0) | ASVS V4.1, API Security API1 | Single-segment glob `*` was incorrectly matching across `/` boundaries, potentially allowing tools under sub-paths to be reached with policies intended for shallower paths. Fixed with `re.fullmatch` and `[^/]*` translation. |
 | **Direct webhook alerting on credential exfil** (v0.7.1) | OWASP LLM01, LLM06 | Security teams receive real-time notification of credential exfiltration attempts; reduces mean time to awareness |

@@ -73,6 +73,9 @@ class AgentResponse(BaseModel):
     allowed_caller_groups: list
     allowed_paths: list
     allowed_cidrs: list = Field(default_factory=list)
+    # v0.9.0 — token rotation metadata (F-09)
+    token_last_rotated: str = Field(default="")
+    token_rotation_schedule: str = Field(default="")
 
 
 class AgentRegisterResponse(AgentResponse):
@@ -121,6 +124,8 @@ def _to_response(agent: dict) -> AgentResponse:
         allowed_caller_groups=agent["allowed_caller_groups"],
         allowed_paths=agent["allowed_paths"],
         allowed_cidrs=agent.get("allowed_cidrs", []),
+        token_last_rotated=agent.get("token_last_rotated", ""),
+        token_rotation_schedule=agent.get("token_rotation_schedule", ""),
     )
 
 

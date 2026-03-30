@@ -1,28 +1,52 @@
 """
-Multi-sink audit writer — Phase 10.
+Multi-sink audit writer — Phase 10 / v0.9.0 Production Hardening (SC-04).
 
 Sinks:
   FileSink      — synchronous RotatingFileHandler (wraps existing AuditLogWriter)
   PostgresSink  — async batch writer to audit_events table via asyncpg
-  SiemSink      — optional async forwarding: Splunk HEC, Elasticsearch bulk API, or Wazuh
+  SiemSink      — Redis-backed async forwarding: Splunk HEC, Elasticsearch bulk API, or Wazuh
+                  PostgreSQL and file sinks remain synchronous per design.
 
 Architecture:
   MultiSinkAuditWriter.write(event) is synchronous (compatible with existing call sites).
   FileSink writes synchronously — audit trail is never lost even if Postgres is down.
-  PostgresSink and SiemSink enqueue to asyncio.Queue and drain in a background task.
-  Queue full → drop + increment counter (never block the request path).
+  PostgresSink enqueues to asyncio.Queue and drains in a background task.
+  SiemSink (SC-04): HTTP-based SIEM delivery is moved to a Redis-backed queue.
+    - RPUSH yashigani:siem_queue:{sink_name} for each event JSON.
+    - SiemWorker pops and delivers in configurable batches (1-100).
+    - Dead-letter queue: yashigani:siem_dlq:{sink_name} after 3 retries with
+      exponential backoff (2s, 4s, 8s).
+    - Queue full → drop + increment Prometheus counter.
+  Prometheus gauges:
+    yashigani_siem_queue_depth{sink}  — current Redis queue depth
+    yashigani_siem_dlq_depth{sink}    — current DLQ depth
+    yashigani_audit_chain_breaks_total — chain breaks (populated by audit_verify.py)
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import time
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Redis queue constants (SC-04)
+# ---------------------------------------------------------------------------
+
+_SIEM_QUEUE_PREFIX = "yashigani:siem_queue:"
+_SIEM_DLQ_PREFIX = "yashigani:siem_dlq:"
+_SIEM_MAX_RETRIES = 3
+_SIEM_BACKOFF_SECONDS = [2.0, 4.0, 8.0]   # exponential backoff per retry
+_SIEM_DEFAULT_BATCH_SIZE = 50              # events per delivery batch
+_SIEM_BATCH_MIN = 1
+_SIEM_BATCH_MAX = 100
 
 
 class AuditSink(ABC):
@@ -139,18 +163,68 @@ class PostgresSink(AuditSink):
 
 class SiemSink(AuditSink):
     """
-    Optional SIEM forwarding. Fail-open: errors logged and counted, never propagated.
-    Supports: splunk | elasticsearch | wazuh (wazuh uses Elasticsearch bulk API format).
-    """
-    name = "siem"
+    v0.9.0 (SC-04): HTTP-based SIEM delivery is Redis-backed and asynchronous.
 
-    def __init__(self, siem_type: str, endpoint: str, token: str) -> None:
+    write() pushes the event JSON to ``yashigani:siem_queue:{name}`` via RPUSH.
+    A SiemWorker background thread pops events and delivers them in batches.
+    On exhausted retries the event is moved to the dead-letter queue (DLQ).
+
+    Prometheus gauges (updated by SiemWorker):
+        yashigani_siem_queue_depth{sink}  — main queue depth
+        yashigani_siem_dlq_depth{sink}    — DLQ depth
+
+    Fail-open: queue push errors are logged and counted, never propagated.
+    """
+
+    def __init__(
+        self,
+        siem_type: str,
+        endpoint: str,
+        token: str,
+        redis_client=None,
+        sink_name: Optional[str] = None,
+        batch_size: int = _SIEM_DEFAULT_BATCH_SIZE,
+    ) -> None:
         self._siem_type = siem_type   # "splunk" | "elasticsearch" | "wazuh"
         self._endpoint = endpoint
         self._token = token
+        self._redis = redis_client
+        self._sink_name = sink_name or siem_type
+        self._batch_size = max(_SIEM_BATCH_MIN, min(_SIEM_BATCH_MAX, batch_size))
         self._last_write: Optional[datetime] = None
+        self._queue_key = f"{_SIEM_QUEUE_PREFIX}{self._sink_name}"
+        self._dlq_key = f"{_SIEM_DLQ_PREFIX}{self._sink_name}"
+
+    @property
+    def name(self) -> str:  # type: ignore[override]
+        return f"siem_{self._sink_name}"
 
     async def write(self, event: dict) -> None:
+        """
+        Enqueue the event JSON to the Redis SIEM queue (RPUSH).
+        Falls back to direct delivery if Redis is not configured.
+        """
+        if self._redis is None:
+            # No Redis — deliver directly (legacy / test path)
+            await self._deliver_direct(event)
+            return
+
+        try:
+            payload = json.dumps(event, default=str)
+            self._redis.rpush(self._queue_key, payload)
+            self._update_queue_gauge()
+        except Exception as exc:
+            try:
+                from yashigani.metrics.registry import siem_forward_errors_total
+                siem_forward_errors_total.labels(siem=self._siem_type).inc()
+            except Exception:
+                pass
+            logger.warning(
+                "SiemSink(%s): Redis enqueue error — %s", self._sink_name, exc
+            )
+
+    async def _deliver_direct(self, event: dict) -> None:
+        """Direct (non-queued) delivery — used when Redis is not available."""
         try:
             if self._siem_type == "splunk":
                 await self._send_splunk(event)
@@ -163,7 +237,19 @@ class SiemSink(AuditSink):
                 siem_forward_errors_total.labels(siem=self._siem_type).inc()
             except Exception:
                 pass
-            logger.warning("SiemSink forward error (%s): %s", self._siem_type, exc)
+            logger.warning("SiemSink(%s) direct forward error: %s", self._sink_name, exc)
+
+    def _update_queue_gauge(self) -> None:
+        if self._redis is None:
+            return
+        try:
+            from yashigani.metrics.registry import siem_queue_depth, siem_dlq_depth
+            q_depth = self._redis.llen(self._queue_key) or 0
+            d_depth = self._redis.llen(self._dlq_key) or 0
+            siem_queue_depth.labels(sink=self._sink_name).set(q_depth)
+            siem_dlq_depth.labels(sink=self._sink_name).set(d_depth)
+        except Exception:
+            pass
 
     async def _send_splunk(self, event: dict) -> None:
         import httpx
@@ -190,6 +276,151 @@ class SiemSink(AuditSink):
 
     async def last_write_ts(self) -> Optional[datetime]:
         return self._last_write
+
+
+# ---------------------------------------------------------------------------
+# SC-04: SiemWorker — Redis-queue consumer / delivery background thread
+# ---------------------------------------------------------------------------
+
+class SiemWorker:
+    """
+    Background worker thread that drains yashigani:siem_queue:{sink_name},
+    delivers events to the SIEM endpoint in batches, and moves failed events
+    to the dead-letter queue (DLQ) after exhausting retries.
+
+    Usage::
+
+        worker = SiemWorker(sink=siem_sink, poll_interval=1.0)
+        worker.start()
+        # ... application runs ...
+        worker.stop()
+    """
+
+    def __init__(
+        self,
+        sink: SiemSink,
+        poll_interval: float = 1.0,
+    ) -> None:
+        if sink._redis is None:
+            raise ValueError("SiemWorker requires SiemSink to have a Redis client configured.")
+        self._sink = sink
+        self._poll_interval = poll_interval
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"siem-worker-{self._sink._sink_name}",
+            daemon=True,
+        )
+        self._thread.start()
+        logger.info(
+            "SiemWorker(%s): started (batch_size=%d, poll=%.1fs)",
+            self._sink._sink_name, self._sink._batch_size, self._poll_interval,
+        )
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=timeout)
+        logger.info("SiemWorker(%s): stopped", self._sink._sink_name)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._drain_batch()
+            except Exception as exc:
+                logger.error("SiemWorker(%s) drain error: %s", self._sink._sink_name, exc)
+            self._stop_event.wait(timeout=self._poll_interval)
+
+    def _drain_batch(self) -> None:
+        r = self._sink._redis
+        queue_key = self._sink._queue_key
+        batch_size = self._sink._batch_size
+
+        batch = []
+        for _ in range(batch_size):
+            raw = r.lpop(queue_key)
+            if raw is None:
+                break
+            batch.append(raw)
+
+        if not batch:
+            return
+
+        events = []
+        for raw in batch:
+            try:
+                events.append(json.loads(raw if isinstance(raw, str) else raw.decode("utf-8")))
+            except Exception as exc:
+                logger.warning(
+                    "SiemWorker(%s): malformed event in queue — %s", self._sink._sink_name, exc
+                )
+
+        for event in events:
+            self._deliver_with_retry(event)
+
+        self._sink._update_queue_gauge()
+
+    def _deliver_with_retry(self, event: dict) -> None:
+        """Deliver a single event with exponential backoff; send to DLQ on failure."""
+        last_exc: Optional[Exception] = None
+        for attempt, delay in enumerate(_SIEM_BACKOFF_SECONDS):
+            try:
+                # Synchronous delivery via a new event loop slice
+                loop = asyncio.new_event_loop()
+                try:
+                    if self._sink._siem_type == "splunk":
+                        loop.run_until_complete(self._sink._send_splunk(event))
+                    elif self._sink._siem_type in ("elasticsearch", "wazuh"):
+                        loop.run_until_complete(self._sink._send_elasticsearch(event))
+                    else:
+                        raise ValueError(f"Unknown SIEM type: {self._sink._siem_type!r}")
+                finally:
+                    loop.close()
+                self._sink._last_write = datetime.now(timezone.utc)
+                return
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "SiemWorker(%s): delivery attempt %d/%d failed — %s",
+                    self._sink._sink_name, attempt + 1, _SIEM_MAX_RETRIES, exc,
+                )
+                if attempt < _SIEM_MAX_RETRIES - 1:
+                    time.sleep(delay)
+
+        # All retries exhausted — move to DLQ
+        self._send_to_dlq(event, str(last_exc))
+
+    def _send_to_dlq(self, event: dict, error: str) -> None:
+        """Push failed event to the dead-letter queue."""
+        dlq_key = self._sink._dlq_key
+        try:
+            record = json.dumps({
+                "event": event,
+                "error": error,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "sink": self._sink._sink_name,
+            }, default=str)
+            self._sink._redis.rpush(dlq_key, record)
+            self._sink._update_queue_gauge()
+            logger.error(
+                "SiemWorker(%s): event %s moved to DLQ after %d retries",
+                self._sink._sink_name,
+                event.get("audit_event_id", "<unknown>"),
+                _SIEM_MAX_RETRIES,
+            )
+        except Exception as exc:
+            logger.error(
+                "SiemWorker(%s): DLQ write failed for event %s — %s",
+                self._sink._sink_name,
+                event.get("audit_event_id", "<unknown>"),
+                exc,
+            )
 
 
 class MultiSinkAuditWriter:

@@ -92,6 +92,15 @@ class EventType(str, Enum):
     OPA_ASSISTANT_SUGGESTION_GENERATED = "OPA_ASSISTANT_SUGGESTION_GENERATED"
     OPA_ASSISTANT_SUGGESTION_APPLIED = "OPA_ASSISTANT_SUGGESTION_APPLIED"
     OPA_ASSISTANT_SUGGESTION_REJECTED = "OPA_ASSISTANT_SUGGESTION_REJECTED"
+    # v0.9.0 — Response-path inspection
+    RESPONSE_INJECTION_DETECTED = "RESPONSE_INJECTION_DETECTED"
+    # v0.9.0 — Break-glass (S-04)
+    BREAK_GLASS_ACTIVATED = "BREAK_GLASS_ACTIVATED"
+    BREAK_GLASS_EXPIRED = "BREAK_GLASS_EXPIRED"
+    # v0.9.0 — WebAuthn/Passkeys (Phase 6)
+    WEBAUTHN_CREDENTIAL_REGISTERED = "WEBAUTHN_CREDENTIAL_REGISTERED"
+    WEBAUTHN_CREDENTIAL_USED = "WEBAUTHN_CREDENTIAL_USED"
+    WEBAUTHN_CREDENTIAL_DELETED = "WEBAUTHN_CREDENTIAL_DELETED"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +115,11 @@ class AuditEvent:
     audit_event_id: str = field(default_factory=_new_uuid)
     timestamp: str = field(default_factory=_now_iso)
     schema_version: str = "1.0"
+    # v0.9.0 — tamper-evident hash chain (F-12).
+    # SHA-384 of the preceding event's canonical JSON, or SHA-384 of the
+    # date string "YYYY-MM-DD" for the first event of each calendar day.
+    # Empty string means the writer has not yet populated the field.
+    prev_event_hash: str = ""
 
     def to_dict(self) -> dict:
         import dataclasses
@@ -363,6 +377,8 @@ class GatewayRequestEvent(AuditEvent):
     upstream_status: Optional[int] = None
     elapsed_ms: Optional[int] = None
     confidence_score: Optional[float] = None
+    # v0.9.0 — populated when response inspection is enabled; None when disabled
+    response_inspection_verdict: Optional[str] = None  # CLEAN | FLAGGED | BLOCKED | None
 
 
 # ---------------------------------------------------------------------------
@@ -625,3 +641,102 @@ class OPAAssistantSuggestionRejectedEvent(AuditEvent):
     account_tier: str = AccountTier.ADMIN
     admin_account: str = ""
     reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — Response-path inspection events
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ResponseInjectionDetectedEvent(AuditEvent):
+    """
+    Written when a tool response is flagged or blocked by response inspection.
+    The raw response body is never stored — only a content hash.
+    """
+    event_type: str = EventType.RESPONSE_INJECTION_DETECTED
+    account_tier: str = AccountTier.SYSTEM
+    masking_applied: bool = True
+    request_id: str = ""
+    session_id: str = ""
+    agent_id: str = ""
+    verdict: str = ""                      # FLAGGED | BLOCKED
+    confidence_score: float = 0.0
+    action_taken: str = ""                 # 502_returned | flagged_only
+    content_type: str = ""                 # Content-Type of the upstream response
+    response_content_hash: str = ""        # SHA-256 of the raw response body
+    fasttext_only_mode: bool = False       # True when LLM fallback was skipped
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — Break-glass events (S-04)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BreakGlassActivatedEvent(AuditEvent):
+    """
+    Written when break-glass emergency access is activated.
+    Marked tamper-evident — prev_event_hash is always populated.
+    Raw credentials are never stored in this event.
+    """
+    event_type: str = EventType.BREAK_GLASS_ACTIVATED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True
+    activated_by: str = ""
+    ttl_hours: int = 4
+    expires_at: str = ""
+    approver: str = ""                     # empty string if single-admin activation
+    tamper_evident: bool = True            # immutable floor — always True
+
+
+@dataclass
+class BreakGlassExpiredEvent(AuditEvent):
+    """
+    Written when break-glass access is revoked (manually or by auto-expiry).
+    Marked tamper-evident — prev_event_hash is always populated.
+    """
+    event_type: str = EventType.BREAK_GLASS_EXPIRED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True
+    activated_by: str = ""
+    revoked_by: str = ""                   # admin ID or "__auto_expire__"
+    auto_expired: bool = False
+    tamper_evident: bool = True            # immutable floor — always True
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — WebAuthn/Passkey events (Phase 6)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WebAuthnCredentialRegisteredEvent(AuditEvent):
+    """Written when a new WebAuthn credential is successfully registered."""
+    event_type: str = EventType.WEBAUTHN_CREDENTIAL_REGISTERED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True
+    admin_account: str = ""
+    credential_uuid: str = ""              # internal UUID (not raw credential_id)
+    credential_name: str = ""             # user-supplied label
+    aaguid: str = ""                      # authenticator AAGUID
+    outcome: str = "success"             # success | failure
+
+
+@dataclass
+class WebAuthnCredentialUsedEvent(AuditEvent):
+    """Written on every WebAuthn authentication ceremony completion."""
+    event_type: str = EventType.WEBAUTHN_CREDENTIAL_USED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True
+    admin_account: str = ""
+    credential_uuid: str = ""
+    outcome: str = "success"             # success | failure
+    failure_reason: str = ""
+
+
+@dataclass
+class WebAuthnCredentialDeletedEvent(AuditEvent):
+    """Written when a WebAuthn credential is deleted by the owning admin."""
+    event_type: str = EventType.WEBAUTHN_CREDENTIAL_DELETED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True
+    admin_account: str = ""
+    credential_uuid: str = ""

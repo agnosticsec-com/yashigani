@@ -7,7 +7,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Callable
 
 from yashigani.audit.masking import CredentialMasker
@@ -334,3 +334,194 @@ class _BackendResultAdapter:
         self.confidence = confidence
         self.exfil_indicators = label == LABEL_CREDENTIAL_EXFIL
         self.detected_payload_spans: list = []
+
+
+# ---------------------------------------------------------------------------
+# Response inspection — Phase 2 (v0.9.0 F-01)
+# ---------------------------------------------------------------------------
+
+# Verdict constants for response inspection
+RESPONSE_VERDICT_CLEAN = "CLEAN"
+RESPONSE_VERDICT_FLAGGED = "FLAGGED"
+RESPONSE_VERDICT_BLOCKED = "BLOCKED"
+
+
+@dataclass
+class ResponseInspectionConfig:
+    """
+    Per-agent configuration for the response inspection pipeline.
+
+    Fields:
+        enabled             Toggle the pipeline entirely.
+        fasttext_only       Skip LLM fallback — classify with FastText only.
+                            Faster but lower recall on novel injection patterns.
+        blocked_action      HTTP status code to return when a response is BLOCKED.
+                            Must be "502" (upstream tainted) per the security design.
+                            "403" is reserved for request-path blocks.
+        exempt_content_types
+                            Content-Type values that bypass response inspection.
+                            application/json is exempt by default because structured
+                            JSON payloads carry low free-text injection surface area
+                            and the classifier produces too many false positives on them.
+                            Extend this list with care — each addition is a trust assumption.
+    """
+    enabled: bool = True
+    fasttext_only: bool = False
+    blocked_action: str = "502"
+    exempt_content_types: list[str] = field(
+        default_factory=lambda: ["application/json"]
+    )
+
+
+@dataclass
+class ResponseInspectionResult:
+    request_id: str
+    verdict: str                    # CLEAN | FLAGGED | BLOCKED
+    confidence: float
+    skipped: bool                   # True when inspection was bypassed (disabled/exempt)
+    skip_reason: Optional[str]      # "disabled" | "exempt_content_type" | None
+    audit_fields: dict
+
+
+class ResponseInspectionPipeline:
+    """
+    Response inspection pipeline — inspects tool/upstream responses before
+    they are returned to the calling agent.
+
+    Threat model:
+        A malicious document (or tool response) may embed natural-language
+        instructions designed to redirect agent behaviour — indirect prompt
+        injection. This pipeline applies the same FastText + LLM fallback
+        chain used for request inspection, but operates on the *response body*
+        rather than the agent query.
+
+    Disposition:
+        CLEAN   — response is forwarded as-is.
+        FLAGGED — response is forwarded but the audit event is written and
+                  an X-Yashigani-Response-Verdict header is attached.
+        BLOCKED — response is suppressed; a 502 is returned to the agent
+                  (versus 403 for request blocks, which signal a client error).
+
+    The raw response body is never stored in the audit log. A SHA-256 hash
+    is recorded instead (ASVS V7.1 — audit log integrity).
+    """
+
+    def __init__(
+        self,
+        classifier: PromptInjectionClassifier,
+        config: Optional[ResponseInspectionConfig] = None,
+        on_audit: Optional[Callable[[str, dict], None]] = None,
+        backend_registry=None,  # Optional[BackendRegistry]
+    ) -> None:
+        self._classifier = classifier
+        self._backend_registry = backend_registry
+        self._config = config or ResponseInspectionConfig()
+        self._on_audit = on_audit or (lambda name, data: None)
+
+    def inspect(
+        self,
+        response_body: str,
+        content_type: str,
+        request_id: str,
+        session_id: str,
+        agent_id: str,
+    ) -> ResponseInspectionResult:
+        """
+        Inspect an upstream response body.
+
+        Parameters:
+            response_body   Decoded text of the upstream response.
+            content_type    Content-Type header value from the upstream response.
+            request_id      Correlation ID from the originating gateway request.
+            session_id      Agent session identifier.
+            agent_id        Registered agent identifier.
+
+        Returns:
+            ResponseInspectionResult with the verdict and audit fields.
+        """
+        cfg = self._config
+
+        # Fast path — pipeline disabled
+        if not cfg.enabled:
+            return ResponseInspectionResult(
+                request_id=request_id,
+                verdict=RESPONSE_VERDICT_CLEAN,
+                confidence=1.0,
+                skipped=True,
+                skip_reason="disabled",
+                audit_fields={},
+            )
+
+        # Fast path — exempt content type
+        ct_base = content_type.split(";")[0].strip().lower()
+        for exempt in cfg.exempt_content_types:
+            if ct_base == exempt.lower():
+                return ResponseInspectionResult(
+                    request_id=request_id,
+                    verdict=RESPONSE_VERDICT_CLEAN,
+                    confidence=1.0,
+                    skipped=True,
+                    skip_reason="exempt_content_type",
+                    audit_fields={},
+                )
+
+        # Classify — backend_registry takes precedence over legacy classifier
+        if self._backend_registry is not None:
+            backend_result = self._backend_registry.classify(
+                response_body, request_id=request_id
+            )
+            classifier_result = _BackendResultAdapter(
+                label=backend_result.label,
+                confidence=backend_result.confidence,
+            )
+        else:
+            classifier_result = self._classifier.classify(response_body)
+
+        # Disposition
+        if classifier_result.label == LABEL_CLEAN:
+            return ResponseInspectionResult(
+                request_id=request_id,
+                verdict=RESPONSE_VERDICT_CLEAN,
+                confidence=classifier_result.confidence,
+                skipped=False,
+                skip_reason=None,
+                audit_fields={},
+            )
+
+        # Any non-CLEAN label is a potential injection attempt
+        verdict = (
+            RESPONSE_VERDICT_BLOCKED
+            if cfg.blocked_action == "502"
+            else RESPONSE_VERDICT_FLAGGED
+        )
+
+        action_taken = "502_returned" if verdict == RESPONSE_VERDICT_BLOCKED else "flagged_only"
+        content_hash = _content_hash(response_body)
+
+        audit = {
+            "event_type": "RESPONSE_INJECTION_DETECTED",
+            "verdict": verdict,
+            "request_id": request_id,
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "classification": classifier_result.label,
+            "confidence_score": classifier_result.confidence,
+            "action_taken": action_taken,
+            "content_type": content_type,
+            "response_content_hash": content_hash,
+            "fasttext_only_mode": cfg.fasttext_only,
+        }
+        self._on_audit("RESPONSE_INJECTION_DETECTED", audit)
+
+        return ResponseInspectionResult(
+            request_id=request_id,
+            verdict=verdict,
+            confidence=classifier_result.confidence,
+            skipped=False,
+            skip_reason=None,
+            audit_fields=audit,
+        )
+
+    def update_config(self, config: ResponseInspectionConfig) -> None:
+        """Replace the active config. Admin-callable."""
+        self._config = config

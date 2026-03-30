@@ -20,6 +20,10 @@ from yashigani.backoffice.routes.license import license_router
 from yashigani.backoffice.routes.opa_assistant import router as opa_assistant_router
 from yashigani.backoffice.routes.alerts import router as alerts_router
 from yashigani.backoffice.routes.agent_bundles import router as agent_bundles_router
+# v0.9.0 — Phase 6 + Phase 7
+from yashigani.backoffice.routes.webauthn import router as webauthn_router
+from yashigani.backoffice.routes.events import router as events_router
+from yashigani.backoffice.routes.audit_search import router as audit_search_router
 
 __all__ = [
     "auth_router", "accounts_router", "users_router",
@@ -31,4 +35,6 @@ __all__ = [
     "jwt_config_router", "cache_router", "audit_sinks_router", "kms_vault_router",
     "license_router", "opa_assistant_router", "alerts_router",
     "agent_bundles_router",
+    # v0.9.0
+    "webauthn_router", "events_router", "audit_search_router",
 ]

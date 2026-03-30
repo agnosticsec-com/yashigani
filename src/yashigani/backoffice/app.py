@@ -36,6 +36,10 @@ from yashigani.backoffice.routes import (
     opa_assistant_router,
     alerts_router,
     agent_bundles_router,
+    # v0.9.0 — Phase 6 + Phase 7
+    webauthn_router,
+    events_router,
+    audit_search_router,
 )
 
 
@@ -136,5 +140,11 @@ def create_backoffice_app() -> FastAPI:
     app.include_router(opa_assistant_router, prefix="/admin/opa-assistant", tags=["opa-assistant"])
     app.include_router(alerts_router, prefix="/admin/alerts", tags=["alerts"])
     app.include_router(agent_bundles_router, prefix="/admin/agent-bundles", tags=["agent-bundles"])
+    # v0.9.0 — Phase 6: WebAuthn/Passkeys
+    # webauthn_router carries its own full path segments (no prefix stripping needed)
+    app.include_router(webauthn_router, tags=["webauthn"])
+    # v0.9.0 — Phase 7: Operator Visibility
+    app.include_router(events_router, prefix="/admin/events", tags=["events"])
+    app.include_router(audit_search_router, prefix="/admin/audit", tags=["audit-search"])
 
     return app

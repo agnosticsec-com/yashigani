@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/preflight.sh — Yashigani v0.8.4
+# scripts/preflight.sh — Yashigani v0.9.1
 # Pre-install requirement checks. Exits 1 if any REQUIRED check fails.
 
 set -euo pipefail
@@ -286,12 +286,13 @@ _check_ports() {
 _check_disk() {
   local mount_point="/"
 
+  # Try to find the container storage mount point — fall back to / if unavailable
   case "${YSG_RUNTIME:-docker}" in
-    docker)
-      if docker info >/dev/null 2>&1; then
-        local docker_root
-        docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")"
-        [ -n "$docker_root" ] && [ -d "$docker_root" ] && mount_point="$docker_root"
+    docker|docker_desktop_no_cli)
+      local docker_root=""
+      docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+      if [ -n "$docker_root" ] && [ -d "$docker_root" ]; then
+        mount_point="$docker_root"
       fi
       ;;
     podman)
@@ -302,9 +303,9 @@ _check_disk() {
 
   local avail_gb=0
   if [ "$YSG_OS" = "macos" ]; then
-    avail_gb="$(df -g "$mount_point" 2>/dev/null | awk 'NR==2 {print $4}')"
+    avail_gb="$(df -g "$mount_point" 2>/dev/null | awk 'NR==2 {print $4}' || echo "0")"
   else
-    avail_gb="$(df -BG "$mount_point" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
+    avail_gb="$(df -BG "$mount_point" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}' || echo "0")"
   fi
   avail_gb="${avail_gb:-0}"
 

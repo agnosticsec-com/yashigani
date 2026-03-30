@@ -248,4 +248,7 @@ class AgentRegistry:
             "allowed_caller_groups": _j(b"allowed_caller_groups"),
             "allowed_paths": _j(b"allowed_paths"),
             "allowed_cidrs": _j(b"allowed_cidrs"),
+            # v0.9.0 — token rotation fields (F-09)
+            "token_last_rotated": _b(b"token_last_rotated"),
+            "token_rotation_schedule": _b(b"token_rotation_schedule"),
         }

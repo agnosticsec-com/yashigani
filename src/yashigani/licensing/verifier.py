@@ -1,18 +1,23 @@
 """
-ECDSA P-256 / SHA-256 offline license verifier.
+ML-DSA-65 (FIPS 204 / CRYSTALS-Dilithium Level 3) offline license verifier.
 
 License file format (v3):
-    {base64url(utf8(json_payload))}.{base64url(der_ecdsa_signature)}
+    {base64url(utf8(json_payload))}.{base64url(mldsa65_signature)}
+
+ML-DSA-65 uses internal hashing — no external hash algorithm is required.
+Signatures are ~3.3 KB; public keys are ~1.9 KB.
 
 Payload versions:
     v1 — max_agents, max_orgs only
     v2 — adds max_users (renamed to max_end_users in v3)
-    v3 — max_agents, max_end_users, max_admin_seats, max_orgs (current)
+    v3 — max_agents, max_end_users, max_admin_seats, max_orgs, key_alg (current)
 
 Backwards compat: v1/v2 payloads missing new fields fall back to
 TIER_DEFAULTS[tier] so existing customer license files keep working.
 
 Fail-open on corrupt/unparseable licenses; fail-closed on invalid signatures.
+
+Requires: cryptography>=44 (ML-DSA-65 support).
 """
 from __future__ import annotations
 
@@ -25,22 +30,21 @@ from typing import Optional
 from yashigani.licensing.model import (
     COMMUNITY_LICENSE,
     TIER_DEFAULTS,
+    LicenseFeature,
     LicenseState,
     LicenseTier,
 )
 
 logger = logging.getLogger(__name__)
 
-# ECDSA P-256 public key — generated 2026-03-28 with scripts/keygen.py
+# ML-DSA-65 (FIPS 204) public key — generated with scripts/keygen.py
 # Private key is stored in KMS. Do NOT commit the private key.
+# Replace this placeholder by running: python scripts/keygen.py --out-dir keys/
 _PUBLIC_KEY_PEM = """\
------BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9v3e5INc8Mr7yoN5rSsaJROahk58
-HPYAxfkKlcJDVSH47HIERSL19ceu3JVS28uHRJw1WJ13JbUYI/vWAE1zNQ==
------END PUBLIC KEY-----
+PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65
 """
 
-_PLACEHOLDER_MARKER = "PLACEHOLDER_YASHIGANI_PUBLIC_KEY_P256"
+_PLACEHOLDER_MARKER = "PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65"
 _placeholder_warned = False
 
 
@@ -82,8 +86,19 @@ def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None
         tier = LicenseTier.COMMUNITY
         tier_str = "community"
 
-    features_list = payload.get("features", [])
-    features = frozenset(features_list) if isinstance(features_list, list) else frozenset()
+    # Coerce string feature values to LicenseFeature enum; unknown strings are silently dropped
+    # for forwards-compat (new features added server-side before client ships).
+    features_raw = payload.get("features", [])
+    if isinstance(features_raw, list):
+        coerced: list[LicenseFeature] = []
+        for f in features_raw:
+            try:
+                coerced.append(LicenseFeature(f))
+            except ValueError:
+                pass
+        features: frozenset[LicenseFeature] = frozenset(coerced)
+    else:
+        features = frozenset()
 
     issued_at = _parse_datetime(payload.get("issued_at")) or datetime(2020, 1, 1, tzinfo=timezone.utc)
     expires_at = _parse_datetime(payload.get("expires_at"))
@@ -134,10 +149,15 @@ def verify_license(content: str) -> LicenseState:
     """
     Verify a license string and return a LicenseState.
 
+    Uses ML-DSA-65 (FIPS 204 / CRYSTALS-Dilithium Level 3) for signature verification.
+    ML-DSA-65 uses internal hashing — verify() takes only the message and signature bytes.
+
     Returns COMMUNITY_LICENSE if the public key is a placeholder.
     Returns LicenseState(valid=False, error="invalid_signature") for bad signatures.
     Returns LicenseState(valid=False, error="license_expired") for expired licenses.
     Returns COMMUNITY_LICENSE (fail-open) for any other parse/crypto error.
+
+    Requires: cryptography>=44.
     """
     if _is_placeholder():
         _warn_placeholder_once()
@@ -160,15 +180,14 @@ def verify_license(content: str) -> LicenseState:
         logger.warning("License verifier: base64url decode failed: %s", exc)
         return COMMUNITY_LICENSE
 
-    # Verify ECDSA P-256 / SHA-256 signature
+    # Verify ML-DSA-65 (FIPS 204) signature.
+    # ML-DSA-65 verify() takes only message + signature — no external hash parameter.
     try:
-        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
-        from cryptography.hazmat.primitives.hashes import SHA256
         from cryptography.hazmat.primitives.serialization import load_pem_public_key
         from cryptography.exceptions import InvalidSignature
 
         public_key = load_pem_public_key(_PUBLIC_KEY_PEM.encode("utf-8"))
-        public_key.verify(sig_bytes, payload_bytes, ECDSA(SHA256()))
+        public_key.verify(sig_bytes, payload_bytes)
     except InvalidSignature:
         logger.warning("License verifier: signature verification failed")
         try:

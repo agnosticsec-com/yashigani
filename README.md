@@ -15,7 +15,7 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v0.8.4
+**Latest Stable Version:** v0.9.1
 ---
 **Document Date:** 2026-03-30
 ---
@@ -172,6 +172,8 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.7.1 | Alert wiring + partition bootstrap | Direct alert dispatch on credential exfil + licence expiry monitor, partition bootstrap migration (2026-05 → 2027-06), full DB health unit test suite |
 | v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / CrewAI / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
 | v0.8.4 | Installer patch — macOS + GPU + Podman | Fixed platform detection, GPU detection (Apple Silicon/NVIDIA/AMD), bash 3.2 compat, Podman runtime, Docker Desktop CLI auto-fix, numbered agent bundles, runtime-agnostic compose, interactive fallbacks, `update.sh`, `test-installer.sh` |
+| v0.9.0 | Post-quantum cryptography + security hardening | ML-DSA-65 (FIPS 204) licence signing, hybrid TLS X25519+ML-KEM-768 (pending Caddy 2.10), response-path inspection (F-01), WebAuthn/Passkeys (S-01), break-glass dual-control, SHA-384 Merkle audit chain, async SIEM queue, agent PSK auto-rotation, real-time SSE inspection feed, searchable + exportable audit log, installer deployment modes redesign |
+| v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -235,7 +237,9 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - SAML v2 SSO — Professional and above
 - SCIM automated user provisioning and deprovisioning — Professional and above
 - Multiple admin accounts with minimum-count enforcement
+- **Dual admin accounts provisioned at install (v0.9.1)** — two accounts with random themed usernames created during installation; TOTP 2FA configured for both at install time
 - Admin account lockout protection (brute-force resistance)
+- **HIBP k-Anonymity breach check on password change (v0.9.1)** — `PasswordBreachedError` raised on known-breached passwords; OWASP ASVS V2.1.7 compliant; fail-open if API unreachable
 
 ### 5.2 Authorization and Policy
 
@@ -299,7 +303,8 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - bcrypt password hashing
 - AES-256-GCM column encryption in PostgreSQL via pgcrypto
 - Several KMS supported - Keeper Security, AWS, GCP, Azure and HashiCorp Vault
-- ECDSA P-256 offline license signature verification
+- ML-DSA-65 (FIPS 204) offline licence signature verification — replaces ECDSA P-256 (v0.9.0)
+- Hybrid TLS X25519+ML-KEM-768 Caddyfile config included (pending Caddy 2.10) (v0.9.0)
 - TLS bootstrap: ACME (Let's Encrypt / ACME-compatible), CA-signed, self-signed (demo)
 
 ### 5.7 Observability and Alerting
@@ -341,92 +346,101 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 
 ### 5.9 Licensing and Tiers
 
-- 5-tier licensing model: Community / Starter / Professional / Professional Plus / Enterprise
-- Tier for Education and Non-for-Profit organisations
-- ECDSA P-256 offline license verification (no call-home)
+- 6-tier licensing model: Community / Academic / Non-Profit / Starter / Professional / Professional Plus / Enterprise
+- ML-DSA-65 (FIPS 204) offline license verification — no call-home, works air-gapped (v0.9.0)
 - Three independent limit dimensions: agents, end users, admin seats
-- Community tier: free, Apache 2.0, 20 agents, 50 end users, 10 admin seats
-- Starter tier: Paid, OIDC-only SSO, 100 agents, 250 end users, 25 admin seats
-- Professional, Professional Plus, Enterprise: signed license key required, full SSO
+- Community tier: free, Apache 2.0, 5 agents, 10 end users, 2 admins
+- Academic / Non-Profit tier: free (verified institution — see agnosticsec.com/academic)
+- Starter, Professional, Professional Plus, Enterprise: signed license key required
+- See agnosticsec.com/pricing for current tier limits and pricing
 - Apache 2.0 open-source community license with Contributor License Agreement (CLA)
 
 ---
 
 ## 6. Feature Matrix by Tier
 
-| Feature | Community | Starter | Professional | Professional Plus | Enterprise |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **Licensing** | | | | | |
-| Free, no license key | Yes | — | — | — | — |
-| Signed paid license key | — | Yes | Yes | Yes | Yes |
-| Annual price | Free | TBD | TBD | TBD | Custom |
-| ECDSA P-256 offline verification | Yes | Yes | Yes | Yes | Yes |
-| Max agents / MCP servers | 20 | 100 | 500 | 2,000 | Unlimited |
-| Max end users | 50 | 250 | 1,000 | 10,000 | Unlimited |
-| Max admin seats | 10 | 25 | 50 | 200 | Unlimited |
-| Max organizations / domains | 1 | 1 | 1 | 5 | Unlimited |
-| **Authentication** | | | | | |
-| Username + password (Argon2 / bcrypt) | Yes | Yes | Yes | Yes | Yes |
-| TOTP / 2FA | Yes | Yes | Yes | Yes | Yes |
-| API key authentication | Yes | Yes | Yes | Yes | Yes |
-| Session authentication | Yes | Yes | Yes | Yes | Yes |
-| Bearer token (agent routing) | Yes | Yes | Yes | Yes | Yes |
-| JWT introspection / JWKS waterfall | Yes | Yes | Yes | Yes | Yes |
-| OpenID Connect (OIDC) SSO | No | Yes | Yes | Yes | Yes |
-| SAML v2 SSO | No | No | Yes | Yes | Yes |
-| SCIM automated provisioning | No | No | Yes | Yes | Yes |
-| Multiple admin accounts | Yes | Yes | Yes | Yes | Yes |
-| Admin lockout protection | Yes | Yes | Yes | Yes | Yes |
-| **Authorization** | | | | | |
-| OPA policy engine | Yes | Yes | Yes | Yes | Yes |
-| RBAC via OPA | Yes | Yes | Yes | Yes | Yes |
-| Per-tool / per-route policy | Yes | Yes | Yes | Yes | Yes |
-| Multi-tenant org isolation | No | No | No | Partial (5 orgs) | Yes |
-| **Content Inspection** | | | | | |
-| FastText ML classifier (offline, <5ms) | Yes | Yes | Yes | Yes | Yes |
-| Ollama LLM inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Anthropic Claude inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Google Gemini inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Azure OpenAI inspection backend | Yes | Yes | Yes | Yes | Yes |
-| LM Studio inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Fail-closed sentinel | Yes | Yes | Yes | Yes | Yes |
-| Prompt injection detection | Yes | Yes | Yes | Yes | Yes |
-| Credential Harvesting Suppression (CHS) | Yes | Yes | Yes | Yes | Yes |
-| Payload masking before AI inspection | Yes | Yes | Yes | Yes | Yes |
-| Response masking / sanitization | Yes | Yes | Yes | Yes | Yes |
-| Anomaly detection (ZSET sliding window) | Yes | Yes | Yes | Yes | Yes |
-| Inference payload logging (encrypted) | Yes | Yes | Yes | Yes | Yes |
-| **Audit and Compliance** | | | | | |
-| Structured JSON audit log (file) | Yes | Yes | Yes | Yes | Yes |
-| PostgreSQL audit storage (RLS + AES-256-GCM) | Yes | Yes | Yes | Yes | Yes |
-| Splunk SIEM integration | Yes | Yes | Yes | Yes | Yes |
-| Elasticsearch SIEM integration | Yes | Yes | Yes | Yes | Yes |
-| Wazuh SIEM integration | Yes | Yes | Yes | Yes | Yes |
-| Monthly partition management (pg_partman) | Yes | Yes | Yes | Yes | Yes |
-| **Rate Limiting** | | | | | |
-| Per-endpoint rate limiting (Redis) | Yes | Yes | Yes | Yes | Yes |
-| Response caching (CLEAN-only, SHA-256) | Yes | Yes | Yes | Yes | Yes |
-| **Cryptography and Secrets** | | | | | |
-| TLS (ACME / CA-signed / self-signed) | Yes | Yes | Yes | Yes | Yes |
-| HashiCorp Vault KMS | Yes | Yes | Yes | Yes | Yes |
-| AES-256-GCM column encryption (Postgres) | Yes | Yes | Yes | Yes | Yes |
-| **Observability** | | | | | |
-| Prometheus metrics | Yes | Yes | Yes | Yes | Yes |
-| Grafana dashboards | Yes | Yes | Yes | Yes | Yes |
-| OpenTelemetry / Jaeger tracing | Yes | Yes | Yes | Yes | Yes |
-| Loki + Promtail log aggregation | Yes | Yes | Yes | Yes | Yes |
-| Alertmanager escalation (Slack/email/PagerDuty) | Yes | Yes | Yes | Yes | Yes |
-| **Deployment** | | | | | |
-| Universal installer | Yes | Yes | Yes | Yes | Yes |
-| Docker Compose | Yes | Yes | Yes | Yes | Yes |
-| Kubernetes Helm charts | Yes | Yes | Yes | Yes | Yes |
-| KEDA autoscaling | Yes | Yes | Yes | Yes | Yes |
-| Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes |
-| Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes |
-| Trivy container scanning | Yes | Yes | Yes | Yes | Yes |
-| Optional agent bundles (LangGraph / Goose / CrewAI / OpenClaw) | Yes | Yes | Yes | Yes | Yes |
-| Apache 2.0 open-source license | Yes | — | — | — | — |
-| CLA-covered contributions | Yes | — | — | — | — |
+| Feature | Community | Academic / Non-Profit | Starter | Professional | Professional Plus | Enterprise |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Licensing** | | | | | | |
+| Free, no license key | Yes | Yes (verified) | — | — | — | — |
+| Signed paid license key | — | — | Yes | Yes | Yes | Yes |
+| Pricing | Free | Free | See agnosticsec.com/pricing | See agnosticsec.com/pricing | See agnosticsec.com/pricing | Custom |
+| ML-DSA-65 offline verification | Yes | Yes | Yes | Yes | Yes | Yes |
+| Max agents / MCP servers | 5 | 50 | 100 | 500 | 2,000 | Unlimited |
+| Max end users | 10 | 500 | 250 | 1,000 | 10,000 | Unlimited |
+| Max admin seats | 2 | 10 | 25 | 50 | 200 | Unlimited |
+| Max organizations / domains | 1 | 1 | 1 | 1 | 5 | Unlimited |
+| **Authentication** | | | | | | |
+| Username + password (Argon2 / bcrypt) | Yes | Yes | Yes | Yes | Yes | Yes |
+| TOTP / 2FA | Yes | Yes | Yes | Yes | Yes | Yes |
+| WebAuthn / Passkeys (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| API key authentication | Yes | Yes | Yes | Yes | Yes | Yes |
+| Session authentication | Yes | Yes | Yes | Yes | Yes | Yes |
+| Bearer token (agent routing) | Yes | Yes | Yes | Yes | Yes | Yes |
+| JWT introspection / JWKS waterfall | Yes | Yes | Yes | Yes | Yes | Yes |
+| OpenID Connect (OIDC) SSO | No | Yes | Yes | Yes | Yes | Yes |
+| SAML v2 SSO | No | No | No | Yes | Yes | Yes |
+| SCIM automated provisioning | No | No | No | Yes | Yes | Yes |
+| Multiple admin accounts | Yes | Yes | Yes | Yes | Yes | Yes |
+| Admin lockout protection | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Authorization** | | | | | | |
+| OPA policy engine | Yes | Yes | Yes | Yes | Yes | Yes |
+| RBAC via OPA | Yes | Yes | Yes | Yes | Yes | Yes |
+| Per-tool / per-route policy | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-tenant org isolation | No | No | No | No | Partial (5 orgs) | Yes |
+| **Content Inspection** | | | | | | |
+| FastText ML classifier (offline, <5ms) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Response-path inspection (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Ollama LLM inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Anthropic Claude inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Google Gemini inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Azure OpenAI inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| LM Studio inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Fail-closed sentinel | Yes | Yes | Yes | Yes | Yes | Yes |
+| Prompt injection detection | Yes | Yes | Yes | Yes | Yes | Yes |
+| Credential Harvesting Suppression (CHS) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Payload masking before AI inspection | Yes | Yes | Yes | Yes | Yes | Yes |
+| Response masking / sanitization | Yes | Yes | Yes | Yes | Yes | Yes |
+| Anomaly detection (ZSET sliding window) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Inference payload logging (encrypted) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Audit and Compliance** | | | | | | |
+| Structured JSON audit log (file) | Yes | Yes | Yes | Yes | Yes | Yes |
+| PostgreSQL audit storage (RLS + AES-256-GCM) | Yes | Yes | Yes | Yes | Yes | Yes |
+| SHA-384 Merkle audit hash chain (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Audit log search (7 filters, cursor pagination) (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Audit log export (CSV/JSON, 10k rows) (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Splunk SIEM integration | Yes | Yes | Yes | Yes | Yes | Yes |
+| Elasticsearch SIEM integration | Yes | Yes | Yes | Yes | Yes | Yes |
+| Wazuh SIEM integration | Yes | Yes | Yes | Yes | Yes | Yes |
+| Async SIEM delivery queue (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Monthly partition management (pg_partman) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Rate Limiting** | | | | | | |
+| Per-endpoint rate limiting (Redis) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Response caching (CLEAN-only, SHA-256) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Cryptography and Secrets** | | | | | | |
+| TLS (ACME / CA-signed / self-signed) | Yes | Yes | Yes | Yes | Yes | Yes |
+| ML-DSA-65 licence verification (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-KMS (Docker, AWS, Azure, GCP, Keeper, Vault) | Yes | Yes | Yes | Yes | Yes | Yes |
+| AES-256-GCM column encryption (Postgres) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Agent PSK auto-rotation (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Observability** | | | | | | |
+| Prometheus metrics | Yes | Yes | Yes | Yes | Yes | Yes |
+| Grafana dashboards | Yes | Yes | Yes | Yes | Yes | Yes |
+| Real-time SSE inspection feed (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| OpenTelemetry / Jaeger tracing | Yes | Yes | Yes | Yes | Yes | Yes |
+| Loki + Promtail log aggregation | Yes | Yes | Yes | Yes | Yes | Yes |
+| Alertmanager escalation (Slack/email/PagerDuty) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Deployment** | | | | | | |
+| Universal installer | Yes | Yes | Yes | Yes | Yes | Yes |
+| Docker Compose | Yes | Yes | Yes | Yes | Yes | Yes |
+| Kubernetes Helm charts | Yes | Yes | Yes | Yes | Yes | Yes |
+| KEDA autoscaling | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes | Yes |
+| Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Trivy container scanning | Yes | Yes | Yes | Yes | Yes | Yes |
+| Optional agent bundles (LangGraph / Goose / CrewAI / OpenClaw) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Apache 2.0 open-source license | Yes | Yes | — | — | — | — |
+| CLA-covered contributions | Yes | Yes | — | — | — | — |
 
 ---
 
@@ -530,11 +544,9 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.8.4 is the current production release. The v0.8.x series introduced the optional agent bundle ecosystem — a courtesy integration layer that lets operators deploy LangGraph, Goose, CrewAI, and OpenClaw alongside Yashigani with a single opt-in prompt. All four agents connect through Yashigani's gateway, ensuring every LLM call they make is inspected, audited, and policy-enforced. The agent bundle feature requires no changes to Yashigani's data plane; it is purely additive infrastructure delivered via Compose profiles and Helm value toggles.
+Yashigani v0.9.1 is the current production release. v0.9.1 is the installer security hardening release: it provisions two admin accounts at install time (random themed usernames — animals/flowers/robots theme) with TOTP 2FA secrets and otpauth:// URIs displayed immediately, checks all generated passwords against the HIBP k-Anonymity breach database before use, adds HIBP breach checking to the backoffice authentication flow (OWASP ASVS V2.1.7), and displays a one-time credential summary at the end of install. All secrets are written to docker/secrets/ with chmod 600. v0.9.0 migrated licence signing from ECDSA P-256 to ML-DSA-65 (FIPS 204), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
 
-v0.8.4 is a patch release focused on installer reliability: it fixes platform detection variable mismatches that caused the summary to show "unknown" for OS, architecture, and runtime, adds GPU hardware detection with model recommendations, extends Podman support as a first-class runtime, resolves a macOS-specific `df` incompatibility in preflight, and ships a new `update.sh` script for in-place installation updates with automatic rollback.
-
-The progression from v0.1.0 through v0.8.4 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
+The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
@@ -562,17 +574,55 @@ The progression from v0.1.0 through v0.8.4 reflects a deliberate security maturi
 - **Runtime-agnostic compose commands** — `install.sh` resolves the correct compose command (`docker compose`, `docker-compose`, or `podman-compose`) at runtime instead of hardcoding `docker`
 - **`test-installer.sh`** — new 7-test automated suite (28 checks): platform detection, bash 3.2 compatibility, variable consistency, preflight, dry-run, file integrity, and agent bundle selection
 
-### v0.8.5+ Priorities (deferred from v0.8.0)
+### v0.9.0 Delivered
 
-- Licence key rotation and break-glass expiry override (S-04, S-06)
-- Audit log tamper detection (F-12)
-- Real-time inspection feed and audit log search UI (UX-03, UX-07)
-- Async SIEM sink delivery for high-throughput deployments (SC-04)
-- GitHub Actions integration for policy-as-code workflows (F-16)
-- SBOM generation (S-12)
-- Compliance dashboard (F-11)
-- OpenClaw license confirmation (TBD — must be resolved before v0.8.1 agent bundle GA)
-- Upstream image digest pinning automation (P1-F release workflow)
+**Phase 1 — Post-Quantum Cryptography**
+- **ML-DSA-65 (FIPS 204) licence signing** — replaces ECDSA P-256 across `keygen.py`, `sign_license.py`, and `verifier.py`; `cryptography>=44` required
+- **`LicenseFeature` enum** — OIDC, SAML, SCIM feature gates replaced with typed enum (replaces `frozenset[str]`)
+- **Academic / Non-Profit tier** — added to `LicenseTier` enum; full tier support in verifier and feature gate logic
+- **Community tier limits** — updated to v0.8.4 values (5 agents, 10 users, 2 admins)
+- **`key_alg: "ML-DSA-65"`** — added to v3 licence payload
+- **Hybrid TLS Caddyfile config** — X25519+ML-KEM-768 configuration included (commented — pending Caddy 2.10)
+
+**Phase 2 — Response-Path Inspection (F-01)**
+- **`ResponseInspectionPipeline`** — FastText + LLM fallback applied to upstream responses, closing the indirect prompt injection vector
+- **Per-agent config** — `fasttext_only` flag and `exempt_content_types` (default: `application/json`) configurable per agent
+- **BLOCKED → 502** — tainted upstream responses return 502 to the client; FLAGGED responses forwarded with `X-Yashigani-Response-Verdict` header
+- **`response_inspection_verdict`** — added to all audit events; `RESPONSE_INJECTION_DETECTED` event type added
+
+**Phase 3 — Production Hardening**
+- **PH-A: Break-glass** — hard TTL (1–72h, default 4h), dual-control approval, Redis-backed activation state, tamper-evident audit events
+- **PH-B: Audit hash chain** — SHA-384 Merkle chain with daily anchors, `audit_verify.py` CLI for chain integrity verification, Prometheus gauge for chain health
+- **PH-C: Async SIEM queue** — Redis RPUSH/LPOP delivery queue, batched transmission, DLQ after 3 retries, Prometheus gauges for queue depth and DLQ size
+- **PH-D: Agent PSK auto-rotation** — APScheduler cron-based rotation, KMS push on rotation, grace period for concurrent token acceptance, `token_last_rotated` field in agent API response
+
+**Phase 6 — WebAuthn / Passkeys (S-01)**
+- **`WebAuthnService`** — registration and authentication ceremonies via `py_webauthn`
+- **`WebAuthnCredentialRow`** — DB model with `pgp_sym_encrypt` at-rest encryption
+- **6 backoffice endpoints** — `/auth/webauthn/register/begin`, `/auth/webauthn/register/complete`, `/auth/webauthn/authenticate/begin`, `/auth/webauthn/authenticate/complete`, `/auth/webauthn/credentials`, `/auth/webauthn/credentials/{id}` (DELETE)
+- **TOTP coexistence** — both TOTP and WebAuthn remain available; WebAuthn is preferred when a credential is registered
+- **Audit events** — `WEBAUTHN_CREDENTIAL_REGISTERED`, `WEBAUTHN_CREDENTIAL_USED`, `WEBAUTHN_CREDENTIAL_DELETED`
+
+**Phase 7 — Operator Visibility**
+- **`EventBus`** — asyncio pub/sub with 512-entry per-subscriber queue; gateway publishes all inspection events
+- **SSE real-time inspection feed** — `GET /admin/events/inspection-feed` streams live inspection verdicts with 15-second heartbeat
+- **Audit log search** — `GET /admin/audit/search` with 7 filter parameters (event type, agent, user, verdict, date range, cursor) and cursor-based pagination
+- **Audit log export** — `GET /admin/audit/export` delivers CSV or JSON with 10,000-row cap and streaming response
+
+**Installer redesign**
+- **Three deployment modes** — Demo (1) / Production (2) / Enterprise (3) via `--deploy` flag (replaces `--mode`)
+- **AES key provisioning** — auto-generate (default) or BYOK with `--aes-key` flag
+- **`--offline` flag** — air-gapped installation support
+- **Demo mode** — localhost, self-signed, auto-generate everything, 1–2 prompts maximum
+
+### v0.9.1 Delivered
+
+- **Dual admin accounts at install** — two admin accounts are created during installation with random themed usernames (animals/flowers/robots theme, e.g. "phoenix", "condor"); eliminates single-admin lockout risk from day one
+- **TOTP 2FA provisioned at install** — TOTP secret key and `otpauth://` URI are generated and displayed for both admin accounts; operators can immediately scan the QR code or import the URI into any TOTP app
+- **HIBP k-Anonymity breach check (installer)** — all generated passwords are checked against the Have I Been Pwned API using SHA-1 k-Anonymity prefix lookup before use; any compromised password is automatically regenerated and re-checked; fail-open if the API is unreachable
+- **HIBP breach check in backoffice auth** — every password change is checked against the HIBP breach database via `password.py`; a `PasswordBreachedError` is raised if the password appears in a known breach; implements OWASP ASVS V2.1.7; fail-open if HIBP API is unreachable
+- **One-time credential summary** — a formatted credential block is displayed at the end of install showing all passwords, TOTP secrets, TOTP URIs, and the AES key; displayed once with a prominent red warning banner ("These credentials will NOT be shown again")
+- **Secrets written to docker/secrets/ chmod 600** — all credentials are persisted to `docker/secrets/` with file permissions 0600; existing secrets are preserved on upgrade
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 

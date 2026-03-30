@@ -460,6 +460,32 @@ siem_forward_errors_total = _C(
     ["siem"],  # splunk | elasticsearch | wazuh
 )
 
+# ---------------------------------------------------------------------------
+# v0.9.0 — SIEM async queue metrics (SC-04)
+# ---------------------------------------------------------------------------
+
+siem_queue_depth = _G(
+    "yashigani_siem_queue_depth",
+    "Current depth of the Redis-backed SIEM delivery queue per sink.",
+    ["sink"],
+)
+
+siem_dlq_depth = _G(
+    "yashigani_siem_dlq_depth",
+    "Current depth of the SIEM dead-letter queue (DLQ) per sink.",
+    ["sink"],
+)
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — Audit chain integrity (F-12)
+# ---------------------------------------------------------------------------
+
+audit_chain_breaks_total = _G(
+    "yashigani_audit_chain_breaks_total",
+    "Total number of audit log hash-chain breaks detected by audit_verify.py. "
+    "Updated by the offline verification script via Prometheus Pushgateway.",
+)
+
 endpoint_ratelimit_violations_total = _C(
     "yashigani_endpoint_ratelimit_violations_total",
     "Per-endpoint rate limit violations.",
