@@ -442,7 +442,8 @@ do_rollback() {
   # Restore backed-up config files
   log_step "2/3" "Restoring configuration..."
   local restore_count=0
-  while IFS= read -r -d '' f; do
+  # Use find + exec instead of process substitution (bash 3.2 compatible)
+  find "$latest_backup" -type f -print 2>/dev/null | while IFS= read -r f; do
     local rel_path="${f#${latest_backup}/}"
     local dest="${INSTALL_DIR}/${rel_path}"
     local dest_dir
@@ -450,7 +451,9 @@ do_rollback() {
     mkdir -p "$dest_dir"
     cp "$f" "$dest"
     restore_count=$((restore_count + 1))
-  done < <(find "$latest_backup" -type f -print0 2>/dev/null)
+  done
+  # Count files restored (pipe runs in subshell so restore_count doesn't propagate)
+  restore_count="$(find "$latest_backup" -type f 2>/dev/null | wc -l | tr -d ' ')"
   log_success "Restored ${restore_count} files"
 
   # If git repo, checkout the old version tag
