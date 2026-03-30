@@ -10,11 +10,10 @@
 </html>
 
 ---
-
 **Yashigani is the security enforcement gateway for MCP servers and agentic AI systems.**
-
+---
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
-
+---
 ---
 **Latest Stable Version:** v0.8.3
 ---
