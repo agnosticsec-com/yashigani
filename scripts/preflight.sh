@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/preflight.sh — Yashigani v0.9.1
+# scripts/preflight.sh — Yashigani v0.9.2
 # Pre-install requirement checks. Exits 1 if any REQUIRED check fails.
 
 set -euo pipefail

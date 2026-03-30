@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# update.sh — Yashigani v0.9.1
+# update.sh — Yashigani v0.9.2
 # Updates an existing Yashigani installation to the latest version.
 #
 # Usage:
 #   ./update.sh                          # Interactive update
-#   ./update.sh --target 0.9.1           # Update to specific version
+#   ./update.sh --target 0.9.2           # Update to specific version
 #   ./update.sh --skip-backup            # Skip pre-update backup
 #   ./update.sh --dry-run                # Show what would happen
 #   ./update.sh --rollback               # Rollback to previous version
@@ -15,7 +15,7 @@ set -euo pipefail
 # Constants
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CURRENT_VERSION="0.9.1"
+CURRENT_VERSION="0.9.2"
 REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 RELEASES_API="https://api.github.com/repos/agnosticsec-com/yashigani/releases/latest"
 
@@ -63,7 +63,7 @@ OPTIONS
 
 EXAMPLES
   ./update.sh                     # Update to latest
-  ./update.sh --target 0.9.1      # Update to v0.9.1
+  ./update.sh --target 0.9.2      # Update to v0.9.2
   ./update.sh --rollback          # Rollback to previous version
 EOF
   exit 0

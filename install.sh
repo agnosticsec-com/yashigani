@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="0.9.1"
+YASHIGANI_VERSION="0.9.2"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -926,32 +926,61 @@ _validate_aes_key() {
   fi
 }
 
-# Write AES key to .env file
+# Write all required environment variables to docker/.env
 _write_aes_key_to_env() {
   local env_file="${WORK_DIR}/docker/.env"
 
-  if [[ -z "$DB_AES_KEY" ]]; then
-    return 0
-  fi
-
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "Write YASHIGANI_DB_AES_KEY to ${env_file}"
+    dry_print "Write environment variables to ${env_file}"
     return 0
   fi
 
   # Create .env if it doesn't exist
   touch "$env_file"
 
-  # Update or append
-  if grep -q '^YASHIGANI_DB_AES_KEY=' "$env_file" 2>/dev/null; then
-    # macOS sed compatibility — use temp file
-    local tmp_env
-    tmp_env="$(mktemp)"
-    sed "s/^YASHIGANI_DB_AES_KEY=.*/YASHIGANI_DB_AES_KEY=${DB_AES_KEY}/" "$env_file" > "$tmp_env"
-    mv "$tmp_env" "$env_file"
-  else
-    echo "YASHIGANI_DB_AES_KEY=${DB_AES_KEY}" >> "$env_file"
+  # --- Helper: set a var in .env (update if exists, append if not) ---
+  _env_set() {
+    local key="$1"
+    local value="$2"
+    if [[ -z "$value" ]]; then return 0; fi
+    if grep -q "^${key}=" "$env_file" 2>/dev/null; then
+      local tmp_env
+      tmp_env="$(mktemp)"
+      sed "s|^${key}=.*|${key}=${value}|" "$env_file" > "$tmp_env"
+      mv "$tmp_env" "$env_file"
+    else
+      echo "${key}=${value}" >> "$env_file"
+    fi
+  }
+
+  # --- AES encryption key ---
+  _env_set "YASHIGANI_DB_AES_KEY" "${DB_AES_KEY}"
+
+  # --- Upstream MCP URL ---
+  # Demo mode: use a built-in echo server so compose doesn't fail on missing var
+  # Production: set from wizard or --upstream-url flag
+  local upstream="${UPSTREAM_URL}"
+  if [[ -z "$upstream" && "$DEPLOY_MODE" == "demo" ]]; then
+    upstream="http://localhost:8080/echo"
   fi
+  _env_set "UPSTREAM_MCP_URL" "${upstream}"
+
+  # --- Domain ---
+  _env_set "YASHIGANI_TLS_DOMAIN" "${DOMAIN}"
+
+  # --- Admin email ---
+  if [[ -n "$ADMIN_EMAIL" ]]; then
+    _env_set "YASHIGANI_ADMIN_EMAIL" "${ADMIN_EMAIL}"
+  fi
+
+  # --- Environment mode ---
+  if [[ "$DEPLOY_MODE" == "demo" ]]; then
+    _env_set "YASHIGANI_ENV" "development"
+  else
+    _env_set "YASHIGANI_ENV" "production"
+  fi
+
+  log_info "Environment written to ${env_file}"
 }
 
 # =============================================================================
