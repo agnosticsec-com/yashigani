@@ -1,0 +1,68 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [staging, production]
+      image_tag:
+        description: 'Image tag to deploy (e.g. 0.4.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry-run only'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Helm Deploy — ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Write kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > /tmp/kubeconfig
+          chmod 600 /tmp/kubeconfig
+      - uses: sigstore/cosign-installer@v3
+      - name: Verify image signatures
+        run: |
+          cosign verify \
+            ghcr.io/${{ github.repository_owner }}/yashigani-gateway:${{ inputs.image_tag }} \
+            --key env://COSIGN_PUBLIC_KEY
+          cosign verify \
+            ghcr.io/${{ github.repository_owner }}/yashigani-backoffice:${{ inputs.image_tag }} \
+            --key env://COSIGN_PUBLIC_KEY
+        env:
+          COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
+      - name: Helm repo add
+        run: |
+          helm repo add yashigani https://${{ github.repository_owner }}.github.io/yashigani
+          helm repo update
+      - name: Helm upgrade --install
+        run: |
+          helm upgrade --install yashigani yashigani/yashigani \
+            --namespace yashigani \
+            --create-namespace \
+            --set gateway.image.tag=${{ inputs.image_tag }} \
+            --set backoffice.image.tag=${{ inputs.image_tag }} \
+            --values helm/environments/${{ inputs.environment }}.yaml \
+            --kubeconfig /tmp/kubeconfig \
+            --timeout 10m \
+            --wait \
+            ${{ inputs.dry_run == 'true' && '--dry-run' || '' }}
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f /tmp/kubeconfig

@@ -1,0 +1,42 @@
+name: Helm Release
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Images"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package & Publish Helm Chart
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
+      - name: Lint chart
+        run: helm lint helm/yashigani/
+      - name: Update appVersion from tag
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          APP_VERSION="${TAG#refs/tags/v}"
+          sed -i "s/^appVersion:.*/appVersion: \"${APP_VERSION}\"/" helm/yashigani/Chart.yaml
+          sed -i "s/^version:.*/version: ${APP_VERSION}/" helm/yashigani/Chart.yaml
+      - name: Helm dep update
+        run: helm dep update helm/yashigani/
+      - name: Package chart
+        run: |
+          mkdir -p .helm-packages
+          helm package helm/yashigani/ --destination .helm-packages/
+      - name: Publish via chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          config: .cr.yaml
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

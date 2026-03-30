@@ -61,6 +61,7 @@ Yashigani proxies ALL traffic to one primary upstream. You must know where it is
 | 11434/tcp | Internal only | Must NOT be exposed externally | Ollama |
 | 8080/tcp | Internal only | Must NOT be exposed externally | Gateway |
 | 8443/tcp | Internal only | Must NOT be exposed externally | Backoffice |
+| 18789/tcp | Inbound | Optional — OpenClaw bundle only | OpenClaw Gateway (messaging webhooks) |
 
 > **Warning:** The Docker Compose `internal: true` flag on the `internal` network prevents direct external access to most services. Still verify your host firewall (iptables/ufw/nftables) blocks these ports at the host level if you have other containers or processes that bypass the Docker network.
 
@@ -714,6 +715,15 @@ Print this page and tick every item before running the installer.
 [ ] Ingress controller deployed
 [ ] cert-manager installed (for ACME)
 [ ] StorageClass confirmed
+```
+
+### Optional Agent Bundles (v0.8.0 — if using LangGraph / Goose / CrewAI / OpenClaw)
+
+```
+[ ] Decision made: which bundles to enable (or none)
+[ ] Sufficient disk space confirmed (LangGraph/Goose/CrewAI ~200 MB each; OpenClaw ~800 MB)
+[ ] OpenClaw only: port 18789 open inbound if messaging webhooks are required
+[ ] OpenClaw only: no other service using port 18789 on the host
 ```
 
 ### Production Go-Live

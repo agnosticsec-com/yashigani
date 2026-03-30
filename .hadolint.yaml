@@ -1,0 +1,18 @@
+failure-threshold: error
+format: tty
+ignore: []
+override:
+  error:
+    - DL3007   # pin image versions
+    - DL3008   # apt-get version pin
+    - DL3009   # apt-get clean
+    - DL3015   # apt-get --no-install-recommends
+    - DL4006   # set -o pipefail
+  warning:
+    - DL3013   # pip version pin (warning not error — handled by explicit pip pin in RUN)
+    - DL3042   # avoid pip as root — we use non-root user
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+  - gcr.io
+  - quay.io

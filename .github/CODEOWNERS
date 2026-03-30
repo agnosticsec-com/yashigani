@@ -1,0 +1,13 @@
+# Yashigani CODEOWNERS
+# Python source → backend team
+/src/                       @yashigani/backend
+# Helm charts → platform team
+/helm/                      @yashigani/platform
+# Docker → platform team
+/docker/                    @yashigani/platform
+# GitHub Actions → platform team
+/.github/workflows/         @yashigani/platform
+# Policy (OPA) → security team
+/policy/                    @yashigani/security
+# Docs → any maintainer
+*.md                        @yashigani/maintainers

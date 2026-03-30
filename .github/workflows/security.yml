@@ -1,0 +1,140 @@
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  pull_request:
+    branches: [main]
+
+permissions:
+  security-events: write
+  contents: read
+
+jobs:
+  trivy-scan:
+    name: Trivy Container Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build gateway for scan
+        run: docker build -f docker/Dockerfile.gateway -t yashigani/gateway:scan .
+      - name: Trivy gateway
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: yashigani/gateway:scan
+          scan-type: image
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-gateway.sarif
+      - name: Build backoffice for scan
+        run: docker build -f docker/Dockerfile.backoffice -t yashigani/backoffice:scan .
+      - name: Trivy backoffice
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: yashigani/backoffice:scan
+          scan-type: image
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-backoffice.sarif
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-gateway.sarif
+      - name: Upload SARIF backoffice
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-backoffice.sarif
+      - name: Push CVE metrics
+        if: always()
+        run: |
+          pip install --quiet requests
+          python scripts/parse_trivy.py --input trivy-gateway.sarif --image gateway \
+            --pushgateway "${PUSHGATEWAY_URL:-http://localhost:9091}" --job yashigani-ci || true
+          python scripts/parse_trivy.py --input trivy-backoffice.sarif --image backoffice \
+            --pushgateway "${PUSHGATEWAY_URL:-http://localhost:9091}" --job yashigani-ci || true
+
+  bandit-sast:
+    name: Bandit SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "bandit[toml]>=1.7"
+      - name: Run Bandit
+        run: bandit -r src/yashigani/ -c pyproject.toml -f json -o bandit-report.json -ll
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 30
+
+  pip-audit:
+    name: pip-audit Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e "." pip-audit
+      - name: Run pip-audit
+        run: pip-audit --format json --output pip-audit-report.json --fail-on-cvss 7
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.json
+          retention-days: 30
+
+  semgrep-full:
+    name: Semgrep Full Scan (scheduled only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/python
+            p/owasp-top-ten
+            p/secrets
+            p/supply-chain
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  owasp-dep-check:
+    name: OWASP Dependency Check (scheduled only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: yashigani
+          path: .
+          format: JSON HTML
+          args: --failOnCVSS 7 --enableRetired
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owasp-dep-check-report
+          path: reports/
+          retention-days: 30

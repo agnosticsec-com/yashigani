@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Yashigani runtime data
+docker/secrets/
+data/
+docker/data/
+*.log
+
+# FastText model binaries — train locally, never commit
+models/*.bin
+models/*.vec
+models/*.ftz
+
+# License signing keys — NEVER commit private key
+keys/
+*.pem
+scripts/keygen.py
+scripts/sign_license.py
+
+# Customer license files — do not commit
+*.ysg
+
+# Environment config — contains secrets
+.env
+.env.local
+
+# TLS certificates
+docker/tls/
+
+# Alembic generated (keep versions/ in VCS)
+src/yashigani/db/migrations/__pycache__/
+
+# OS
+**/.DS_Store
+Thumbs.db
+
+# IDE — editor-specific settings
+.vscode/
+.idea/
+
+# Internal / agent memory — never publish
+.claude/
