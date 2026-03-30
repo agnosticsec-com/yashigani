@@ -4,7 +4,7 @@
 <html>
 <body>
 <div>
-  <img src="https://github.com/agnosticsec-com/yashigani/blob/main/theyashigani.png" alt="Yashigani" align="center" style="width:50%">
+  <img src="https://github.com/agnosticsec-com/yashigani_img/blob/main/Yashiganymaster.png" alt="Yashigani" align="center" style="width:100%">
 </div>
 </body>
 </html>
