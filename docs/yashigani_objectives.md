@@ -155,7 +155,7 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.7.0 | Operational hardening + OPA Policy Assistant | ECDSA P-256 key active, DB partition automation + monitoring, OPA Policy Assistant (NL → RBAC JSON), MCP quick-start snippets, direct webhook alerting (Slack/Teams/PagerDuty), CIDR IP allowlisting per agent, path matching parity fix, runtime-configurable rate limit thresholds |
 | v0.7.1 | Alert wiring + partition bootstrap | Direct alert dispatch on credential exfil + licence expiry monitor, partition bootstrap migration (2026-05 → 2027-06), full DB health unit test suite |
 | v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / CrewAI / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
-| v0.8.4 | Installer patch — macOS + GPU + Podman | Fixed platform detection variables, GPU detection (Apple Silicon/NVIDIA/AMD), bash 3.2 compatibility, macOS `df` fix, Podman as first-class runtime, Docker Desktop detection, numbered agent bundle selection, interactive fallback prompts, `update.sh` for in-place updates |
+| v0.8.4 | Installer patch — macOS + GPU + Podman | Fixed platform detection, GPU detection (Apple Silicon/NVIDIA/AMD), bash 3.2 compat, Podman runtime, Docker Desktop CLI auto-fix, numbered agent bundles, runtime-agnostic compose, interactive fallbacks, `update.sh`, `test-installer.sh` (28 checks) |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -537,8 +537,11 @@ The progression from v0.1.0 through v0.8.4 reflects a deliberate security maturi
 - **`update.sh`** — new script for updating existing Yashigani installations: backs up current state, pulls latest images, restarts the stack, and rolls back automatically on failure
 - **Bash 3.2 compatibility** — replaced `${var,,}` (bash 4+ syntax) with `tr` for case conversion; installer now runs on macOS default bash without errors
 - **Numbered agent bundle selection** — agent bundles selected via numbered menu (e.g. `1,3` or `5` for all) instead of individual y/n prompts; invalid input is warned and skipped, not crashed
+- **Docker Desktop CLI auto-fix** — when Docker Desktop is installed but `docker` CLI is not in PATH, preflight offers to create the symlink automatically with a single Y/n prompt
+- **Runtime-agnostic compose commands** — `install.sh` resolves the correct compose command (`docker compose`, `docker-compose`, or `podman-compose`) dynamically instead of hardcoding `docker`
+- **`test-installer.sh`** — new 7-test automated suite (28 checks) covering platform detection, bash 3.2 compatibility, variable consistency, preflight, dry-run, file integrity, and agent bundle selection
 
-### v0.8.1+ Priorities (deferred from v0.8.0)
+### v0.8.5+ Priorities (deferred from v0.8.0)
 
 - Licence key rotation and break-glass expiry override (S-04, S-06)
 - Audit log tamper detection (F-12)

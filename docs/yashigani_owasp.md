@@ -1,8 +1,8 @@
 # Yashigani Security Gateway — OWASP Compliance Mapping
 
 **Document Version:** 1.2
-**Date:** 2026-03-28
-**Codebase version:** v0.8.0
+**Date:** 2026-03-30
+**Codebase version:** v0.8.4
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
 

@@ -151,7 +151,42 @@ _check_docker_daemon() {
       fi
       ;;
     docker_desktop_no_cli)
-      _warn_check "Container runtime" "Docker Desktop installed but CLI not in PATH — enable CLI integration in Docker Desktop Settings > General"
+      _warn_check "Container runtime" "Docker Desktop installed but CLI not in PATH"
+      printf "\n"
+      printf "      ${YSG_YELLOW}The 'docker' command is not in your PATH but Docker Desktop is installed.${YSG_RESET}\n"
+      printf "      ${YSG_YELLOW}We can fix this by creating a symlink (requires sudo).${YSG_RESET}\n"
+      printf "\n"
+      printf "      Run this command:\n"
+      printf "        ${YSG_GREEN}sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker${YSG_RESET}\n"
+      printf "\n"
+      # Offer to run it automatically if interactive
+      if [ -t 0 ]; then
+        printf "      Would you like to run this now? [Y/n]: "
+        local fix_answer
+        read -r fix_answer
+        fix_answer="$(echo "${fix_answer:-y}" | tr '[:upper:]' '[:lower:]')"
+        if [ "$fix_answer" = "y" ] || [ "$fix_answer" = "yes" ] || [ -z "$fix_answer" ]; then
+          if sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker 2>/dev/null; then
+            printf "      ${YSG_GREEN}Done! Docker CLI is now available.${YSG_RESET}\n\n"
+            # Re-check — update runtime detection
+            if docker info >/dev/null 2>&1; then
+              YSG_RUNTIME="docker"
+              export YSG_RUNTIME
+              # Replace the warning with a pass
+              REQUIRED_FAILURES=$((REQUIRED_FAILURES > 0 ? REQUIRED_FAILURES - 1 : 0))
+              RESULT_LINES=("${RESULT_LINES[@]/${RESULT_LINES[-1]}/}")
+              _pass "Container runtime" "Docker — running (CLI symlink created)"
+            else
+              printf "      ${YSG_YELLOW}Symlink created but Docker daemon not responding — open Docker Desktop first.${YSG_RESET}\n\n"
+            fi
+          else
+            printf "      ${YSG_RED}Could not create symlink. Run manually:${YSG_RESET}\n"
+            printf "        sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker\n\n"
+          fi
+        else
+          printf "\n      You can also enable it via: Docker Desktop → Settings → General → \"Install Docker CLI\"\n\n"
+        fi
+      fi
       ;;
     podman)
       if podman info >/dev/null 2>&1; then
