@@ -65,11 +65,14 @@ sudo dnf install -y git       # RHEL/Fedora
 **macOS:**
 
 1. Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (version 4.x or later — includes Docker Compose v2). The installer detects Docker Desktop by checking `/Applications/Docker.app` (v0.8.4).
-2. Alternatively, install Podman Desktop or the Podman CLI — Podman is supported as a first-class runtime in v0.8.4.
-3. Install Git via Homebrew: `brew install git`
-4. In Docker Desktop preferences, increase memory to at least 6 GB and disk to at least 30 GB.
+2. If the `docker` CLI is not in your PATH after installing Docker Desktop, the preflight check will detect this and offer to create the symlink automatically: `sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker` — just press Y when prompted.
+3. Alternatively, install Podman Desktop or the Podman CLI — Podman is supported as a first-class runtime. The installer resolves the correct compose command (`docker compose`, `docker-compose`, or `podman-compose`) dynamically.
+4. Install Git via Homebrew: `brew install git`
+5. In Docker Desktop preferences, increase memory to at least 6 GB and disk to at least 30 GB.
 
 > **Shell compatibility (v0.8.4):** The installer runs on macOS default bash (3.2) without errors. No need to install bash 4+ via Homebrew. The preflight check reports your login shell (`$SHELL`, typically zsh on modern macOS) rather than the script executor.
+
+> **Verify your environment before installing:** Run `bash scripts/test-installer.sh` for a 28-check automated verification of your setup (platform detection, GPU, runtime, bash compatibility, file integrity).
 
 **Verify your environment:**
 

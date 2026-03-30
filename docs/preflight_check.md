@@ -176,7 +176,7 @@ The installer auto-detects these but you should confirm them in advance for non-
 |------|-----------|-------|
 | Cloud provider | Recommended | AWS / GCP / Azure / DigitalOcean / Hetzner / none |
 | VM hypervisor | Info only | KVM / VMware / VirtualBox / HyperV / bare metal |
-| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.4). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. |
+| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.4). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. If Docker Desktop is installed but the `docker` CLI is not in PATH, the preflight offers to create the symlink automatically with a single Y/n prompt. |
 | If AWS: region | Required for AWS KMS | e.g. `us-east-1` |
 | If AWS: IAM role or access keys | Required for AWS KMS | EC2 instance role preferred over static keys |
 | If GCP: project ID | Required for GCP KMS | e.g. `my-project-123456` |
@@ -805,6 +805,8 @@ Print this page and tick every item before running the installer.
 [ ] Ports 80 + 443 open inbound
 [ ] Server has ≥ 4 GB RAM, ≥ 20 GB free disk
 [ ] Docker Engine 24+, Docker Desktop 4.x+, or Podman installed (or installer will handle it)
+[ ] If Docker Desktop on macOS: `docker` CLI in PATH (or let installer create symlink)
+[ ] Optional: run `bash scripts/test-installer.sh` to verify environment before install
 ```
 
 ### ACME TLS Mode

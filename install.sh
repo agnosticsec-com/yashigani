@@ -308,11 +308,56 @@ prompt_input() {
 # -----------------------------------------------------------------------------
 require_cmd() {
   local cmd="$1"
-  if ! command -v "$cmd" &>/dev/null; then
+  if ! command -v "$cmd" >/dev/null 2>&1; then
     log_error "Required command not found in PATH: $cmd"
     log_error "Please install '$cmd' and re-run the installer."
     exit 1
   fi
+}
+
+# Resolve the compose command based on detected runtime
+# Sets COMPOSE_CMD as an array (e.g. "docker compose" or "docker-compose" or "podman-compose")
+resolve_compose_cmd() {
+  COMPOSE_CMD=()
+
+  # Try docker compose plugin first
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=("docker" "compose")
+    return 0
+  fi
+
+  # Try standalone docker-compose
+  if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=("docker-compose")
+    return 0
+  fi
+
+  # Try podman-compose
+  if command -v podman-compose >/dev/null 2>&1; then
+    COMPOSE_CMD=("podman-compose")
+    return 0
+  fi
+
+  # Docker Desktop on macOS without CLI in PATH
+  if [ "${YSG_RUNTIME:-}" = "docker_desktop_no_cli" ]; then
+    # Try known Docker Desktop CLI paths
+    local dd_docker=""
+    if [ -x "$HOME/.docker/bin/docker" ]; then
+      dd_docker="$HOME/.docker/bin/docker"
+    elif [ -x "/usr/local/bin/com.docker.cli" ]; then
+      dd_docker="/usr/local/bin/com.docker.cli"
+    elif [ -x "/Applications/Docker.app/Contents/Resources/bin/docker" ]; then
+      dd_docker="/Applications/Docker.app/Contents/Resources/bin/docker"
+    fi
+
+    if [ -n "$dd_docker" ] && $dd_docker compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("$dd_docker" "compose")
+      return 0
+    fi
+  fi
+
+  log_error "No compose command found. Install Docker Desktop, docker-compose, or podman-compose."
+  exit 1
 }
 
 # =============================================================================
@@ -972,29 +1017,29 @@ compose_pull() {
     return 0
   fi
 
-  log_step "9/${TOTAL_STEPS}" "Pulling Docker images..."
+  log_step "9/${TOTAL_STEPS}" "Pulling container images..."
 
-  require_cmd "docker"
+  resolve_compose_cmd
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "docker compose -f $compose_file pull"
+    dry_print "${COMPOSE_CMD[*]} -f $compose_file pull"
     return 0
   fi
 
-  docker compose -f "$compose_file" pull
-  log_success "Docker images pulled"
+  "${COMPOSE_CMD[@]}" -f "$compose_file" pull
+  log_success "Container images pulled"
 }
 
 # =============================================================================
 # STEP 10 (compose/vm): docker compose up -d
 # =============================================================================
 compose_up() {
-  set_step "10" "docker compose up"
+  set_step "10" "compose up"
   log_step "10/${TOTAL_STEPS}" "Starting services..."
 
-  require_cmd "docker"
+  resolve_compose_cmd
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
@@ -1005,15 +1050,15 @@ compose_up() {
   done
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "docker compose -f $compose_file ${profile_args[*]:-} up -d"
+    dry_print "${COMPOSE_CMD[*]} -f $compose_file ${profile_args[*]:-} up -d"
     return 0
   fi
 
   if [[ "$UPGRADE" == "true" ]]; then
     log_info "Rolling restart for upgrade..."
-    docker compose -f "$compose_file" "${profile_args[@]:-}" up -d --remove-orphans
+    "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" up -d --remove-orphans
   else
-    docker compose -f "$compose_file" "${profile_args[@]:-}" up -d
+    "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" up -d
   fi
 
   log_success "Services started"
