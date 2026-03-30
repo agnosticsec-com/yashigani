@@ -1,7 +1,7 @@
-# Yashigani v0.8.0 — Installation and Configuration Guide
+# Yashigani v0.8.3 — Installation and Configuration Guide
 
-**Version:** 0.8.0
-**Last updated:** 2026-03-28
+**Version:** 0.8.3
+**Last updated:** 2026-03-30
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -40,7 +40,7 @@
 | Disk | 20 GB | 50+ GB |
 | OS | Any (Linux / macOS / VM) | Linux x86_64 or arm64 |
 
-> **Note:** If you enable GPU acceleration for Ollama (recommended for production), the host must have a CUDA-capable NVIDIA GPU (driver 525+) or Apple Silicon with Docker Desktop 4.x+. Expect an additional 4–8 GB VRAM per loaded model.
+> **Note:** If you enable GPU acceleration for Ollama (recommended for production), the host must have a CUDA-capable NVIDIA GPU (driver 525+), Apple Silicon (any M-series), or an AMD GPU with ROCm support. Expect an additional 4–8 GB VRAM (or unified memory) per loaded model. The installer detects GPU hardware automatically in v0.8.3 and prints model recommendations based on available VRAM.
 
 ### 1.2 Software Requirements
 
@@ -64,9 +64,10 @@ sudo dnf install -y git       # RHEL/Fedora
 
 **macOS:**
 
-1. Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (version 4.x or later — includes Docker Compose v2).
-2. Install Git via Homebrew: `brew install git`
-3. In Docker Desktop preferences, increase memory to at least 6 GB and disk to at least 30 GB.
+1. Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (version 4.x or later — includes Docker Compose v2). The installer detects Docker Desktop by checking `/Applications/Docker.app` (v0.8.3).
+2. Alternatively, install Podman Desktop or the Podman CLI — Podman is supported as a first-class runtime in v0.8.3.
+3. Install Git via Homebrew: `brew install git`
+4. In Docker Desktop preferences, increase memory to at least 6 GB and disk to at least 30 GB.
 
 **Verify your environment:**
 
@@ -150,7 +151,7 @@ Your admin password, Redis password, Postgres password, Grafana admin password, 
 
 Running `./install.sh` without flags launches an interactive wizard. It performs 12 steps:
 
-**Step 1 — Preflight checks.** Verifies Docker Engine version, Docker Compose version, available disk space, and available RAM. Aborts with a clear error if requirements are not met.
+**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. On macOS, uses POSIX-compatible disk space checks (v0.8.3). Aborts with a clear error if requirements are not met. GPU hardware is detected at this step via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed in the platform summary based on detected VRAM (v0.8.3).
 
 **Step 2 — Deployment mode.** Asks whether you are deploying to Docker Compose or Kubernetes (Helm). Choose **Docker Compose** for standalone hosts; choose **Kubernetes** if you have an existing cluster and `kubectl` configured.
 
@@ -167,7 +168,7 @@ Running `./install.sh` without flags launches an interactive wizard. It performs
 **Step 5 — Upstream MCP URL.** The installer asks for the URL of your backend MCP server that Yashigani will proxy requests to. Example: `http://mcp-server.internal:8080`. This maps to `UPSTREAM_MCP_URL`. You can enter multiple comma-separated URLs for load balancing.
 
 **Step 6 — KMS provider.** Choose how secrets are stored:
-- `docker` — Docker secrets on local filesystem. Default and simplest.
+- `docker` — Docker secrets on local filesystem. Default and simplest. Also compatible with Podman secrets (v0.8.3).
 - `aws` — AWS Secrets Manager. Recommended for AWS-hosted deployments.
 - `azure` — Azure Key Vault.
 - `gcp` — GCP Secret Manager.
@@ -548,7 +549,7 @@ YASHIGANI_LICENSE_FILE=/absolute/path/to/license.ysg
 | SCIM Provisioning | No | No | Yes | Yes | Yes |
 | KMS integrations | Docker only | All | All | All | All |
 | Audit log export | No | Yes | Yes | Yes | Yes |
-| Annual price | Free | $1,200 | $4,800 | $14,400 | Custom |
+| Annual price | Free | See agnosticsec.com/pricing | See agnosticsec.com/pricing | See agnosticsec.com/pricing | Custom |
 | SLA support | Community (Apache 2.0) | Email | Business hours | Business hours+ | 24/7 named |
 
 ---
@@ -699,7 +700,9 @@ The pull can take 2–10 minutes depending on your internet connection and model
 
 **Step 3 (optional) — GPU acceleration:**
 
-Open `docker-compose.yml` and uncomment the `deploy.resources` block under the `ollama` service:
+Starting in v0.8.3, the installer detects your GPU automatically and prints model recommendations. GPU acceleration configuration depends on your hardware:
+
+**NVIDIA:** Open `docker-compose.yml` and uncomment the `deploy.resources` block under the `ollama` service. Requires `nvidia-container-toolkit` (driver 525+):
 
 ```yaml
 ollama:
@@ -717,6 +720,10 @@ Then restart Ollama:
 ```bash
 docker compose up -d ollama
 ```
+
+**Apple Silicon (M-series):** GPU acceleration for Ollama is automatic when using Docker Desktop 4.x+ on macOS. No additional configuration is needed. Increase Docker Desktop memory allocation to match your model size (see preflight_check.md Section 4a for recommendations).
+
+**AMD (ROCm):** Requires ROCm-compatible driver and runtime. Contact support for ROCm-specific Compose configuration.
 
 ### 7.2 Cloud Backends (Anthropic, Gemini, Azure OpenAI)
 
@@ -1393,13 +1400,31 @@ docker compose logs backoffice | grep -i "alembic\|migration\|error"
 
 ## 16. Upgrade Procedure
 
-### 16.1 Via Installer (Recommended)
+### 16.0 Via update.sh (Recommended — v0.8.3+)
+
+For existing installations at v0.8.3 or later, use the new `update.sh` script. It handles backup, pull, restart, migration, and automatic rollback in a single command:
+
+```bash
+./update.sh
+```
+
+For a specific target version:
+
+```bash
+./update.sh --version v0.8.3
+```
+
+`update.sh` automatically backs up `.env`, `docker/secrets/`, and `config/` before pulling new images. If the backoffice fails to reach a healthy state within the timeout, it restores the pre-update backup and brings up the previous image versions.
+
+> **Note:** Take a Postgres volume snapshot before running any update. See Section 4.5 and the tip at the end of Section 16.2 for the snapshot command.
+
+### 16.1 Via Installer (Legacy Path)
 
 ```bash
 ./install.sh --upgrade
 ```
 
-The installer pulls the latest images, checks for breaking `.env` changes, backs up your current `.env` to `.env.bak`, and restarts the stack. Alembic migrations run automatically.
+The installer pulls the latest images, checks for breaking `.env` changes, backs up your current `.env` to `.env.bak`, and restarts the stack. Alembic migrations run automatically. Prefer `update.sh` for v0.8.3+ installations.
 
 ### 16.2 Manual Upgrade
 
@@ -1524,4 +1549,4 @@ Each bundle is assigned a **restricted RBAC policy** by default — it can only 
 
 ---
 
-*Yashigani v0.8.0 — Installation and Configuration Guide — 2026-03-28*
+*Yashigani v0.8.3 — Installation and Configuration Guide — 2026-03-30*

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/platform-detect.sh — Yashigani v0.8.2
+# scripts/platform-detect.sh — Yashigani v0.8.3
 # Full platform detection. Source this script; exports YSG_* environment variables.
 
 set -euo pipefail
@@ -198,6 +198,30 @@ _detect_vm() {
 # Container runtime detection
 # ---------------------------------------------------------------------------
 _detect_runtime() {
+  # On macOS, check for Docker Desktop first — it's the standard runtime
+  if [ "$YSG_OS" = "macos" ] && [ -d "/Applications/Docker.app" ]; then
+    # Docker Desktop is installed — ensure CLI is in PATH
+    # Docker Desktop puts its CLI at /usr/local/bin/docker or ~/.docker/bin/docker
+    local docker_cli=""
+    if command -v docker >/dev/null 2>&1; then
+      docker_cli="docker"
+    elif [ -x "/usr/local/bin/docker" ]; then
+      docker_cli="/usr/local/bin/docker"
+    elif [ -x "$HOME/.docker/bin/docker" ]; then
+      docker_cli="$HOME/.docker/bin/docker"
+    fi
+    if [ -n "$docker_cli" ]; then
+      if $docker_cli info >/dev/null 2>&1; then
+        echo "docker" && return
+      fi
+      # Docker Desktop installed, CLI found, but daemon not responding — still prefer it
+      echo "docker" && return
+    fi
+    # Docker Desktop installed but CLI not in PATH
+    echo "docker_desktop_no_cli" && return
+  fi
+
+  # Standard detection for Linux and fallback
   if command -v docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then
       echo "docker" && return

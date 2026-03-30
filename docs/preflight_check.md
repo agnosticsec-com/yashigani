@@ -1,7 +1,7 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v0.8.0
-**Last updated:** 2026-03-28
+**Version:** v0.8.3
+**Last updated:** 2026-03-30
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
 ---
@@ -32,7 +32,7 @@ These items are required regardless of deployment mode.
 | Operating system and version | Required | Installer picks correct Docker install method | Ubuntu 22.04 LTS x86_64 |
 | CPU architecture | Required | Installer selects correct image variants | `amd64` or `arm64` |
 | Available RAM (GB) | Required | Preflight check — minimum 2 GB, 4 GB for Ollama | 8 GB |
-| Available disk on Docker data root (GB) | Required | Preflight check — minimum 10 GB | 50 GB |
+| Available disk on Docker data root (GB) | Required | Preflight check — minimum 10 GB. On macOS, `preflight.sh` uses `df -k` (POSIX-compatible) instead of `df -BG` (GNU-only). | 50 GB |
 
 ### 1.2 Upstream MCP Server
 
@@ -175,11 +175,65 @@ The installer auto-detects these but you should confirm them in advance for non-
 |------|-----------|-------|
 | Cloud provider | Recommended | AWS / GCP / Azure / DigitalOcean / Hetzner / none |
 | VM hypervisor | Info only | KVM / VMware / VirtualBox / HyperV / bare metal |
-| Container runtime preference | Recommended | Docker (default) or Podman |
+| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.3). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. |
 | If AWS: region | Required for AWS KMS | e.g. `us-east-1` |
 | If AWS: IAM role or access keys | Required for AWS KMS | EC2 instance role preferred over static keys |
 | If GCP: project ID | Required for GCP KMS | e.g. `my-project-123456` |
 | If Azure: subscription / resource group | Required for Azure KMS | For Key Vault access |
+
+---
+
+## Section 4a — GPU Detection (v0.8.3)
+
+The installer runs GPU detection automatically via `platform-detect.sh`. No action is required for the detection itself. Use this section to verify your GPU is supported and to choose an appropriate Ollama model before installation.
+
+### 4a.1 Supported GPU Platforms
+
+| Platform | Detection Method | Compute Framework | Notes |
+|----------|-----------------|-------------------|-------|
+| Apple Silicon (M-series) | `sysctl hw.memsize` + chip model | Unified memory, Metal, ANE | No VRAM separation — system RAM is shared. Installer recommends model based on total RAM. |
+| NVIDIA | `nvidia-smi` | CUDA | Requires `nvidia-container-toolkit` for Docker GPU passthrough. |
+| AMD | `rocm-smi` | ROCm | Requires ROCm-compatible driver and container runtime. |
+| Unknown discrete GPU | `lspci` (fallback) | None | Detected but not accelerated. Installer warns and recommends CPU inference. |
+| No dedicated GPU | Software fallback | CPU only | Installer recommends small models (3B parameters or less) for CPU inference. |
+
+### 4a.2 Model Recommendations by VRAM
+
+The installer prints a recommended Ollama model based on detected GPU VRAM or unified memory:
+
+| Available VRAM / Unified Memory | Recommended Model |
+|---------------------------------|-------------------|
+| < 4 GB | `qwen2.5:0.5b` (CPU only or very low-end GPU) |
+| 4–6 GB | `qwen2.5:3b` (default) |
+| 8–12 GB | `llama3.2:8b` or `mistral:7b` |
+| 16 GB+ | `llama3.1:14b` or `qwen2.5:14b` |
+
+> **Note:** These are starting recommendations. Actual performance depends on memory bandwidth and concurrent workload. Monitor Ollama container memory usage during the first week and adjust `OLLAMA_MODEL` in `.env` as needed.
+
+### 4a.3 NVIDIA GPU — Pre-requirements
+
+If the installer detects an NVIDIA GPU and you want to use it for Ollama:
+
+| Item | Required? | Notes |
+|------|-----------|-------|
+| NVIDIA driver 525+ | Required | `nvidia-smi` must succeed |
+| `nvidia-container-toolkit` | Required | Install: `sudo apt-get install nvidia-container-toolkit` |
+| CUDA-compatible GPU | Required | Pascal (GTX 1000 series) or newer |
+
+After installing `nvidia-container-toolkit`, uncomment the `deploy.resources` GPU block in `docker-compose.yml` under the `ollama` service.
+
+### 4a.4 Apple Silicon — Pre-requirements
+
+Docker Desktop 4.x on macOS automatically enables Apple Silicon acceleration for Ollama. No additional packages are required. Set memory allocation to at least 10 GB in Docker Desktop preferences when running 7B+ models.
+
+### Checklist — Section 4a
+
+```
+[ ] GPU detection result noted (Apple Silicon / NVIDIA / AMD / CPU-only)
+[ ] NVIDIA: nvidia-container-toolkit installed (if using NVIDIA GPU)
+[ ] Apple Silicon: Docker Desktop memory allocation ≥ 10 GB for 7B+ models
+[ ] Ollama model selected based on available VRAM / unified memory
+```
 
 ---
 
@@ -646,6 +700,92 @@ These are not installer inputs but must be planned before go-live.
 
 ---
 
+## Section 16 — Interactive Fallback Prompts (v0.8.3)
+
+In v0.8.3, when automatic detection fails for OS, container runtime, or GPU, the installer falls back to interactive selection menus rather than aborting. This section documents what to expect and what to have ready.
+
+### 16.1 When Fallback Prompts Appear
+
+| Detection Scenario | Fallback Behavior |
+|--------------------|------------------|
+| OS could not be determined | Installer presents a numbered list: `1) linux  2) macos  3) other` |
+| Container runtime not found | Installer presents: `1) docker  2) docker-desktop  3) podman` |
+| GPU detection failed or no GPU found | Installer presents: `1) nvidia  2) apple-silicon  3) amd  4) none (CPU only)` |
+
+### 16.2 Non-Interactive Mode
+
+For automated or CI deployments, bypass interactive prompts using flags:
+
+```bash
+./install.sh \
+  --os linux \
+  --runtime docker \
+  --gpu nvidia \
+  --non-interactive
+```
+
+If `--non-interactive` is set and required detection fails, the installer aborts with a clear error rather than hanging for input.
+
+### Checklist — Section 16
+
+```
+[ ] Understood: interactive prompts may appear if detection fails
+[ ] Non-interactive deployments: --os, --runtime, --gpu flags prepared
+[ ] CI/CD pipelines: --non-interactive flag added to install command
+```
+
+---
+
+## Section 17 — Updating an Existing Installation (v0.8.3)
+
+`update.sh` handles updating an existing Yashigani installation. It is the recommended path for patch and minor version updates.
+
+### 17.1 What update.sh Does
+
+1. **Backs up** the current `.env`, `docker/secrets/`, and `config/` directories to a timestamped archive.
+2. **Pulls** the latest Docker images for all stack services.
+3. **Restarts** the stack with `docker compose up -d --remove-orphans`.
+4. **Runs** Alembic migrations automatically via the backoffice start sequence.
+5. **Rolls back** automatically if the backoffice fails to reach `healthy` status within the configured timeout — restores the pre-update backup and brings the previous image versions back up.
+
+### 17.2 Running the Update
+
+```bash
+./update.sh
+```
+
+For a specific version:
+
+```bash
+./update.sh --version v0.8.3
+```
+
+To skip the interactive confirmation:
+
+```bash
+./update.sh --non-interactive
+```
+
+### 17.3 Pre-Update Checklist
+
+| Item | Required? | Notes |
+|------|-----------|-------|
+| Postgres volume snapshot | **Recommended** | Take a snapshot before any update. See Section 14. |
+| `.env` backup | Auto-handled by `update.sh` | Also back up manually to an off-host location |
+| Confirm no pending Alembic state | Recommended | `docker compose exec backoffice alembic current` should show a clean head |
+| Disk space for new images | Required | Ensure ≥ 5 GB free on Docker data root |
+
+### Checklist — Section 17
+
+```
+[ ] Postgres volume backed up (or snapshot taken)
+[ ] Disk space confirmed ≥ 5 GB free
+[ ] `update.sh` reviewed (in repo root)
+[ ] Rollback plan understood (update.sh handles automatically; manual restore from backup is the fallback)
+```
+
+---
+
 ## Master Pre-Installation Summary Checklist
 
 Print this page and tick every item before running the installer.
@@ -658,9 +798,12 @@ Print this page and tick every item before running the installer.
 [ ] Upstream MCP server URL:    ___________________________
 [ ] TLS mode chosen:            [ ] acme  [ ] ca  [ ] selfsigned
 [ ] KMS provider chosen:        [ ] docker  [ ] aws  [ ] azure  [ ] gcp  [ ] vault  [ ] keeper
+[ ] Container runtime confirmed: [ ] Docker Engine  [ ] Docker Desktop  [ ] Podman
+[ ] GPU noted (installer detects automatically): [ ] Apple Silicon  [ ] NVIDIA  [ ] AMD  [ ] CPU-only
+[ ] Ollama model selected based on GPU/RAM (see Section 4a.2)
 [ ] Ports 80 + 443 open inbound
 [ ] Server has ≥ 4 GB RAM, ≥ 20 GB free disk
-[ ] Docker Engine 24+ installed (or installer will handle it)
+[ ] Docker Engine 24+, Docker Desktop 4.x+, or Podman installed (or installer will handle it)
 ```
 
 ### ACME TLS Mode
