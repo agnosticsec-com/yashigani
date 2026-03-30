@@ -15,7 +15,7 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v0.9.1
+**Latest Stable Version:** v0.9.2
 ---
 **Document Date:** 2026-03-30
 ---
@@ -174,6 +174,7 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.8.4 | Installer patch — macOS + GPU + Podman | Fixed platform detection, GPU detection (Apple Silicon/NVIDIA/AMD), bash 3.2 compat, Podman runtime, Docker Desktop CLI auto-fix, numbered agent bundles, runtime-agnostic compose, interactive fallbacks, `update.sh`, `test-installer.sh` |
 | v0.9.0 | Post-quantum cryptography + security hardening | ML-DSA-65 (FIPS 204) licence signing, hybrid TLS X25519+ML-KEM-768 (pending Caddy 2.10), response-path inspection (F-01), WebAuthn/Passkeys (S-01), break-glass dual-control, SHA-384 Merkle audit chain, async SIEM queue, agent PSK auto-rotation, real-time SSE inspection feed, searchable + exportable audit log, installer deployment modes redesign |
 | v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
+| v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -623,6 +624,11 @@ The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturi
 - **HIBP breach check in backoffice auth** — every password change is checked against the HIBP breach database via `password.py`; a `PasswordBreachedError` is raised if the password appears in a known breach; implements OWASP ASVS V2.1.7; fail-open if HIBP API is unreachable
 - **One-time credential summary** — a formatted credential block is displayed at the end of install showing all passwords, TOTP secrets, TOTP URIs, and the AES key; displayed once with a prominent red warning banner ("These credentials will NOT be shown again")
 - **Secrets written to docker/secrets/ chmod 600** — all credentials are persisted to `docker/secrets/` with file permissions 0600; existing secrets are preserved on upgrade
+
+### v0.9.2 Delivered
+
+- **Installer env var fix** — `_write_aes_key_to_env` expanded into a full `.env` writer; sets `UPSTREAM_MCP_URL`, `YASHIGANI_TLS_DOMAIN`, `YASHIGANI_ADMIN_EMAIL`, `YASHIGANI_ENV`, and the AES key before `docker compose pull` runs; demo mode defaults `UPSTREAM_MCP_URL` to `http://localhost:8080/echo`
+- **bash 3.2 compat fix in `update.sh`** — `< <(find ...)` process substitution replaced with `find | while read` pipe; resolves failure on macOS default bash (3.2)
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 

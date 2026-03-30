@@ -2,7 +2,7 @@
 
 **Document Version:** 1.4
 **Date:** 2026-03-30
-**Codebase version:** v0.9.1
+**Codebase version:** v0.9.2
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
 

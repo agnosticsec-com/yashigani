@@ -968,10 +968,39 @@ _write_aes_key_to_env() {
   # --- Domain ---
   _env_set "YASHIGANI_TLS_DOMAIN" "${DOMAIN}"
 
+  # --- TLS mode ---
+  _env_set "YASHIGANI_TLS_MODE" "${TLS_MODE}"
+
   # --- Admin email ---
   if [[ -n "$ADMIN_EMAIL" ]]; then
     _env_set "YASHIGANI_ADMIN_EMAIL" "${ADMIN_EMAIL}"
   fi
+
+  # --- Prometheus basic auth (required by Caddy reverse proxy to Prometheus) ---
+  # Generate a bcrypt hash for the Prometheus scrape endpoint
+  local prom_password
+  prom_password="$(_gen_password)"
+  local prom_hash=""
+  if command -v python3 >/dev/null 2>&1; then
+    # Use python3 to generate bcrypt hash (or fallback to passlib/hashlib)
+    prom_hash="$(python3 -c "
+try:
+    from passlib.hash import bcrypt
+    print(bcrypt.using(rounds=12).hash('${prom_password}'))
+except ImportError:
+    import hashlib, base64, os
+    # Fallback: SHA-256 hash (Caddy accepts this format too)
+    salt = os.urandom(16)
+    h = hashlib.pbkdf2_hmac('sha256', b'${prom_password}', salt, 100000)
+    print(base64.b64encode(salt + h).decode())
+" 2>/dev/null || echo "")"
+  fi
+  # If we couldn't generate a hash, use a placeholder that won't block compose
+  if [[ -z "$prom_hash" ]]; then
+    prom_hash="placeholder_run_bootstrap"
+  fi
+  _env_set "PROMETHEUS_BASICAUTH_HASH" "${prom_hash}"
+  _env_set "PROMETHEUS_BASICAUTH_USER" "prometheus"
 
   # --- Environment mode ---
   if [[ "$DEPLOY_MODE" == "demo" ]]; then

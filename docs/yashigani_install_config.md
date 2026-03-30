@@ -1,6 +1,6 @@
-# Yashigani v0.9.1 — Installation and Configuration Guide
+# Yashigani v0.9.2 — Installation and Configuration Guide
 
-**Version:** 0.9.1
+**Version:** 0.9.2
 **Last updated:** 2026-03-30
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
