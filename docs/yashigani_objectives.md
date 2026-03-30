@@ -186,7 +186,7 @@ v0.6.1 restructured the licensing tiers to reflect real-world deployment segment
 
 ### v0.6.2 — Starter Tier and Three-Dimensional Limits
 
-v0.6.2 completed the licensing model with three changes. First, a Starter tier ($1,200/year, OIDC-only SSO, 100 agents) was added to fill the gap between Community and Professional for small teams with an SSO mandate. Second, the single user limit was split into two independent dimensions: `max_end_users` (people using AI tools through the gateway) and `max_admin_seats` (people managing the Yashigani control plane). Third, the license payload was updated to v3 schema with backwards-compat loading for v1/v2 license files.
+v0.6.2 completed the licensing model with three changes. First, a Starter tier (OIDC-only SSO, 100 agents) was added to fill the gap between Community and Professional for small teams with an SSO mandate. Second, the single user limit was split into two independent dimensions: `max_end_users` (people using AI tools through the gateway) and `max_admin_seats` (people managing the Yashigani control plane). Third, the license payload was updated to v3 schema with backwards-compat loading for v1/v2 license files.
 
 ### v0.7.0 — Operational Hardening and OPA Policy Assistant
 
@@ -322,87 +322,96 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - 5-tier licensing model: Community / Starter / Professional / Professional Plus / Enterprise
 - ECDSA P-256 offline license verification (no call-home)
 - Three independent limit dimensions: agents, end users, admin seats
-- Community tier: free, Apache 2.0, 20 agents, 50 end users, 10 admin seats
-- Starter tier: $1,200/year, OIDC-only SSO, 100 agents, 250 end users, 25 admin seats
-- Professional, Professional Plus, Enterprise: signed license key required, full SSO
+- Community tier: free, Apache 2.0
+- Academic / Non-Profit tier: free (verified institution — see agnosticsec.com/academic)
+- Starter, Professional, Professional Plus, Enterprise: signed license key required
+- See agnosticsec.com/pricing for current tier limits and pricing
 - Apache 2.0 open-source community license with Contributor License Agreement (CLA)
 
 ---
 
 ## 6. Feature Matrix by Tier
 
-| Feature | Community | Starter | Professional | Professional Plus | Enterprise |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **Licensing** | | | | | |
-| Free, no license key | Yes | — | — | — | — |
-| Signed paid license key | — | Yes | Yes | Yes | Yes |
-| Annual price | Free | $1,200 | $4,800 | $14,400 | Custom |
-| ECDSA P-256 offline verification | Yes | Yes | Yes | Yes | Yes |
-| Max agents / MCP servers | 20 | 100 | 500 | 2,000 | Unlimited |
-| Max end users | 50 | 250 | 1,000 | 10,000 | Unlimited |
-| Max admin seats | 10 | 25 | 50 | 200 | Unlimited |
-| Max organizations / domains | 1 | 1 | 1 | 5 | Unlimited |
-| **Authentication** | | | | | |
-| Username + password (Argon2 / bcrypt) | Yes | Yes | Yes | Yes | Yes |
-| TOTP / 2FA | Yes | Yes | Yes | Yes | Yes |
-| API key authentication | Yes | Yes | Yes | Yes | Yes |
-| Session authentication | Yes | Yes | Yes | Yes | Yes |
-| Bearer token (agent routing) | Yes | Yes | Yes | Yes | Yes |
-| JWT introspection / JWKS waterfall | Yes | Yes | Yes | Yes | Yes |
-| OpenID Connect (OIDC) SSO | No | Yes | Yes | Yes | Yes |
-| SAML v2 SSO | No | No | Yes | Yes | Yes |
-| SCIM automated provisioning | No | No | Yes | Yes | Yes |
-| Multiple admin accounts | Yes | Yes | Yes | Yes | Yes |
-| Admin lockout protection | Yes | Yes | Yes | Yes | Yes |
-| **Authorization** | | | | | |
-| OPA policy engine | Yes | Yes | Yes | Yes | Yes |
-| RBAC via OPA | Yes | Yes | Yes | Yes | Yes |
-| Per-tool / per-route policy | Yes | Yes | Yes | Yes | Yes |
-| Multi-tenant org isolation | No | No | No | Partial (5 orgs) | Yes |
-| **Content Inspection** | | | | | |
-| FastText ML classifier (offline, <5ms) | Yes | Yes | Yes | Yes | Yes |
-| Ollama LLM inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Anthropic Claude inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Google Gemini inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Azure OpenAI inspection backend | Yes | Yes | Yes | Yes | Yes |
-| LM Studio inspection backend | Yes | Yes | Yes | Yes | Yes |
-| Fail-closed sentinel | Yes | Yes | Yes | Yes | Yes |
-| Prompt injection detection | Yes | Yes | Yes | Yes | Yes |
-| Credential Harvesting Suppression (CHS) | Yes | Yes | Yes | Yes | Yes |
-| Payload masking before AI inspection | Yes | Yes | Yes | Yes | Yes |
-| Response masking / sanitization | Yes | Yes | Yes | Yes | Yes |
-| Anomaly detection (ZSET sliding window) | Yes | Yes | Yes | Yes | Yes |
-| Inference payload logging (encrypted) | Yes | Yes | Yes | Yes | Yes |
-| **Audit and Compliance** | | | | | |
-| Structured JSON audit log (file) | Yes | Yes | Yes | Yes | Yes |
-| PostgreSQL audit storage (RLS + AES-256-GCM) | Yes | Yes | Yes | Yes | Yes |
-| Splunk SIEM integration | Yes | Yes | Yes | Yes | Yes |
-| Elasticsearch SIEM integration | Yes | Yes | Yes | Yes | Yes |
-| Wazuh SIEM integration | Yes | Yes | Yes | Yes | Yes |
-| Monthly partition management (pg_partman) | Yes | Yes | Yes | Yes | Yes |
-| **Rate Limiting** | | | | | |
-| Per-endpoint rate limiting (Redis) | Yes | Yes | Yes | Yes | Yes |
-| Response caching (CLEAN-only, SHA-256) | Yes | Yes | Yes | Yes | Yes |
-| **Cryptography and Secrets** | | | | | |
-| TLS (ACME / CA-signed / self-signed) | Yes | Yes | Yes | Yes | Yes |
-| HashiCorp Vault KMS | Yes | Yes | Yes | Yes | Yes |
-| AES-256-GCM column encryption (Postgres) | Yes | Yes | Yes | Yes | Yes |
-| **Observability** | | | | | |
-| Prometheus metrics | Yes | Yes | Yes | Yes | Yes |
-| Grafana dashboards | Yes | Yes | Yes | Yes | Yes |
-| OpenTelemetry / Jaeger tracing | Yes | Yes | Yes | Yes | Yes |
-| Loki + Promtail log aggregation | Yes | Yes | Yes | Yes | Yes |
-| Alertmanager escalation (Slack/email/PagerDuty) | Yes | Yes | Yes | Yes | Yes |
-| **Deployment** | | | | | |
-| Universal installer | Yes | Yes | Yes | Yes | Yes |
-| Docker Compose | Yes | Yes | Yes | Yes | Yes |
-| Kubernetes Helm charts | Yes | Yes | Yes | Yes | Yes |
-| KEDA autoscaling | Yes | Yes | Yes | Yes | Yes |
-| Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes |
-| Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes |
-| Trivy container scanning | Yes | Yes | Yes | Yes | Yes |
-| Apache 2.0 open-source license | Yes | — | — | — | — |
-| CLA-covered contributions | Yes | — | — | — | — |
+| Feature | Community | Academic / Non-Profit | Starter | Professional | Prof Plus | Enterprise |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Licensing** | | | | | | |
+| Free, no license key | Yes | Yes (verified) | — | — | — | — |
+| Signed paid license key | — | — | Yes | Yes | Yes | Yes |
+| Pricing | Free | Free | See website | See website | See website | Custom |
+| Offline license verification | Yes | Yes | Yes | Yes | Yes | Yes |
+| Max agents / MCP servers | 5 | 50 | 100 | 500 | 2,000 | Unlimited |
+| Max chat users | 10 | 500 | 250 | 1,000 | 10,000 | Unlimited |
+| Max admin seats | 2 | 10 | 25 | 50 | 200 | Unlimited |
+| Max organizations / domains | 1 | 1 | 1 | 1 | 5 | Unlimited |
+| "Powered by Yashigani" badge | No | **Required** | No | No | No | No |
+| **Authentication** | | | | | | |
+| Username + password (Argon2 / bcrypt) | Yes | Yes | Yes | Yes | Yes | Yes |
+| TOTP / 2FA | Yes | Yes | Yes | Yes | Yes | Yes |
+| API key authentication | Yes | Yes | Yes | Yes | Yes | Yes |
+| Session authentication | Yes | Yes | Yes | Yes | Yes | Yes |
+| Bearer token (agent routing) | Yes | Yes | Yes | Yes | Yes | Yes |
+| JWT introspection / JWKS waterfall | Yes | Yes | Yes | Yes | Yes | Yes |
+| OpenID Connect (OIDC) SSO | No | Yes | Yes | Yes | Yes | Yes |
+| SAML v2 SSO | No | No | No | Yes | Yes | Yes |
+| SCIM automated provisioning | No | No | No | Yes | Yes | Yes |
+| Multiple admin accounts | Yes | Yes | Yes | Yes | Yes | Yes |
+| Admin lockout protection | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Authorization** | | | | | | |
+| OPA policy engine | Default only | Yes | Yes | Yes | Yes | Yes |
+| Custom OPA policies | No | Yes | Yes | Yes | Yes | Yes |
+| RBAC via OPA | Yes | Yes | Yes | Yes | Yes | Yes |
+| Per-tool / per-route policy | Default only | Yes | Yes | Yes | Yes | Yes |
+| Multi-tenant org isolation | No | No | No | No | Partial (5 orgs) | Yes |
+| **Content Inspection** | | | | | | |
+| FastText ML classifier (offline, <5ms) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Ollama LLM inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Anthropic Claude inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Google Gemini inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Azure OpenAI inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| LM Studio inspection backend | Yes | Yes | Yes | Yes | Yes | Yes |
+| Fail-closed sentinel | Yes | Yes | Yes | Yes | Yes | Yes |
+| Prompt injection detection | Yes | Yes | Yes | Yes | Yes | Yes |
+| Credential Harvesting Suppression (CHS) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Payload masking before AI inspection | Yes | Yes | Yes | Yes | Yes | Yes |
+| Response masking / sanitization | Yes | Yes | Yes | Yes | Yes | Yes |
+| Anomaly detection (ZSET sliding window) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Inference payload logging (encrypted) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Audit and Compliance** | | | | | | |
+| Structured JSON audit log (file) | Yes | Yes | Yes | Yes | Yes | Yes |
+| PostgreSQL audit storage (RLS + AES-256-GCM) | No | Yes | Yes | Yes | Yes | Yes |
+| Audit log export (CSV/JSON) | No | CSV only | Yes | Yes | Yes | Yes |
+| Splunk SIEM integration | No | 1 sink | Yes | Yes | Yes | Yes |
+| Elasticsearch SIEM integration | No | 1 sink | Yes | Yes | Yes | Yes |
+| Wazuh SIEM integration | No | 1 sink | Yes | Yes | Yes | Yes |
+| Monthly partition management (pg_partman) | No | Yes | Yes | Yes | Yes | Yes |
+| **Rate Limiting** | | | | | | |
+| Per-endpoint rate limiting (Redis) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Response caching (CLEAN-only, SHA-256) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Cryptography and Secrets** | | | | | | |
+| TLS (ACME / CA-signed / self-signed) | Yes | Yes | Yes | Yes | Yes | Yes |
+| HashiCorp Vault KMS | Yes | Yes | Yes | Yes | Yes | Yes |
+| AES-256-GCM column encryption (Postgres) | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Observability** | | | | | | |
+| Prometheus metrics | Yes | Yes | Yes | Yes | Yes | Yes |
+| Grafana dashboards (basic) | Yes | Yes | Yes | Yes | Yes | Yes |
+| OpenTelemetry / Jaeger tracing | Yes | Yes | Yes | Yes | Yes | Yes |
+| Loki + Promtail log aggregation | Yes | Yes | Yes | Yes | Yes | Yes |
+| Alertmanager escalation (Slack/email/PagerDuty) | No | Basic | Yes | Yes | Yes | Yes |
+| **Deployment** | | | | | | |
+| Universal installer | Yes | Yes | Yes | Yes | Yes | Yes |
+| Docker Compose | Yes | Yes | Yes | Yes | Yes | Yes |
+| Kubernetes Helm charts | Yes | Yes | Yes | Yes | Yes | Yes |
+| KEDA autoscaling | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes | Yes |
+| Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Trivy container scanning | Yes | Yes | Yes | Yes | Yes | Yes |
+| Apache 2.0 open-source license | Yes | Yes | — | — | — | — |
+| CLA-covered contributions | Yes | Yes | — | — | — | — |
+| **Support** | | | | | | |
+| Community (GitHub Issues) | Yes | — | — | — | — | — |
+| Email support | — | 72h SLA | 48h SLA | 24h SLA | — | — |
+| Priority support (named SE) | — | — | — | — | 4h SLA | — |
+| Dedicated (TAM + onboarding + QBRs) | — | — | — | — | — | 2h SLA |
 
 ---
 
@@ -522,7 +531,7 @@ The progression from v0.1.0 through v0.8.0 reflects a deliberate security maturi
 - OpenClaw license confirmation (TBD — must be resolved before v0.8.1 agent bundle GA)
 - Upstream image digest pinning automation (P1-F release workflow)
 
-Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier ($1,200/year, OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with a named support engineer and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
+Organizations evaluating Yashigani for production deployment should begin with the Community tier (Apache 2.0). Non-profit and educational institutions qualify for the Academic / Non-Profit tier (verified, free — see agnosticsec.com/academic). Teams with an SSO mandate but limited scale should consider the Starter tier. Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments. Enterprise provides unlimited scale with a dedicated Technical Account Manager. See agnosticsec.com/pricing for current tier details. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
 ---
 

@@ -141,7 +141,7 @@ AI Agent / Client (response)
 | **Audit Pipeline** | Multi-sink writer: file, PostgreSQL, Splunk, Elasticsearch, Wazuh |
 | **PgBouncer** | PostgreSQL connection pooler, prevents connection exhaustion |
 | **Redis** | Rate limiting, response caching, anomaly detection sliding windows |
-| **HashiCorp Vault** | KMS: AppRole auth, KV v2 secrets, AES-256-GCM key management |
+| **Key Management System** | KMS integration: Keeper, AWS KMS, Azure Key Vault, GCP KMS, HashiCorp Vault |
 | **Prometheus / Grafana** | Metrics collection and dashboards |
 | **Loki / Promtail** | Log aggregation and shipping |
 | **Alertmanager** | 3-channel escalation: Slack/email → PagerDuty |
@@ -166,7 +166,7 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.5.0 | Data plane hardening + observability | PostgreSQL 16 RLS + AES-256-GCM, pg_partman, PgBouncer, JWT introspection (JWKS waterfall), multi-sink audit, OTEL/Jaeger, FastText ML, Vault KMS, Loki, Alertmanager, per-endpoint rate limiting, response caching, Wazuh, anomaly detection, inference logging, container hardening, structured JSON logging |
 | v0.6.0 | Universal installer + licensing | Linux/macOS/cloud/VM installer, 3-tier licensing (Community/Professional/Enterprise), ECDSA P-256 license verification, feature gates |
 | v0.6.1 | Tier restructuring + open-source licensing | 4-tier model (Community/Professional/Professional Plus/Enterprise), Apache 2.0 community license, CLA framework |
-| v0.6.2 | Starter tier + three-dimensional limits | 5-tier model adds Starter ($1,200/yr, OIDC-only), max_end_users + max_admin_seats split, v3 license payload schema |
+| v0.6.2 | Starter tier + three-dimensional limits | 5-tier model adds Starter (OIDC-only), max_end_users + max_admin_seats split, v3 license payload schema |
 | v0.7.0 | Operational hardening + OPA Policy Assistant | ECDSA P-256 key active, DB partition automation + monitoring, OPA Policy Assistant (NL → RBAC JSON), MCP quick-start snippets, direct webhook alerting (Slack/Teams/PagerDuty), CIDR IP allowlisting per agent, path matching parity fix, runtime-configurable rate limit thresholds |
 | v0.7.1 | Alert wiring + partition bootstrap | Direct alert dispatch on credential exfil + licence expiry monitor, partition bootstrap migration (2026-05 → 2027-06), full DB health unit test suite |
 | v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / CrewAI / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
@@ -189,11 +189,11 @@ Kubernetes support arrived via production-ready Helm charts. GitHub Actions CI/C
 
 ### v0.5.0 — Data Platform and Full Observability
 
-The most feature-dense release. PostgreSQL 16 with row-level security and AES-256-GCM column encryption via pgcrypto became the primary audit and operational data store. pg_partman and pg_cron automated monthly partition management. PgBouncer was added for connection pooling. JWT introspection implemented a JWKS waterfall supporting three deployment streams (opensource, corporate, SaaS). The audit pipeline became multi-sink: file, PostgreSQL, Splunk, Elasticsearch, and Wazuh simultaneously. OpenTelemetry distributed tracing with OTLP export to Jaeger made end-to-end latency visible. FastText ML added a sub-5ms, fully offline first-pass classifier. HashiCorp Vault KMS provided AppRole authentication and KV v2 secrets management. Loki + Promtail consolidated log aggregation. Alertmanager delivered 3-channel escalation. Per-endpoint rate limiting and clean-only response caching (SHA-256 keyed) were introduced. Anomaly detection using Redis ZSET sliding windows caught repeated-small-call enumeration patterns. Inference payloads were logged in AES-encrypted form in Postgres. Container hardening applied seccomp allowlists, AppArmor profiles, UID 1001 non-root execution, tmpfs mounts for `/tmp` and audit buffers, and read-only root filesystem.
+The most feature-dense release. PostgreSQL 16 with row-level security and AES-256-GCM column encryption via pgcrypto became the primary audit and operational data store. pg_partman and pg_cron automated monthly partition management. PgBouncer was added for connection pooling. JWT introspection implemented a JWKS waterfall supporting three deployment streams (opensource, corporate, SaaS). The audit pipeline became multi-sink: file, PostgreSQL, Splunk, Elasticsearch, and Wazuh simultaneously. OpenTelemetry distributed tracing with OTLP export to Jaeger made end-to-end latency visible. FastText ML added a sub-5ms, fully offline first-pass classifier. Severak KMS's implemented to provided AppRole authentication and KV v2 secrets management. Loki + Promtail consolidated log aggregation. Alertmanager delivered 3-channel escalation. Per-endpoint rate limiting and clean-only response caching (SHA-256 keyed) were introduced. Anomaly detection using Redis ZSET sliding windows caught repeated-small-call enumeration patterns. Inference payloads were logged in AES-encrypted form in Postgres. Container hardening applied seccomp allowlists, AppArmor profiles, UID 1001 non-root execution, tmpfs mounts for `/tmp` and audit buffers, and read-only root filesystem.
 
 ### v0.6.0 — Universal Installer and Licensing
 
-Yashigani became self-distributable. The universal installer auto-detects OS, architecture, and cloud provider, then performs a full production-grade installation on Linux, macOS, cloud VMs, and bare-metal. Three licensing tiers were introduced: Community (free, no key), Professional (paid, signed key), and Enterprise (paid, signed key with multi-tenancy). License verification uses ECDSA P-256 offline signature validation — no license server call-home required. Feature gates enforce SAML, OIDC, and SCIM access at the tier boundary. Agent and organization limits are enforced per tier.
+Yashigani became self-distributable. The universal installer auto-detects OS, architecture, and cloud provider, then performs a full production-grade installation on Linux, MacOS, cloud VMs, and bare-metal. Three licensing tiers were introduced: Community (free, no key), Professional (paid, signed key), and Enterprise (paid, signed key with multi-tenancy). License verification uses ECDSA P-256 offline signature validation — no license server call-home required. Feature gates enforce SAML, OIDC, and SCIM access at the tier boundary. Agent and organization limits are enforced per tier.
 
 ### v0.6.1 — Tier Restructuring and Open-Source Licensing
 
@@ -331,6 +331,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
   - tmpfs mounts for `/tmp` and audit buffer
   - Read-only root filesystem
 - PgBouncer PostgreSQL connection pooling
+- **Optional agent bundle containers** (v0.8.0) — LangGraph, Goose, CrewAI, OpenClaw as opt-in Docker Compose profiles and Helm toggles; all agent traffic routes through Yashigani's enforcement layer; images are digest-pinned per release; third-party courtesy integrations (no support obligation)
 
 ### 5.9 Licensing and Tiers
 
@@ -416,6 +417,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 | Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes |
 | Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes |
 | Trivy container scanning | Yes | Yes | Yes | Yes | Yes |
+| Optional agent bundles (LangGraph / Goose / CrewAI / OpenClaw) | Yes | Yes | Yes | Yes | Yes |
 | Apache 2.0 open-source license | Yes | — | — | — | — |
 | CLA-covered contributions | Yes | — | — | — | — |
 
@@ -440,12 +442,20 @@ docker-compose.yml
 ├── loki                    # Log aggregation
 ├── promtail                # Log shipping
 ├── alertmanager            # Alert routing
-└── jaeger                  # Distributed tracing
+├── jaeger                  # Distributed tracing
+│
+│   Optional agent bundles (v0.8.0) — enable with --profile <name>:
+├── langgraph               # LangGraph agent (profile: langgraph)
+├── goose                   # Goose agent (profile: goose)
+├── crewai                  # CrewAI agent (profile: crewai)
+└── openclaw                # OpenClaw gateway, port 18789 (profile: openclaw)
 ```
 
 Suitable for: development, staging, small production workloads, air-gapped environments.
 
 **Minimum hardware:** 4 vCPU, 8 GB RAM, 50 GB SSD.
+**Recommended hardware:** 6 vCPU, 12 GB RAM, 80 GB SSD.
+
 
 ### 7.2 Kubernetes — High-Availability Multi-Replica
 
@@ -471,7 +481,7 @@ Suitable for: production workloads requiring high availability, rolling updates,
 
 **Helm install:**
 ```bash
-helm repo add yashigani https://charts.yashigani.io
+helm repo add yashigani https://charts.agnosticsec.com
 helm install yashigani yashigani/yashigani \
   --namespace yashigani --create-namespace \
   --values values-production.yaml
@@ -506,6 +516,8 @@ The universal installer supports bare-metal Linux and macOS hosts without contai
 Suitable for: regulated industries with no-cloud or no-container requirements, air-gapped environments, on-premises data centers.
 
 **Minimum hardware (production bare-metal):** 8 vCPU, 16 GB RAM, 100 GB NVMe SSD.
+**Recommended hardware (production bare-metal):** 12 vCPU, 32 GB RAM, 180 GB NVMe SSD.
+
 
 ---
 
@@ -537,7 +549,7 @@ The progression from v0.1.0 through v0.8.0 reflects a deliberate security maturi
 - OpenClaw license confirmation (TBD — must be resolved before v0.8.1 agent bundle GA)
 - Upstream image digest pinning automation (P1-F release workflow)
 
-Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier ($1,200/year, OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with a named support engineer and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
+Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
 ---
 
@@ -570,5 +582,5 @@ Open-core with five tiers:
 
 **Our commitment to the Open-Source Projects used:**
 ---
-Agnistic security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they registered as non-for-profit organizations.
+Agnostic Security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they are registered as non-for-profit organizations.
 We might also decide to sponsor other Open-Source projects that we use in some way.
