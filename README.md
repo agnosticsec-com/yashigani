@@ -342,6 +342,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 ### 5.9 Licensing and Tiers
 
 - 5-tier licensing model: Community / Starter / Professional / Professional Plus / Enterprise
+- Tier for Education and Non-for-Profit organisations
 - ECDSA P-256 offline license verification (no call-home)
 - Three independent limit dimensions: agents, end users, admin seats
 - Community tier: free, Apache 2.0, 20 agents, 50 end users, 10 admin seats
@@ -578,7 +579,7 @@ Organizations evaluating Yashigani for production deployment should begin with t
 ---
 
 
-***Hardware Requirements:***
+### 9. Hardware Requirements:
 
 ---
 
@@ -592,19 +593,9 @@ Organizations evaluating Yashigani for production deployment should begin with t
 > **Note:** If you enable GPU acceleration for Ollama (recommended for production), the host must have a CUDA-capable NVIDIA GPU (driver 525+) or Apple Silicon with Docker Desktop 4.x+. Expect an additional 4–8 GB VRAM per loaded model.
 
 
-**Pricing:**
----
-Open-core with five tiers:
----
-| Tier | Agents | End Users | Admin Seats | Annual Price |
-|------|--------|-----------|-------------|-------------|
-| Community | 20 | 50 | 10 | Free (Apache 2.0) |
-| Starter | 100 | 250 | 25 | TBD |
-| Professional | 500 | 1,000 | 50 | TBD |
-| Professional Plus | 2,000 | 10,000 | 200 | TBD |
-| Enterprise | Unlimited | Unlimited | Unlimited | TBD |
 
-**Our commitment to the Open-Source Projects used:**
+
+### 10. Our commitment to the OSS Community:**
 ---
 Agnostic Security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they are registered as non-for-profit organizations.
 We might also decide to sponsor other Open-Source projects that we use in some way.
