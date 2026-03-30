@@ -1,10 +1,10 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "yashigani"
-version = "0.8.0"
+version = "0.9.2"
 description = "Security enforcement gateway for MCP servers and agentic AI systems"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
