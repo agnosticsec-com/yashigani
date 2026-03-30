@@ -1303,6 +1303,9 @@ compose_pull() {
 
   resolve_compose_cmd
 
+  # --- Verify Docker daemon is running before attempting pull ---
+  _ensure_docker_running
+
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -1312,6 +1315,74 @@ compose_pull() {
 
   "${COMPOSE_CMD[@]}" -f "$compose_file" pull
   log_success "Container images pulled"
+}
+
+# Ensure Docker daemon is running — prompt user to start it if not
+_ensure_docker_running() {
+  # Skip check for dry-run
+  if [[ "$DRY_RUN" == "true" ]]; then return 0; fi
+
+  # Check if daemon responds
+  if docker info >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Daemon not running — try to help
+  log_warn "Docker daemon is not running."
+
+  if [[ "$YSG_OS" == "macos" && -d "/Applications/Docker.app" ]]; then
+    printf "\n"
+    printf "  ${C_BOLD}Docker Desktop needs to be started.${C_RESET}\n\n"
+
+    if [[ "$NON_INTERACTIVE" == "true" ]]; then
+      log_info "Attempting to start Docker Desktop..."
+      open -a Docker 2>/dev/null || true
+    else
+      printf "    1) Start Docker Desktop automatically\n"
+      printf "    2) I'll start it manually — wait for me\n"
+      printf "\n"
+      printf "  ${C_BOLD}Choice [1]: ${C_RESET}"
+      local choice
+      read -r choice </dev/tty 2>/dev/null || choice="1"
+      choice="${choice:-1}"
+
+      if [[ "$choice" == "1" ]]; then
+        log_info "Starting Docker Desktop..."
+        open -a Docker 2>/dev/null || true
+      fi
+    fi
+
+    # Wait for daemon to become available (up to 60 seconds)
+    printf "  Waiting for Docker daemon"
+    local waited=0
+    while ! docker info >/dev/null 2>&1; do
+      if [[ $waited -ge 60 ]]; then
+        printf "\n"
+        log_error "Docker daemon did not start within 60 seconds."
+        log_error "Start Docker Desktop manually and re-run the installer."
+        exit 1
+      fi
+      printf "."
+      sleep 2
+      waited=$((waited + 2))
+    done
+    printf " ready!\n\n"
+    log_success "Docker daemon is running"
+
+  elif command -v podman >/dev/null 2>&1; then
+    log_info "Trying: podman machine start..."
+    podman machine start 2>/dev/null || true
+    sleep 3
+    if ! podman info >/dev/null 2>&1; then
+      log_error "Podman machine did not start. Run 'podman machine start' manually and re-run."
+      exit 1
+    fi
+    log_success "Podman machine is running"
+
+  else
+    log_error "No container runtime is running. Start Docker or Podman and re-run the installer."
+    exit 1
+  fi
 }
 
 # =============================================================================
