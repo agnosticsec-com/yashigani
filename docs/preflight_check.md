@@ -1,6 +1,6 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v0.8.3
+**Version:** v0.8.4
 **Last updated:** 2026-03-30
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
@@ -33,6 +33,7 @@ These items are required regardless of deployment mode.
 | CPU architecture | Required | Installer selects correct image variants | `amd64` or `arm64` |
 | Available RAM (GB) | Required | Preflight check — minimum 2 GB, 4 GB for Ollama | 8 GB |
 | Available disk on Docker data root (GB) | Required | Preflight check — minimum 10 GB. On macOS, `preflight.sh` uses `df -k` (POSIX-compatible) instead of `df -BG` (GNU-only). | 50 GB |
+| Shell | Informational | Preflight reports the user's login shell (`$SHELL`) — typically zsh on modern macOS. The installer is compatible with bash 3.2+ (macOS default) and zsh 5+. | zsh 5.9, bash 5.2 |
 
 ### 1.2 Upstream MCP Server
 
@@ -175,7 +176,7 @@ The installer auto-detects these but you should confirm them in advance for non-
 |------|-----------|-------|
 | Cloud provider | Recommended | AWS / GCP / Azure / DigitalOcean / Hetzner / none |
 | VM hypervisor | Info only | KVM / VMware / VirtualBox / HyperV / bare metal |
-| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.3). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. |
+| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.4). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. |
 | If AWS: region | Required for AWS KMS | e.g. `us-east-1` |
 | If AWS: IAM role or access keys | Required for AWS KMS | EC2 instance role preferred over static keys |
 | If GCP: project ID | Required for GCP KMS | e.g. `my-project-123456` |
@@ -183,7 +184,7 @@ The installer auto-detects these but you should confirm them in advance for non-
 
 ---
 
-## Section 4a — GPU Detection (v0.8.3)
+## Section 4a — GPU Detection (v0.8.4)
 
 The installer runs GPU detection automatically via `platform-detect.sh`. No action is required for the detection itself. Use this section to verify your GPU is supported and to choose an appropriate Ollama model before installation.
 
@@ -700,9 +701,9 @@ These are not installer inputs but must be planned before go-live.
 
 ---
 
-## Section 16 — Interactive Fallback Prompts (v0.8.3)
+## Section 16 — Interactive Fallback Prompts (v0.8.4)
 
-In v0.8.3, when automatic detection fails for OS, container runtime, or GPU, the installer falls back to interactive selection menus rather than aborting. This section documents what to expect and what to have ready.
+In v0.8.4, when automatic detection fails for OS, container runtime, or GPU, the installer falls back to interactive selection menus rather than aborting. This section documents what to expect and what to have ready.
 
 ### 16.1 When Fallback Prompts Appear
 
@@ -736,7 +737,7 @@ If `--non-interactive` is set and required detection fails, the installer aborts
 
 ---
 
-## Section 17 — Updating an Existing Installation (v0.8.3)
+## Section 17 — Updating an Existing Installation (v0.8.4)
 
 `update.sh` handles updating an existing Yashigani installation. It is the recommended path for patch and minor version updates.
 
@@ -757,7 +758,7 @@ If `--non-interactive` is set and required detection fails, the installer aborts
 For a specific version:
 
 ```bash
-./update.sh --version v0.8.3
+./update.sh --version v0.8.4
 ```
 
 To skip the interactive confirmation:

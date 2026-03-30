@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# update.sh — Yashigani v0.8.3
+# update.sh — Yashigani v0.8.4
 # Updates an existing Yashigani installation to the latest version.
 #
 # Usage:
@@ -15,7 +15,7 @@ set -euo pipefail
 # Constants
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CURRENT_VERSION="0.8.3"
+CURRENT_VERSION="0.8.4"
 REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 RELEASES_API="https://api.github.com/repos/agnosticsec-com/yashigani/releases/latest"
 

@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="0.8.3"
+YASHIGANI_VERSION="0.8.4"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -278,7 +278,8 @@ prompt_yn() {
   local answer
   read -r answer </dev/tty 2>/dev/null || answer="$default"
   answer="${answer:-$default}"
-  [[ "${answer,,}" == "y" || "${answer,,}" == "yes" ]]
+  answer="$(echo "$answer" | tr '[:upper:]' '[:lower:]')"
+  [[ "$answer" == "y" || "$answer" == "yes" ]]
 }
 
 # Prints the entered value (or default) to stdout
@@ -891,38 +892,71 @@ select_agent_bundles() {
     return 0
   fi
 
-  printf "${C_BOLD}Select optional agent bundles to install (default: skip all):${C_RESET}\n\n"
-
-  # LangGraph
-  if prompt_yn "  Install LangGraph (Python MCP-native orchestration — Apache 2.0)?" "n"; then
-    COMPOSE_PROFILES+=("langgraph")
-    log_success "LangGraph selected"
-  fi
-
-  # Goose
-  if prompt_yn "  Install Goose (Python MCP-native dev assistant — Apache 2.0)?" "n"; then
-    COMPOSE_PROFILES+=("goose")
-    log_success "Goose selected"
-  fi
-
-  # CrewAI
-  if prompt_yn "  Install CrewAI (Python multi-agent orchestration — MIT)?" "n"; then
-    COMPOSE_PROFILES+=("crewai")
-    log_success "CrewAI selected"
-  fi
-
-  # OpenClaw — extra size warning
+  printf "${C_BOLD}Available agent bundles:${C_RESET}\n\n"
+  printf "    1) LangGraph   — Python MCP-native orchestration (Apache 2.0)\n"
+  printf "    2) Goose       — Python MCP-native dev assistant (Apache 2.0)\n"
+  printf "    3) CrewAI      — Python multi-agent orchestration (MIT)\n"
+  printf "    4) OpenClaw    — Node.js 24 personal AI, 30+ channels (${C_YELLOW}~800 MB${C_RESET}, license TBD)\n"
+  printf "    5) All of the above\n"
+  printf "    0) None — skip agent bundles\n"
   printf "\n"
-  log_warn "OpenClaw uses a Node.js 24 image (~800 MB). Ensure you have sufficient disk space."
-  if prompt_yn "  Install OpenClaw (Node.js 24 personal AI, port 18789 — license TBD)?" "n"; then
-    COMPOSE_PROFILES+=("openclaw")
-    log_success "OpenClaw selected"
-  fi
+  printf "${C_BOLD}  Enter your choices (comma-separated, e.g. 1,3 or 5 for all) [0]: ${C_RESET}"
+
+  local choices
+  read -r choices </dev/tty 2>/dev/null || choices="0"
+  choices="${choices:-0}"
+
+  # Normalize: remove spaces
+  choices="$(echo "$choices" | tr -d ' ')"
+
+  # Parse choices
+  IFS=',' read -ra selected <<< "$choices"
+  for choice in "${selected[@]}"; do
+    case "$choice" in
+      1)
+        COMPOSE_PROFILES+=("langgraph")
+        log_success "LangGraph selected"
+        ;;
+      2)
+        COMPOSE_PROFILES+=("goose")
+        log_success "Goose selected"
+        ;;
+      3)
+        COMPOSE_PROFILES+=("crewai")
+        log_success "CrewAI selected"
+        ;;
+      4)
+        COMPOSE_PROFILES+=("openclaw")
+        log_warn "OpenClaw uses a Node.js 24 image (~800 MB) — ensure sufficient disk space"
+        log_success "OpenClaw selected"
+        ;;
+      5)
+        COMPOSE_PROFILES+=("langgraph" "goose" "crewai" "openclaw")
+        log_warn "OpenClaw uses a Node.js 24 image (~800 MB) — ensure sufficient disk space"
+        log_success "All agent bundles selected"
+        ;;
+      0)
+        ;;
+      *)
+        log_warn "Unknown option '$choice' — skipping"
+        ;;
+    esac
+  done
 
   printf "\n"
   if [[ ${#COMPOSE_PROFILES[@]} -eq 0 ]]; then
     log_info "No agent bundles selected — skipping"
   else
+    # Deduplicate in case user entered e.g. 1,5
+    local unique_profiles=()
+    for p in "${COMPOSE_PROFILES[@]}"; do
+      local already=false
+      for u in "${unique_profiles[@]:-}"; do
+        [[ "$u" == "$p" ]] && already=true
+      done
+      [[ "$already" == "false" ]] && unique_profiles+=("$p")
+    done
+    COMPOSE_PROFILES=("${unique_profiles[@]}")
     log_success "Agent bundles selected: ${COMPOSE_PROFILES[*]}"
   fi
 }
