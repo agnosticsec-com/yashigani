@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/preflight.sh — Yashigani v0.6.0
+# scripts/preflight.sh — Yashigani v0.8.2
 # Pre-install requirement checks. Exits 1 if any REQUIRED check fails.
 
 set -euo pipefail
@@ -108,30 +108,63 @@ _check_curl() {
   fi
 }
 
-# 3. Docker daemon
+# 3. Container runtime (Docker or Podman)
 _check_docker_daemon() {
-  if docker info >/dev/null 2>&1; then
-    _pass "Docker daemon" "running"
-  else
-    _fail "Docker daemon" "not reachable — is Docker running?"
-  fi
-}
-
-# 4. Docker Compose
-_check_compose() {
-  case "$YSG_COMPOSE" in
-    plugin)
-      local ver
-      ver="$(docker compose version --short 2>/dev/null || echo "unknown")"
-      _pass "Docker Compose" "plugin v${ver}"
+  case "${YSG_RUNTIME:-none}" in
+    docker)
+      if docker info >/dev/null 2>&1; then
+        _pass "Container runtime" "Docker — running"
+      else
+        _fail "Container runtime" "Docker found but daemon not reachable — is Docker running?"
+      fi
       ;;
-    standalone)
-      local ver
-      ver="$(docker-compose version --short 2>/dev/null || echo "unknown")"
-      _pass "Docker Compose" "standalone v${ver}"
+    podman)
+      if podman info >/dev/null 2>&1; then
+        _pass "Container runtime" "Podman — running"
+      elif command -v podman >/dev/null 2>&1; then
+        _warn_check "Container runtime" "Podman found but not running — try: podman machine start"
+      else
+        _fail "Container runtime" "Podman not reachable"
+      fi
       ;;
     none)
-      _fail "Docker Compose" "not found — install docker-compose-plugin"
+      _fail "Container runtime" "no container runtime found — install Docker or Podman"
+      ;;
+  esac
+}
+
+# 4. Compose
+_check_compose() {
+  case "${YSG_RUNTIME:-docker}" in
+    podman)
+      if command -v podman-compose >/dev/null 2>&1; then
+        local ver
+        ver="$(podman-compose version 2>/dev/null | head -1 || echo "unknown")"
+        _pass "Compose" "podman-compose ${ver}"
+      elif command -v docker-compose >/dev/null 2>&1; then
+        local ver
+        ver="$(docker-compose version --short 2>/dev/null || echo "unknown")"
+        _pass "Compose" "docker-compose (standalone) v${ver}"
+      else
+        _warn_check "Compose" "podman-compose not found — install: pip install podman-compose"
+      fi
+      ;;
+    *)
+      case "$YSG_COMPOSE" in
+        plugin)
+          local ver
+          ver="$(docker compose version --short 2>/dev/null || echo "unknown")"
+          _pass "Compose" "Docker Compose plugin v${ver}"
+          ;;
+        standalone)
+          local ver
+          ver="$(docker-compose version --short 2>/dev/null || echo "unknown")"
+          _pass "Compose" "docker-compose (standalone) v${ver}"
+          ;;
+        none)
+          _fail "Compose" "not found — install docker-compose-plugin"
+          ;;
+      esac
       ;;
   esac
 }
@@ -177,16 +210,28 @@ _check_ports() {
 
 # 6. Disk space
 _check_disk() {
-  local docker_root="/var/lib/docker"
-  if docker info >/dev/null 2>&1; then
-    docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")"
-  fi
-  # Use the mount point of docker root (or / on macOS)
-  local mount_point="$docker_root"
-  [ -d "$mount_point" ] || mount_point="/"
+  local mount_point="/"
 
-  local avail_gb
-  avail_gb="$(df -BG "$mount_point" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
+  case "${YSG_RUNTIME:-docker}" in
+    docker)
+      if docker info >/dev/null 2>&1; then
+        local docker_root
+        docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "")"
+        [ -n "$docker_root" ] && [ -d "$docker_root" ] && mount_point="$docker_root"
+      fi
+      ;;
+    podman)
+      local podman_root="${HOME}/.local/share/containers"
+      [ -d "$podman_root" ] && mount_point="$podman_root"
+      ;;
+  esac
+
+  local avail_gb=0
+  if [ "$YSG_OS" = "macos" ]; then
+    avail_gb="$(df -g "$mount_point" 2>/dev/null | awk 'NR==2 {print $4}')"
+  else
+    avail_gb="$(df -BG "$mount_point" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
+  fi
   avail_gb="${avail_gb:-0}"
 
   if [ "$avail_gb" -ge 10 ]; then
@@ -277,6 +322,42 @@ _check_dns() {
   fi
 }
 
+# 10+. GPU check
+_check_gpu() {
+  case "${YSG_GPU_TYPE:-none}" in
+    apple_metal)
+      local vram_gb
+      vram_gb="$(awk "BEGIN { printf \"%.0f\", ${YSG_GPU_VRAM_MB:-0}/1024 }")"
+      _pass "GPU" "${YSG_GPU_NAME:-Apple Silicon} — ${vram_gb} GB unified memory (Metal)"
+      if [ "${YSG_GPU_VRAM_MB:-0}" -lt 8192 ]; then
+        _warn_check "GPU memory" "${vram_gb} GB — 8 GB+ recommended for local LLM inference"
+      fi
+      ;;
+    nvidia)
+      local vram_gb
+      vram_gb="$(awk "BEGIN { printf \"%.0f\", ${YSG_GPU_VRAM_MB:-0}/1024 }")"
+      _pass "GPU" "${YSG_GPU_NAME:-NVIDIA GPU} — ${vram_gb} GB VRAM (CUDA)"
+      if [ "${YSG_GPU_VRAM_MB:-0}" -lt 8192 ]; then
+        _warn_check "GPU VRAM" "${vram_gb} GB — 8 GB+ recommended for local LLM inference"
+      fi
+      ;;
+    amd_rocm)
+      local vram_gb
+      vram_gb="$(awk "BEGIN { printf \"%.0f\", ${YSG_GPU_VRAM_MB:-0}/1024 }")"
+      _pass "GPU" "${YSG_GPU_NAME:-AMD GPU} — ${vram_gb} GB VRAM (ROCm)"
+      ;;
+    nvidia_no_driver)
+      _warn_check "GPU" "${YSG_GPU_NAME:-NVIDIA GPU detected} — drivers not installed"
+      ;;
+    amd_no_driver)
+      _warn_check "GPU" "${YSG_GPU_NAME:-AMD GPU detected} — ROCm not installed"
+      ;;
+    none)
+      _warn_check "GPU" "no GPU detected — Ollama will use CPU inference (slower)"
+      ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Run all checks
 # ---------------------------------------------------------------------------
@@ -287,6 +368,7 @@ _check_compose
 _check_ports
 _check_disk
 _check_ram
+_check_gpu
 _check_secrets
 _check_dns
 
