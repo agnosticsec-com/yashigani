@@ -16,9 +16,11 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 
 ---
-**Latest Stable Version:** v0.8.2
+**Latest Stable Version:** v0.8.3
+---
 **Document Date:** 2026-03-30
-**Classification:** Public — Product Overview
+---
+**Classification:** ***Public — Product Overview***
 ---
 
 
