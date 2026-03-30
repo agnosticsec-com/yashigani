@@ -4,9 +4,8 @@
 # v0.5.0: adds asyncpg, alembic, PyJWT, OTEL, python-json-logger, Vault optional.
 
 # ── Stage 1: wheel builder ───────────────────────────────────────────────────
-# Pin refreshed: 2026-03-27
-# Digest pinned 2026-03-27 — refresh quarterly or on CVE advisory
-FROM python:3.12-slim@sha256:a9f8a8c3b7e2d1f0e4c6b5a3d2e1f0c9b8a7d6e5f4c3b2a1d0e9f8c7b6a5d4e3 AS builder
+# Base image: python:3.12-slim (tag-pinned, no digest — digests rotate upstream)
+FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
@@ -20,9 +19,8 @@ RUN python -m build --wheel --outdir /dist
 
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
-# Pin refreshed: 2026-03-27
-# Digest pinned 2026-03-27 — refresh quarterly or on CVE advisory
-FROM python:3.12-slim@sha256:a9f8a8c3b7e2d1f0e4c6b5a3d2e1f0c9b8a7d6e5f4c3b2a1d0e9f8c7b6a5d4e3 AS runtime
+# Base image: python:3.12-slim (tag-pinned, no digest — digests rotate upstream)
+FROM python:3.12-slim AS runtime
 
 RUN groupadd --gid 1001 yashigani \
  && useradd --uid 1001 --gid 1001 --no-create-home --shell /bin/false yashigani
