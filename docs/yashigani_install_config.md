@@ -1,6 +1,6 @@
-# Yashigani v0.8.4 — Installation and Configuration Guide
+# Yashigani v0.9.1 — Installation and Configuration Guide
 
-**Version:** 0.8.4
+**Version:** 0.9.1
 **Last updated:** 2026-03-30
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
@@ -26,6 +26,9 @@
 15. [Troubleshooting](#15-troubleshooting)
 16. [Upgrade Procedure](#16-upgrade-procedure)
 17. [Optional Agent Bundles (v0.8.0)](#17-optional-agent-bundles-v080)
+18. [Response Path Inspection (v0.9.0)](#18-response-path-inspection-v090)
+19. [WebAuthn / Passkeys Configuration (v0.9.0)](#19-webauthn--passkeys-configuration-v090)
+20. [Credential Summary and Dual Admin Accounts (v0.9.1)](#20-credential-summary-and-dual-admin-accounts-v091)
 
 ---
 
@@ -154,11 +157,38 @@ Your admin password, Redis password, Postgres password, Grafana admin password, 
 
 ## 3. Installer Walk-Through (Interactive)
 
-Running `./install.sh` without flags launches an interactive wizard. It performs 12 steps:
+Running `./install.sh` without flags launches an interactive wizard. In v0.9.0 the installer was redesigned around three deployment modes. The `--mode` flag is replaced by `--deploy`.
 
-**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. On macOS, uses POSIX-compatible disk space checks (v0.8.4). Aborts with a clear error if requirements are not met. GPU hardware is detected at this step via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed in the platform summary based on detected VRAM (v0.8.4).
+### 3.1 Deployment Mode Selection
 
-**Step 2 — Deployment mode.** Asks whether you are deploying to Docker Compose or Kubernetes (Helm). Choose **Docker Compose** for standalone hosts; choose **Kubernetes** if you have an existing cluster and `kubectl` configured.
+The installer's first prompt asks for the deployment mode:
+
+```
+Select deployment mode:
+  1) Demo        — localhost, self-signed cert, auto-generate everything (1-2 prompts)
+  2) Production  — public or internal hostname, ACME or CA cert, full configuration
+  3) Enterprise  — multi-org, external managed databases, BYOK AES key
+
+Enter choice [1-3]:
+```
+
+Alternatively, supply the flag non-interactively:
+
+```bash
+./install.sh --deploy demo        # or: 1
+./install.sh --deploy production  # or: 2
+./install.sh --deploy enterprise  # or: 3
+```
+
+**Demo mode** is intentionally minimal: it defaults to `localhost`, `selfsigned` TLS, auto-generates all secrets, and starts the stack with 1–2 prompts (upstream URL and optional license key). No KMS, SIEM, or SSO configuration is asked. Suitable for evaluations and local development.
+
+**Production mode** and **Enterprise mode** prompt through the full configuration wizard described in steps 3–12 below.
+
+### 3.2 Full Wizard (Production / Enterprise)
+
+**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. GPU hardware is detected via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed based on detected VRAM (v0.8.4).
+
+**Step 2 — Container platform.** Asks whether you are deploying to Docker Compose or Kubernetes (Helm). Choose **Docker Compose** for standalone hosts; choose **Kubernetes** if you have an existing cluster and `kubectl` configured.
 
 **Step 3 — Deployment stream.** Choose one of:
 - `opensource` — All open-source components. No license required.
@@ -170,35 +200,73 @@ Running `./install.sh` without flags launches an interactive wizard. It performs
 - `ca` — Mount your own certificate. Use for enterprise internal deployments.
 - `selfsigned` — Caddy internal CA. Use for local dev/demo only.
 
-**Step 5 — Upstream MCP URL.** The installer asks for the URL of your backend MCP server that Yashigani will proxy requests to. Example: `http://mcp-server.internal:8080`. This maps to `UPSTREAM_MCP_URL`. You can enter multiple comma-separated URLs for load balancing.
+**Step 5 — Upstream MCP URL.** Enter the URL of your backend MCP server. Example: `http://mcp-server.internal:8080`. Maps to `UPSTREAM_MCP_URL`. Multiple comma-separated URLs are accepted for load balancing.
 
-**Step 6 — KMS provider.** Choose how secrets are stored:
-- `docker` — Docker secrets on local filesystem. Default and simplest. Also compatible with Podman secrets (v0.8.4).
+**Step 6 — AES key provisioning (v0.9.0).** Choose how the AES-256-GCM column encryption key is provisioned:
+- Auto-generate (default) — the installer generates a cryptographically random 32-byte key and stores it in the configured KMS.
+- BYOK — supply your own key with `--aes-key /path/to/key.bin`. The installer loads the file and stores it in KMS.
+
+**Step 7 — KMS provider.** Choose how secrets are stored:
+- `docker` — Docker secrets on local filesystem. Default and simplest. Also compatible with Podman secrets.
 - `aws` — AWS Secrets Manager. Recommended for AWS-hosted deployments.
 - `azure` — Azure Key Vault.
 - `gcp` — GCP Secret Manager.
 - `keeper` — Keeper Secrets Manager.
 - `vault` — HashiCorp Vault (self-hosted, dev mode only — not for production).
 
-**Step 7 — Inspection pipeline backend.** Choose the LLM used for the second-pass injection analysis:
+**Step 8 — Inspection pipeline backend.** Choose the LLM used for the second-pass injection analysis:
 - `ollama` — Fully local. No data leaves the host. Choose this for air-gapped or privacy-sensitive deployments.
 - `anthropic` — Claude Haiku. Fast and accurate. Requires API key.
 - `gemini` — Gemini 1.5 Flash. Requires API key.
 - `azure_openai` — GPT-4o-mini via Azure. Requires Azure OpenAI resource.
 
-The installer prompts you for API keys immediately if you select a cloud backend, and stores them in the KMS provider you chose in Step 6.
+The installer prompts for API keys immediately if you select a cloud backend, and stores them in the KMS provider chosen in Step 7.
 
-**Step 8 — Injection threshold.** Sets `YASHIGANI_INJECT_THRESHOLD`. Default `0.85`. Range `0.70`–`0.99`. Lower = more sensitive (more false positives). Higher = more permissive (may miss subtle injections). The default 0.85 is appropriate for most production environments.
+**Step 9 — Injection threshold.** Sets `YASHIGANI_INJECT_THRESHOLD`. Default `0.85`. Range `0.70`–`0.99`. Lower = more sensitive. Higher = more permissive. The default is appropriate for most production environments.
 
-**Step 9 — SIEM mode.** Choose one of `none`, `splunk`, `elasticsearch`, or `wazuh`. If you choose `wazuh`, the installer adds the Wazuh Compose override file automatically.
+**Step 10 — SIEM mode.** Choose one of `none`, `splunk`, `elasticsearch`, or `wazuh`. If you choose `wazuh`, the installer adds the Wazuh Compose override file automatically.
 
-**Step 10 — License key.** Enter the path to your `.ysg` license file if you have one, or press Enter to skip for Community tier. The installer copies the file to `docker/secrets/license_key`.
+**Step 11 — License key.** Enter the path to your `.ysg` license file if you have one, or press Enter to skip for Community tier. The installer copies the file to `docker/secrets/license_key`. License files are signed with ML-DSA-65 (FIPS 204) as of v0.9.0.
 
-**Step 11 — Admin account.** Set `YASHIGANI_ADMIN_USERNAME` to your admin email address. The first-run bootstrap generates a random 36-character password for this account.
+**Step 12 — Admin accounts (v0.9.1).** Set `YASHIGANI_ADMIN_USERNAME` to your primary admin email address. The installer creates **two** admin accounts at bootstrap — each with a random themed username (animals/flowers/robots theme, e.g. "phoenix", "condor") and an independent 36-character password. Both accounts are configured with TOTP 2FA at install time; the TOTP secret key and `otpauth://` URI are printed for each account.
 
-**Step 12 — Launch.** The installer runs `docker compose up -d`, tails `backoffice` logs until the FIRST-RUN block appears, and then prints your credentials and the URL to the admin panel.
+> **Anti-lockout design:** Two independent admin accounts are provisioned so that a lost password or lost TOTP device for one account does not lock out the system. Treat both accounts as equally privileged and store their credentials separately.
+
+**Step 13 — HIBP breach check.** Before the stack starts, the installer checks all generated passwords against the Have I Been Pwned API using SHA-1 k-Anonymity prefix lookup. Any password found in a known breach is automatically regenerated and re-checked. If the HIBP API is unreachable, the check is skipped silently — installation is never blocked by an unreachable breach database.
+
+**Step 14 — Launch.** The installer runs `docker compose up -d`, tails `backoffice` logs until the stack is healthy, then prints the one-time credential summary.
+
+**Step 15 — Credential summary.** At the end of install, a formatted credential block is displayed once with a red warning banner:
+
+```
+============================================================
+  WARNING: These credentials will NOT be shown again.
+  Save them immediately to a secure password manager.
+============================================================
+
+  Admin 1 Username : phoenix
+  Admin 1 Password : <36-char random>
+  Admin 1 TOTP Key : <base32 secret>
+  Admin 1 TOTP URI : otpauth://totp/Yashigani%3Aphoenix?secret=...
+
+  Admin 2 Username : condor
+  Admin 2 Password : <36-char random>
+  Admin 2 TOTP Key : <base32 secret>
+  Admin 2 TOTP URI : otpauth://totp/Yashigani%3Acondor?secret=...
+
+  Postgres Password : <36-char random>
+  Redis Password    : <36-char random>
+  Grafana Password  : <36-char random>
+  AES-256-GCM Key   : <hex>
+
+============================================================
+```
+
+All credentials are also written to `docker/secrets/` with chmod 600. They will not be printed again.
 
 > **Tip:** You can re-run `./install.sh` at any time to change settings. It will detect an existing `.env` and ask if you want to update individual sections without redeploying everything.
+
+> **Air-gapped deployments:** Pass `--offline` to skip all outbound pulls and work entirely from pre-loaded images. Pre-pull all images on a connected host and transfer them with `docker save` / `docker load` before running the installer in offline mode.
 
 ---
 
@@ -340,6 +408,8 @@ The following tables document every significant variable, grouped by category.
 ---
 
 ### 4.3 TLS Configuration
+
+> **Post-quantum TLS (v0.9.0):** A hybrid X25519+ML-KEM-768 Caddyfile configuration is included in the repository as a commented block (`caddy/Caddyfile.pq`). This requires Caddy 2.10 (not yet released). Enable it once Caddy 2.10 ships to provide quantum-resistant key exchange while maintaining full backward compatibility with classical TLS clients.
 
 #### ACME Mode (Production — Let's Encrypt)
 
@@ -503,7 +573,7 @@ These passwords are stored in `docker/secrets/`. You should:
 
 ### 5.1 Community Tier
 
-No action required. Community tier is active by default with no license file. Feature limits apply: 20 agents, 50 end users, 10 admin seats, no SSO. Licensed under Apache 2.0.
+No action required. Community tier is active by default with no license file. Feature limits apply: 5 agents, 10 end users, 2 admin seats, no SSO. Licensed under Apache 2.0.
 
 ### 5.2 Starter, Professional, Professional Plus, and Enterprise Tiers
 
@@ -545,9 +615,9 @@ YASHIGANI_LICENSE_FILE=/absolute/path/to/license.ysg
 
 | Feature | Community | Starter | Professional | Professional Plus | Enterprise |
 |---|---|---|---|---|---|
-| Agent limit | 20 | 100 | 500 | 2,000 | Unlimited |
-| End user limit | 50 | 250 | 1,000 | 10,000 | Unlimited |
-| Admin seat limit | 10 | 25 | 50 | 200 | Unlimited |
+| Agent limit | 5 | 100 | 500 | 2,000 | Unlimited |
+| End user limit | 10 | 250 | 1,000 | 10,000 | Unlimited |
+| Admin seat limit | 2 | 25 | 50 | 200 | Unlimited |
 | Organization limit | 1 | 1 | 1 | 5 | Unlimited |
 | OIDC SSO | No | Yes | Yes | Yes | Yes |
 | SAML v2 SSO | No | No | Yes | Yes | Yes |
@@ -1407,7 +1477,7 @@ docker compose logs backoffice | grep -i "alembic\|migration\|error"
 
 ### 16.0 Via update.sh (Recommended — v0.8.4+)
 
-For existing installations at v0.8.4 or later, use the new `update.sh` script. It handles backup, pull, restart, migration, and automatic rollback in a single command:
+For existing installations at v0.8.4 or later, use the `update.sh` script. It handles backup, pull, restart, migration, and automatic rollback in a single command:
 
 ```bash
 ./update.sh
@@ -1416,7 +1486,7 @@ For existing installations at v0.8.4 or later, use the new `update.sh` script. I
 For a specific target version:
 
 ```bash
-./update.sh --version v0.8.4
+./update.sh --version v0.9.0
 ```
 
 `update.sh` automatically backs up `.env`, `docker/secrets/`, and `config/` before pulling new images. If the backoffice fails to reach a healthy state within the timeout, it restores the pre-update backup and brings up the previous image versions.
@@ -1569,4 +1639,159 @@ Each bundle is assigned a **restricted RBAC policy** by default — it can only 
 
 ---
 
-*Yashigani v0.8.4 — Installation and Configuration Guide — 2026-03-30*
+---
+
+## 18. Response Path Inspection (v0.9.0)
+
+v0.9.0 adds `ResponseInspectionPipeline` — a bidirectional inspection layer that applies the same FastText + LLM fallback pipeline to upstream responses before they are returned to the client. This closes the indirect prompt injection vector where a malicious upstream response could hijack an agent's next action.
+
+### 18.1 How It Works
+
+- Upstream responses pass through FastText first-pass (sub-5ms, offline).
+- Responses that exceed the suspicion threshold are forwarded to the configured LLM backend for semantic analysis.
+- **BLOCKED** verdict: the gateway returns `502 Bad Gateway` to the client. The upstream response is not forwarded. The audit event records `response_inspection_verdict: BLOCKED` and emits a `RESPONSE_INJECTION_DETECTED` event.
+- **FLAGGED** verdict: the response is forwarded to the client with the header `X-Yashigani-Response-Verdict: FLAGGED`. The audit event records the verdict.
+- **CLEAN** verdict: the response is forwarded normally.
+
+### 18.2 Per-Agent Configuration
+
+Response inspection is configurable per agent via the admin panel (Admin → Agents → Edit) or the API:
+
+```json
+{
+  "response_inspection": {
+    "enabled": true,
+    "fasttext_only": false,
+    "exempt_content_types": ["application/json"]
+  }
+}
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `enabled` | `true` | Set `false` to disable response inspection for this agent (not recommended) |
+| `fasttext_only` | `false` | Skip the LLM second-pass; use only the FastText classifier. Reduces latency at the cost of accuracy. |
+| `exempt_content_types` | `["application/json"]` | Content types that bypass inspection entirely (e.g., binary blobs, media files) |
+
+### 18.3 `.env` Settings
+
+```dotenv
+YASHIGANI_INSPECT_RESPONSES=true        # Enable/disable globally (default: true)
+YASHIGANI_RESPONSE_THRESHOLD=0.85       # Suspicion threshold for response classifier (default: matches request threshold)
+```
+
+---
+
+## 19. WebAuthn / Passkeys Configuration (v0.9.0)
+
+v0.9.0 adds phishing-resistant WebAuthn/Passkey MFA for backoffice admin accounts. Supported authenticators include: Face ID, Touch ID, Windows Hello, Android biometrics, YubiKey (FIDO2), and other FIDO2-compatible hardware tokens.
+
+### 19.1 Registration
+
+Admin users register a passkey via the backoffice:
+
+1. Log in with username + password (and TOTP if enrolled).
+2. Navigate to Admin → Account → Security → Passkeys → Register New Passkey.
+3. The browser presents the platform authenticator (Face ID / Windows Hello) or prompts for a hardware key.
+4. On success, the credential is stored encrypted with `pgp_sym_encrypt` in the `webauthn_credentials` table.
+
+The following audit event is emitted: `WEBAUTHN_CREDENTIAL_REGISTERED`.
+
+### 19.2 Authentication
+
+Once a passkey is registered:
+
+1. The login form presents a **Use Passkey** button alongside the password field.
+2. The browser's platform authenticator handles the challenge locally — no credential material leaves the device.
+3. The server verifies the assertion via `py_webauthn`.
+4. Session is established. TOTP is not required if authentication succeeded via WebAuthn.
+
+The following audit event is emitted: `WEBAUTHN_CREDENTIAL_USED`.
+
+### 19.3 Credential Management
+
+View and delete credentials: Admin → Account → Security → Passkeys.
+
+```bash
+# List credentials via API:
+curl -H "Authorization: Bearer $TOKEN" \
+  https://your-domain/auth/webauthn/credentials
+
+# Delete a credential:
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  https://your-domain/auth/webauthn/credentials/{credential_id}
+```
+
+Deleting the last registered passkey falls back to TOTP (if enrolled) or password-only. The audit event `WEBAUTHN_CREDENTIAL_DELETED` is emitted on deletion.
+
+### 19.4 `.env` Settings
+
+```dotenv
+YASHIGANI_WEBAUTHN_RP_ID=your-domain.example.com   # Relying Party ID (must match FQDN)
+YASHIGANI_WEBAUTHN_RP_NAME=Yashigani               # Human-readable RP name shown in authenticator dialogs
+YASHIGANI_WEBAUTHN_ORIGIN=https://your-domain.example.com  # Must match the exact origin of the backoffice
+```
+
+> **Note:** `YASHIGANI_WEBAUTHN_RP_ID` and `YASHIGANI_WEBAUTHN_ORIGIN` must be set to your actual domain. Passkey registration and authentication will fail if these values do not match the browser's current origin.
+
+---
+
+## 20. Credential Summary and Dual Admin Accounts (v0.9.1)
+
+### 20.1 Dual Admin Accounts
+
+Starting with v0.9.1, the installer creates two independent admin accounts during the bootstrap phase. Both accounts receive random themed usernames drawn from an animals/flowers/robots wordlist (e.g. "phoenix", "condor"). Each account receives:
+
+- A unique 36-character cryptographically random password
+- An independent TOTP secret key and `otpauth://` URI
+
+This design eliminates the most common post-install lockout scenario: losing access to the single admin account due to a forgotten password or lost TOTP device.
+
+> **Operational guidance:** Store the credentials for both accounts in separate entries in your password manager, ideally accessible to at least two members of your operations team. Never store both admin credentials in the same vault entry.
+
+### 20.2 HIBP Breach Check at Install
+
+The installer performs a Have I Been Pwned (HIBP) k-Anonymity check on all generated passwords before writing them to disk or starting the stack. The check works as follows:
+
+1. The SHA-1 hash of each password is computed.
+2. The first 5 characters of the hash are sent to `api.pwnedpasswords.com/range/{prefix}`.
+3. The response contains all suffixes matching that prefix. If the full hash is found, the password has been seen in a known breach.
+4. A matching password is discarded and a new one is generated and re-checked.
+5. If the HIBP API is unreachable (network error, timeout), the check is skipped and installation continues — the HIBP check is **fail-open** and never blocks installation.
+
+Only the first 5 hex characters of the hash are transmitted. The full password and full hash are never sent to HIBP or any external service.
+
+### 20.3 HIBP Integration in Backoffice Auth
+
+The `password.py` module in the backoffice checks every password change (user-initiated or admin-initiated) against the HIBP breach database using the same k-Anonymity method. A `PasswordBreachedError` exception is raised if the submitted password is found in the breach database, and the change is rejected with a user-facing error: "This password has appeared in a data breach. Please choose a different password."
+
+This satisfies **OWASP ASVS V2.1.7**: "Verify that passwords submitted during account registration, login, and password change are checked against a set of breached passwords."
+
+The check is fail-open: if the HIBP API is unreachable, the password change proceeds normally. Availability of the HIBP service never blocks authentication.
+
+### 20.4 One-Time Credential Summary
+
+At the end of install, a credential summary block is printed to the terminal once. It contains:
+
+- Both admin usernames and passwords
+- Both admin TOTP secret keys
+- Both admin `otpauth://` TOTP URIs (scan with any TOTP app)
+- All infrastructure passwords (Postgres, Redis, Grafana, Prometheus)
+- The AES-256-GCM column encryption key
+
+The block is preceded by a red warning banner:
+
+```
+============================================================
+  WARNING: These credentials will NOT be shown again.
+  Save them immediately to a secure password manager.
+============================================================
+```
+
+All credentials are also written to `docker/secrets/` with chmod 600. On upgrade, existing secrets files are preserved and not overwritten.
+
+> **Post-install:** To retrieve a stored secret after install, read the relevant file directly: `cat docker/secrets/admin_password_1`. Do not expose these files to other users or processes.
+
+---
+
+*Yashigani v0.9.1 — Installation and Configuration Guide — 2026-03-30*

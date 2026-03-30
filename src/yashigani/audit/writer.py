@@ -2,10 +2,16 @@
 Yashigani Audit — Log writer with volume sink and multi-SIEM forwarding.
 Volume sink is always active and cannot be disabled.
 SIEM forwarding is optional and failure-tolerant.
+
+v0.9.0 (F-12): Every event carries a ``prev_event_hash`` field — SHA-384 of
+the preceding event's canonical JSON, forming a tamper-evident hash chain.
+The first event of each calendar day anchors with SHA-384 of the date string
+"YYYY-MM-DD".  The chain can be verified offline with scripts/audit_verify.py.
 """
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -24,6 +30,31 @@ from yashigani.audit.scope import MaskingScopeConfig
 logger = logging.getLogger(__name__)
 
 _RETRY_DELAYS = [1.0, 5.0, 25.0]  # seconds
+
+
+# ---------------------------------------------------------------------------
+# Hash-chain helpers (F-12)
+# ---------------------------------------------------------------------------
+
+def _canonical_json(event_dict: dict) -> str:
+    """
+    Produce a deterministic, compact JSON string for hashing.
+
+    The ``prev_event_hash`` field is excluded from the canonical form so that
+    the hash of event N does not depend on event N's own chain link — only on
+    the content of the preceding event.
+    """
+    d = {k: v for k, v in event_dict.items() if k != "prev_event_hash"}
+    return json.dumps(d, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _sha384_hex(text: str) -> str:
+    return hashlib.sha384(text.encode("utf-8")).hexdigest()
+
+
+def _day_anchor(date_str: str) -> str:
+    """SHA-384 of a 'YYYY-MM-DD' string — used as the chain anchor for the first event of each day."""
+    return _sha384_hex(date_str)
 
 
 class AuditWriteError(Exception):
@@ -53,6 +84,10 @@ class AuditLogWriter:
     Thread-safe audit log writer.
     Primary: newline-delimited JSON to a mounted volume file.
     Secondary: optional SIEM forwarding (webhook / Splunk HEC / Elastic).
+
+    v0.9.0 (F-12): maintains an in-memory hash chain. Each event's
+    ``prev_event_hash`` is set to SHA-384 of the preceding event's canonical
+    JSON (or the day-anchor for the first event of each calendar day).
     """
 
     def __init__(
@@ -69,6 +104,9 @@ class AuditLogWriter:
         self._log_path = Path(config.log_path)
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self._open_log_file()
+        # Hash-chain state (protected by self._lock)
+        self._chain_last_hash: Optional[str] = None   # hash of the most recent event
+        self._chain_current_day: Optional[str] = None  # "YYYY-MM-DD" of last event
 
     # -- Public API ----------------------------------------------------------
 
@@ -83,14 +121,30 @@ class AuditLogWriter:
         Write an audit event to the volume sink (always) and forward to
         enabled SIEM targets (best-effort). Raises AuditWriteError if the
         volume write fails — the caller MUST abort their operation.
+
+        The ``prev_event_hash`` field is injected immediately before
+        serialisation so that the hash chain is always consistent on disk.
         """
         if self._masking_scope.should_mask(event, agent_id, user_handle, component):
             event = self._masker.mask_event(event)
             object.__setattr__(event, "masking_applied", True) if dataclasses.is_dataclass(event) else setattr(event, "masking_applied", True)
 
-        record = json.dumps(event.to_dict(), default=str)
-
         with self._lock:
+            # Compute and inject prev_event_hash before serialisation
+            event_dict = event.to_dict()
+            today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+            if self._chain_current_day != today or self._chain_last_hash is None:
+                # First event of the day (or first ever): anchor with day hash
+                prev_hash = _day_anchor(today)
+                self._chain_current_day = today
+            else:
+                prev_hash = self._chain_last_hash
+            event_dict["prev_event_hash"] = prev_hash
+
+            # Update in-memory chain pointer with this event's canonical hash
+            self._chain_last_hash = _sha384_hex(_canonical_json(event_dict))
+
+            record = json.dumps(event_dict, default=str)
             try:
                 self._rotate_if_needed()
                 self._file.write(record + "\n")

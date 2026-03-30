@@ -71,6 +71,7 @@ def create_gateway_app(
     fasttext_backend=None,
     inference_logger=None,
     anomaly_detector=None,
+    response_inspection_pipeline=None,  # v0.9.0 — ResponseInspectionPipeline | None
 ) -> FastAPI:
     """
     Create the Yashigani gateway FastAPI application.
@@ -80,6 +81,7 @@ def create_gateway_app(
     _state = {
         "config": config,
         "inspection_pipeline": inspection_pipeline,
+        "response_inspection_pipeline": response_inspection_pipeline,  # v0.9.0
         "auth_service": auth_service,
         "chs": chs,
         "audit_writer": audit_writer,
@@ -365,11 +367,53 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
     client: httpx.AsyncClient = state["http_client"]
     upstream_response = await _forward(client, request, path, forwarded_body, request_id)
 
+    # 5a. Response inspection — v0.9.0 F-01
+    # Inspect the upstream response for indirect prompt injection before
+    # returning it to the agent. Raw body is never stored; only a hash.
+    response_verdict: Optional[str] = None
+    resp_pipeline = state.get("response_inspection_pipeline")
+    if resp_pipeline is not None:
+        resp_body_text = _decode_body_safe(upstream_response.content)
+        if resp_body_text:
+            resp_content_type = upstream_response.headers.get("content-type", "")
+            resp_result = resp_pipeline.inspect(
+                response_body=resp_body_text,
+                content_type=resp_content_type,
+                request_id=request_id,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            if not resp_result.skipped:
+                response_verdict = resp_result.verdict
+            if resp_result.verdict == "BLOCKED":
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                _audit_request(
+                    audit_writer, request_id, "BLOCKED", "response_injection",
+                    request, path,
+                    upstream_status=upstream_response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    confidence=resp_result.confidence,
+                    response_inspection_verdict=resp_result.verdict,
+                )
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "error": "UPSTREAM_RESPONSE_BLOCKED",
+                        "detail": "The upstream response was blocked by Yashigani response inspection.",
+                        "request_id": request_id,
+                    },
+                    headers={
+                        "X-Yashigani-Request-Id": request_id,
+                        "X-Yashigani-Response-Verdict": resp_result.verdict,
+                    },
+                )
+
     elapsed_ms = int((time.monotonic() - start) * 1000)
     _audit_request(
         audit_writer, request_id, "FORWARDED", "clean", request, path,
         upstream_status=upstream_response.status_code,
         elapsed_ms=elapsed_ms,
+        response_inspection_verdict=response_verdict,
     )
 
     try:
@@ -420,6 +464,11 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
             response.headers["X-Trace-Id"] = trace_id
     except Exception:
         pass
+
+    # 5e. Attach response inspection verdict header when present (v0.9.0)
+    if response_verdict is not None:
+        response.headers["X-Yashigani-Response-Verdict"] = response_verdict
+
     return response
 
 
@@ -608,6 +657,7 @@ def _audit_request(
     upstream_status: Optional[int] = None,
     elapsed_ms: Optional[int] = None,
     confidence: Optional[float] = None,
+    response_inspection_verdict: Optional[str] = None,  # v0.9.0
 ) -> None:
     if audit_writer is None:
         return
@@ -623,6 +673,7 @@ def _audit_request(
             upstream_status=upstream_status,
             elapsed_ms=elapsed_ms,
             confidence_score=confidence,
+            response_inspection_verdict=response_inspection_verdict,
         )
         audit_writer.write(event)
     except Exception as exc:

@@ -1,6 +1,6 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v0.8.4
+**Version:** v0.9.1
 **Last updated:** 2026-03-30
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
@@ -516,6 +516,30 @@ Yashigani has a second, independent alerting channel — direct webhook sinks co
 
 ---
 
+## Section 9b — AES Key Provisioning (v0.9.0)
+
+v0.9.0 requires an AES-256-GCM key for PostgreSQL column encryption. The installer manages this automatically, but review the options before starting.
+
+| Item | Required? | Notes |
+|------|-----------|-------|
+| AES key provisioning mode | **Required** | Auto-generate (default) or BYOK |
+| BYOK key file | Required if BYOK | 32-byte random key in binary format. Pass with `--aes-key /path/to/key.bin`. The installer stores it in the configured KMS. |
+| Key backup | Required | If auto-generated, the installer stores the key in KMS. Ensure your KMS is backed up before starting. If using Docker secrets, back up `docker/secrets/aes_key` to a secure location. |
+| Key rotation plan | Recommended | AES key rotation requires a DB re-encryption job. Plan the rotation cycle before production deployment. |
+
+> **Warning:** Loss of the AES key renders all encrypted PostgreSQL columns (audit events, inference payloads, WebAuthn credentials) unreadable. Ensure the key is stored in a backed-up KMS or secure key store before starting.
+
+### Checklist — Section 9b
+
+```
+[ ] AES key provisioning mode decided: [ ] auto-generate  [ ] BYOK
+[ ] BYOK: 32-byte key file prepared and path noted
+[ ] KMS backup confirmed (key will be stored there)
+[ ] Key recovery plan documented
+```
+
+---
+
 ## Section 10 — Agent and MCP Registration
 
 You register agents (AI clients) in the admin panel after installation. Prepare:
@@ -525,7 +549,7 @@ You register agents (AI clients) in the admin panel after installation. Prepare:
 | List of agents to register | Required | Each agent needs: name, description, path prefix |
 | Path prefix per agent | Required | Which MCP paths each agent is allowed to call (e.g. `/tools/read`, `/tools`) |
 | Token management plan | Required | Tokens are shown only once. Have a secure storage plan (vault, 1Password, etc.) |
-| Tier limits | Note | Community: 20 agents / 50 end users / 10 admin seats. Starter: 100/250/25. Professional: 500/1,000/50. Pro Plus: 2,000/10,000/200. Enterprise: unlimited. |
+| Tier limits | Note | Community: 5 agents / 10 end users / 2 admin seats. Starter: 100/250/25. Professional: 500/1,000/50. Pro Plus: 2,000/10,000/200. Enterprise: unlimited. |
 
 For each agent, note:
 - **Name**: human-readable (e.g. `claude-code-agent`)
@@ -542,7 +566,7 @@ The registration response includes a `quick_start` field with copy-paste curl, P
 [ ] Agent inventory created (name, description, path prefix for each)
 [ ] Token storage method decided (secret manager, vault, encrypted file)
 [ ] (v0.7.0) IP CIDR allowlists defined for agents with known source IPs
-[ ] Community: agents ≤ 20, end users ≤ 50, admin seats ≤ 10
+[ ] Community: agents ≤ 5, end users ≤ 10, admin seats ≤ 2
 [ ] Starter: agents ≤ 100, end users ≤ 250, admin seats ≤ 25
 [ ] Professional: agents ≤ 500, end users ≤ 1,000, admin seats ≤ 50
 [ ] Professional Plus: agents ≤ 2,000, end users ≤ 10,000, admin seats ≤ 200

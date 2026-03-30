@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/platform-detect.sh — Yashigani v0.8.4
+# scripts/platform-detect.sh — Yashigani v0.9.1
 # Full platform detection. Source this script; exports YSG_* environment variables.
 
 set -euo pipefail

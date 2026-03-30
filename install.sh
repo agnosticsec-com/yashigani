@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="0.8.4"
+YASHIGANI_VERSION="0.9.1"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -50,16 +50,19 @@ dry_print()   { printf "${C_YELLOW}    >>  Would run: %s${C_RESET}\n" "$*"; }
 # Defaults
 # -----------------------------------------------------------------------------
 MODE="compose"
+DEPLOY_MODE=""                # demo|production|enterprise — set interactively or via --deploy
 DOMAIN=""
 TLS_MODE="acme"
 ADMIN_EMAIL=""
 UPSTREAM_URL=""
 LICENSE_KEY_PATH=""
+DB_AES_KEY=""                 # YASHIGANI_DB_AES_KEY — set via prompt or --db-aes-key
 NON_INTERACTIVE=false
 SKIP_PREFLIGHT=false
 SKIP_PULL=false
 UPGRADE=false
 DRY_RUN=false
+OFFLINE=false
 NAMESPACE="yashigani"
 TOTAL_STEPS=13
 WORK_DIR=""
@@ -83,14 +86,17 @@ USAGE
   curl -sSL https://get.yashigani.io | bash -s -- [OPTIONS]
 
 OPTIONS
-  --mode           compose|k8s|vm         Deployment mode (default: compose)
+  --deploy         demo|production|enterprise  Deployment mode (interactive if omitted)
+  --mode           compose|k8s|vm         Legacy deployment mode (prefer --deploy)
   --domain         DOMAIN                 TLS domain, e.g. yashigani.example.com
   --tls-mode       acme|ca|selfsigned     TLS provisioning mode (default: acme)
   --admin-email    EMAIL                  Admin account email / username
   --upstream-url   URL                    Upstream MCP URL
   --license-key    PATH                   Path to .ysg license file
+  --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
   --agent-bundles  BUNDLES               Comma-separated opt-in agents: langgraph,goose,crewai,openclaw
+  --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
   --skip-preflight                        Skip preflight checks
   --skip-pull                             Skip docker compose pull (use local images)
@@ -153,6 +159,15 @@ parse_args() {
         NAMESPACE="${2:?'--namespace requires a value'}"
         shift 2
         ;;
+      --deploy)
+        DEPLOY_MODE="${2:?'--deploy requires a value: demo|production|enterprise'}"
+        shift 2
+        ;;
+      --db-aes-key)
+        DB_AES_KEY="${2:?'--db-aes-key requires a value (64-char hex or 44-char base64)'}"
+        shift 2
+        ;;
+      --offline)         OFFLINE=true;           shift ;;
       --non-interactive) NON_INTERACTIVE=true;  shift ;;
       --skip-preflight)  SKIP_PREFLIGHT=true;   shift ;;
       --skip-pull)       SKIP_PULL=true;         shift ;;
@@ -731,6 +746,215 @@ run_preflight() {
 }
 
 # =============================================================================
+# =============================================================================
+# STEP 5b: Deployment mode selection
+# =============================================================================
+select_deploy_mode() {
+  # Already set via --deploy flag
+  if [[ -n "$DEPLOY_MODE" ]]; then
+    case "$DEPLOY_MODE" in
+      demo|production|enterprise) ;;
+      *)
+        log_error "Invalid --deploy value '$DEPLOY_MODE'. Use: demo, production, enterprise"
+        exit 1
+        ;;
+    esac
+    log_info "Deployment mode: ${DEPLOY_MODE} (--deploy flag)"
+    _apply_deploy_defaults
+    return 0
+  fi
+
+  # Non-interactive without --deploy defaults to demo
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    DEPLOY_MODE="demo"
+    log_info "Deployment mode: demo (non-interactive default)"
+    _apply_deploy_defaults
+    return 0
+  fi
+
+  printf "\n"
+  printf "${C_BOLD}How would you like to deploy Yashigani?${C_RESET}\n\n"
+  printf "    1) Demo / Open Source — quick evaluation on this machine (localhost, self-signed TLS)\n"
+  printf "    2) Production — Docker Compose on a real server (Starter / Professional / Professional Plus)\n"
+  printf "    3) Enterprise — Kubernetes with Helm charts (Enterprise licence)\n"
+  printf "\n"
+  printf "${C_BOLD}  Choice [1]: ${C_RESET}"
+
+  local choice
+  read -r choice </dev/tty 2>/dev/null || choice="1"
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1) DEPLOY_MODE="demo" ;;
+    2) DEPLOY_MODE="production" ;;
+    3) DEPLOY_MODE="enterprise" ;;
+    *) log_warn "Invalid choice — defaulting to Demo"; DEPLOY_MODE="demo" ;;
+  esac
+
+  printf "\n"
+  log_success "Deployment mode: ${DEPLOY_MODE}"
+  _apply_deploy_defaults
+}
+
+_apply_deploy_defaults() {
+  case "$DEPLOY_MODE" in
+    demo)
+      MODE="compose"
+      DOMAIN="${DOMAIN:-localhost}"
+      TLS_MODE="selfsigned"
+      SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-false}"
+      ;;
+    production)
+      MODE="compose"
+      ;;
+    enterprise)
+      MODE="k8s"
+      TOTAL_STEPS=10
+      ;;
+  esac
+
+  # Offline mode forces self-signed and skip-pull
+  if [[ "$OFFLINE" == "true" ]]; then
+    TLS_MODE="selfsigned"
+    SKIP_PULL=true
+    log_info "Offline mode: TLS set to self-signed, image pull skipped"
+  fi
+}
+
+# =============================================================================
+# STEP 5c: AES key provisioning
+# =============================================================================
+provision_aes_key() {
+  # Already provided via --db-aes-key flag
+  if [[ -n "$DB_AES_KEY" ]]; then
+    _validate_aes_key "$DB_AES_KEY"
+    log_info "Database AES key: provided via --db-aes-key"
+    return 0
+  fi
+
+  # Check if .env already has a key (upgrade path)
+  local env_file="${WORK_DIR}/docker/.env"
+  if [[ -f "$env_file" ]]; then
+    local existing_key
+    existing_key="$(grep -oP 'YASHIGANI_DB_AES_KEY=\K.+' "$env_file" 2>/dev/null || echo "")"
+    if [[ -n "$existing_key" ]]; then
+      DB_AES_KEY="$existing_key"
+      log_info "Database AES key: preserved from existing .env"
+      return 0
+    fi
+  fi
+
+  # Demo mode: auto-generate without prompting
+  if [[ "$DEPLOY_MODE" == "demo" ]]; then
+    _generate_aes_key
+    log_info "Database AES key: auto-generated (demo mode)"
+    return 0
+  fi
+
+  # Non-interactive: auto-generate
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    _generate_aes_key
+    log_info "Database AES key: auto-generated (non-interactive)"
+    return 0
+  fi
+
+  # Interactive: prompt
+  printf "\n"
+  printf "${C_BOLD}  Database encryption key (YASHIGANI_DB_AES_KEY):${C_RESET}\n\n"
+  printf "    1) Generate a new 256-bit key automatically (recommended)\n"
+  printf "    2) Bring your own key (BYOK) — paste an existing key\n"
+  printf "\n"
+  printf "${C_BOLD}  Choice [1]: ${C_RESET}"
+
+  local choice
+  read -r choice </dev/tty 2>/dev/null || choice="1"
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1)
+      _generate_aes_key
+      printf "\n"
+      printf "  ${C_YELLOW}SAVE THIS KEY — it will only be shown once:${C_RESET}\n"
+      printf "  ${C_BOLD}${DB_AES_KEY}${C_RESET}\n"
+      printf "\n"
+      log_success "Database AES key: generated"
+      ;;
+    2)
+      printf "\n"
+      printf "  Paste your 256-bit AES key (64-char hex or 44-char base64): "
+      local user_key
+      read -r user_key </dev/tty 2>/dev/null || user_key=""
+      if [[ -z "$user_key" ]]; then
+        log_error "No key provided. Aborting."
+        exit 1
+      fi
+      _validate_aes_key "$user_key"
+      DB_AES_KEY="$user_key"
+      printf "\n"
+      log_success "Database AES key: BYOK accepted"
+      ;;
+    *)
+      log_warn "Invalid choice — generating automatically"
+      _generate_aes_key
+      log_success "Database AES key: generated"
+      ;;
+  esac
+}
+
+_generate_aes_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    DB_AES_KEY="$(openssl rand -hex 32)"
+  elif command -v python3 >/dev/null 2>&1; then
+    DB_AES_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  else
+    log_error "Cannot generate AES key: neither openssl nor python3 found"
+    exit 1
+  fi
+}
+
+_validate_aes_key() {
+  local key="$1"
+  local len=${#key}
+  # Accept 64-char hex (32 bytes) or 44-char base64 (32 bytes)
+  if [[ "$len" -eq 64 ]] && echo "$key" | grep -qE '^[0-9a-fA-F]+$'; then
+    return 0
+  elif [[ "$len" -eq 44 ]] && echo "$key" | grep -qE '^[A-Za-z0-9+/]+=*$'; then
+    return 0
+  else
+    log_error "Invalid AES key: expected 64-char hex or 44-char base64 (got ${len} chars)"
+    exit 1
+  fi
+}
+
+# Write AES key to .env file
+_write_aes_key_to_env() {
+  local env_file="${WORK_DIR}/docker/.env"
+
+  if [[ -z "$DB_AES_KEY" ]]; then
+    return 0
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    dry_print "Write YASHIGANI_DB_AES_KEY to ${env_file}"
+    return 0
+  fi
+
+  # Create .env if it doesn't exist
+  touch "$env_file"
+
+  # Update or append
+  if grep -q '^YASHIGANI_DB_AES_KEY=' "$env_file" 2>/dev/null; then
+    # macOS sed compatibility — use temp file
+    local tmp_env
+    tmp_env="$(mktemp)"
+    sed "s/^YASHIGANI_DB_AES_KEY=.*/YASHIGANI_DB_AES_KEY=${DB_AES_KEY}/" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "YASHIGANI_DB_AES_KEY=${DB_AES_KEY}" >> "$env_file"
+  fi
+}
+
+# =============================================================================
 # STEP 6: Configuration wizard
 # =============================================================================
 run_wizard() {
@@ -1111,33 +1335,409 @@ run_health_check() {
 }
 
 # =============================================================================
-# STEP 13 (compose/vm): Completion summary
+# STEP 8b: Generate all service secrets
+# =============================================================================
+# Stored as module-level vars so the completion summary can print them once.
+GEN_ADMIN1_PASSWORD=""
+GEN_ADMIN2_PASSWORD=""
+GEN_ADMIN1_TOTP_SECRET=""
+GEN_ADMIN2_TOTP_SECRET=""
+GEN_ADMIN1_TOTP_URI=""
+GEN_ADMIN2_TOTP_URI=""
+GEN_POSTGRES_PASSWORD=""
+GEN_REDIS_PASSWORD=""
+GEN_GRAFANA_PASSWORD=""
+
+_gen_password() {
+  # 36-char alphanumeric password (matches Agnostic Security policy)
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 27 | tr -dc 'A-Za-z0-9' | head -c 36
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits) for _ in range(36)))'
+  else
+    # Last resort — /dev/urandom
+    cat /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 36
+  fi
+}
+
+_gen_totp_secret() {
+  # 20-byte (160-bit) TOTP secret, base32-encoded (RFC 4226 / RFC 6238)
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets,base64; print(base64.b32encode(secrets.token_bytes(20)).decode().rstrip("="))'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl rand 20 | base64 | tr '+/' '-_' | tr -d '=' | head -c 32
+  else
+    cat /dev/urandom | head -c 20 | base64 | tr '+/' '-_' | tr -d '=' | head -c 32
+  fi
+}
+
+_gen_totp_uri() {
+  # otpauth://totp/Yashigani:username?secret=SECRET&issuer=Yashigani&digits=6&period=30
+  local username="$1"
+  local secret="$2"
+  local issuer="${DOMAIN:-Yashigani}"
+  echo "otpauth://totp/Yashigani:${username}?secret=${secret}&issuer=${issuer}&digits=6&period=30"
+}
+
+# Generate two distinct admin usernames from curated word lists
+GEN_ADMIN1_USERNAME=""
+GEN_ADMIN2_USERNAME=""
+
+_gen_admin_usernames() {
+  # Three themed lists — installer picks one theme at random, then two distinct names
+  local -a animals=(falcon eagle phoenix raven wolf panther orca hawk lynx cobra
+                    tiger condor viper mantis jaguar osprey heron crane puma ibis)
+  local -a flowers=(orchid lotus cedar maple jasmine iris dahlia sage willow ivy
+                    azalea holly fern clover hazel violet laurel rowan aspen reed)
+  local -a robots=(atlas optimus cortex nexus cipher vector prism zenith echo forge
+                   titan onyx flux nova spark pulse helix quark axiom delta)
+
+  # Pick a random theme
+  local theme_roll
+  if command -v python3 >/dev/null 2>&1; then
+    theme_roll="$(python3 -c 'import secrets; print(secrets.randbelow(3))')"
+  else
+    theme_roll=$(( RANDOM % 3 ))
+  fi
+
+  local -a chosen_list
+  case "$theme_roll" in
+    0) chosen_list=("${animals[@]}") ;;
+    1) chosen_list=("${flowers[@]}") ;;
+    2) chosen_list=("${robots[@]}") ;;
+  esac
+
+  local list_len=${#chosen_list[@]}
+
+  # Pick two distinct indices
+  local idx1 idx2
+  if command -v python3 >/dev/null 2>&1; then
+    idx1="$(python3 -c "import secrets; print(secrets.randbelow(${list_len}))")"
+    idx2="$(python3 -c "import secrets; r=${idx1}; exec('while r==${idx1}: r=secrets.randbelow(${list_len})'); print(r)")"
+  else
+    idx1=$(( RANDOM % list_len ))
+    idx2=$(( (idx1 + 1 + RANDOM % (list_len - 1)) % list_len ))
+  fi
+
+  GEN_ADMIN1_USERNAME="${chosen_list[$idx1]}"
+  GEN_ADMIN2_USERNAME="${chosen_list[$idx2]}"
+}
+
+generate_secrets() {
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Skip if secrets already exist (upgrade path)
+  if [[ -f "${secrets_dir}/postgres_password" && -f "${secrets_dir}/redis_password" ]]; then
+    log_info "Secrets already exist — preserving (upgrade path)"
+    GEN_POSTGRES_PASSWORD="$(cat "${secrets_dir}/postgres_password" 2>/dev/null || echo "[preserved]")"
+    GEN_REDIS_PASSWORD="$(cat "${secrets_dir}/redis_password" 2>/dev/null || echo "[preserved]")"
+    GEN_GRAFANA_PASSWORD="$(cat "${secrets_dir}/grafana_admin_password" 2>/dev/null || echo "[preserved]")"
+    GEN_ADMIN1_PASSWORD="[preserved — check secrets dir]"
+    GEN_ADMIN2_PASSWORD="[preserved — check secrets dir]"
+    GEN_ADMIN1_TOTP_SECRET="[preserved]"
+    GEN_ADMIN2_TOTP_SECRET="[preserved]"
+    GEN_ADMIN1_TOTP_URI=""
+    GEN_ADMIN2_TOTP_URI=""
+    return 0
+  fi
+
+  # Generate unique admin usernames from themed word lists
+  _gen_admin_usernames
+
+  log_info "Generating service passwords and 2FA secrets..."
+  log_info "Admin usernames: ${GEN_ADMIN1_USERNAME} (primary), ${GEN_ADMIN2_USERNAME} (backup)"
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    dry_print "Generate 36-char passwords for: ${GEN_ADMIN1_USERNAME}, ${GEN_ADMIN2_USERNAME}, postgres, redis, grafana"
+    dry_print "Generate TOTP secrets for: ${GEN_ADMIN1_USERNAME}, ${GEN_ADMIN2_USERNAME}"
+    dry_print "Write to ${secrets_dir}/"
+    GEN_ADMIN1_PASSWORD="[dry-run]"
+    GEN_ADMIN2_PASSWORD="[dry-run]"
+    GEN_ADMIN1_TOTP_SECRET="[dry-run]"
+    GEN_ADMIN2_TOTP_SECRET="[dry-run]"
+    GEN_POSTGRES_PASSWORD="[dry-run]"
+    GEN_REDIS_PASSWORD="[dry-run]"
+    GEN_GRAFANA_PASSWORD="[dry-run]"
+    return 0
+  fi
+
+  mkdir -p "$secrets_dir"
+
+  # --- Admin 1 (primary) ---
+  GEN_ADMIN1_PASSWORD="$(_gen_password)"
+  printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin1_password"
+  chmod 600 "${secrets_dir}/admin1_password"
+  printf "%s" "$GEN_ADMIN1_USERNAME" > "${secrets_dir}/admin1_username"
+  chmod 600 "${secrets_dir}/admin1_username"
+
+  GEN_ADMIN1_TOTP_SECRET="$(_gen_totp_secret)"
+  printf "%s" "$GEN_ADMIN1_TOTP_SECRET" > "${secrets_dir}/admin1_totp_secret"
+  chmod 600 "${secrets_dir}/admin1_totp_secret"
+  GEN_ADMIN1_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN1_USERNAME" "$GEN_ADMIN1_TOTP_SECRET")"
+
+  # --- Admin 2 (backup — anti-lockout) ---
+  GEN_ADMIN2_PASSWORD="$(_gen_password)"
+  printf "%s" "$GEN_ADMIN2_PASSWORD" > "${secrets_dir}/admin2_password"
+  chmod 600 "${secrets_dir}/admin2_password"
+  printf "%s" "$GEN_ADMIN2_USERNAME" > "${secrets_dir}/admin2_username"
+  chmod 600 "${secrets_dir}/admin2_username"
+
+  GEN_ADMIN2_TOTP_SECRET="$(_gen_totp_secret)"
+  printf "%s" "$GEN_ADMIN2_TOTP_SECRET" > "${secrets_dir}/admin2_totp_secret"
+  chmod 600 "${secrets_dir}/admin2_totp_secret"
+  GEN_ADMIN2_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN2_USERNAME" "$GEN_ADMIN2_TOTP_SECRET")"
+
+  # --- PostgreSQL ---
+  GEN_POSTGRES_PASSWORD="$(_gen_password)"
+  printf "%s" "$GEN_POSTGRES_PASSWORD" > "${secrets_dir}/postgres_password"
+  chmod 600 "${secrets_dir}/postgres_password"
+
+  # --- Redis ---
+  GEN_REDIS_PASSWORD="$(_gen_password)"
+  printf "%s" "$GEN_REDIS_PASSWORD" > "${secrets_dir}/redis_password"
+  chmod 600 "${secrets_dir}/redis_password"
+
+  # --- Grafana ---
+  GEN_GRAFANA_PASSWORD="$(_gen_password)"
+  printf "%s" "$GEN_GRAFANA_PASSWORD" > "${secrets_dir}/grafana_admin_password"
+  chmod 600 "${secrets_dir}/grafana_admin_password"
+
+  # --- HIBP breach check on generated passwords (defense-in-depth) ---
+  _hibp_check_passwords
+
+  log_success "All passwords and 2FA secrets generated (${secrets_dir}/)"
+}
+
+# =============================================================================
+# Have I Been Pwned (HIBP) k-Anonymity password breach check
+# =============================================================================
+# Uses the HIBP Passwords API v3 (api.pwnedpasswords.com)
+# Protocol: SHA-1 hash the password, send first 5 chars, check locally.
+# The actual password NEVER leaves the system.
+# See: https://haveibeenpwned.com/API/v3#SearchingPwnedPasswordsByRange
+
+_hibp_check_single() {
+  local label="$1"
+  local password="$2"
+
+  # Skip if no curl or no internet
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # SHA-1 hash the password
+  local sha1_hash=""
+  if command -v shasum >/dev/null 2>&1; then
+    sha1_hash="$(printf '%s' "$password" | shasum -a 1 | awk '{print toupper($1)}')"
+  elif command -v sha1sum >/dev/null 2>&1; then
+    sha1_hash="$(printf '%s' "$password" | sha1sum | awk '{print toupper($1)}')"
+  elif command -v openssl >/dev/null 2>&1; then
+    sha1_hash="$(printf '%s' "$password" | openssl dgst -sha1 | awk '{print toupper($NF)}')"
+  else
+    return 0  # Can't hash — skip silently
+  fi
+
+  local prefix="${sha1_hash:0:5}"
+  local suffix="${sha1_hash:5}"
+
+  # Query HIBP k-Anonymity API (5-char prefix only — password never sent)
+  local response=""
+  response="$(curl -sSL --max-time 5 --connect-timeout 3 \
+    -H "User-Agent: Yashigani-Installer/${YASHIGANI_VERSION}" \
+    "https://api.pwnedpasswords.com/range/${prefix}" 2>/dev/null || echo "")"
+
+  if [[ -z "$response" ]]; then
+    return 0  # API unreachable — skip silently (air-gapped, offline, etc.)
+  fi
+
+  # Check if our suffix appears in the response
+  local match_count=""
+  match_count="$(echo "$response" | grep -i "^${suffix}:" | cut -d: -f2 | tr -d '\r' || echo "")"
+
+  if [[ -n "$match_count" && "$match_count" -gt 0 ]]; then
+    log_warn "HIBP: ${label} password found in ${match_count} data breach(es) — regenerating..."
+    return 1  # Compromised
+  fi
+
+  return 0  # Clean
+}
+
+_hibp_check_passwords() {
+  # Only check if we have internet access (skip in offline/demo-localhost mode)
+  if [[ "$OFFLINE" == "true" ]]; then
+    log_info "Skipping HIBP breach check (offline mode)"
+    return 0
+  fi
+
+  log_info "Checking generated passwords against HIBP breach database..."
+
+  local max_retries=3
+
+  # Check admin1 — regenerate if compromised (extremely unlikely for 36-char random)
+  local attempt=0
+  while ! _hibp_check_single "Admin 1 (${GEN_ADMIN1_USERNAME})" "$GEN_ADMIN1_PASSWORD"; do
+    attempt=$((attempt + 1))
+    if [[ $attempt -ge $max_retries ]]; then
+      log_warn "HIBP: Could not generate a clean password after ${max_retries} attempts — proceeding anyway"
+      break
+    fi
+    GEN_ADMIN1_PASSWORD="$(_gen_password)"
+    printf "%s" "$GEN_ADMIN1_PASSWORD" > "${WORK_DIR}/docker/secrets/admin1_password"
+  done
+
+  # Check admin2
+  attempt=0
+  while ! _hibp_check_single "Admin 2 (${GEN_ADMIN2_USERNAME})" "$GEN_ADMIN2_PASSWORD"; do
+    attempt=$((attempt + 1))
+    if [[ $attempt -ge $max_retries ]]; then
+      break
+    fi
+    GEN_ADMIN2_PASSWORD="$(_gen_password)"
+    printf "%s" "$GEN_ADMIN2_PASSWORD" > "${WORK_DIR}/docker/secrets/admin2_password"
+  done
+
+  # Check service passwords (postgres, redis, grafana)
+  _hibp_check_and_regen "postgres" "$GEN_POSTGRES_PASSWORD" "${WORK_DIR}/docker/secrets/postgres_password" $max_retries
+  _hibp_check_and_regen "redis" "$GEN_REDIS_PASSWORD" "${WORK_DIR}/docker/secrets/redis_password" $max_retries
+  _hibp_check_and_regen "grafana" "$GEN_GRAFANA_PASSWORD" "${WORK_DIR}/docker/secrets/grafana_admin_password" $max_retries
+
+  log_success "HIBP breach check complete — all passwords clean"
+}
+
+_hibp_check_and_regen() {
+  local label="$1"
+  local password="$2"
+  local secret_file="$3"
+  local max_retries="$4"
+  local attempt=0
+
+  while ! _hibp_check_single "$label" "$password"; do
+    attempt=$((attempt + 1))
+    if [[ $attempt -ge $max_retries ]]; then
+      break
+    fi
+    password="$(_gen_password)"
+    printf "%s" "$password" > "$secret_file"
+  done
+
+  # Update the module-level variable
+  local upper_label
+  upper_label="$(echo "$label" | tr '[:lower:]' '[:upper:]')"
+  eval "GEN_${upper_label}_PASSWORD='${password}'"
+}
+
+# =============================================================================
+# STEP 13 (compose/vm): Completion summary with credentials
 # =============================================================================
 print_completion_summary() {
   set_step "13" "Completion"
   log_step "13/${TOTAL_STEPS}" "Installation complete"
 
   local proto="https"
-  [[ "$TLS_MODE" == "selfsigned" ]] && proto="https (self-signed cert)"
+  [[ "$TLS_MODE" == "selfsigned" ]] && proto="https (self-signed)"
 
   printf "\n"
-  printf "${C_GREEN}╔═══════════════════════════════════════════════════╗${C_RESET}\n"
-  printf "${C_GREEN}║    Yashigani v%-8s is up and running!        ║${C_RESET}\n" "${YASHIGANI_VERSION}"
-  printf "${C_GREEN}╚═══════════════════════════════════════════════════╝${C_RESET}\n"
+  printf "${C_GREEN}╔═══════════════════════════════════════════════════════════════╗${C_RESET}\n"
+  printf "${C_GREEN}║    Yashigani v%-8s is up and running!                     ║${C_RESET}\n" "${YASHIGANI_VERSION}"
+  printf "${C_GREEN}╚═══════════════════════════════════════════════════════════════╝${C_RESET}\n"
   printf "\n"
 
+  # --- Access URLs ---
   if [[ -n "$DOMAIN" ]]; then
-    printf "  %-22s %s://%s\n"      "Dashboard:"   "$proto"  "$DOMAIN"
-    printf "  %-22s %s://%s/api\n"  "API:"         "https"   "$DOMAIN"
+    printf "  ${C_BOLD}Access:${C_RESET}\n"
+    printf "    %-22s %s://%s\n"      "Backoffice:"   "$proto"  "$DOMAIN"
+    printf "    %-22s %s://%s/v1\n"   "Gateway API:"  "https"   "$DOMAIN"
+    if [[ "$DOMAIN" != "localhost" ]]; then
+      printf "    %-22s https://%s:3000\n" "Grafana:" "$DOMAIN"
+    else
+      printf "    %-22s https://localhost:3000\n" "Grafana:"
+    fi
+    printf "\n"
   fi
 
-  printf "  %-22s %s\n" "Install directory:" "$WORK_DIR"
+  # --- Credentials (shown ONCE — never again) ---
+  printf "  ${C_YELLOW}╔══════════════════════════════════════════════════════════════════╗${C_RESET}\n"
+  printf "  ${C_YELLOW}║  CREDENTIALS — SAVE THESE NOW (shown only once)                 ║${C_RESET}\n"
+  printf "  ${C_YELLOW}╠══════════════════════════════════════════════════════════════════╣${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Admin 1 (primary):${C_RESET}                                           ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    Username:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN1_USERNAME}"
+  printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN1_PASSWORD}"
+  printf "  ${C_YELLOW}║${C_RESET}    TOTP secret:  %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN1_TOTP_SECRET}"
+  if [[ -n "$GEN_ADMIN1_TOTP_URI" ]]; then
+  printf "  ${C_YELLOW}║${C_RESET}    TOTP URI (paste into authenticator app):                     ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    %s\n" "${GEN_ADMIN1_TOTP_URI}"
+  fi
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Admin 2 (backup — anti-lockout):${C_RESET}                              ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    Username:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN2_USERNAME}"
+  printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN2_PASSWORD}"
+  printf "  ${C_YELLOW}║${C_RESET}    TOTP secret:  %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN2_TOTP_SECRET}"
+  if [[ -n "$GEN_ADMIN2_TOTP_URI" ]]; then
+  printf "  ${C_YELLOW}║${C_RESET}    TOTP URI (paste into authenticator app):                     ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    %s\n" "${GEN_ADMIN2_TOTP_URI}"
+  fi
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}╠══════════════════════════════════════════════════════════════════╣${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Database Encryption (AES-256):${C_RESET}                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    %-60s ${C_YELLOW}║${C_RESET}\n" "${DB_AES_KEY:-[not set]}"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}╠══════════════════════════════════════════════════════════════════╣${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}PostgreSQL:${C_RESET}                                                  ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    User:         yashigani_app                                  ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_POSTGRES_PASSWORD}"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Redis:${C_RESET}                                                       ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_REDIS_PASSWORD}"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Grafana:${C_RESET}                                                     ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    Username:     admin                                          ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_GRAFANA_PASSWORD}"
+  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  printf "  ${C_YELLOW}╚══════════════════════════════════════════════════════════════════╝${C_RESET}\n"
   printf "\n"
-  printf "  View logs:\n"
-  printf "    docker compose -f %s/docker/docker-compose.yml logs -f\n" "$WORK_DIR"
+  printf "  ${C_RED}${C_BOLD}WARNING:${C_RESET} These credentials will NOT be shown again.\n"
+  printf "  ${C_RED}Store them in a password manager or secure vault immediately.${C_RESET}\n"
   printf "\n"
-  printf "  Uninstall:\n"
-  printf "    %s/uninstall.sh\n" "$WORK_DIR"
+
+  # --- Agent bundles ---
+  if [[ ${#COMPOSE_PROFILES[@]} -gt 0 ]]; then
+    printf "  ${C_BOLD}Agent bundles installed:${C_RESET} %s\n" "${COMPOSE_PROFILES[*]}"
+    printf "\n"
+  fi
+
+  # --- Deployment mode ---
+  printf "  ${C_BOLD}Deployment:${C_RESET}\n"
+  printf "    %-22s %s\n" "Mode:"      "${DEPLOY_MODE:-compose}"
+  printf "    %-22s %s\n" "Directory:" "$WORK_DIR"
+  printf "    %-22s %s\n" "TLS:"       "$TLS_MODE"
+  if [[ "${YSG_GPU_TYPE:-none}" != "none" ]]; then
+    printf "    %-22s %s\n" "GPU:"     "${YSG_GPU_NAME}"
+  fi
+  printf "\n"
+
+  # --- Next steps ---
+  printf "  ${C_BOLD}Next steps:${C_RESET}\n"
+  printf "    1. Save ALL credentials above in a password manager\n"
+  printf "    2. Scan the TOTP QR URIs into your authenticator app (Google Authenticator, Authy, 1Password)\n"
+  printf "    3. Log in to the backoffice as '%s' and change the default password\n" "${GEN_ADMIN1_USERNAME}"
+  printf "    4. Store '%s' credentials in a safe/vault (break-glass backup)\n" "${GEN_ADMIN2_USERNAME}"
+  printf "    5. Register your first AI agent\n"
+  printf "    6. Configure your OPA RBAC policy\n"
+  if [[ "$DEPLOY_MODE" != "demo" ]]; then
+    printf "    7. Set up SIEM integration (Splunk / Elastic / Wazuh)\n"
+    printf "    8. Import your licence key (if not done during install)\n"
+  fi
+  printf "\n"
+
+  # --- Useful commands ---
+  printf "  ${C_BOLD}Useful commands:${C_RESET}\n"
+  printf "    Health check:    bash %s/scripts/health-check.sh\n" "$WORK_DIR"
+  printf "    View logs:       ${COMPOSE_CMD[*]:-docker compose} -f %s/docker/docker-compose.yml logs -f\n" "$WORK_DIR"
+  printf "    Update:          bash %s/update.sh\n" "$WORK_DIR"
+  printf "    Uninstall:       bash %s/uninstall.sh\n" "$WORK_DIR"
   printf "\n"
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -1277,9 +1877,15 @@ main() {
   # ---- Step 3: Platform summary ----
   print_platform_summary
 
+  # ---- Step 3b: Deployment mode selection (new in v0.9.0) ----
+  select_deploy_mode
+
+  # ---- Step 3c: AES key provisioning (new in v0.9.0) ----
+  provision_aes_key
+
   if [[ "$MODE" == "k8s" ]]; then
     # ------------------------------------------------------------------
-    # Kubernetes deployment path
+    # Kubernetes / Enterprise deployment path
     # ------------------------------------------------------------------
     # Step 4: n/a (no runtime install for k8s)
     # Step 5: Preflight
@@ -1287,6 +1893,9 @@ main() {
 
     # Step 6: Wizard / config
     run_wizard
+
+    # Write AES key to Helm values or K8s secret
+    _write_aes_key_to_env
 
     # Step 7: Helm dependency update
     k8s_helm_dep_update
@@ -1302,7 +1911,7 @@ main() {
 
   else
     # ------------------------------------------------------------------
-    # Docker Compose / VM deployment path
+    # Docker Compose deployment path (Demo + Production)
     # ------------------------------------------------------------------
 
     # Step 4: Install runtime (vm mode only — no-op for compose)
@@ -1311,14 +1920,28 @@ main() {
     # Step 5: Preflight
     run_preflight
 
-    # Step 6: Wizard / config
-    run_wizard
+    # Step 6: Wizard / config (skipped in demo mode — defaults applied)
+    if [[ "$DEPLOY_MODE" == "demo" ]]; then
+      log_step "6/${TOTAL_STEPS}" "Skipping wizard (demo mode — using defaults)"
+    else
+      run_wizard
+    fi
 
     # Idempotency: check for running installation before making changes
     check_existing_installation
 
-    # Step 7: License key
-    handle_license
+    # Write AES key to .env
+    _write_aes_key_to_env
+
+    # Generate all service passwords (admin, postgres, redis, grafana)
+    generate_secrets
+
+    # Step 7: License key (skipped in demo — Community, no key needed)
+    if [[ "$DEPLOY_MODE" == "demo" ]]; then
+      log_step "7/${TOTAL_STEPS}" "Skipping licence key (demo mode — Community tier)"
+    else
+      handle_license
+    fi
 
     # Step 8: Optional agent bundle selection
     select_agent_bundles
