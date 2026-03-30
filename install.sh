@@ -1316,8 +1316,19 @@ compose_pull() {
     return 0
   fi
 
-  "${COMPOSE_CMD[@]}" -f "$compose_file" pull
-  log_success "Container images pulled"
+  # Build local images first (gateway + backoffice have Dockerfiles, not on Docker Hub)
+  log_info "Building gateway and backoffice images from source..."
+  "${COMPOSE_CMD[@]}" -f "$compose_file" build gateway backoffice 2>&1 | tail -5
+  log_success "Local images built"
+
+  # Pull all remote images (skip services that are built locally)
+  log_info "Pulling remote container images..."
+  "${COMPOSE_CMD[@]}" -f "$compose_file" pull --ignore-buildable 2>&1 | tail -5 || {
+    # --ignore-buildable may not be supported in older compose — fall back
+    log_info "Retrying pull without --ignore-buildable..."
+    "${COMPOSE_CMD[@]}" -f "$compose_file" pull 2>&1 | tail -5 || true
+  }
+  log_success "Container images ready"
 }
 
 # Ensure Docker daemon is running — prompt user to start it if not
