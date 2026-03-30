@@ -1306,6 +1306,9 @@ compose_pull() {
   # --- Verify Docker daemon is running before attempting pull ---
   _ensure_docker_running
 
+  # --- Fix Docker credential helper if missing (common macOS issue) ---
+  _fix_docker_credentials
+
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -1382,6 +1385,76 @@ _ensure_docker_running() {
   else
     log_error "No container runtime is running. Start Docker or Podman and re-run the installer."
     exit 1
+  fi
+}
+
+# Fix missing Docker credential helper (common on macOS when Docker Desktop
+# CLI is symlinked but the credential helpers aren't in PATH)
+_fix_docker_credentials() {
+  if [[ "$DRY_RUN" == "true" ]]; then return 0; fi
+
+  # Only relevant on macOS
+  if [[ "$YSG_OS" != "macos" ]]; then return 0; fi
+
+  # Check if the credential helper exists
+  if command -v docker-credential-osxkeychain >/dev/null 2>&1; then
+    return 0  # Already in PATH
+  fi
+
+  # Check Docker Desktop's bundled credential helper
+  local cred_helper="/Applications/Docker.app/Contents/Resources/bin/docker-credential-osxkeychain"
+  if [[ ! -x "$cred_helper" ]]; then
+    # No credential helper at all — configure Docker to not use one
+    _docker_config_no_credsStore
+    return 0
+  fi
+
+  # Credential helper exists but not in PATH — symlink it
+  log_info "Docker credential helper not in PATH — fixing..."
+  if [[ -t 0 && "$NON_INTERACTIVE" != "true" ]]; then
+    printf "  ${C_BOLD}Create symlink for docker-credential-osxkeychain? [Y/n]: ${C_RESET}"
+    local choice
+    read -r choice </dev/tty 2>/dev/null || choice="y"
+    choice="$(echo "${choice:-y}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$choice" != "y" && "$choice" != "yes" && -n "$choice" ]]; then
+      _docker_config_no_credsStore
+      return 0
+    fi
+  fi
+
+  if sudo ln -sf "$cred_helper" /usr/local/bin/docker-credential-osxkeychain 2>/dev/null; then
+    log_success "docker-credential-osxkeychain symlinked"
+  else
+    log_warn "Could not create symlink — configuring Docker to pull without credential helper"
+    _docker_config_no_credsStore
+  fi
+}
+
+# Configure Docker to not require a credential helper for pulling public images
+_docker_config_no_credsStore() {
+  local docker_config="$HOME/.docker/config.json"
+  if [[ -f "$docker_config" ]]; then
+    # Remove credsStore from config if present (allows anonymous pulls)
+    if grep -q '"credsStore"' "$docker_config" 2>/dev/null; then
+      log_info "Removing credsStore from Docker config (allows anonymous image pulls)..."
+      local tmp_config
+      tmp_config="$(mktemp)"
+      # Use python3 for safe JSON manipulation
+      if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json, sys
+with open('${docker_config}') as f:
+    cfg = json.load(f)
+cfg.pop('credsStore', None)
+with open('${tmp_config}', 'w') as f:
+    json.dump(cfg, f, indent=2)
+" 2>/dev/null && mv "$tmp_config" "$docker_config"
+      else
+        # Fallback: sed (less safe but works for simple cases)
+        sed '/"credsStore"/d' "$docker_config" > "$tmp_config" && mv "$tmp_config" "$docker_config"
+      fi
+      log_success "Docker config updated — anonymous pulls enabled"
+    fi
   fi
 }
 
