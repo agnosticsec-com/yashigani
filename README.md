@@ -18,10 +18,9 @@
 --- ---
 **Latest Stable Version:** v0.8.1
 ---
-**Current Version:** v0.8.1 **
+**Current Version:** v0.8.1
 ---
-**Document Date:** 2026-03-30
-**Classification:** Public — Product Overview **
+**Document Date:** 2026-03-30 **Classification:** Public — Product Overview
 
 ---
 
