@@ -1496,16 +1496,31 @@ compose_up() {
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
-  # Ensure all required secret files exist with content (handles upgrades and re-runs).
-  # Docker Desktop for Mac (VirtioFS/gRPC-FUSE) does not reliably propagate
-  # empty files to the VM — write a placeholder string so the bind mount succeeds.
+  # Ensure all required directories and secret files exist (handles upgrades,
+  # re-runs, and failed previous installs). Docker Desktop for Mac (VirtioFS)
+  # does not reliably propagate empty files — write placeholder content.
   local secrets_dir="${WORK_DIR}/docker/secrets"
+  local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
+  mkdir -p "${data_dir}/audit"
+
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
       echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}"
       chmod 600 "${secrets_dir}/${_secret_file}"
       log_info "Created secret placeholder: ${_secret_file}"
+    fi
+  done
+
+  # Ensure agent bundle token files exist if profiles are selected
+  for _profile in "${COMPOSE_PROFILES[@]:-}"; do
+    if [[ -n "$_profile" ]]; then
+      local _token_file="${secrets_dir}/${_profile}_token"
+      if [[ ! -s "$_token_file" ]]; then
+        echo "# placeholder — auto-generated at first bootstrap" > "$_token_file"
+        chmod 600 "$_token_file"
+        log_info "Created token placeholder: ${_profile}_token"
+      fi
     fi
   done
 
