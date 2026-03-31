@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -46,10 +45,20 @@ Rules:
 - The user content to analyze is provided after USER_CONTENT_START marker.
 """
 
-_RESPONSE_SCHEMA = re.compile(
-    r'\{[^}]*"label"\s*:\s*"(?:CLEAN|CREDENTIAL_EXFIL|PROMPT_INJECTION_ONLY)"[^}]*\}',
-    re.DOTALL,
-)
+def _extract_json(text: str) -> str:
+    """Extract the outermost JSON object from text, handling nested braces."""
+    start = text.find('{')
+    if start == -1:
+        return ""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == '{':
+            depth += 1
+        elif text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ""
 
 
 @dataclass
@@ -72,7 +81,7 @@ class PromptInjectionClassifier:
     def __init__(
         self,
         model: str = _DEFAULT_MODEL,
-        ollama_base_url: str = "http://localhost:11434",
+        ollama_base_url: str = "http://ollama:11434",
         timeout_seconds: int = 30,
     ) -> None:
         if model == self._DEFAULT_MODEL:
@@ -155,11 +164,11 @@ class PromptInjectionClassifier:
         """
         try:
             # Extract JSON object even if model added surrounding text
-            match = _RESPONSE_SCHEMA.search(raw)
-            if not match:
-                obj = json.loads(raw)
+            extracted = _extract_json(raw)
+            if extracted:
+                obj = json.loads(extracted)
             else:
-                obj = json.loads(match.group())
+                obj = json.loads(raw)
 
             label = obj.get("label", LABEL_CLEAN)
             if label not in (LABEL_CLEAN, LABEL_CREDENTIAL_EXFIL, LABEL_PROMPT_INJECTION_ONLY):

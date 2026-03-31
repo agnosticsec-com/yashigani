@@ -83,30 +83,28 @@ class TestParseResponse:
         assert result.detected_payload_spans == []
 
     def test_injection_only_response(self):
-        # NOTE: detected_payload_spans uses [] here because the _RESPONSE_SCHEMA regex
-        # uses [^}]* which stops at the first '}' inside a nested span dict. When spans
-        # are non-empty the regex partially matches, json.loads fails, and the parser
-        # falls back to CLEAN/0.0. Span round-tripping is tested in test_valid_span_kept.
         result = self._parse({
             "label": "PROMPT_INJECTION_ONLY",
             "confidence": 0.93,
             "exfil_indicators": False,
-            "detected_payload_spans": [],
+            "detected_payload_spans": [{"start": 10, "end": 40}],
         })
         assert result.label == LABEL_PROMPT_INJECTION_ONLY
+        assert result.confidence == pytest.approx(0.93)
         assert result.exfil_indicators is False
+        assert result.detected_payload_spans == [{"start": 10, "end": 40}]
 
     def test_credential_exfil_response(self):
-        # NOTE: empty spans for the same reason as test_injection_only_response —
-        # nested '}' in span dicts breaks the _RESPONSE_SCHEMA regex match.
         result = self._parse({
             "label": "CREDENTIAL_EXFIL",
             "confidence": 0.99,
             "exfil_indicators": True,
-            "detected_payload_spans": [],
+            "detected_payload_spans": [{"start": 5, "end": 60}],
         })
         assert result.label == LABEL_CREDENTIAL_EXFIL
+        assert result.confidence == pytest.approx(0.99)
         assert result.exfil_indicators is True
+        assert result.detected_payload_spans == [{"start": 5, "end": 60}]
 
     def test_surrounding_text_extracted(self):
         """Model may produce text before/after JSON — should still parse correctly."""
@@ -163,16 +161,6 @@ class TestParseResponse:
         })
         assert result.detected_payload_spans == []
 
-    @pytest.mark.xfail(
-        reason=(
-            "Known bug: _RESPONSE_SCHEMA regex uses [^}]* which stops at the first '}' "
-            "inside a nested span dict, causing json.loads(match.group()) to fail with "
-            "'Expecting , delimiter'. The parser then returns CLEAN/0.0 instead of the "
-            "expected result. Fix requires updating the regex in classifier.py to handle "
-            "nested braces (e.g. use a proper JSON extraction approach)."
-        ),
-        strict=True,
-    )
     def test_valid_span_kept(self):
         result = self._parse({
             "label": "PROMPT_INJECTION_ONLY",

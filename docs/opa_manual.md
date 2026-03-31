@@ -1,6 +1,6 @@
 # Yashigani — OPA Policy Manual
 
-**Version:** v0.9.3
+**Version:** v0.9.4
 **Last updated:** 2026-03-30
 **Policy engine:** Open Policy Agent (OPA) v0.x, rootless container
 **Policy language:** Rego (v1 import keywords)
