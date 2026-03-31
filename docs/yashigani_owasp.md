@@ -2,7 +2,7 @@
 
 **Document Version:** 1.4
 **Date:** 2026-03-30
-**Codebase version:** v0.9.2
+**Codebase version:** v0.9.3
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
 
@@ -142,7 +142,7 @@ Coverage ratings:
 | ASVS Requirement | Level | Yashigani Control | Coverage |
 |---|---|---|---|
 | V6.1.1 — Verify that sensitive data at rest is encrypted | L2 | AES-256-GCM column encryption via pgcrypto on all sensitive PostgreSQL columns; encryption keys managed via integrated secrets backends | FULL |
-| V6.2.1 — Verify that strong, current algorithms are used | L2 | AES-256-GCM for symmetric encryption; ML-DSA-65 (FIPS 204, post-quantum) for licence signing; hybrid TLS X25519+ML-KEM-768 prepared (pending Caddy 2.10); SHA-384 Merkle chain for audit integrity; Argon2id for password hashing; no deprecated algorithms (MD5, SHA1, DES, 3DES) permitted | FULL |
+| V6.2.1 — Verify that strong, current algorithms are used | L2 | AES-256-GCM for symmetric encryption; ECDSA P-256 for licence signing (ML-DSA-65 planned when cryptography ships FIPS 204); hybrid TLS X25519+ML-KEM-768 prepared (pending Caddy 2.10); SHA-384 Merkle chain for audit integrity; Argon2id for password hashing; no deprecated algorithms (MD5, SHA1, DES, 3DES) permitted | FULL |
 | V6.2.2 — Verify that random number generation is cryptographically secure | L2 | All security-sensitive random values (session tokens, API keys, nonces) use the OS CSPRNG (os.urandom / secrets module) | FULL |
 | V6.3.1 — Verify that cryptographic keys are protected | L2 | Keys are managed via external secrets backends: Docker Secrets, Keeper, AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, HashiCorp Vault; no keys stored in environment variables in production mode | FULL |
 | V6.4.1 — Verify that key rotation is supported | L2 | Secrets backend integrations support key versioning and rotation; JWKS key rotation is automatic on upstream 401 response | PARTIAL |
@@ -634,7 +634,7 @@ Ollama runs locally within the deployment environment. Model weights for the sec
 
 Inspection backend API keys (for Anthropic, Gemini, Azure OpenAI) are stored in the secrets backend and are never logged or exposed in responses. CHS ensures that the payloads sent to these backends do not contain operator credentials that could be used to access operator-specific fine-tuned models.
 
-License verification for Yashigani itself uses ML-DSA-65 (FIPS 204) offline verification with no network call, preventing license-related network traffic that could reveal deployment information. ML-DSA-65 is a NIST-standardized post-quantum digital signature algorithm, providing resistance against both classical and quantum adversaries.
+License verification for Yashigani itself uses ECDSA P-256 offline verification with no network call, preventing license-related network traffic that could reveal deployment information. A migration to ML-DSA-65 (FIPS 204, post-quantum) is planned once the `cryptography` library ships stable FIPS 204 support; at that point licence signing will provide resistance against both classical and quantum adversaries.
 
 **Residual Risk:** Yashigani protects the inspection backends' API credentials and prevents unauthorized access to the Ollama local model. It does not protect the customer's own AI models that are deployed in the MCP servers behind the gateway — those models' security is the responsibility of the upstream MCP server operators.
 
@@ -685,7 +685,7 @@ This table maps Yashigani's coverage across the three OWASP frameworks, noting w
 | Credential Handle Service (CHS) | V5, V8 | API3 | LLM06 | Yes | Yes | Yes | Yes | Yes |
 | AES-256-GCM column encryption | V6 | API8 | LLM06 | Yes | Yes | Yes | Yes | Yes |
 | Argon2id password hashing | V6 | API2 | — | Yes | Yes | Yes | Yes | Yes |
-| ML-DSA-65 (FIPS 204) licence signing (v0.9.0) | V6 | API8 | — | Yes | Yes | Yes | Yes | Yes |
+| ECDSA P-256 licence signing | V6 | API8 | — | Yes | Yes | Yes | Yes | Yes |
 | Generic error responses | V7 | API8 | — | Yes | Yes | Yes | Yes | Yes |
 | Structured audit log (file) | V7 | API9 | LLM08 | Yes | Yes | Yes | Yes | Yes |
 | Audit log to PostgreSQL | V7 | API9 | LLM08 | Yes | Yes | Yes | Yes | Yes |
@@ -843,7 +843,7 @@ The following improvements from v0.7.0 and v0.7.1 directly affect OWASP complian
 
 | Change | OWASP Relevance | Effect |
 |--------|-----------------|--------|
-| **ML-DSA-65 (FIPS 204) key active** | ASVS V6, V14 | Post-quantum licence signing active; replaces ECDSA P-256; `cryptography>=44` required |
+| **ECDSA P-256 licence signing key active** | ASVS V6, V14 | ECDSA P-256 licence signing active; `cryptography>=42`; ML-DSA-65 migration planned when `cryptography` ships FIPS 204 |
 | **CIDR-based IP allowlisting per agent** (v0.7.0) | ASVS V4.1.3, API Security API5 | Provides defense-in-depth for agent token compromise; a stolen token from an unexpected IP is blocked and audited |
 | **Path matching fix — IC-6** (v0.7.0) | ASVS V4.1, API Security API1 | Single-segment glob `*` was incorrectly matching across `/` boundaries, potentially allowing tools under sub-paths to be reached with policies intended for shallower paths. Fixed with `re.fullmatch` and `[^/]*` translation. |
 | **Direct webhook alerting on credential exfil** (v0.7.1) | OWASP LLM01, LLM06 | Security teams receive real-time notification of credential exfiltration attempts; reduces mean time to awareness |

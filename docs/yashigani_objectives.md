@@ -1,7 +1,7 @@
 # Yashigani Security Gateway
 ## Product Features and Objectives
 
-**Current Version:** v0.9.2
+**Current Version:** v0.9.3
 **Document Date:** 2026-03-30
 **Classification:** Public — Product Overview
 
