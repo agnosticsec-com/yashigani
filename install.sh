@@ -66,7 +66,7 @@ OFFLINE=false
 NAMESPACE="yashigani"
 TOTAL_STEPS=13
 WORK_DIR=""
-AGENT_BUNDLES=""          # comma-separated: langgraph,goose,crewai,openclaw
+AGENT_BUNDLES=""          # comma-separated: langgraph,goose,openclaw (crewai: enterprise only)
 COMPOSE_PROFILES=()       # populated by select_agent_bundles()
 
 # If stdin is not a TTY (piped from curl), force non-interactive
@@ -95,7 +95,7 @@ OPTIONS
   --license-key    PATH                   Path to .ysg license file
   --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
-  --agent-bundles  BUNDLES               Comma-separated opt-in agents: langgraph,goose,crewai,openclaw
+  --agent-bundles  BUNDLES               Comma-separated opt-in agents: langgraph,goose,openclaw
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
   --skip-preflight                        Skip preflight checks
@@ -1215,7 +1215,7 @@ select_agent_bundles() {
       for _b in "${_bundles[@]}"; do
         _b="${_b// /}"   # trim spaces
         case "$_b" in
-          langgraph|goose|crewai|openclaw)
+          langgraph|goose|openclaw)
             COMPOSE_PROFILES+=("$_b")
             log_info "Agent bundle enabled (--agent-bundles): $_b"
             ;;
@@ -1233,9 +1233,8 @@ select_agent_bundles() {
   printf "${C_BOLD}Available agent bundles:${C_RESET}\n\n"
   printf "    1) LangGraph   — Python MCP-native orchestration (Apache 2.0)\n"
   printf "    2) Goose       — Python MCP-native dev assistant (Apache 2.0)\n"
-  printf "    3) CrewAI      — Python multi-agent orchestration (MIT)\n"
-  printf "    4) OpenClaw    — Node.js 24 personal AI, 30+ channels (${C_YELLOW}~800 MB${C_RESET}, license TBD)\n"
-  printf "    5) All of the above\n"
+  printf "    3) OpenClaw    — Node.js 24 personal AI, 30+ channels (${C_YELLOW}~800 MB${C_RESET}, license TBD)\n"
+  printf "    4) All of the above\n"
   printf "    0) None — skip agent bundles\n"
   printf "\n"
   printf "${C_BOLD}  Enter your choices (comma-separated, e.g. 1,3 or 5 for all) [0]: ${C_RESET}"
@@ -1260,16 +1259,12 @@ select_agent_bundles() {
         log_success "Goose selected"
         ;;
       3)
-        COMPOSE_PROFILES+=("crewai")
-        log_success "CrewAI selected"
-        ;;
-      4)
         COMPOSE_PROFILES+=("openclaw")
         log_warn "OpenClaw uses a Node.js 24 image (~800 MB) — ensure sufficient disk space"
         log_success "OpenClaw selected"
         ;;
-      5)
-        COMPOSE_PROFILES+=("langgraph" "goose" "crewai" "openclaw")
+      4)
+        COMPOSE_PROFILES+=("langgraph" "goose" "openclaw")
         log_warn "OpenClaw uses a Node.js 24 image (~800 MB) — ensure sufficient disk space"
         log_success "All agent bundles selected"
         ;;
