@@ -25,7 +25,7 @@ from typing import Optional, Any
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
-from yashigani.backoffice.auth import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import require_admin_session, AdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.backoffice.routes.rbac import _push
 from yashigani.rbac.model import RBACGroup, ResourcePattern
