@@ -39,7 +39,8 @@ RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)" && \
     rm /tmp/*.whl
 
-RUN mkdir -p /data/audit && chown yashigani:yashigani /data/audit
+RUN mkdir -p /data/audit /data/bootstrap /var/log/yashigani && \
+    chown -R yashigani:yashigani /data /var/log/yashigani
 
 USER yashigani
 

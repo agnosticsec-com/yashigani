@@ -83,9 +83,10 @@ def _bootstrap():
     )
 
     # ── Session store (Redis db/1) ──────────────────────────────────────────
+    from urllib.parse import quote
     redis_host = os.getenv("REDIS_HOST", "redis")
     redis_port = os.getenv("REDIS_PORT", "6379")
-    redis_url = f"redis://:{_redis_password}@{redis_host}:{redis_port}/1"
+    redis_url = f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/1"
     session_store = SessionStore(redis_url=redis_url)
 
     # ── Auth service ────────────────────────────────────────────────────────
