@@ -141,7 +141,7 @@ def _make_payload(
 
 class TestLicenseTier:
     def test_all_expected_tiers_exist(self):
-        expected = {"community", "starter", "professional", "professional_plus", "enterprise"}
+        expected = {"community", "starter", "professional", "professional_plus", "enterprise", "academic_nonprofit"}
         actual = {t.value for t in LicenseTier}
         assert actual == expected
 
@@ -158,9 +158,9 @@ class TestTierDefaults:
 
     def test_community_limits(self):
         d = TIER_DEFAULTS["community"]
-        assert d["max_agents"] == 20
-        assert d["max_end_users"] == 50
-        assert d["max_admin_seats"] == 10
+        assert d["max_agents"] == 5
+        assert d["max_end_users"] == 10
+        assert d["max_admin_seats"] == 2
         assert d["max_orgs"] == 1
 
     def test_starter_limits(self):
@@ -286,6 +286,16 @@ class TestBase64UrlDecode:
 
 class TestVerifyLicensePlaceholder:
     """When public key is the placeholder, verify_license returns COMMUNITY_LICENSE."""
+
+    @pytest.fixture(autouse=True)
+    def force_placeholder_key(self, monkeypatch):
+        import yashigani.licensing.verifier as verifier_mod
+        monkeypatch.setattr(
+            verifier_mod,
+            "_PUBLIC_KEY_PEM",
+            "PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65",
+        )
+        monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
 
     def test_returns_community_on_placeholder(self):
         result = verify_license("any.content")

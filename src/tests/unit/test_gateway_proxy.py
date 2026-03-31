@@ -37,7 +37,7 @@ class TestHealthEndpoint:
 
 class TestMetricsEndpoint:
     def test_metrics_returns_200(self):
-        """GET /metrics must return Prometheus text format."""
+        """GET /internal/metrics must return Prometheus text format (or plain text when not installed)."""
         from yashigani.gateway.proxy import create_gateway_app, GatewayConfig
         mock_pipeline = MagicMock()
         cfg = GatewayConfig(upstream_base_url="http://mcp:8080", opa_url="http://opa:8181")
@@ -49,6 +49,6 @@ class TestMetricsEndpoint:
         )
         from fastapi.testclient import TestClient
         client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/metrics")
-        # May return 200 or 404 depending on whether prometheus middleware is wired
-        assert response.status_code in (200, 404)
+        response = client.get("/internal/metrics")
+        # Returns 200 with prometheus text (or plain fallback when prometheus_client not installed)
+        assert response.status_code == 200
