@@ -1160,9 +1160,10 @@ handle_license() {
   if [[ -z "$src_path" ]]; then
     log_info "No license key provided — proceeding as Community Edition"
     log_info "To upgrade later, place your .ysg license file at: ${license_dest}"
-    # Create empty file so Docker Compose secret bind mount succeeds
+    # Write placeholder content — Docker Desktop for Mac does not reliably
+    # propagate empty files to the VM via VirtioFS/gRPC-FUSE.
     mkdir -p "$secrets_dir"
-    touch "$license_dest"
+    echo "# community — replace with .ysg license content to upgrade" > "$license_dest"
     chmod 600 "$license_dest"
     return 0
   fi
@@ -1495,14 +1496,16 @@ compose_up() {
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
-  # Ensure all required secret files exist (handles upgrades and re-runs)
+  # Ensure all required secret files exist with content (handles upgrades and re-runs).
+  # Docker Desktop for Mac (VirtioFS/gRPC-FUSE) does not reliably propagate
+  # empty files to the VM — write a placeholder string so the bind mount succeeds.
   local secrets_dir="${WORK_DIR}/docker/secrets"
   mkdir -p "$secrets_dir"
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
-    if [[ ! -f "${secrets_dir}/${_secret_file}" ]]; then
-      touch "${secrets_dir}/${_secret_file}"
+    if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
+      echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}"
       chmod 600 "${secrets_dir}/${_secret_file}"
-      log_info "Created empty secret placeholder: ${_secret_file}"
+      log_info "Created secret placeholder: ${_secret_file}"
     fi
   done
 
