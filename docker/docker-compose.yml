@@ -571,10 +571,12 @@ services:
 volumes:
   audit_data:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${AUDIT_DATA_PATH:-./data/audit}
+    # On Linux with a dedicated audit partition, override with:
+    #   AUDIT_DATA_PATH=/mnt/audit docker compose up -d
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: ${AUDIT_DATA_PATH:-./data/audit}
   bootstrap_data:
     driver: local
   # secrets_volume removed — all services now bind-mount ./secrets directly
