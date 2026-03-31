@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from yashigani.auth.session import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session
 
 logger = logging.getLogger(__name__)
 kms_vault_router = APIRouter(tags=["kms-vault"])

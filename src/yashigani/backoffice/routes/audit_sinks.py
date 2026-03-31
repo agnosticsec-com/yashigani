@@ -15,7 +15,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 
-from yashigani.auth.session import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session
 
 logger = logging.getLogger(__name__)
 audit_sinks_router = APIRouter(tags=["audit-sinks"])
