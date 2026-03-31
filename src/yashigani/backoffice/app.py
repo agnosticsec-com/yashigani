@@ -118,6 +118,11 @@ def create_backoffice_app() -> FastAPI:
             content={"error": "internal_error", "message": "An internal error occurred"},
         )
 
+    # Unauthenticated health endpoint for Docker healthcheck
+    @app.get("/healthz")
+    async def healthz():
+        return {"status": "ok"}
+
     # Routers
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
