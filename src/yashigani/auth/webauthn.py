@@ -5,6 +5,7 @@ OWASP ASVS V2.8: hardware-bound credential, replay prevention via sign_count.
 """
 from __future__ import annotations
 
+import os
 import secrets
 import uuid
 from dataclasses import dataclass, field
@@ -28,7 +29,7 @@ def _import_webauthn():
 
 @dataclass
 class WebAuthnConfig:
-    rp_id: str = "localhost"
+    rp_id: str = os.getenv("YASHIGANI_WEBAUTHN_RP_ID", "localhost")
     rp_name: str = "Yashigani Backoffice"
     require_resident_key: bool = False
     user_verification: str = "preferred"   # "required" for high-assurance

@@ -44,7 +44,7 @@ class SessionStore:
     Concurrent sessions: not permitted (new login invalidates prior session).
     """
 
-    def __init__(self, redis_url: str = "redis://localhost:6379/0") -> None:
+    def __init__(self, redis_url: str = "redis://redis:6379/0") -> None:
         r = _import_redis()
         self._redis = r.Redis.from_url(redis_url, decode_responses=True)
         self._account_index_prefix = "yashigani:account_sessions:"

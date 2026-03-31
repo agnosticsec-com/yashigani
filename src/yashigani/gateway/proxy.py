@@ -23,6 +23,7 @@ import hashlib
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -97,12 +98,27 @@ def create_gateway_app(
         "http_client": None,
     }
 
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        # Startup: create shared HTTP client for upstream proxying
+        _state["http_client"] = httpx.AsyncClient(
+            base_url=config.upstream_base_url,
+            timeout=config.request_timeout_seconds,
+            follow_redirects=False,
+        )
+        yield
+        # Shutdown: close the HTTP client
+        client = _state["http_client"]
+        if client:
+            await client.aclose()
+
     app = FastAPI(
         title="Yashigani Gateway",
         version="0.1.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_lifespan,
     )
 
     # Security headers
@@ -113,21 +129,6 @@ def create_gateway_app(
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
-
-    # Startup: create shared HTTP client for upstream proxying
-    @app.on_event("startup")
-    async def _startup():
-        _state["http_client"] = httpx.AsyncClient(
-            base_url=config.upstream_base_url,
-            timeout=config.request_timeout_seconds,
-            follow_redirects=False,
-        )
-
-    @app.on_event("shutdown")
-    async def _shutdown():
-        client = _state["http_client"]
-        if client:
-            await client.aclose()
 
     # Internal health check — used by Caddy and container health probe
     @app.get("/healthz")

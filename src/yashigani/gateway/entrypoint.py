@@ -59,7 +59,7 @@ def _build_app():
     )
 
     # Inspection pipeline
-    ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
     if "OLLAMA_MODEL" not in os.environ:
         logger.warning("OLLAMA_MODEL not set — using default '%s'", model)

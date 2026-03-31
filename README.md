@@ -15,7 +15,7 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v0.9.3
+**Latest Stable Version:** v0.9.4
 ---
 **Document Date:** 2026-03-31
 ---
@@ -176,6 +176,7 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
 | v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
 | v0.9.3 | Bugfix and hardening (45-issue audit) | Rate limiter bypass fix, OllamaPool stack overflow fix, Vault KMS provider fix, response inspection pipeline activation, ECDSA P-256 license key embedded, all Docker images pinned, WebAuthn migration, integration test suite, 18 bare-exception handlers replaced with logging, CI license key gate, Redis scan_iter, IPv6-safe IP masking |
+| v0.9.4 | Final hardening | Classifier regex fix (security: nested braces in inspection response no longer misclassified as CLEAN), FastAPI lifespan migration, localhost defaults replaced with Docker service names, CI version consistency gate |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -546,35 +547,17 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.9.3 is the current production release — the 45-issue bugfix and hardening release. v0.9.3 fixes the rate limiter bypass, OllamaPool stack overflow, and Vault KMS provider; activates the response inspection pipeline; embeds the ECDSA P-256 license key; pins all Docker images; adds the WebAuthn Alembic migration; ships an integration test suite; replaces 18 bare-exception handlers with structured logging; gates CI on a valid license key; and fixes Redis scan_iter and IPv6-safe IP masking. v0.9.2 fixed the installer `.env` writer and `update.sh` bash 3.2 compatibility. v0.9.1 provisioned dual admin accounts with TOTP 2FA at install time and added HIBP k-Anonymity breach checking. v0.9.0 introduced ECDSA P-256 licence signing (ML-DSA-65 migration planned when the cryptography library ships FIPS 204 support), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
+Yashigani v0.9.4 is the current production release — the final hardening release before v1.0 development begins. v0.9.4 fixes the classifier regex that silently misclassified valid injection detections as CLEAN when LLM responses included nested objects, migrates the FastAPI gateway to the lifespan context manager, standardises default service URLs to Docker Compose service names, and adds a CI gate to prevent version drift between `pyproject.toml` and `__init__.py`. v0.9.3 was the 45-issue bugfix and hardening release: it fixed the rate limiter bypass, OllamaPool stack overflow, and Vault KMS provider; activated the response inspection pipeline; embedded the ECDSA P-256 license key; pinned all Docker images; added the WebAuthn Alembic migration; shipped an integration test suite; replaced 18 bare-exception handlers with structured logging; gated CI on a valid license key; and fixed Redis scan_iter and IPv6-safe IP masking. v0.9.2 fixed the installer `.env` writer and `update.sh` bash 3.2 compatibility. v0.9.1 provisioned dual admin accounts with TOTP 2FA at install time and added HIBP k-Anonymity breach checking. v0.9.0 introduced ECDSA P-256 licence signing (ML-DSA-65 migration planned when the cryptography library ships FIPS 204 support), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
 
 The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
-- **Optional agent bundles** — LangGraph, Goose, CrewAI, OpenClaw as opt-in Compose profiles and Helm toggles
-- **Installer agent bundle selection step** — interactive prompt with disclaimer, `--agent-bundles` flag for non-interactive use
-- **`GET /admin/agent-bundles`** — bundle catalogue with metadata and disclaimer for UI banner
-- **`GET /admin/agents/{id}/quickstart`** — copy-paste snippet endpoint on agent detail page
-- **Rate limiting `last_changed` timestamp** — `GET /admin/ratelimit/config` now includes when thresholds were last updated
+v0.8.0 addressed operator demand for first-class agentic framework support without forcing Yashigani's security boundary to become optional. LangGraph, Goose, CrewAI, and OpenClaw are available as opt-in Docker Compose profiles and Helm toggles — all agent traffic from these containers routes through Yashigani's enforcement layer and is subject to the same inspection, authorization, and audit pipeline as any other agent. A new `GET /admin/agent-bundles` endpoint exposes the bundle catalogue with metadata and a third-party disclaimer for the UI banner. `GET /admin/agents/{id}/quickstart` returns copy-paste curl, Python httpx, and health check snippets on the agent detail page, reducing time-to-first-call for new agent deployments. The rate limit config endpoint was extended with a `last_changed` timestamp, making threshold change history auditable without requiring a full audit log query.
 
 ### v0.8.4 Delivered
 
-- **Platform detection fix** — corrected `DETECTED_*` → `YSG_*` variable mismatch in `install.sh`; platform summary now correctly reports OS, architecture, and runtime
-- **GPU detection** — `platform-detect.sh` identifies Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA (nvidia-smi, CUDA), AMD (rocm-smi, ROCm), and unknown discrete GPUs (lspci fallback)
-- **Model recommendations** — platform summary prints Ollama model size recommendations based on detected GPU VRAM
-- **macOS `df` fix** — `preflight.sh` now uses `df -k` with macOS-compatible arithmetic instead of `df -BG` (GNU-only flag)
-- **Podman support** — Podman is now a first-class supported runtime in preflight checks and secrets handling
-- **Docker Desktop detection** — installer checks `/Applications/Docker.app` on macOS before falling back to command-line detection
-- **User shell detection** — installer reads `$SHELL` (the user's login shell) rather than the script executor's bash version
-- **Interactive fallback prompts** — if OS, runtime, or GPU detection fails, the installer presents selection menus rather than aborting
-- **Secrets check updated** — secrets validation covers Podman and Docker Desktop on macOS
-- **`update.sh`** — new script for updating existing Yashigani installations: backs up current state, pulls latest images, restarts the stack, and rolls back automatically on failure
-- **Bash 3.2 compatibility** — replaced `${var,,}` (bash 4+) with `tr` for case conversion; installer now runs cleanly on macOS default bash 3.2
-- **Numbered agent bundle selection** — agent bundles are now selected via numbered menu (e.g. `1,3` or `5` for all) instead of individual y/n prompts; eliminates typo-related crashes
-- **Docker Desktop CLI auto-fix** — when Docker Desktop is installed but `docker` CLI is not in PATH, the installer offers to create the symlink automatically (`sudo ln -sf`) with a single Y/n prompt
-- **Runtime-agnostic compose commands** — `install.sh` resolves the correct compose command (`docker compose`, `docker-compose`, or `podman-compose`) at runtime instead of hardcoding `docker`
-- **`test-installer.sh`** — new 7-test automated suite (28 checks): platform detection, bash 3.2 compatibility, variable consistency, preflight, dry-run, file integrity, and agent bundle selection
+v0.8.4 addressed a cluster of installer failures discovered after v0.8.0 shipped — specifically on macOS with Apple Silicon, Podman, and Docker Desktop environments. Platform detection was fixed by correcting a variable naming mismatch (`DETECTED_*` vs `YSG_*`) that caused the platform summary to report incorrect values. GPU detection was added for Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA, and AMD GPUs with an lspci fallback; Ollama model size recommendations are printed based on detected VRAM. The macOS `df -BG` (GNU-only) flag was replaced with `df -k` and compatible arithmetic. Podman became a first-class supported runtime alongside Docker Engine and Docker Desktop. A Docker Desktop CLI auto-fix was added for environments where Docker Desktop is installed but `docker` is not in PATH. Bash 3.2 compatibility was enforced throughout by replacing all `${var,,}` expansions with `tr`. Agent bundle selection was changed from individual y/n prompts to a numbered menu, eliminating typo-related crashes. A new `update.sh` script handles in-place upgrades with automatic backup, image pull, restart, and rollback on failure. A 7-test automated installer validation suite (`test-installer.sh`) covering 28 checks was added to CI.
 
 ### v0.9.0 Delivered
 
@@ -618,34 +601,23 @@ The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturi
 
 ### v0.9.1 Delivered
 
-- **Dual admin accounts at install** — two admin accounts are created during installation with random themed usernames (animals/flowers/robots theme, e.g. "phoenix", "condor"); eliminates single-admin lockout risk from day one
-- **TOTP 2FA provisioned at install** — TOTP secret key and `otpauth://` URI are generated and displayed for both admin accounts; operators can immediately scan the QR code or import the URI into any TOTP app
-- **HIBP k-Anonymity breach check (installer)** — all generated passwords are checked against the Have I Been Pwned API using SHA-1 k-Anonymity prefix lookup before use; any compromised password is automatically regenerated and re-checked; fail-open if the API is unreachable
-- **HIBP breach check in backoffice auth** — every password change is checked against the HIBP breach database via `password.py`; a `PasswordBreachedError` is raised if the password appears in a known breach; implements OWASP ASVS V2.1.7; fail-open if HIBP API is unreachable
-- **One-time credential summary** — a formatted credential block is displayed at the end of install showing all passwords, TOTP secrets, TOTP URIs, and the AES key; displayed once with a prominent red warning banner ("These credentials will NOT be shown again")
-- **Secrets written to docker/secrets/ chmod 600** — all credentials are persisted to `docker/secrets/` with file permissions 0600; existing secrets are preserved on upgrade
+v0.9.1 hardened the credential bootstrap process that v0.9.0's installer redesign had left incomplete. Rather than generating a single admin account and requiring operators to create additional accounts manually, the installer now creates two admin accounts at install time with randomly generated themed usernames — eliminating the single-admin lockout risk from day one. TOTP 2FA is fully provisioned for both accounts during installation: the TOTP secret and `otpauth://` URI are generated, displayed, and immediately ready for import into any authenticator app. All generated passwords are checked against the Have I Been Pwned breach database using SHA-1 k-Anonymity prefix lookup before use; any compromised password is automatically regenerated and rechecked. The same HIBP check was added to the backoffice password-change path, implementing OWASP ASVS V2.1.7. A one-time credential summary block is displayed at the end of install showing all passwords, TOTP secrets, URIs, and the AES key with a prominent warning that the summary will not be shown again. All credentials are persisted to `docker/secrets/` with permissions 0600; existing secrets survive in-place upgrades.
 
 ### v0.9.2 Delivered
 
-- **Installer env var fix** — `_write_aes_key_to_env` expanded into a full `.env` writer; sets `UPSTREAM_MCP_URL`, `YASHIGANI_TLS_DOMAIN`, `YASHIGANI_ADMIN_EMAIL`, `YASHIGANI_ENV`, and the AES key before `docker compose pull` runs; demo mode defaults `UPSTREAM_MCP_URL` to `http://localhost:8080/echo`
-- **bash 3.2 compat fix in `update.sh`** — `< <(find ...)` process substitution replaced with `find | while read` pipe; resolves failure on macOS default bash (3.2)
+v0.9.2 fixed two regressions introduced during the v0.9.0 installer redesign. The `.env` writer was incomplete: only the AES key was being written before `docker compose pull` ran, causing `UPSTREAM_MCP_URL` to be undefined in the compose environment and producing a startup error on fresh installs. The function was expanded into a full `.env` writer that sets all required variables — `UPSTREAM_MCP_URL`, `YASHIGANI_TLS_DOMAIN`, `YASHIGANI_ADMIN_EMAIL`, `YASHIGANI_ENV`, and the AES key — before compose is invoked. Demo mode defaults `UPSTREAM_MCP_URL` to `http://localhost:8080/echo`. Additionally, `update.sh` used a process substitution (`< <(find ...)`) that is a bash 4+ feature not available in macOS's default bash 3.2; this was replaced with a `find | while read` pipe that is fully compatible.
 
 ### v0.9.3 Delivered
 
-- **Rate limiter bypass fix** — closed authentication bypass in the per-endpoint rate limiting layer
-- **OllamaPool stack overflow fix** — resolved recursive call path causing stack overflow under pool exhaustion
-- **Vault KMS provider fix** — corrected provider initialization failure on cold start
-- **Response inspection pipeline activation** — `ResponseInspectionPipeline` now active in the default request path (was wired but not invoked in v0.9.0–v0.9.2)
-- **ECDSA P-256 license key embedded** — production public key committed; license tier enforcement fully active for all tiers
-- **All Docker images pinned** — every image in `docker-compose.yml` and Helm charts pinned to digest; eliminates mutable-tag supply-chain risk
-- **WebAuthn Alembic migration** — `WebAuthnCredentialRow` schema migration added; upgrades from v0.9.0–v0.9.2 apply cleanly
-- **Integration test suite** — end-to-end test suite covering auth, inspection, rate limiting, audit write, and license gate paths
-- **18 bare-exception handlers replaced** — `except Exception: pass` patterns replaced with structured logging across gateway and backoffice; previously silent failures now observable
-- **CI license key gate** — CI pipeline validates a test license key before build; prevents shipping with a broken verifier
-- **Redis `scan_iter` fix** — replaced `keys()` with `scan_iter()` in all Redis queries; eliminates blocking full-keyspace scans under load
-- **IPv6-safe IP masking** — IP address masking in audit events and CHS now handles IPv6 addresses correctly
+v0.9.3 was a structured 45-issue audit hardening release — the most comprehensive single-version quality pass in the project's history. Three functional blockers were closed: an authentication bypass in the per-endpoint rate limiting layer; a recursive call path in `OllamaPool` that caused a stack overflow under pool exhaustion; and a Vault KMS provider initialization failure on cold start. The `ResponseInspectionPipeline` introduced in v0.9.0 was wired into the gateway but never invoked in the default request path — v0.9.3 activated it, closing the response-path injection vector that v0.9.0 had intended to address. The ECDSA P-256 production public key was committed, making license tier enforcement fully active for all tiers for the first time since v0.7.0 shipped the key infrastructure. Every image in `docker-compose.yml` and the Helm charts was pinned to a digest, eliminating mutable-tag supply-chain risk. The `WebAuthnCredentialRow` Alembic migration was added so upgrades from v0.9.0–v0.9.2 apply cleanly without manual schema intervention. An end-to-end integration test suite was shipped covering auth, inspection, rate limiting, audit write, and license gate paths. Eighteen `except Exception: pass` bare-exception handlers were replaced with structured logging throughout the gateway and backoffice — previously silent failures became observable. A CI license key gate was added to validate the verifier before any build proceeds. Redis `keys()` calls were replaced with `scan_iter()` to eliminate blocking full-keyspace scans under load. IPv6 address handling was corrected in audit event IP masking and CHS.
 
-Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
+### v0.9.4 Delivered
+
+v0.9.4 is the final hardening release before v1.0 development begins. It closes the last known security-relevant bug in the inspection pipeline: the classifier's JSON extraction regex silently misclassified valid injection detections as CLEAN when the LLM response included nested objects in the `detected_payload_spans` field. The regex-based extraction was replaced with a brace-depth counting parser that correctly handles arbitrarily nested JSON.
+
+Additionally, the FastAPI gateway migrated from the deprecated `@app.on_event` pattern to the recommended `lifespan` context manager, eliminating all deprecation warnings. Default service URLs throughout the codebase were standardized to Docker Compose service names (`redis`, `ollama`, `policy`) instead of `localhost`, preventing silent failures in containerized deployments where localhost does not resolve to the expected service. A CI gate was added to verify that `__init__.py` and `pyproject.toml` versions remain in sync, preventing the version drift discovered during v0.9.3 QA.
+
+Organizations evaluating Yashigani for production deployment should begin with the Community tier (5 agents, 10 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
 ---
 
