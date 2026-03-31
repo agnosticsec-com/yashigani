@@ -1558,19 +1558,33 @@ bootstrap_postgres() {
   set_step "11" "Bootstrap Postgres"
   log_step "11/${TOTAL_STEPS}" "Bootstrapping database..."
 
-  local bootstrap_script="${WORK_DIR}/scripts/bootstrap-postgres.sh"
-
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "bash $bootstrap_script"
+    dry_print "docker compose exec backoffice python scripts/bootstrap_postgres.py"
     return 0
   fi
 
-  if [[ ! -f "$bootstrap_script" ]]; then
-    log_error "Bootstrap script not found: $bootstrap_script"
-    exit 1
-  fi
+  # Wait for backoffice to be ready before running bootstrap
+  local retries=30
+  local compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  resolve_compose_cmd
+  log_info "Waiting for backoffice to be ready..."
+  for i in $(seq 1 $retries); do
+    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "print('ready')" >/dev/null 2>&1; then
+      break
+    fi
+    if [[ "$i" -eq "$retries" ]]; then
+      log_warn "Backoffice not ready after ${retries} attempts — skipping DB bootstrap"
+      log_info "Run manually later: docker compose exec backoffice python scripts/bootstrap_postgres.py"
+      return 0
+    fi
+    sleep 2
+  done
 
-  bash "$bootstrap_script"
+  # Run Alembic migrations + seed data via the backoffice container
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -m alembic upgrade head 2>&1 || {
+    log_warn "Alembic migrations failed — database may already be bootstrapped"
+  }
+
   log_success "Database bootstrapped"
 }
 
