@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/health-check.sh — Yashigani v0.6.0
+# scripts/health-check.sh — Yashigani v0.9.4
 # Post-install health verification with retries and spinner.
 
 set -euo pipefail
@@ -53,7 +53,9 @@ source "${SCRIPT_DIR}/platform-detect.sh"
 # Load .env for domain info
 # ---------------------------------------------------------------------------
 YASHIGANI_TLS_DOMAIN="${YASHIGANI_TLS_DOMAIN:-}"
-if [ -f "${PROJECT_ROOT}/.env" ]; then
+ENV_FILE="${PROJECT_ROOT}/docker/.env"
+[ ! -f "$ENV_FILE" ] && ENV_FILE="${PROJECT_ROOT}/.env"
+if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   set -o allexport
   # Source only safe KEY=VALUE pairs, ignoring comments and blanks
@@ -71,7 +73,7 @@ if [ -f "${PROJECT_ROOT}/.env" ]; then
     # Trim trailing whitespace
     value="${value%"${value##*[![:space:]]}"}"
     export "$key"="$value" 2>/dev/null || true
-  done < "${PROJECT_ROOT}/.env"
+  done < "$ENV_FILE"
   set +o allexport
 fi
 DOMAIN="${YASHIGANI_TLS_DOMAIN:-localhost}"
@@ -153,7 +155,7 @@ _check_http() {
   local extra_args="${3:-}"
 
   if ! _wait_for "$label" \
-    "curl --silent --fail --max-time 5 ${extra_args} '${url}' -o /dev/null"; then
+    "curl --silent --fail --insecure --max-time 5 ${extra_args} '${url}' -o /dev/null"; then
     _fail "$label — timed out after ${TIMEOUT}s: ${url}"
     FAILED_SERVICES+=("$label")
   fi
@@ -167,10 +169,10 @@ _check_compose_exec() {
 
   local check
   if [ -n "$expect" ]; then
-    check="docker compose -f '${PROJECT_ROOT}/docker-compose.yml' \
+    check="docker compose -f '${PROJECT_ROOT}/docker/docker-compose.yml' \
       exec -T ${service} ${cmd} 2>/dev/null | grep -q '${expect}'"
   else
-    check="docker compose -f '${PROJECT_ROOT}/docker-compose.yml' \
+    check="docker compose -f '${PROJECT_ROOT}/docker/docker-compose.yml' \
       exec -T ${service} ${cmd}"
   fi
 
@@ -192,7 +194,7 @@ _check_http "Gateway" "https://${DOMAIN}/healthz"
 # 2. Backoffice /healthz
 # Try via Caddy /admin path first, fall back to direct
 if ! _wait_for "Backoffice" \
-  "curl --silent --fail --max-time 5 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
+  "curl --silent --fail --insecure --max-time 5 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
   _info "Trying Backoffice direct (no TLS)..."
   _check_http "Backoffice" "http://localhost:8080/healthz"
 fi
@@ -205,12 +207,11 @@ _check_compose_exec "Postgres" "postgres" \
 _check_compose_exec "Redis" "redis" \
   "redis-cli ping" "PONG"
 
-# 5. OPA
-_check_http "OPA" "http://localhost:8181/health" \
-  "-H 'Content-Type: application/json'"
+# 5. OPA — internal network only, check via docker compose exec
+_check_compose_exec "OPA" "policy" "/opa eval true"
 
-# 6. Ollama
-_check_http "Ollama" "http://localhost:11434/api/tags"
+# 6. Ollama — internal network only, check via docker compose exec
+_check_compose_exec "Ollama" "ollama" "bash -c '</dev/tcp/localhost/11434'"
 
 # ---------------------------------------------------------------------------
 # On failure: print logs for each failed service
@@ -226,7 +227,7 @@ if [ "${#FAILED_SERVICES[@]}" -gt 0 ]; then
     # Map display name to compose service name
     local_svc_lower="$(printf '%s' "$svc" | tr '[:upper:]' '[:lower:]')"
     printf "\n--- %s logs ---\n" "$svc"
-    docker compose -f "${PROJECT_ROOT}/docker-compose.yml" \
+    docker compose -f "${PROJECT_ROOT}/docker/docker-compose.yml" \
       logs --tail=20 "$local_svc_lower" 2>/dev/null || \
       printf "(could not retrieve logs for %s)\n" "$local_svc_lower"
   done
@@ -243,7 +244,7 @@ LICENSE_TIER="${YASHIGANI_LICENSE_TIER:-Community (10 agents max)}"
 
 printf "\n"
 printf "╔══════════════════════════════════════════╗\n"
-printf "║   Yashigani v0.6.0 — Installation OK    ║\n"
+printf "║   Yashigani v0.9.4 — Installation OK    ║\n"
 printf "╠══════════════════════════════════════════╣\n"
 printf "║ %-8s %-33s║\n" "URL:"     "https://${DOMAIN}"
 printf "║ %-8s %-33s║\n" "Admin:"   "https://${DOMAIN}/admin"
