@@ -2,7 +2,7 @@
 ## Product Features and Objectives
 
 **Current Version:** v0.9.4
-**Document Date:** 2026-03-30
+**Document Date:** 2026-03-31
 **Classification:** Public — Product Overview
 
 ---

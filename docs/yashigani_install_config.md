@@ -1,7 +1,7 @@
-# Yashigani v0.9.2 — Installation and Configuration Guide
+# Yashigani v0.9.4 — Installation and Configuration Guide
 
-**Version:** 0.9.2
-**Last updated:** 2026-03-30
+**Version:** 0.9.4
+**Last updated:** 2026-03-31
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -226,7 +226,7 @@ The installer prompts for API keys immediately if you select a cloud backend, an
 
 **Step 10 — SIEM mode.** Choose one of `none`, `splunk`, `elasticsearch`, or `wazuh`. If you choose `wazuh`, the installer adds the Wazuh Compose override file automatically.
 
-**Step 11 — License key.** Enter the path to your `.ysg` license file if you have one, or press Enter to skip for Community tier. The installer copies the file to `docker/secrets/license_key`. License files are signed with ML-DSA-65 (FIPS 204) as of v0.9.0.
+**Step 11 — License key.** Enter the path to your `.ysg` license file if you have one, or press Enter to skip for Community tier. The installer copies the file to `docker/secrets/license_key`. License files are signed with ECDSA P-256 (ML-DSA-65 migration planned when cryptography ships FIPS 204).
 
 **Step 12 — Admin accounts (v0.9.1).** Set `YASHIGANI_ADMIN_USERNAME` to your primary admin email address. The installer creates **two** admin accounts at bootstrap — each with a random themed username (animals/flowers/robots theme, e.g. "phoenix", "condor") and an independent 36-character password. Both accounts are configured with TOTP 2FA at install time; the TOTP secret key and `otpauth://` URI are printed for each account.
 
@@ -1794,4 +1794,4 @@ All credentials are also written to `docker/secrets/` with chmod 600. On upgrade
 
 ---
 
-*Yashigani v0.9.1 — Installation and Configuration Guide — 2026-03-30*
+*Yashigani v0.9.1 — Installation and Configuration Guide — 2026-03-31*
