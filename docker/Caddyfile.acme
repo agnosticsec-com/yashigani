@@ -39,7 +39,7 @@
 
     # ── Prometheus federation — admin-authenticated ─────────────────────────
     handle /metrics-federate* {
-        basicauth {
+        basic_auth {
             # Populated at bootstrap from generated prometheus_password secret
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
