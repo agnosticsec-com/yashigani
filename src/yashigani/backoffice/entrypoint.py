@@ -251,7 +251,7 @@ def _bootstrap():
         db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
         if db_dsn:
             loop = asyncio.get_event_loop()
-            loop.run_until_complete(create_pool(db_dsn))
+            loop.run_until_complete(create_pool())
             db_pool_ready = True
 
             inference_logger = InferencePayloadLogger()
@@ -302,6 +302,21 @@ def _bootstrap():
     backoffice_state.anomaly_detector = anomaly_detector
     backoffice_state.response_cache = response_cache
     backoffice_state.license_state = license_state
+
+    # v0.9.0 — WebAuthn + EventBus (optional, graceful degradation if unavailable)
+    try:
+        from yashigani.auth.webauthn import WebAuthnService
+        backoffice_state.webauthn_service = WebAuthnService()
+        logger.info("WebAuthn service initialized")
+    except Exception as exc:
+        logger.warning("WebAuthn service unavailable (%s) — passkey routes will return 503", exc)
+
+    try:
+        from yashigani.events.bus import EventBus
+        backoffice_state.event_bus = EventBus()
+        logger.info("EventBus initialized")
+    except Exception as exc:
+        logger.warning("EventBus unavailable (%s) — SSE feed will return 503", exc)
 
 
 _bootstrap()

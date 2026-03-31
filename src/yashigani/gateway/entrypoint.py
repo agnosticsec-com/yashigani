@@ -191,7 +191,7 @@ def _build_app():
         loop = asyncio.get_event_loop()
         db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
         if db_dsn:
-            loop.run_until_complete(create_pool(db_dsn))
+            loop.run_until_complete(create_pool())
             db_pool = True  # sentinel; pool is module-level singleton
 
             inference_logger = InferencePayloadLogger()
