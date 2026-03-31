@@ -1,4 +1,4 @@
-# Yashigani v0.5.0 — Alertmanager configuration
+# Yashigani v0.9.4 — Alertmanager configuration
 # Notification channels are configured via Admin → Alerts → Notifications.
 # Secrets (webhook URLs, PagerDuty keys) are mounted from /run/secrets.
 # Each channel is optional and independently toggled; unconfigured channels are skipped.
@@ -42,10 +42,10 @@ receivers:
 
   - name: email-warning
     email_configs:
-      - to_file: /run/secrets/alert_email_to
+      - to: "alerts@localhost"
         from: alertmanager@yashigani.local
-        smarthost_file: /run/secrets/smtp_smarthost
-        auth_username_file: /run/secrets/smtp_username
+        smarthost: "localhost:587"
+        auth_username: ""
         auth_password_file: /run/secrets/smtp_password
         send_resolved: true
         headers:
@@ -68,10 +68,10 @@ receivers:
           {{ end }}
         color: danger
     email_configs:
-      - to_file: /run/secrets/alert_email_to
+      - to: "alerts@localhost"
         from: alertmanager@yashigani.local
-        smarthost_file: /run/secrets/smtp_smarthost
-        auth_username_file: /run/secrets/smtp_username
+        smarthost: "localhost:587"
+        auth_username: ""
         auth_password_file: /run/secrets/smtp_password
         send_resolved: true
         headers:
