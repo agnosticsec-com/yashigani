@@ -56,3 +56,4 @@ Thumbs.db
 
 # Internal / agent memory — never publish
 .claude/
+prompt_logs/
