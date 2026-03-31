@@ -1498,7 +1498,7 @@ compose_up() {
 
   # Ensure all required directories and secret files exist (handles upgrades,
   # re-runs, and failed previous installs). Docker Desktop for Mac (VirtioFS)
-  # does not reliably propagate empty files — write placeholder content.
+  # does not reliably propagate files to the VM — verify all exist with content.
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
@@ -1511,6 +1511,10 @@ compose_up() {
       log_info "Created secret placeholder: ${_secret_file}"
     fi
   done
+
+  # Flush filesystem to ensure Docker Desktop Mac (VirtioFS) sees all files
+  sync 2>/dev/null || true
+  sleep 2
 
   # Ensure agent bundle token files exist if profiles are selected
   for _profile in "${COMPOSE_PROFILES[@]:-}"; do
