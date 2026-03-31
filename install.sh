@@ -1010,7 +1010,10 @@ print(base64.b64encode(salt + h).decode())
     log_error "Failed to generate Prometheus basic-auth hash. Install htpasswd (brew install httpd) or ensure python3 is available."
     exit 1
   fi
-  _env_set "PROMETHEUS_BASICAUTH_HASH" "${prom_hash}"
+  # Escape $ to $$ for Docker Compose — bcrypt hashes contain $ delimiters
+  # that Compose would interpret as variable interpolation.
+  local escaped_hash="${prom_hash//\$/\$\$}"
+  _env_set "PROMETHEUS_BASICAUTH_HASH" "${escaped_hash}"
   _env_set "PROMETHEUS_BASICAUTH_USER" "prometheus"
 
   # --- Environment mode ---
@@ -1156,6 +1159,11 @@ handle_license() {
 
   if [[ -z "$src_path" ]]; then
     log_info "No license key provided — proceeding as Community Edition"
+    log_info "To upgrade later, place your .ysg license file at: ${license_dest}"
+    # Create empty file so Docker Compose secret bind mount succeeds
+    mkdir -p "$secrets_dir"
+    touch "$license_dest"
+    chmod 600 "$license_dest"
     return 0
   fi
 
