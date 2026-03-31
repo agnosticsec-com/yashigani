@@ -649,24 +649,7 @@ Organizations evaluating Yashigani for production deployment should begin with t
 
 ---
 
-
-### 9. Hardware Requirements:
-
----
-
-| Resource | Demo / Dev | Production |
-|---|---|---|
-| CPU | 2 cores | 4+ cores |
-| RAM | 4 GB | 8 GB (16 GB with Ollama GPU) |
-| Disk | 20 GB | 50+ GB |
-| OS | Any (Linux / macOS / VM) | Linux x86_64 or arm64 |
-
-> **Note:** If you enable GPU acceleration for Ollama (recommended for production), the host must have a CUDA-capable NVIDIA GPU (driver 525+) or Apple Silicon with Docker Desktop 4.x+. Expect an additional 4–8 GB VRAM per loaded model.
-
-
-
-
-### 10. Our commitment to the OSS Community:**
+### 9. Our commitment to the OSS Community:**
 ---
 Agnostic Security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they are registered as non-for-profit organizations.
 We might also decide to sponsor other Open-Source projects that we use in some way.
