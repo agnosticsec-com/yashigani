@@ -185,7 +185,7 @@ services:
       --requirepass "$$(cat /run/secrets/redis_password)"'
     volumes:
       - redis_data:/data
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: >
         sh -c 'redis-cli -a "$$(cat /run/secrets/redis_password)" ping'
@@ -284,7 +284,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ../config/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../config/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     depends_on:
       prometheus:
         condition: service_healthy
@@ -305,9 +305,10 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - secrets_volume:/run/secrets:ro
-    # Note: postgres_password is provided via secrets_volume (shared volume),
-    # not via Docker secrets — avoids read-only /run/secrets mount conflict.
+      # Bind-mount host secrets directory directly (not the shared named volume).
+      # Postgres starts before backoffice populates secrets_volume, so it needs
+      # the installer-generated password file from disk immediately.
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yashigani_app -d yashigani"]
       interval: 10s
@@ -331,10 +332,8 @@ services:
       MAX_CLIENT_CONN: "100"
       DEFAULT_POOL_SIZE: "20"
     volumes:
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
       - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
-    # Note: postgres_password is provided via secrets_volume (shared volume),
-    # not via Docker secrets — avoids read-only /run/secrets mount conflict.
     depends_on:
       postgres:
         condition: service_healthy
@@ -355,7 +354,7 @@ services:
     volumes:
       - ../config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     depends_on:
       - prometheus
     healthcheck:
@@ -443,7 +442,7 @@ services:
     environment:
       VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
     volumes:
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 10s
@@ -479,7 +478,7 @@ services:
       LANGGRAPH_YASHIGANI_URL: http://gateway:8080
       LANGGRAPH_AGENT_TOKEN_FILE: /run/secrets/langgraph_token
     volumes:
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 15s
@@ -506,7 +505,7 @@ services:
       GOOSE_YASHIGANI_URL: http://gateway:8080
       GOOSE_AGENT_TOKEN_FILE: /run/secrets/goose_token
     volumes:
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 15s
@@ -550,7 +549,7 @@ services:
       OPENCLAW_DISABLE_VOICE_WAKE: "true"
     volumes:
       - openclaw_data:/data
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:18789/health"]
       interval: 15s
