@@ -106,7 +106,8 @@ def _build_app():
     except OSError:
         redis_password = os.getenv("REDIS_PASSWORD", "")
 
-    redis_base = f"redis://:{redis_password}@{redis_host}:{redis_port}"
+    from urllib.parse import quote
+    redis_base = f"redis://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
 
     # Rate limiter — Redis DB 2
     rate_limiter = None

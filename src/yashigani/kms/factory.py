@@ -17,7 +17,7 @@ _PROVIDER_MAP: dict[str, str] = {
     "vault":  "yashigani.kms.providers.vault.VaultKMSProvider",
 }
 
-_DEV_ENVS = {"dev", "local", "test"}
+_DEV_ENVS = {"dev", "development", "local", "test", "demo"}
 
 
 def create_provider() -> KSMProvider:
