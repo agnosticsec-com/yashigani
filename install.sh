@@ -1495,6 +1495,17 @@ compose_up() {
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
+  # Ensure all required secret files exist (handles upgrades and re-runs)
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+  mkdir -p "$secrets_dir"
+  for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
+    if [[ ! -f "${secrets_dir}/${_secret_file}" ]]; then
+      touch "${secrets_dir}/${_secret_file}"
+      chmod 600 "${secrets_dir}/${_secret_file}"
+      log_info "Created empty secret placeholder: ${_secret_file}"
+    fi
+  done
+
   # Build --profile flags for any selected agent bundles
   local profile_args=()
   for _profile in "${COMPOSE_PROFILES[@]:-}"; do
