@@ -1535,10 +1535,16 @@ compose_up() {
     return 0
   fi
 
+  # Clean up any stale containers/networks from failed previous runs.
+  # NEVER use -v (--volumes) — that destroys user data (Postgres, Redis, audit logs).
+  log_info "Stopping any existing containers (preserving data volumes)..."
+  "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" down 2>/dev/null || true
+
   if [[ "$UPGRADE" == "true" ]]; then
-    log_info "Rolling restart for upgrade..."
+    log_info "Starting services (upgrade — removing orphaned containers)..."
     "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" up -d --remove-orphans
   else
+    log_info "Starting services..."
     "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" up -d
   fi
 

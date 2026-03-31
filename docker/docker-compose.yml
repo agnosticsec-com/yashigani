@@ -306,8 +306,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - secrets_volume:/run/secrets:ro
-    secrets:
-      - postgres_password
+    # Note: postgres_password is provided via secrets_volume (shared volume),
+    # not via Docker secrets — avoids read-only /run/secrets mount conflict.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yashigani_app -d yashigani"]
       interval: 10s
@@ -333,8 +333,8 @@ services:
     volumes:
       - secrets_volume:/run/secrets:ro
       - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
-    secrets:
-      - postgres_password
+    # Note: postgres_password is provided via secrets_volume (shared volume),
+    # not via Docker secrets — avoids read-only /run/secrets mount conflict.
     depends_on:
       postgres:
         condition: service_healthy
