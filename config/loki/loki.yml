@@ -1,11 +1,20 @@
 # Loki 3.x single-binary mode — suitable for Docker Compose dev/staging.
 # For Kubernetes production, use the distributed Loki Helm chart.
+# All rings set to inmemory to avoid Consul/etcd dependency.
 auth_enabled: false
 
 server:
   http_listen_port: 3100
   grpc_listen_port: 9096
   log_level: warn
+
+common:
+  ring:
+    kvstore:
+      store: inmemory
+    instance_addr: 127.0.0.1
+  replication_factor: 1
+  path_prefix: /loki
 
 ingester:
   chunk_idle_period: 3m
@@ -47,6 +56,9 @@ limits_config:
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
   retention_period: 744h  # 31 days
+
+query_scheduler:
+  max_outstanding_requests_per_tenant: 2048
 
 ruler:
   storage:
