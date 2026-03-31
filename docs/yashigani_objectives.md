@@ -296,7 +296,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - bcrypt password hashing
 - AES-256-GCM column encryption in PostgreSQL via pgcrypto
 - Multi-KMS: Docker Secrets, HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, Keeper
-- ML-DSA-65 (FIPS 204) offline licence signature verification — replaces ECDSA P-256 (v0.9.0)
+- ECDSA P-256 offline licence signature verification (v0.9.0) — ML-DSA-65 migration planned when cryptography ships FIPS 204
 - Hybrid TLS X25519+ML-KEM-768 Caddyfile config (pending Caddy 2.10) (v0.9.0)
 - TLS bootstrap: ACME (Let's Encrypt / ACME-compatible), CA-signed, self-signed
 - Agent PSK auto-rotation with KMS push, grace period, and APScheduler cron (v0.9.0)
