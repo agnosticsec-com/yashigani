@@ -57,7 +57,7 @@ services:
       gateway:
         condition: service_healthy
       backoffice:
-        condition: service_started
+        condition: service_healthy
     networks:
       - external
       - internal
@@ -134,11 +134,17 @@ services:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       redis:
         condition: service_healthy
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
     networks:
       - internal
 
@@ -284,11 +290,17 @@ services:
       - ../config/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../config/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - ./secrets:/run/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       prometheus:
         condition: service_healthy
       backoffice:
-        condition: service_started
+        condition: service_healthy
     networks:
       - internal
 
@@ -333,6 +345,12 @@ services:
     volumes:
       - ./secrets:/run/secrets:ro
       - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+    healthcheck:
+      test: ["CMD-SHELL", "sh -c 'echo | nc -w1 localhost 5432'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -355,7 +373,8 @@ services:
       - alertmanager_data:/alertmanager
       - ./secrets:/run/secrets:ro
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/healthy"]
       interval: 15s
@@ -393,6 +412,11 @@ services:
       - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9080/ready | grep -q ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     depends_on:
       - loki
     networks:
@@ -407,6 +431,11 @@ services:
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
       - ../config/otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:13133/ >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     depends_on:
       - jaeger
     networks:
