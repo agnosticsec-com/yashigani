@@ -34,7 +34,7 @@
 
     # ── Prometheus federation — admin-authenticated ─────────────────────────
     handle /metrics-federate* {
-        basicauth {
+        basic_auth {
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
         reverse_proxy prometheus:9090

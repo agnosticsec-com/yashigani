@@ -10,9 +10,8 @@
 # and any IP address. No setup required.
 
 {
-    # Disable ACME entirely in self-signed mode
+    # Use Caddy's internal CA for self-signed certs (no ACME)
     local_certs
-    auto_https off
 }
 
 # Serve on HTTPS with self-signed cert
@@ -36,7 +35,7 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
     }
 
     handle /metrics-federate* {
-        basicauth {
+        basic_auth {
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
         reverse_proxy prometheus:9090
