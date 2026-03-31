@@ -413,7 +413,7 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9080/ready | grep -q ready"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9080'"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -431,11 +431,8 @@ services:
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
       - ../config/otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:13133/ >/dev/null 2>&1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
+    # No healthcheck — scratch image has no shell or HTTP tools.
+    # The health extension runs on :13133 but cannot be probed from inside the container.
     depends_on:
       - jaeger
     networks:
