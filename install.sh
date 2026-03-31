@@ -1332,8 +1332,9 @@ compose_pull() {
   fi
 
   # Build local images first (gateway + backoffice have Dockerfiles, not on Docker Hub)
+  # Use --no-cache to ensure fresh pip install picks up latest pyproject.toml deps.
   log_info "Building gateway and backoffice images from source..."
-  "${COMPOSE_CMD[@]}" -f "$compose_file" build gateway backoffice || {
+  "${COMPOSE_CMD[@]}" -f "$compose_file" build --no-cache gateway backoffice || {
     log_error "Failed to build gateway/backoffice images. Check Dockerfiles."
     exit 1
   }
