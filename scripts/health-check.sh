@@ -191,12 +191,12 @@ printf "\n"
 # 1. Gateway /healthz
 _check_http "Gateway" "https://${DOMAIN}/healthz"
 
-# 2. Backoffice /healthz
-# Try via Caddy /admin path first, fall back to direct
+# 2. Backoffice — try via Caddy first, fall back to docker compose exec
 if ! _wait_for "Backoffice" \
   "curl --silent --fail --insecure --max-time 5 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
-  _info "Trying Backoffice direct (no TLS)..."
-  _check_http "Backoffice" "http://localhost:8080/healthz"
+  _info "Trying Backoffice via container exec..."
+  _check_compose_exec "Backoffice" "backoffice" \
+    "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""
 fi
 
 # 3. Postgres
