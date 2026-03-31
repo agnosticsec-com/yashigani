@@ -1,4 +1,4 @@
-# Loki single-binary mode — suitable for Docker Compose dev/staging.
+# Loki 3.x single-binary mode — suitable for Docker Compose dev/staging.
 # For Kubernetes production, use the distributed Loki Helm chart.
 auth_enabled: false
 
@@ -11,7 +11,6 @@ ingester:
   chunk_idle_period: 3m
   chunk_block_size: 262144
   chunk_retain_period: 1m
-  max_transfer_retries: 0
   wal:
     enabled: true
     dir: /loki/wal
@@ -19,25 +18,23 @@ ingester:
 schema_config:
   configs:
     - from: 2024-01-01
-      store: boltdb-shipper
+      store: tsdb
       object_store: filesystem
-      schema: v12
+      schema: v13
       index:
         prefix: index_
         period: 24h
 
 storage_config:
-  boltdb_shipper:
-    active_index_directory: /loki/boltdb-shipper-active
-    cache_location: /loki/boltdb-shipper-cache
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-shipper-active
+    cache_location: /loki/tsdb-shipper-cache
     cache_ttl: 24h
-    shared_store: filesystem
   filesystem:
     directory: /loki/chunks
 
 compactor:
-  working_directory: /loki/boltdb-shipper-compactor
-  shared_store: filesystem
+  working_directory: /loki/compactor
   compaction_interval: 10m
   retention_enabled: true
   retention_delete_delay: 2h
@@ -49,13 +46,6 @@ limits_config:
   ingestion_rate_mb: 16
   ingestion_burst_size_mb: 32
   retention_period: 744h  # 31 days
-
-chunk_store_config:
-  max_look_back_period: 0s
-
-table_manager:
-  retention_deletes_enabled: true
-  retention_period: 744h
 
 ruler:
   storage:
