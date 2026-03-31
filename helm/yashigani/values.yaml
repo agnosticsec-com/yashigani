@@ -1,9 +1,10 @@
-# Yashigani v0.8.0 — Umbrella Chart Top-Level Values
+# Yashigani v0.9.3 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
 
 global:
   imageRegistry: "ghcr.io"
   imageOwner: "yashigani"
+  # REQUIRED: Replace with your actual domain before deployment
   tlsDomain: "yashigani.example.com"
   # tlsMode: caddy | nginx (cert-manager + nginx-ingress)
   tlsMode: "nginx"
@@ -30,7 +31,7 @@ gateway:
   enabled: true
   image:
     repository: yashigani-gateway
-    tag: "0.5.0"
+    tag: "0.9.3"
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:
@@ -74,7 +75,7 @@ backoffice:
   enabled: true
   image:
     repository: yashigani-backoffice
-    tag: "0.5.0"
+    tag: "0.9.3"
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:

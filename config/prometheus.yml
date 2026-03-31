@@ -29,6 +29,8 @@ scrape_configs:
     metrics_path: /internal/metrics
     scheme: https
     tls_config:
+      # RISK ACCEPTED: Internal Docker network only. Backoffice uses self-signed
+      # cert. For production with external Prometheus, configure proper CA trust.
       insecure_skip_verify: true
     relabel_configs:
       - source_labels: [__address__]

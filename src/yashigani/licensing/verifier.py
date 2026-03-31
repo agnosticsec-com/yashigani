@@ -1,11 +1,12 @@
 """
-ML-DSA-65 (FIPS 204 / CRYSTALS-Dilithium Level 3) offline license verifier.
+Offline license verifier — ECDSA P-256 (migrating to ML-DSA-65 when cryptography ships FIPS 204).
 
 License file format (v3):
-    {base64url(utf8(json_payload))}.{base64url(mldsa65_signature)}
+    {base64url(utf8(json_payload))}.{base64url(signature)}
 
-ML-DSA-65 uses internal hashing — no external hash algorithm is required.
-Signatures are ~3.3 KB; public keys are ~1.9 KB.
+Current key algorithm: ECDSA P-256 (SHA-256).
+Future: ML-DSA-65 (FIPS 204 / CRYSTALS-Dilithium Level 3) — pending cryptography library support.
+The verifier is algorithm-agnostic: load_pem_public_key() + .verify() dispatches by key type.
 
 Payload versions:
     v1 — max_agents, max_orgs only
@@ -17,7 +18,7 @@ TIER_DEFAULTS[tier] so existing customer license files keep working.
 
 Fail-open on corrupt/unparseable licenses; fail-closed on invalid signatures.
 
-Requires: cryptography>=44 (ML-DSA-65 support).
+Requires: cryptography>=42.
 """
 from __future__ import annotations
 
@@ -37,11 +38,13 @@ from yashigani.licensing.model import (
 
 logger = logging.getLogger(__name__)
 
-# ML-DSA-65 (FIPS 204) public key — generated with scripts/keygen.py
-# Private key is stored in KMS. Do NOT commit the private key.
-# Replace this placeholder by running: python scripts/keygen.py --out-dir keys/
+# ECDSA P-256 production public key — private key stored in KMS.
+# Will migrate to ML-DSA-65 (FIPS 204) when cryptography library ships support.
 _PUBLIC_KEY_PEM = """\
-PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9v3e5INc8Mr7yoN5rSsaJROahk58
+HPYAxfkKlcJDVSH47HIERSL19ceu3JVS28uHRJw1WJ13JbUYI/vWAE1zNQ==
+-----END PUBLIC KEY-----
 """
 
 _PLACEHOLDER_MARKER = "PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65"
@@ -180,14 +183,16 @@ def verify_license(content: str) -> LicenseState:
         logger.warning("License verifier: base64url decode failed: %s", exc)
         return COMMUNITY_LICENSE
 
-    # Verify ML-DSA-65 (FIPS 204) signature.
-    # ML-DSA-65 verify() takes only message + signature — no external hash parameter.
+    # Verify signature. Algorithm-agnostic: dispatches by key type in the PEM.
+    # ECDSA P-256 requires (signature, data, algorithm); ML-DSA-65 requires (signature, data) only.
     try:
         from cryptography.hazmat.primitives.serialization import load_pem_public_key
+        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
+        from cryptography.hazmat.primitives.hashes import SHA256
         from cryptography.exceptions import InvalidSignature
 
         public_key = load_pem_public_key(_PUBLIC_KEY_PEM.encode("utf-8"))
-        public_key.verify(sig_bytes, payload_bytes)
+        public_key.verify(sig_bytes, payload_bytes, ECDSA(SHA256()))
     except InvalidSignature:
         logger.warning("License verifier: signature verification failed")
         try:

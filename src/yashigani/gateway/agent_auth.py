@@ -165,7 +165,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             from yashigani.metrics.registry import agent_auth_failures_total
             agent_auth_failures_total.labels(reason="ip_allowlist_violation").inc()
         except Exception:
-            pass
+            logger.debug("agent_auth: metric increment failed for agent_auth_failures_total (ip_allowlist_violation)", exc_info=True)
         if self._audit is not None:
             try:
                 from yashigani.audit.schema import IPAllowlistViolationEvent
@@ -199,7 +199,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             from yashigani.metrics.registry import agent_auth_failures_total
             agent_auth_failures_total.labels(reason=reason).inc()
         except Exception:
-            pass
+            logger.debug("agent_auth: metric increment failed for agent_auth_failures_total reason=%s", reason, exc_info=True)
 
         # Write audit event
         if self._audit is not None:

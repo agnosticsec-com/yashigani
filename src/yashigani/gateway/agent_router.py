@@ -136,7 +136,7 @@ async def route_agent_call(request: Request, path: str, state: dict) -> Response
                 outcome="denied_rbac",
             ).inc()
         except Exception:
-            pass
+            logger.debug("agent_router: metric increment failed for agent_calls_total (denied_rbac)", exc_info=True)
         return JSONResponse(
             status_code=403,
             content={
@@ -176,7 +176,7 @@ async def route_agent_call(request: Request, path: str, state: dict) -> Response
             status_code=502,
             content={
                 "error": "AGENT_UPSTREAM_UNREACHABLE",
-                "detail": str(exc),
+                "detail": "Upstream agent is unreachable. Check agent health and network connectivity.",
                 "target_agent_id": target_agent_id,
             },
         )
@@ -199,7 +199,7 @@ async def route_agent_call(request: Request, path: str, state: dict) -> Response
             target_agent_id=target_agent_id,
         ).observe(elapsed_ms / 1000)
     except Exception:
-        pass
+        logger.debug("agent_router: metric increment failed for agent_calls_total/agent_call_duration_seconds (allowed)", exc_info=True)
 
     # Audit event
     if audit_writer is not None:

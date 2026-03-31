@@ -5,6 +5,7 @@ ASVS V3: 256-bit tokens, HttpOnly/Secure/SameSite=Strict,
 """
 from __future__ import annotations
 
+import ipaddress
 import secrets
 import time
 from dataclasses import dataclass
@@ -167,15 +168,20 @@ class SessionStore:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _mask_ip(ip: str) -> str:
-    """Mask last octet of IPv4 or last group of IPv6 for privacy."""
-    if "." in ip:
-        parts = ip.split(".")
-        return ".".join(parts[:-1]) + ".x"
-    if ":" in ip:
-        parts = ip.split(":")
-        return ":".join(parts[:-1]) + ":xxxx"
-    return ip
+def _mask_ip(ip_str: str) -> str:
+    """Mask the client IP for privacy: last octet (IPv4) or last 80 bits (IPv6)."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        if isinstance(addr, ipaddress.IPv4Address):
+            # Mask last octet: 192.168.1.100 -> 192.168.1.0/24
+            network = ipaddress.IPv4Network(f"{ip_str}/24", strict=False)
+            return str(network.network_address)
+        else:
+            # Mask last 80 bits: keep first 48 bits (site prefix)
+            network = ipaddress.IPv6Network(f"{ip_str}/48", strict=False)
+            return str(network.network_address)
+    except ValueError:
+        return "unknown"
 
 
 def _session_to_dict(s: Session) -> dict:

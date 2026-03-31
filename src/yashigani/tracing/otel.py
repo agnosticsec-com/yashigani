@@ -47,7 +47,8 @@ def setup_tracer(service_name: str = "yashigani-gateway") -> None:
             "deployment.environment": os.getenv("YASHIGANI_ENV", "production"),
         })
         provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
+        otel_insecure = os.getenv("OTEL_EXPORTER_INSECURE", "false").lower() in ("true", "1", "yes")
+        exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=otel_insecure)
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
         set_global_textmap(CompositePropagator([TraceContextTextMapPropagator()]))

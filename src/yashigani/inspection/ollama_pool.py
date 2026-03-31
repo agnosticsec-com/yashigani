@@ -10,7 +10,6 @@ In K8s: endpoints are the per-pod DNS names from the headless Service:
   ollama-1.ollama-headless.yashigani.svc.cluster.local:11434
 """
 from __future__ import annotations
-import itertools
 import logging
 import os
 import threading
@@ -50,7 +49,7 @@ class OllamaPool(ClassifierBackend):
             OllamaBackend(base_url=ep, model=model) for ep in endpoints
         ]
         self._inactive: list[tuple[OllamaBackend, float]] = []  # (backend, removed_at)
-        self._cycle = itertools.cycle(self._active)
+        self._index = 0
         self._stop = threading.Event()
         self._health_thread = threading.Thread(
             target=self._health_loop, daemon=True, name="ollama-pool-health"
@@ -73,16 +72,25 @@ class OllamaPool(ClassifierBackend):
         return cls(endpoints=endpoints, model=model)
 
     def classify(self, content: str) -> ClassifierResult:
-        with self._lock:
-            if not self._active:
-                raise BackendUnavailableError("All Ollama pool members are unhealthy")
-            backend = next(self._cycle)
-        try:
-            return backend.classify(content)
-        except BackendUnavailableError:
-            self._mark_inactive(backend)
-            # Try next member
-            return self.classify(content)
+        max_retries = len(self._all_endpoints)
+        for attempt in range(max_retries):
+            with self._lock:
+                if not self._active:
+                    raise BackendUnavailableError("All Ollama pool members are unhealthy")
+                backend = self._get_next_backend()
+            try:
+                return backend.classify(content)
+            except BackendUnavailableError:
+                self._mark_inactive(backend)
+                if attempt == max_retries - 1:
+                    raise
+        raise BackendUnavailableError("All Ollama pool members are unhealthy")
+
+    def _get_next_backend(self) -> OllamaBackend:
+        """Thread-safe round-robin. Must be called under self._lock."""
+        backend = self._active[self._index % len(self._active)]
+        self._index += 1
+        return backend
 
     def health_check(self) -> bool:
         with self._lock:
@@ -93,7 +101,7 @@ class OllamaPool(ClassifierBackend):
             if backend in self._active:
                 self._active.remove(backend)
                 self._inactive.append((backend, time.time()))
-                self._cycle = itertools.cycle(self._active) if self._active else iter([])
+                self._index = 0
                 logger.warning(
                     "Ollama pool member removed: %s (active=%d)",
                     backend._base_url, len(self._active),
@@ -119,7 +127,7 @@ class OllamaPool(ClassifierBackend):
                 for backend, _ in recovered:
                     self._inactive = [(b, t) for b, t in self._inactive if b is not backend]
                     self._active.append(backend)
-                    self._cycle = itertools.cycle(self._active)
+                    self._index = 0
                     logger.info(
                         "Ollama pool member recovered: %s (active=%d)",
                         backend._base_url, len(self._active),

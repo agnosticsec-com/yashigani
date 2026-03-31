@@ -45,7 +45,7 @@ _HOP_BY_HOP_HEADERS = frozenset({
 @dataclass
 class GatewayConfig:
     upstream_base_url: str              # Target MCP server URL
-    opa_url: str = "http://localhost:8181"
+    opa_url: str = "http://policy:8181"
     opa_policy_path: str = "/v1/data/yashigani/allow"
     request_timeout_seconds: float = 30.0
     max_request_body_bytes: int = 4 * 1024 * 1024  # 4 MB
@@ -164,6 +164,7 @@ def create_gateway_app(
 
 async def _handle_request(request: Request, path: str, state: dict) -> Response:
     request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
     cfg: GatewayConfig = state["config"]
     audit_writer = state["audit_writer"]
 
@@ -174,6 +175,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
         from yashigani.tracing import get_tracer, current_trace_id
         _tracer = get_tracer()
     except Exception:
+        logger.debug("proxy: tracer import or initialisation failed", exc_info=True)
         _tracer = None
 
     # Agent routing — intercept /agents/* before rate limiting and inspection.
@@ -222,7 +224,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
                 from yashigani.metrics.registry import ratelimit_violations_total
                 ratelimit_violations_total.labels(dimension=rl_result.dimension).inc()
             except Exception:
-                pass
+                logger.debug("proxy: metric increment failed for ratelimit_violations_total", exc_info=True)
             _audit_rate_limit(
                 audit_writer=state["audit_writer"],
                 request_id=request_id,
@@ -256,7 +258,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
                 from yashigani.metrics.registry import endpoint_ratelimit_violations_total
                 endpoint_ratelimit_violations_total.labels(path=ep_result.endpoint_hash[:8]).inc()
             except Exception:
-                pass
+                logger.debug("proxy: metric increment failed for endpoint_ratelimit_violations_total", exc_info=True)
             return JSONResponse(
                 status_code=429,
                 content={
@@ -352,7 +354,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
             try:
                 trace_id = current_trace_id()
             except Exception:
-                pass
+                logger.debug("proxy: trace ID retrieval failed for cache-hit response", exc_info=True)
             resp_headers = {"X-Yashigani-Request-Id": request_id, "X-Cache": "HIT"}
             if trace_id:
                 resp_headers["X-Trace-Id"] = trace_id
@@ -427,7 +429,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
         gateway_request_duration_seconds.labels(method=request.method, action="FORWARDED").observe(elapsed_ms / 1000)
         gateway_upstream_status_total.labels(status_code=str(upstream_response.status_code)).inc()
     except Exception:
-        pass
+        logger.debug("proxy: metric increment failed for gateway forwarded-request counters", exc_info=True)
 
     # 5b. Store clean 2xx responses in cache (Phase 6)
     if (
@@ -463,7 +465,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
         if trace_id:
             response.headers["X-Trace-Id"] = trace_id
     except Exception:
-        pass
+        logger.debug("proxy: trace ID retrieval failed for forwarded response header", exc_info=True)
 
     # 5e. Attach response inspection verdict header when present (v0.9.0)
     if response_verdict is not None:
@@ -630,7 +632,7 @@ def _audit_rate_limit(
             rpi = rate_limiter._monitor.get_metrics().pressure_index if rate_limiter._monitor else 0.0
             multiplier = rate_limiter.current_rpi_multiplier()
         except Exception:
-            pass
+            logger.debug("proxy: RPI/multiplier retrieval failed for rate limit audit event", exc_info=True)
         event = RateLimitViolationEvent(
             account_tier="system",
             request_id=request_id,

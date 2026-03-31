@@ -997,7 +997,8 @@ except ImportError:
   fi
   # If we couldn't generate a hash, use a placeholder that won't block compose
   if [[ -z "$prom_hash" ]]; then
-    prom_hash="placeholder_run_bootstrap"
+    log_error "Failed to generate Prometheus basic-auth hash. Ensure 'htpasswd' or 'openssl' is available."
+    exit 1
   fi
   _env_set "PROMETHEUS_BASICAUTH_HASH" "${prom_hash}"
   _env_set "PROMETHEUS_BASICAUTH_USER" "prometheus"

@@ -4,11 +4,11 @@ Yashigani License Signing Infrastructure — License Signer
 =========================================================
 YASHIGANI-INTERNAL ONLY — used by the Yashigani team to generate customer license files.
 
-Signs a license payload with the Yashigani ML-DSA-65 (FIPS 204) private key.
-Output is a .ysg file: {base64url(json)}.{base64url(mldsa_signature)}
+Signs a license payload with the Yashigani ECDSA P-256 private key.
+Output is a .ysg file: {base64url(json)}.{base64url(ecdsa_signature)}
 
-ML-DSA-65 uses internal hashing — no external hash algorithm is passed to sign().
-Signatures are ~3.3 KB (vs ~72 bytes for P-256 DER); the .ysg format is unchanged.
+ECDSA P-256 with SHA-256. Signatures are ~72 bytes DER-encoded.
+Will migrate to ML-DSA-65 (FIPS 204) when cryptography library ships support.
 
 Payload version: v3 (current)
   Fields: tier, org_domain, max_agents, max_end_users, max_admin_seats, max_orgs,
@@ -106,7 +106,7 @@ def build_payload(args) -> dict:
 
     payload = {
         "v": 3,
-        "key_alg": "ML-DSA-65",
+        "key_alg": "ECDSA-P256",
         "tier": tier,
         "license_type": license_type,
         "org_domain": args.org_domain,
@@ -126,25 +126,13 @@ def build_payload(args) -> dict:
 
 def sign_payload(payload: dict, private_key_pem: bytes) -> str:
     """
-    Sign a license payload with the ML-DSA-65 (FIPS 204) private key.
+    Sign a license payload with the ECDSA P-256 private key (SHA-256).
 
-    ML-DSA-65 uses internal hashing — sign() takes only the raw message bytes,
-    no external hash algorithm parameter.  Signatures are ~3.3 KB.
-
-    Requires cryptography>=44.
+    Requires cryptography>=42.
     """
-    try:
-        from cryptography.hazmat.primitives.serialization import load_pem_private_key
-        # Validate that the loaded key is an ML-DSA key by attempting the import.
-        # The actual key type check happens implicitly when sign() is called.
-        from cryptography.hazmat.primitives.asymmetric import mldsa as _mldsa_mod  # noqa: F401
-    except ImportError:
-        print(
-            "ERROR: ML-DSA-65 signing requires cryptography>=44.\n"
-            "       Install with: pip install 'cryptography>=44'",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
+    from cryptography.hazmat.primitives.hashes import SHA256
 
     private_key = load_pem_private_key(private_key_pem, password=None)
 
@@ -152,8 +140,7 @@ def sign_payload(payload: dict, private_key_pem: bytes) -> str:
     payload_bytes = payload_json.encode("utf-8")
     payload_b64 = base64url_encode(payload_bytes)
 
-    # ML-DSA-65 sign() takes only the message — no hash parameter.
-    signature = private_key.sign(payload_bytes)
+    signature = private_key.sign(payload_bytes, ECDSA(SHA256()))
     sig_b64 = base64url_encode(signature)
 
     return f"{payload_b64}.{sig_b64}"
@@ -161,9 +148,9 @@ def sign_payload(payload: dict, private_key_pem: bytes) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Sign a Yashigani v3 license payload (ML-DSA-65 / FIPS 204)"
+        description="Sign a Yashigani v3 license payload (ECDSA P-256)"
     )
-    parser.add_argument("--private-key", required=True, help="Path to ML-DSA-65 private key PEM")
+    parser.add_argument("--private-key", required=True, help="Path to ECDSA P-256 private key PEM")
     parser.add_argument("--tier", choices=_VALID_TIERS, default="professional",
                         help="License tier")
     parser.add_argument("--license-type", choices=_VALID_LICENSE_TYPES, default="production",

@@ -67,12 +67,19 @@ class PromptInjectionClassifier:
     The model is local-only. No external network call is ever made.
     """
 
+    _DEFAULT_MODEL = "qwen2.5:3b"
+
     def __init__(
         self,
-        model: str = "qwen2.5:3b",
+        model: str = _DEFAULT_MODEL,
         ollama_base_url: str = "http://localhost:11434",
         timeout_seconds: int = 30,
     ) -> None:
+        if model == self._DEFAULT_MODEL:
+            logger.warning(
+                "PromptInjectionClassifier: model not explicitly set — using default '%s'",
+                model,
+            )
         self._model = model
         self._base_url = ollama_base_url.rstrip("/")
         self._timeout = timeout_seconds
