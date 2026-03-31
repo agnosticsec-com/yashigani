@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+from starlette.requests import Request
 
 
 class TestAgentAuthMiddleware:
@@ -50,13 +51,14 @@ class TestAgentAuthMiddleware:
         received_state = {}
 
         @app.get("/agents/target-id/tools/list")
-        async def agent_route(request):
+        async def agent_route(request: Request):
             received_state["caller_type"] = getattr(request.state, "caller_type", None)
             return {"ok": True}
 
         mock_registry = MagicMock()
         mock_registry.verify_token.return_value = True
-        mock_registry.get_agent.return_value = MagicMock(id="caller-id", name="Test Agent")
+        # Return None from .get() so the IP allowlist check is skipped (no CIDRs configured)
+        mock_registry.get.return_value = None
         mock_audit = MagicMock()
         app.add_middleware(AgentAuthMiddleware, agent_registry=mock_registry, audit_writer=mock_audit)
 

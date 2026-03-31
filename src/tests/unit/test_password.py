@@ -34,46 +34,46 @@ class TestMinPasswordLength:
 
     def test_hash_accepts_exact_min_length(self):
         pw = "A" * _MIN_PASSWORD_LENGTH
-        result = hash_password(pw)
+        result = hash_password(pw, check_breach=False)
         assert result.startswith("$argon2")
 
     def test_hash_accepts_long_password(self):
         pw = "x" * 128
-        result = hash_password(pw)
+        result = hash_password(pw, check_breach=False)
         assert result.startswith("$argon2")
 
 
 class TestHashVerify:
     def test_roundtrip(self):
         pw = "correct-horse-battery-staple-plus-extra-chars"
-        hashed = hash_password(pw)
+        hashed = hash_password(pw, check_breach=False)
         assert verify_password(pw, hashed) is True
 
     def test_wrong_password_returns_false(self):
         pw = "correct-horse-battery-staple-plus-extra-chars"
-        hashed = hash_password(pw)
+        hashed = hash_password(pw, check_breach=False)
         assert verify_password("wrong" + pw, hashed) is False
 
     def test_empty_password_returns_false(self):
         pw = "correct-horse-battery-staple-plus-extra-chars"
-        hashed = hash_password(pw)
+        hashed = hash_password(pw, check_breach=False)
         assert verify_password("", hashed) is False
 
     def test_case_sensitive(self):
         pw = "A" * _MIN_PASSWORD_LENGTH
-        hashed = hash_password(pw)
+        hashed = hash_password(pw, check_breach=False)
         assert verify_password("a" * _MIN_PASSWORD_LENGTH, hashed) is False
 
     def test_hash_is_different_each_time(self):
         """Argon2id uses a random salt per hash."""
         pw = "X" * _MIN_PASSWORD_LENGTH
-        h1 = hash_password(pw)
-        h2 = hash_password(pw)
+        h1 = hash_password(pw, check_breach=False)
+        h2 = hash_password(pw, check_breach=False)
         assert h1 != h2
 
     def test_needs_rehash_returns_bool(self):
         pw = "Y" * _MIN_PASSWORD_LENGTH
-        hashed = hash_password(pw)
+        hashed = hash_password(pw, check_breach=False)
         result = needs_rehash(hashed)
         assert isinstance(result, bool)
 
@@ -96,7 +96,8 @@ class TestGeneratePassword:
 
     def test_generated_password_is_hashable(self):
         pw = generate_password()
-        hashed = hash_password(pw)
+        # check_breach=False: avoids a live HIBP network call in unit tests.
+        hashed = hash_password(pw, check_breach=False)
         assert verify_password(pw, hashed) is True
 
     def test_uniqueness(self):

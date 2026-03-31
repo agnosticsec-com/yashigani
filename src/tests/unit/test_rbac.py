@@ -4,29 +4,35 @@ import pytest
 from yashigani.rbac.model import RBACGroup, ResourcePattern, RateLimitOverride
 
 
+def _matches(pattern: ResourcePattern, method: str, path: str) -> bool:
+    """Call the store-level matching helpers since ResourcePattern has no .matches() method."""
+    from yashigani.rbac.store import _method_matches, _path_matches
+    return _method_matches(pattern.method, method) and _path_matches(pattern.path_glob, path)
+
+
 class TestResourcePattern:
     def test_exact_match(self):
         p = ResourcePattern(method="GET", path_glob="/tools/list")
-        assert p.matches("GET", "/tools/list")
-        assert not p.matches("POST", "/tools/list")
-        assert not p.matches("GET", "/tools/call")
+        assert _matches(p, "GET", "/tools/list")
+        assert not _matches(p, "POST", "/tools/list")
+        assert not _matches(p, "GET", "/tools/call")
 
     def test_wildcard_method(self):
         p = ResourcePattern(method="*", path_glob="/tools/list")
-        assert p.matches("GET", "/tools/list")
-        assert p.matches("POST", "/tools/list")
-        assert p.matches("DELETE", "/tools/list")
+        assert _matches(p, "GET", "/tools/list")
+        assert _matches(p, "POST", "/tools/list")
+        assert _matches(p, "DELETE", "/tools/list")
 
     def test_double_star_glob(self):
         p = ResourcePattern(method="*", path_glob="**")
-        assert p.matches("GET", "/anything")
-        assert p.matches("POST", "/deep/nested/path")
+        assert _matches(p, "GET", "/anything")
+        assert _matches(p, "POST", "/deep/nested/path")
 
     def test_prefix_glob(self):
         p = ResourcePattern(method="*", path_glob="/tools/**")
-        assert p.matches("GET", "/tools/list")
-        assert p.matches("POST", "/tools/call/foo")
-        assert not p.matches("GET", "/resources/list")
+        assert _matches(p, "GET", "/tools/list")
+        assert _matches(p, "POST", "/tools/call/foo")
+        assert not _matches(p, "GET", "/resources/list")
 
     def test_to_dict_roundtrip(self):
         p = ResourcePattern(method="GET", path_glob="/tools/**")
