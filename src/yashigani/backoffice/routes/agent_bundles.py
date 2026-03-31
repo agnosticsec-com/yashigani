@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from yashigani.backoffice.auth import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import require_admin_session, AdminSession
 
 router = APIRouter()
 

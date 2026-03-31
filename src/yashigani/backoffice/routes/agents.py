@@ -25,7 +25,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl
 
-from yashigani.backoffice.auth import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import require_admin_session, AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)

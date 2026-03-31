@@ -26,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.auth import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import require_admin_session, AdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.inspection.backend_base import ClassifierBackend, BackendUnavailableError
 
