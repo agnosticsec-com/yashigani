@@ -15,7 +15,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from yashigani.auth.session import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session
 
 logger = logging.getLogger(__name__)
 jwt_config_router = APIRouter(tags=["jwt-config"])

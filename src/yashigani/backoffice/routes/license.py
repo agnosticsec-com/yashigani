@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from yashigani.auth.session import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session
 
 logger = logging.getLogger(__name__)
 license_router = APIRouter(tags=["license"])
