@@ -131,7 +131,7 @@ class RateLimiter:
 
         for dimension, key, rps, burst in checks:
             # Skip unknown/anonymous dimensions — they fall through to global
-            if dimension in ("agent", "session") and not agent_id or not session_id:
+            if dimension in ("agent", "session") and (not agent_id or not session_id):
                 continue
             result = self._consume(key, rps * multiplier, burst)
             if not result.allowed:

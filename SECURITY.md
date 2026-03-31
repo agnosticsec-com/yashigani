@@ -6,7 +6,8 @@ Only the latest release is supported. All previous versions have been deprecated
 
 | Version | Supported |
 |---------|-----------|
-| 0.8.0   | ✅ |
+| 0.9.3   | ✅ |
+| 0.8.x-0.9.2 | ❌ |
 | 0.7.x   | ❌ |
 | < 0.7.0 | ❌ |
 

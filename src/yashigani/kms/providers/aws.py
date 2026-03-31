@@ -91,7 +91,10 @@ class AWSSecretsManagerProvider(KSMProvider):
         try:
             self.set_secret(key, new_value)
             resp = self._client.describe_secret(SecretId=self._full_arn(key))
-            return resp.get("VersionIdsToStages", {}).keys().__iter__().__next__()
+            versions = resp.get("VersionIdsToStages", {})
+            if not versions:
+                raise RotationError(f"No version stages found after rotation for '{key}'")
+            return next(iter(versions))
         except Exception as exc:
             raise RotationError(f"Rotation failed for '{key}': {exc}") from exc
 

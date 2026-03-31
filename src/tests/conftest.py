@@ -14,6 +14,17 @@ import httpx
 
 
 # ---------------------------------------------------------------------------
+# Marker registration
+# ---------------------------------------------------------------------------
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "integration: marks integration tests (deselect with '-m \"not integration\"')",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Redis fixture
 # ---------------------------------------------------------------------------
 
@@ -26,7 +37,12 @@ def mock_redis():
         yield client
         client.flushall()
     except ImportError:
-        pytest.skip("fakeredis not installed — run: pip install 'yashigani[dev]'")
+        import warnings
+        warnings.warn(
+            "fakeredis not installed — Redis-dependent tests will be skipped. "
+            "Run: pip install 'yashigani[dev]'",
+            stacklevel=2,
+        )
 
 
 @pytest.fixture
@@ -39,7 +55,12 @@ async def async_mock_redis():
         await client.flushall()
         await client.aclose()
     except ImportError:
-        pytest.skip("fakeredis not installed — run: pip install 'yashigani[dev]'")
+        import warnings
+        warnings.warn(
+            "fakeredis not installed — Redis-dependent tests will be skipped. "
+            "Run: pip install 'yashigani[dev]'",
+            stacklevel=2,
+        )
 
 
 # ---------------------------------------------------------------------------

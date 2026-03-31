@@ -110,7 +110,7 @@ class EndpointRateLimiter:
                 from yashigani.metrics.registry import endpoint_ratelimit_violations_total
                 endpoint_ratelimit_violations_total.labels(endpoint_hash=ep_hash).inc()
             except Exception:
-                pass
+                logger.debug("endpoint_ratelimit: metric increment failed for endpoint_ratelimit_violations_total", exc_info=True)
 
         return EndpointRLResult(
             allowed=allowed,
@@ -132,7 +132,7 @@ class EndpointRateLimiter:
                     label=data.get(b"label", b"").decode(),
                 )
         except Exception:
-            pass
+            logger.debug("endpoint_ratelimit: Redis config load failed for ep_hash=%s", ep_hash, exc_info=True)
         return EndpointRLConfig()
 
     def set_config(self, endpoint_template: str, rps: int, burst: int, window_seconds: int = 1) -> str:
@@ -151,7 +151,7 @@ class EndpointRateLimiter:
         self._redis.delete(f"rl:ep:cfg:{ep_hash}")
 
     def list_configs(self) -> list[dict]:
-        keys = self._redis.keys("rl:ep:cfg:*")
+        keys = list(self._redis.scan_iter("rl:ep:cfg:*", count=100))
         result = []
         for key in keys:
             data = self._redis.hgetall(key)

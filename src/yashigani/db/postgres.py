@@ -60,7 +60,8 @@ async def tenant_transaction(tenant_id: str) -> AsyncIterator[Connection]:
     RLS policies evaluate current_setting('app.tenant_id') on every row access.
     The AES key is also injected here so pgcrypto functions can reference it.
     """
-    assert _pool is not None, "DB pool not initialized — call create_pool() at startup"
+    if _pool is None:
+        raise RuntimeError("DB pool not initialized — call create_pool() at startup")
     aes_key = os.environ.get(_AES_KEY_ENV, "")
     async with _pool.acquire() as conn:
         async with conn.transaction():
@@ -74,5 +75,6 @@ async def tenant_transaction(tenant_id: str) -> AsyncIterator[Connection]:
 
 
 def get_pool() -> Pool:
-    assert _pool is not None, "DB pool not initialized"
+    if _pool is None:
+        raise RuntimeError("DB pool not initialized — call create_pool() at startup")
     return _pool

@@ -26,6 +26,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import jwt as pyjwt
+from jwt import PyJWKClient
+
 logger = logging.getLogger(__name__)
 
 PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
@@ -72,7 +75,6 @@ class JWTInspector:
 
     async def _inspect(self, token: str, tenant_id: str) -> JWTInspectionResult:
         try:
-            import jwt as pyjwt
             header = pyjwt.get_unverified_header(token)
             if header.get("alg", "").lower() == "none":
                 _inc_counter("invalid")
@@ -96,8 +98,6 @@ class JWTInspector:
             return JWTInspectionResult(valid=True, error="jwks_fetch_failed_fail_open")
 
         try:
-            import jwt as pyjwt
-            from jwt import PyJWKClient
             signing_key = jwks_client.get_signing_key_from_jwt(token)
             options = {}
             decode_kwargs: dict = dict(
@@ -117,7 +117,6 @@ class JWTInspector:
                 claims=claims,
             )
         except Exception as exc:
-            import jwt as pyjwt
             if isinstance(exc, pyjwt.ExpiredSignatureError):
                 _inc_counter("expired")
                 return JWTInspectionResult(valid=False, error="token_expired")
@@ -169,7 +168,6 @@ class JWTInspector:
         return None
 
     async def _get_jwks_client(self, jwks_url: str):
-        from jwt import PyJWKClient
         url_hash = hashlib.sha256(jwks_url.encode()).hexdigest()[:16]
         now = time.monotonic()
 
@@ -188,7 +186,7 @@ class JWTInspector:
                     _MEMORY_CACHE[jwks_url] = (now, client)
                     return client
             except Exception:
-                pass
+                logger.debug("jwt_inspector: Redis JWKS cache read failed for url_hash=%s", url_hash, exc_info=True)
 
         client = PyJWKClient(jwks_url, cache_keys=True)
         client.fetch_data()
@@ -198,7 +196,7 @@ class JWTInspector:
             try:
                 self._redis.setex(f"jwks:{url_hash}", JWKS_CACHE_TTL, json.dumps({}))
             except Exception:
-                pass
+                logger.debug("jwt_inspector: Redis JWKS cache write failed for url_hash=%s", url_hash, exc_info=True)
 
         return client
 
@@ -208,7 +206,7 @@ def _inc_counter(result: str) -> None:
         from yashigani.metrics.registry import jwt_validations_total
         jwt_validations_total.labels(result=result).inc()
     except Exception:
-        pass
+        logger.debug("jwt_inspector: metric increment failed for jwt_validations_total result=%s", result, exc_info=True)
 
 
 def _hit_counter(layer: str) -> None:
@@ -216,4 +214,4 @@ def _hit_counter(layer: str) -> None:
         from yashigani.metrics.registry import jwks_cache_hits_total
         jwks_cache_hits_total.labels(layer=layer).inc()
     except Exception:
-        pass
+        logger.debug("jwt_inspector: metric increment failed for jwks_cache_hits_total layer=%s", layer, exc_info=True)

@@ -79,7 +79,11 @@ class InspectionPipeline:
         request_id = str(uuid.uuid4())
 
         # Step 1: Mask credentials before sending to classifier
-        masked_query = self._masker.mask_string(raw_query)
+        try:
+            masked_query = self._masker.mask_string(raw_query)
+        except Exception as exc:
+            logger.warning("CHS masker failed (%s) — using raw query for classification", exc)
+            masked_query = raw_query
 
         # Step 2: Classify — use backend_registry if available, else legacy classifier
         if self._backend_registry is not None:

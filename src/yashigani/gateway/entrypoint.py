@@ -15,7 +15,7 @@ from yashigani.audit.writer import AuditLogWriter
 from yashigani.chs.handle import CredentialHandleService
 from yashigani.chs.resource_monitor import ResourceMonitor
 from yashigani.inspection.classifier import PromptInjectionClassifier
-from yashigani.inspection.pipeline import InspectionPipeline
+from yashigani.inspection.pipeline import InspectionPipeline, ResponseInspectionPipeline
 from yashigani.kms.factory import create_provider
 from yashigani.ratelimit.config import RateLimitConfig
 from yashigani.ratelimit.limiter import RateLimiter
@@ -61,12 +61,20 @@ def _build_app():
     # Inspection pipeline
     ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    if "OLLAMA_MODEL" not in os.environ:
+        logger.warning("OLLAMA_MODEL not set — using default '%s'", model)
     classifier = PromptInjectionClassifier(model=model, ollama_base_url=ollama_url)
 
     pipeline = InspectionPipeline(
         classifier=classifier,
         sanitize_threshold=float(os.getenv("YASHIGANI_INJECT_THRESHOLD", "0.85")),
     )
+
+    # Response inspection pipeline — v0.9.0 F-01
+    response_pipeline = None
+    if os.getenv("YASHIGANI_INSPECT_RESPONSES", "false").lower() == "true":
+        response_pipeline = ResponseInspectionPipeline(classifier=classifier)
+        logger.info("Response inspection pipeline enabled")
 
     # FastText first-pass classifier — Phase 12
     fasttext_backend = None
@@ -79,7 +87,7 @@ def _build_app():
 
     # Gateway config
     upstream_url = os.environ["YASHIGANI_UPSTREAM_URL"]
-    opa_url = os.getenv("YASHIGANI_OPA_URL", "http://localhost:8181")
+    opa_url = os.getenv("YASHIGANI_OPA_URL", "http://policy:8181")
 
     cfg = GatewayConfig(
         upstream_base_url=upstream_url,
@@ -105,6 +113,7 @@ def _build_app():
     try:
         import redis as _redis
         redis_client_rl = _redis.from_url(f"{redis_base}/2", decode_responses=False)
+        redis_client_rl.ping()
         rate_limiter = RateLimiter(
             redis_client=redis_client_rl,
             config=RateLimitConfig(),
@@ -119,6 +128,7 @@ def _build_app():
         import redis as _redis
         from yashigani.gateway.endpoint_ratelimit import EndpointRateLimiter
         redis_client_ep = _redis.from_url(f"{redis_base}/2", decode_responses=False)
+        redis_client_ep.ping()
         endpoint_rate_limiter = EndpointRateLimiter(redis_client=redis_client_ep)
         logger.info("Endpoint rate limiter ready")
     except Exception as exc:
@@ -130,6 +140,7 @@ def _build_app():
         import redis as _redis
         from yashigani.gateway.response_cache import ResponseCache
         redis_client_cache = _redis.from_url(f"{redis_base}/4", decode_responses=False)
+        redis_client_cache.ping()
         response_cache = ResponseCache(redis_client=redis_client_cache)
         logger.info("Response cache ready (Redis DB 4)")
     except Exception as exc:
@@ -141,6 +152,7 @@ def _build_app():
     try:
         import redis as _redis
         redis_client_rbac = _redis.from_url(f"{redis_base}/3", decode_responses=False)
+        redis_client_rbac.ping()
         rbac_store = RBACStore(redis_client=redis_client_rbac)
         logger.info("Gateway RBAC store ready: %d group(s)", len(rbac_store.list_groups()))
         agent_registry = AgentRegistry(redis_client=redis_client_rbac)
@@ -159,6 +171,7 @@ def _build_app():
         import redis as _redis
         from yashigani.gateway.jwt_inspector import JWTInspector
         redis_client_jwt = _redis.from_url(f"{redis_base}/1", decode_responses=False)
+        redis_client_jwt.ping()
         jwt_inspector = JWTInspector(redis_client=redis_client_jwt)
         logger.info(
             "JWT inspector ready (stream=%s)",
@@ -186,6 +199,7 @@ def _build_app():
 
             import redis as _redis
             redis_client_anomaly = _redis.from_url(f"{redis_base}/2", decode_responses=False)
+            redis_client_anomaly.ping()
             anomaly_detector = AnomalyDetector(redis_client=redis_client_anomaly)
             logger.info("DB pool + inference logger + anomaly detector ready")
         else:
@@ -207,6 +221,7 @@ def _build_app():
         fasttext_backend=fasttext_backend,
         inference_logger=inference_logger,
         anomaly_detector=anomaly_detector,
+        response_inspection_pipeline=response_pipeline,
     )
 
     # Agent auth middleware — must run before Prometheus middleware so agent

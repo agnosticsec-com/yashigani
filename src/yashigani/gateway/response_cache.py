@@ -67,7 +67,7 @@ class ResponseCache:
                     "ttl_seconds": int(data.get(b"ttl_seconds", DEFAULT_TTL)),
                 }
         except Exception:
-            pass
+            logger.debug("response_cache: tenant config read failed for tenant_id=%s", tenant_id, exc_info=True)
         return {"enabled": False, "ttl_seconds": DEFAULT_TTL}
 
     def set_tenant_config(self, tenant_id: str, enabled: bool, ttl_seconds: int) -> None:
@@ -111,7 +111,7 @@ def _inc(kind: str, tenant_id: str) -> None:
         else:
             cache_misses_total.labels(tenant_id=tenant_id).inc()
     except Exception:
-        pass
+        logger.debug("response_cache: metric increment failed for cache %s tenant_id=%s", kind, tenant_id, exc_info=True)
 
 
 def _inc_evictions(tenant_id: str, count: int) -> None:
@@ -119,4 +119,4 @@ def _inc_evictions(tenant_id: str, count: int) -> None:
         from yashigani.metrics.registry import cache_evictions_total
         cache_evictions_total.labels(tenant_id=tenant_id).inc(count)
     except Exception:
-        pass
+        logger.debug("response_cache: metric increment failed for cache_evictions_total tenant_id=%s", tenant_id, exc_info=True)

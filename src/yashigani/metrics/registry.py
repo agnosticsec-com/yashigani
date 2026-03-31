@@ -494,6 +494,7 @@ endpoint_ratelimit_violations_total = _C(
 
 # ── v0.7.0 — DB partition monitoring ────────────────────────────────────────
 
+# Updated by scripts/partition_maintenance.py
 audit_partition_missing = _G(
     "yashigani_audit_partition_missing",
     "1 if the upcoming month's audit_events partition is missing; 0 if all present. "

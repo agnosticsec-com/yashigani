@@ -68,7 +68,7 @@ class InferencePayloadLogger:
         except asyncio.QueueFull:
             try:
                 from yashigani.metrics.registry import inference_payload_log_queue_depth
-                # Queue full — drop and count
+                inference_payload_log_queue_depth.set(self._queue.qsize())
             except Exception:
                 pass
             logger.warning(

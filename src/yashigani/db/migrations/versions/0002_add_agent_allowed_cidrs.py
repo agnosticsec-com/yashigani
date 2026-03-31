@@ -23,7 +23,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column(
-        "agents",
+        "agent_registry",
         sa.Column(
             "allowed_cidrs",
             sa.JSON(),
@@ -35,4 +35,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("agents", "allowed_cidrs")
+    op.drop_column("agent_registry", "allowed_cidrs")

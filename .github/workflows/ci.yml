@@ -11,9 +11,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  license-key-gate:
+    name: License Key Gate (no placeholder)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject placeholder public key
+        run: |
+          # Check if _PUBLIC_KEY_PEM still contains the placeholder (not the _PLACEHOLDER_MARKER constant)
+          if grep -q '^PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65' src/yashigani/licensing/verifier.py; then
+            echo "FATAL: Production license public key not embedded. Run: python scripts/keygen.py"
+            exit 1
+          fi
+
   lint:
     name: Lint (ruff + mypy)
     runs-on: ubuntu-latest
+    needs: license-key-gate
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -130,6 +144,7 @@ jobs:
   test-installer:
     name: Installer Smoke Test
     runs-on: ubuntu-latest
+    needs: license-key-gate
     steps:
       - uses: actions/checkout@v4
       - name: Run demo installer

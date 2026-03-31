@@ -98,7 +98,7 @@ class BackendConfigStore:
             safe = {
                 k: str(v)
                 for k, v in config.items()
-                if k not in _SECRET_FIELDS and "key" not in k.lower() and "secret" not in k.lower()
+                if k not in _SECRET_FIELDS and not any(s in k.lower() for s in ("key", "secret", "password", "token"))
             }
             if safe:
                 self._redis.hset(key, mapping=safe)
