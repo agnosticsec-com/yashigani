@@ -15,9 +15,9 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v0.9.2
+**Latest Stable Version:** v0.9.3
 ---
-**Document Date:** 2026-03-30
+**Document Date:** 2026-03-31
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -172,9 +172,10 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.7.1 | Alert wiring + partition bootstrap | Direct alert dispatch on credential exfil + licence expiry monitor, partition bootstrap migration (2026-05 → 2027-06), full DB health unit test suite |
 | v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / CrewAI / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
 | v0.8.4 | Installer patch — macOS + GPU + Podman | Fixed platform detection, GPU detection (Apple Silicon/NVIDIA/AMD), bash 3.2 compat, Podman runtime, Docker Desktop CLI auto-fix, numbered agent bundles, runtime-agnostic compose, interactive fallbacks, `update.sh`, `test-installer.sh` |
-| v0.9.0 | Post-quantum cryptography + security hardening | ML-DSA-65 (FIPS 204) licence signing, hybrid TLS X25519+ML-KEM-768 (pending Caddy 2.10), response-path inspection (F-01), WebAuthn/Passkeys (S-01), break-glass dual-control, SHA-384 Merkle audit chain, async SIEM queue, agent PSK auto-rotation, real-time SSE inspection feed, searchable + exportable audit log, installer deployment modes redesign |
+| v0.9.0 | Post-quantum cryptography + security hardening | ECDSA P-256 licence signing (ML-DSA-65 planned), hybrid TLS X25519+ML-KEM-768 (pending Caddy 2.10), response-path inspection (F-01), WebAuthn/Passkeys (S-01), break-glass dual-control, SHA-384 Merkle audit chain, async SIEM queue, agent PSK auto-rotation, real-time SSE inspection feed, searchable + exportable audit log, installer deployment modes redesign |
 | v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
 | v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
+| v0.9.3 | Bugfix and hardening (45-issue audit) | Rate limiter bypass fix, OllamaPool stack overflow fix, Vault KMS provider fix, response inspection pipeline activation, ECDSA P-256 license key embedded, all Docker images pinned, WebAuthn migration, integration test suite, 18 bare-exception handlers replaced with logging, CI license key gate, Redis scan_iter, IPv6-safe IP masking |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -304,7 +305,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - bcrypt password hashing
 - AES-256-GCM column encryption in PostgreSQL via pgcrypto
 - Several KMS supported - Keeper Security, AWS, GCP, Azure and HashiCorp Vault
-- ML-DSA-65 (FIPS 204) offline licence signature verification — replaces ECDSA P-256 (v0.9.0)
+- ECDSA P-256 offline licence signature verification (v0.9.0) — ML-DSA-65 migration planned when cryptography library ships FIPS 204 support
 - Hybrid TLS X25519+ML-KEM-768 Caddyfile config included (pending Caddy 2.10) (v0.9.0)
 - TLS bootstrap: ACME (Let's Encrypt / ACME-compatible), CA-signed, self-signed (demo)
 
@@ -348,7 +349,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 ### 5.9 Licensing and Tiers
 
 - 6-tier licensing model: Community / Academic / Non-Profit / Starter / Professional / Professional Plus / Enterprise
-- ML-DSA-65 (FIPS 204) offline license verification — no call-home, works air-gapped (v0.9.0)
+- ECDSA P-256 offline license verification — no call-home, works air-gapped (v0.9.0) — ML-DSA-65 migration planned when cryptography library ships FIPS 204 support
 - Three independent limit dimensions: agents, end users, admin seats
 - Community tier: free, Apache 2.0, 5 agents, 10 end users, 2 admins
 - Academic / Non-Profit tier: free (verified institution — see agnosticsec.com/academic)
@@ -366,7 +367,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 | Free, no license key | Yes | Yes (verified) | — | — | — | — |
 | Signed paid license key | — | — | Yes | Yes | Yes | Yes |
 | Pricing | Free | Free | See agnosticsec.com/pricing | See agnosticsec.com/pricing | See agnosticsec.com/pricing | Custom |
-| ML-DSA-65 offline verification | Yes | Yes | Yes | Yes | Yes | Yes |
+| Offline licence verification (ECDSA P-256) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Max agents / MCP servers | 5 | 50 | 100 | 500 | 2,000 | Unlimited |
 | Max end users | 10 | 500 | 250 | 1,000 | 10,000 | Unlimited |
 | Max admin seats | 2 | 10 | 25 | 50 | 200 | Unlimited |
@@ -420,7 +421,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 | Response caching (CLEAN-only, SHA-256) | Yes | Yes | Yes | Yes | Yes | Yes |
 | **Cryptography and Secrets** | | | | | | |
 | TLS (ACME / CA-signed / self-signed) | Yes | Yes | Yes | Yes | Yes | Yes |
-| ML-DSA-65 licence verification (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Offline licence verification (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Multi-KMS (Docker, AWS, Azure, GCP, Keeper, Vault) | Yes | Yes | Yes | Yes | Yes | Yes |
 | AES-256-GCM column encryption (Postgres) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Agent PSK auto-rotation (v0.9.0) | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -545,7 +546,7 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.9.1 is the current production release. v0.9.1 is the installer security hardening release: it provisions two admin accounts at install time (random themed usernames — animals/flowers/robots theme) with TOTP 2FA secrets and otpauth:// URIs displayed immediately, checks all generated passwords against the HIBP k-Anonymity breach database before use, adds HIBP breach checking to the backoffice authentication flow (OWASP ASVS V2.1.7), and displays a one-time credential summary at the end of install. All secrets are written to docker/secrets/ with chmod 600. v0.9.0 migrated licence signing from ECDSA P-256 to ML-DSA-65 (FIPS 204), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
+Yashigani v0.9.3 is the current production release — the 45-issue bugfix and hardening release. v0.9.3 fixes the rate limiter bypass, OllamaPool stack overflow, and Vault KMS provider; activates the response inspection pipeline; embeds the ECDSA P-256 license key; pins all Docker images; adds the WebAuthn Alembic migration; ships an integration test suite; replaces 18 bare-exception handlers with structured logging; gates CI on a valid license key; and fixes Redis scan_iter and IPv6-safe IP masking. v0.9.2 fixed the installer `.env` writer and `update.sh` bash 3.2 compatibility. v0.9.1 provisioned dual admin accounts with TOTP 2FA at install time and added HIBP k-Anonymity breach checking. v0.9.0 introduced ECDSA P-256 licence signing (ML-DSA-65 migration planned when the cryptography library ships FIPS 204 support), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
 
 The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
@@ -577,12 +578,11 @@ The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturi
 
 ### v0.9.0 Delivered
 
-**Phase 1 — Post-Quantum Cryptography**
-- **ML-DSA-65 (FIPS 204) licence signing** — replaces ECDSA P-256 across `keygen.py`, `sign_license.py`, and `verifier.py`; `cryptography>=44` required
+**Phase 1 — Cryptography and Licensing**
+- **ECDSA P-256 licence signing** — production key embedded across `keygen.py`, `sign_license.py`, and `verifier.py`; ML-DSA-65 (FIPS 204) migration planned when the cryptography library ships FIPS 204 support
 - **`LicenseFeature` enum** — OIDC, SAML, SCIM feature gates replaced with typed enum (replaces `frozenset[str]`)
 - **Academic / Non-Profit tier** — added to `LicenseTier` enum; full tier support in verifier and feature gate logic
 - **Community tier limits** — updated to v0.8.4 values (5 agents, 10 users, 2 admins)
-- **`key_alg: "ML-DSA-65"`** — added to v3 licence payload
 - **Hybrid TLS Caddyfile config** — X25519+ML-KEM-768 configuration included (commented — pending Caddy 2.10)
 
 **Phase 2 — Response-Path Inspection (F-01)**
@@ -629,6 +629,21 @@ The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturi
 
 - **Installer env var fix** — `_write_aes_key_to_env` expanded into a full `.env` writer; sets `UPSTREAM_MCP_URL`, `YASHIGANI_TLS_DOMAIN`, `YASHIGANI_ADMIN_EMAIL`, `YASHIGANI_ENV`, and the AES key before `docker compose pull` runs; demo mode defaults `UPSTREAM_MCP_URL` to `http://localhost:8080/echo`
 - **bash 3.2 compat fix in `update.sh`** — `< <(find ...)` process substitution replaced with `find | while read` pipe; resolves failure on macOS default bash (3.2)
+
+### v0.9.3 Delivered
+
+- **Rate limiter bypass fix** — closed authentication bypass in the per-endpoint rate limiting layer
+- **OllamaPool stack overflow fix** — resolved recursive call path causing stack overflow under pool exhaustion
+- **Vault KMS provider fix** — corrected provider initialization failure on cold start
+- **Response inspection pipeline activation** — `ResponseInspectionPipeline` now active in the default request path (was wired but not invoked in v0.9.0–v0.9.2)
+- **ECDSA P-256 license key embedded** — production public key committed; license tier enforcement fully active for all tiers
+- **All Docker images pinned** — every image in `docker-compose.yml` and Helm charts pinned to digest; eliminates mutable-tag supply-chain risk
+- **WebAuthn Alembic migration** — `WebAuthnCredentialRow` schema migration added; upgrades from v0.9.0–v0.9.2 apply cleanly
+- **Integration test suite** — end-to-end test suite covering auth, inspection, rate limiting, audit write, and license gate paths
+- **18 bare-exception handlers replaced** — `except Exception: pass` patterns replaced with structured logging across gateway and backoffice; previously silent failures now observable
+- **CI license key gate** — CI pipeline validates a test license key before build; prevents shipping with a broken verifier
+- **Redis `scan_iter` fix** — replaced `keys()` with `scan_iter()` in all Redis queries; eliminates blocking full-keyspace scans under load
+- **IPv6-safe IP masking** — IP address masking in audit events and CHS now handles IPv6 addresses correctly
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (20 agents, 50 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
