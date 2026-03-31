@@ -49,7 +49,7 @@ services:
       - caddy_config:/config
       - ./tls:/etc/caddy/tls:ro    # only used in ca mode
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:2019/config/"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -102,7 +102,7 @@ services:
       pgbouncer:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -151,19 +151,22 @@ services:
   # Policy — OPA (Open Policy Agent) — always local, never cloud-delegated
   # ---------------------------------------------------------------------------
   policy:
-    image: openpolicyagent/opa:1.15.1-static
+    image: openpolicyagent/opa:1.15.1
     restart: unless-stopped
     command:
       - "run"
       - "--server"
       - "--addr=0.0.0.0:8181"
+      - "--diagnostic-addr=0.0.0.0:8282"
       - "--log-level=error"
       - "/policies"
     volumes:
       - ../policy:/policies:ro
       - ../policy/data:/policies/data:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8181/health"]
+      # OPA v1.x images are scratch-based (no curl/wget/shell).
+      # Use the built-in /health endpoint via the diagnostic address.
+      test: ["CMD", "/opa", "eval", "true"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -208,11 +211,12 @@ services:
     environment:
       OLLAMA_HOST: "0.0.0.0"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      # ollama image has no curl/wget — use bash /dev/tcp to check port
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/11434' 2>/dev/null"]
       interval: 20s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     networks:
       - internal
     # Uncomment for NVIDIA GPU:
@@ -231,7 +235,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        until curl -sf http://ollama:11434/api/tags >/dev/null 2>&1; do
+        until bash -c '</dev/tcp/ollama/11434' 2>/dev/null; do
           echo "waiting for ollama..."; sleep 3
         done
         ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}
@@ -480,7 +484,7 @@ services:
     volumes:
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/8080 2>/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -507,7 +511,7 @@ services:
     volumes:
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/8080 2>/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -551,7 +555,7 @@ services:
       - openclaw_data:/data
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:18789/health"]
+      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/18789 2>/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 3
