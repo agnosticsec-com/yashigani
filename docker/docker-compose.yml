@@ -346,7 +346,7 @@ services:
       - ./secrets:/run/secrets:ro
       - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
     healthcheck:
-      test: ["CMD-SHELL", "sh -c 'echo | nc -w1 localhost 5432'"]
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432"]
       interval: 10s
       timeout: 3s
       retries: 5
