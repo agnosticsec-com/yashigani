@@ -506,7 +506,7 @@ docker-compose.yml
 Suitable for: development, staging, small production workloads, air-gapped environments.
 
 **Minimum hardware:** 4 vCPU, 8 GB RAM, 50 GB SSD.
-**Recommended hardware:** 6 vCPU, 12 GB RAM, 80 GB SSD.
+**Recommended hardware:** 8 vCPU, 16 GB RAM, VRAM 8 GB (Ollama), 80 GB SSD.
 
 
 ### 7.2 Kubernetes — High-Availability Multi-Replica
@@ -648,7 +648,6 @@ Additionally, the FastAPI gateway migrated from the deprecated `@app.on_event` p
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (5 agents, 10 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
 ---
-
 ### 9. Our commitment to the OSS Community:**
 ---
 Agnostic Security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they are registered as non-for-profit organizations.
