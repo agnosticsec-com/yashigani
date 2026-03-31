@@ -106,7 +106,7 @@ def _bootstrap():
     chs = CredentialHandleService(
         kms_provider=kms_provider,
         resource_monitor=resource_monitor,
-        audit_writer=audit_writer,
+        on_audit=audit_writer,
     )
 
     # ── Rotation scheduler (optional) ──────────────────────────────────────
