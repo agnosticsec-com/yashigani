@@ -977,27 +977,37 @@ _write_aes_key_to_env() {
   fi
 
   # --- Prometheus basic auth (required by Caddy reverse proxy to Prometheus) ---
-  # Generate a bcrypt hash for the Prometheus scrape endpoint
+  # Generate a bcrypt hash for the Prometheus scrape endpoint.
+  # Try methods in order: htpasswd (macOS/Linux), python3 bcrypt module, python3 hashlib fallback.
   local prom_password
   prom_password="$(_gen_password)"
   local prom_hash=""
-  if command -v python3 >/dev/null 2>&1; then
-    # Use python3 to generate bcrypt hash (or fallback to passlib/hashlib)
+
+  # Method 1: htpasswd (available on macOS via Apache, Linux via apache2-utils)
+  if [[ -z "$prom_hash" ]] && command -v htpasswd >/dev/null 2>&1; then
+    prom_hash="$(htpasswd -nbBC 12 "" "${prom_password}" 2>/dev/null | tr -d ':\n' || echo "")"
+  fi
+
+  # Method 2: python3 bcrypt module (installed as yashigani dependency)
+  if [[ -z "$prom_hash" ]] && command -v python3 >/dev/null 2>&1; then
     prom_hash="$(python3 -c "
-try:
-    from passlib.hash import bcrypt
-    print(bcrypt.using(rounds=12).hash('${prom_password}'))
-except ImportError:
-    import hashlib, base64, os
-    # Fallback: SHA-256 hash (Caddy accepts this format too)
-    salt = os.urandom(16)
-    h = hashlib.pbkdf2_hmac('sha256', b'${prom_password}', salt, 100000)
-    print(base64.b64encode(salt + h).decode())
+import bcrypt
+print(bcrypt.hashpw(b'${prom_password}', bcrypt.gensalt(rounds=12)).decode())
 " 2>/dev/null || echo "")"
   fi
-  # If we couldn't generate a hash, use a placeholder that won't block compose
+
+  # Method 3: python3 hashlib fallback (no external deps)
+  if [[ -z "$prom_hash" ]] && command -v python3 >/dev/null 2>&1; then
+    prom_hash="$(python3 -c "
+import hashlib, base64, os
+salt = os.urandom(16)
+h = hashlib.pbkdf2_hmac('sha256', b'${prom_password}', salt, 100000)
+print(base64.b64encode(salt + h).decode())
+" 2>/dev/null || echo "")"
+  fi
+
   if [[ -z "$prom_hash" ]]; then
-    log_error "Failed to generate Prometheus basic-auth hash. Ensure 'htpasswd' or 'openssl' is available."
+    log_error "Failed to generate Prometheus basic-auth hash. Install htpasswd (brew install httpd) or ensure python3 is available."
     exit 1
   fi
   _env_set "PROMETHEUS_BASICAUTH_HASH" "${prom_hash}"
