@@ -1,4 +1,4 @@
-# Yashigani v0.5.0 — Wazuh SIEM auto-deploy override
+# Yashigani v0.9.4 — Wazuh SIEM auto-deploy override
 #
 # Activate: docker compose -f docker-compose.yml -f docker-compose.wazuh.yml up -d
 # Or set via Admin → Audit → SIEM Integration → Wazuh (Auto-deploy)
@@ -34,7 +34,7 @@ services:
         hard: 65536
     volumes:
       - wazuh_indexer_data:/var/lib/wazuh-indexer
-      - secrets_volume:/run/secrets:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/ >/dev/null 2>&1"]
       interval: 30s
@@ -55,9 +55,7 @@ services:
       - wazuh_manager_config:/var/ossec/etc
       - wazuh_manager_logs:/var/ossec/logs
       - wazuh_manager_queue:/var/ossec/queue
-      - secrets_volume:/run/secrets:ro
-    secrets:
-      - wazuh_admin_password
+      - ./secrets:/run/secrets:ro
     depends_on:
       wazuh-indexer:
         condition: service_healthy
@@ -80,6 +78,12 @@ services:
       SERVER_SSL_ENABLED: "false"
     volumes:
       - wazuh_dashboard_config:/usr/share/wazuh-dashboard/config
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/ >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     depends_on:
       wazuh-indexer:
         condition: service_healthy
@@ -99,9 +103,3 @@ volumes:
     driver: local
   wazuh_dashboard_config:
     driver: local
-
-secrets:
-  wazuh_admin_password:
-    file: ./secrets/wazuh_admin_password
-  wazuh_api_key:
-    file: ./secrets/wazuh_api_key
