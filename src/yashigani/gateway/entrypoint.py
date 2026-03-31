@@ -55,7 +55,7 @@ def _build_app():
     chs = CredentialHandleService(
         kms_provider=kms_provider,
         resource_monitor=resource_monitor,
-        audit_writer=audit_writer,
+        on_audit=audit_writer,
     )
 
     # Inspection pipeline
