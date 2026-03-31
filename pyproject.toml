@@ -20,6 +20,7 @@ dependencies = [
     "argon2-cffi>=23.1",
     "pyotp>=2.9",
     "qrcode[pil]>=7.4",
+    "py-webauthn>=2.1",
     "redis>=5.0",
     # Inspection / AI
     # (Ollama is accessed via local HTTP — no SDK required)
