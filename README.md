@@ -15,9 +15,9 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v0.9.4
+**Latest Stable Version:** v0.9.5
 ---
-**Document Date:** 2026-03-31
+**Document Date:** 2026-04-01
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -140,7 +140,7 @@ AI Agent / Client (response)
 | **OPA Policy Engine** | Declarative, version-controlled authorization for every tool call |
 | **Inspection Pipeline** | FastText ML + multi-backend LLM inspection with fail-closed sentinel |
 | **Audit Pipeline** | Multi-sink writer: file, PostgreSQL, Splunk, Elasticsearch, Wazuh |
-| **PgBouncer** | PostgreSQL connection pooler, prevents connection exhaustion |
+| **PgBouncer** | PostgreSQL connection pooler, prevents connection exhaustion (password from .env since v0.9.5) |
 | **Redis** | Rate limiting, response caching, anomaly detection sliding windows |
 | **Key Management System** | KMS integration: Keeper, AWS KMS, Azure Key Vault, GCP KMS, HashiCorp Vault |
 | **Prometheus / Grafana** | Metrics collection and dashboards |
@@ -170,13 +170,14 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.6.2 | Starter tier + three-dimensional limits | 5-tier model adds Starter (OIDC-only), max_end_users + max_admin_seats split, v3 license payload schema |
 | v0.7.0 | Operational hardening + OPA Policy Assistant | ECDSA P-256 key active, DB partition automation + monitoring, OPA Policy Assistant (NL → RBAC JSON), MCP quick-start snippets, direct webhook alerting (Slack/Teams/PagerDuty), CIDR IP allowlisting per agent, path matching parity fix, runtime-configurable rate limit thresholds |
 | v0.7.1 | Alert wiring + partition bootstrap | Direct alert dispatch on credential exfil + licence expiry monitor, partition bootstrap migration (2026-05 → 2027-06), full DB health unit test suite |
-| v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / CrewAI / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
+| v0.8.0 | Optional agent bundles + agent UX | Opt-in LangGraph / Goose / OpenClaw containers (Compose profiles + Helm toggles), installer agent selection step with disclaimer, `GET /admin/agent-bundles` catalogue API, agent detail quickstart snippet endpoint, rate limit `last_changed` timestamp |
 | v0.8.4 | Installer patch — macOS + GPU + Podman | Fixed platform detection, GPU detection (Apple Silicon/NVIDIA/AMD), bash 3.2 compat, Podman runtime, Docker Desktop CLI auto-fix, numbered agent bundles, runtime-agnostic compose, interactive fallbacks, `update.sh`, `test-installer.sh` |
 | v0.9.0 | Post-quantum cryptography + security hardening | ECDSA P-256 licence signing (ML-DSA-65 planned), hybrid TLS X25519+ML-KEM-768 (pending Caddy 2.10), response-path inspection (F-01), WebAuthn/Passkeys (S-01), break-glass dual-control, SHA-384 Merkle audit chain, async SIEM queue, agent PSK auto-rotation, real-time SSE inspection feed, searchable + exportable audit log, installer deployment modes redesign |
 | v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
 | v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
 | v0.9.3 | Bugfix and hardening (45-issue audit) | Rate limiter bypass fix, OllamaPool stack overflow fix, Vault KMS provider fix, response inspection pipeline activation, ECDSA P-256 license key embedded, all Docker images pinned, WebAuthn migration, integration test suite, 18 bare-exception handlers replaced with logging, CI license key gate, Redis scan_iter, IPv6-safe IP masking |
 | v0.9.4 | Final hardening | Classifier regex fix (security: nested braces in inspection response no longer misclassified as CLEAN), FastAPI lifespan migration, localhost defaults replaced with Docker service names, CI version consistency gate |
+| v0.9.5 | Agent bundles GA + Podman | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with PSK auto-registration, first-class Podman support (runtime detection, compose command, auto-apply podman override), DNS fix for Ollama external network access, admin accounts with fun codenames (animal/nature themed), PgBouncer password from .env, Alembic migrations in backoffice image, 18-service full stack verified from clean slate |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -226,7 +227,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 
 ### v0.8.0 — Agent Ecosystem Integration
 
-v0.8.0 addressed operator demand for first-class agentic framework support without forcing Yashigani's security boundary to become optional. LangGraph, Goose, CrewAI, and OpenClaw are available as opt-in Docker Compose profiles and Helm toggles — all agent traffic from these containers routes through Yashigani's enforcement layer and is subject to the same inspection, authorization, and audit pipeline as any other agent. A new `GET /admin/agent-bundles` endpoint exposes the bundle catalogue with metadata and a third-party disclaimer for the UI banner. `GET /admin/agents/{id}/quickstart` returns copy-paste curl, Python httpx, and health check snippets on the agent detail page, reducing time-to-first-call for new agent deployments. The rate limit config endpoint was extended with a `last_changed` timestamp, making threshold change history auditable without requiring a full audit log query.
+v0.8.0 addressed operator demand for first-class agentic framework support without forcing Yashigani's security boundary to become optional. LangGraph, Goose, and OpenClaw are available as opt-in Docker Compose profiles and Helm toggles — all agent traffic from these containers routes through Yashigani's enforcement layer and is subject to the same inspection, authorization, and audit pipeline as any other agent. A new `GET /admin/agent-bundles` endpoint exposes the bundle catalogue with metadata and a third-party disclaimer for the UI banner. `GET /admin/agents/{id}/quickstart` returns copy-paste curl, Python httpx, and health check snippets on the agent detail page, reducing time-to-first-call for new agent deployments. The rate limit config endpoint was extended with a `last_changed` timestamp, making threshold change history auditable without requiring a full audit log query.
 
 ### v0.8.4 — Installer Hardening for macOS, GPU, and Podman
 
@@ -252,6 +253,22 @@ v0.9.3 was the most comprehensive single-version quality pass in the project's h
 
 v0.9.4 is the final hardening release before v1.0 development begins. It closes the last known security-relevant bug in the inspection pipeline: the classifier's JSON extraction regex silently misclassified valid injection detections as CLEAN when the LLM response included nested objects in the `detected_payload_spans` field. The regex-based extraction was replaced with a brace-depth counting parser that correctly handles arbitrarily nested JSON. The FastAPI gateway migrated from the deprecated `@app.on_event` pattern to the recommended `lifespan` context manager, eliminating all deprecation warnings. Default service URLs throughout the codebase were standardized to Docker Compose service names (`redis`, `ollama`, `policy`) instead of `localhost`, preventing silent failures in containerized deployments where localhost does not resolve to the expected service. A CI gate was added to verify that `__init__.py` and `pyproject.toml` versions remain in sync. The installer's Prometheus hash generation was fixed for macOS: `passlib` crashes on `bcrypt` 5.x due to a removed API, so the hash generation was replaced with a three-method fallback chain (htpasswd, direct bcrypt module, hashlib PBKDF2) that works reliably on both macOS and Linux.
 
+### v0.9.5 — Agent Bundles GA and Podman Support
+
+v0.9.5 makes agent bundles and Podman first-class citizens of the deployment experience. The three agent bundles — LangGraph, Goose, and OpenClaw — now work out of the box on a clean install: the installer auto-registers each selected bundle as an agent with a pre-shared key (PSK) token, eliminating the manual agent registration step that previously blocked new operators from reaching a working agent stack. The full stack now comprises 18 services (15 core + 3 agent bundles), all verified working from a clean-slate install.
+
+Podman received first-class support: the installer performs runtime detection, selects the correct compose command (`podman compose` vs `docker compose`), and auto-applies the Podman override file where needed. This extends the v0.8.4 Podman groundwork into a fully automated experience.
+
+A DNS fix resolved a networking issue where the `ollama` and `ollama-init` containers were unable to reach external model registries for model downloads. Both containers are now placed on the external network, restoring model registry access without compromising the internal service network isolation.
+
+Admin account provisioning was enhanced: auto-generated accounts now use fun animal/nature-themed codenames as usernames, with TOTP pre-provisioned at install time. PgBouncer password handling was corrected to read the password from `.env` rather than using a hardcoded or missing value. Alembic database migrations are now included directly in the backoffice Docker image, ensuring schema migrations run automatically on container startup without requiring a separate migration step.
+
+All 18 services have verified health checks from a clean-slate installation using the following command:
+
+```bash
+bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langgraph,goose,openclaw
+```
+
 ---
 
 ## 5. Complete Feature List
@@ -268,7 +285,7 @@ v0.9.4 is the final hardening release before v1.0 development begins. It closes 
 - SAML v2 SSO — Professional and above
 - SCIM automated user provisioning and deprovisioning — Professional and above
 - Multiple admin accounts with minimum-count enforcement
-- **Dual admin accounts provisioned at install (v0.9.1)** — two accounts with random themed usernames created during installation; TOTP 2FA configured for both at install time
+- **Dual admin accounts provisioned at install (v0.9.1, v0.9.5)** — two accounts with fun animal/nature-themed codenames created during installation; TOTP 2FA pre-provisioned for both at install time
 - Admin account lockout protection (brute-force resistance)
 - **HIBP k-Anonymity breach check on password change (v0.9.1)** — `PasswordBreachedError` raised on known-breached passwords; OWASP ASVS V2.1.7 compliant; fail-open if API unreachable
 
@@ -354,7 +371,7 @@ v0.9.4 is the final hardening release before v1.0 development begins. It closes 
 
 - Universal installer (Linux, macOS, cloud VM, bare-metal; auto-detects OS, arch, cloud provider, GPU, and container runtime)
 - GPU detection at install time: Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA (nvidia-smi, CUDA), AMD (rocm-smi, ROCm), lspci fallback; model recommendations printed based on detected VRAM (v0.8.4)
-- Podman support as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.4)
+- Podman support as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.4; runtime detection, compose command selection, and auto-apply podman override in v0.9.5)
 - Interactive fallback prompts when OS, runtime, or GPU detection fails (v0.8.4)
 - `update.sh` script for updating existing installations with automatic backup, pull, restart, and rollback (v0.8.4)
 - Docker Compose single-node deployment
@@ -373,7 +390,10 @@ v0.9.4 is the final hardening release before v1.0 development begins. It closes 
   - tmpfs mounts for `/tmp` and audit buffer
   - Read-only root filesystem
 - PgBouncer PostgreSQL connection pooling
-- **Optional agent bundle containers** (v0.8.0) — LangGraph, Goose, CrewAI, OpenClaw as opt-in Docker Compose profiles and Helm toggles; all agent traffic routes through Yashigani's enforcement layer; images are digest-pinned per release; third-party courtesy integrations (no support obligation)
+- **Agent bundle containers** (v0.8.0, GA in v0.9.5) — LangGraph, Goose, OpenClaw as opt-in Docker Compose profiles and Helm toggles; installer auto-registers bundles with PSK tokens (v0.9.5); all agent traffic routes through Yashigani's enforcement layer; images are digest-pinned per release; third-party courtesy integrations (no support obligation)
+  - **LangGraph** (port 8000) — multi-agent orchestration framework; shares Postgres (separate DB) and Redis (DB 5)
+  - **Goose** (port 3284) — AI developer assistant; uses `goose serve` ACP over HTTP
+  - **OpenClaw** (port 18789) — personal AI with 30+ messaging integrations; `OPENCLAW_CONFIG_JSON` routes through gateway
 
 ### 5.9 Licensing and Tiers
 
@@ -469,7 +489,7 @@ v0.9.4 is the final hardening release before v1.0 development begins. It closes 
 | Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes | Yes |
 | Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Trivy container scanning | Yes | Yes | Yes | Yes | Yes | Yes |
-| Optional agent bundles (LangGraph / Goose / CrewAI / OpenClaw) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Agent bundles (LangGraph / Goose / OpenClaw) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Apache 2.0 open-source license | Yes | Yes | — | — | — | — |
 | CLA-covered contributions | Yes | Yes | — | — | — | — |
 
@@ -479,15 +499,17 @@ v0.9.4 is the final hardening release before v1.0 development begins. It closes 
 
 ### 7.1 Docker Compose — Single Node
 
-The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with all services pre-configured: gateway, Postgres with PgBouncer, Redis, Vault, Prometheus, Grafana, Loki, Promtail, Alertmanager, and Jaeger.
+The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with all services pre-configured: gateway, backoffice, Postgres with PgBouncer, Redis, Ollama with init container, Vault, Prometheus, Grafana, Loki, Promtail, Alertmanager, Jaeger, and optional agent bundles. The full stack with all agent bundles enabled comprises 18 services.
 
 ```
-docker-compose.yml
+docker-compose.yml — 15 core services:
 ├── yashigani-gateway       # Core proxy, port 8443 (TLS)
-├── yashigani-backoffice    # Admin API/UI, port 8080
+├── yashigani-backoffice    # Admin API/UI, port 8080 (includes Alembic migrations)
 ├── postgres:16             # Audit + config store
-├── pgbouncer               # Connection pooler
+├── pgbouncer               # Connection pooler (password from .env)
 ├── redis                   # Rate limiting + caching
+├── ollama                  # Local LLM inference (external network for model registry)
+├── ollama-init             # Model pull on first start (external network)
 ├── vault                   # KMS + secrets
 ├── prometheus              # Metrics scrape
 ├── grafana                 # Dashboards
@@ -495,12 +517,12 @@ docker-compose.yml
 ├── promtail                # Log shipping
 ├── alertmanager            # Alert routing
 ├── jaeger                  # Distributed tracing
+├── caddy                   # TLS termination / reverse proxy
 │
-│   Optional agent bundles (v0.8.0) — enable with --profile <name>:
-├── langgraph               # LangGraph agent (profile: langgraph)
-├── goose                   # Goose agent (profile: goose)
-├── crewai                  # CrewAI agent (profile: crewai)
-└── openclaw                # OpenClaw gateway, port 18789 (profile: openclaw)
+│   Agent bundles (v0.9.5 — auto-registered with PSK tokens):
+├── langgraph               # Multi-agent orchestration, port 8000 (shares Postgres + Redis DB 5)
+├── goose                   # AI developer assistant, port 3284 (goose serve ACP over HTTP)
+└── openclaw                # Personal AI, port 18789 (30+ messaging integrations)
 ```
 
 Suitable for: development, staging, small production workloads, air-gapped environments.
@@ -575,13 +597,13 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.9.4 is the current production release — the final hardening release before v1.0 development begins. v0.9.4 fixes the classifier regex that silently misclassified valid injection detections as CLEAN when LLM responses included nested objects, migrates the FastAPI gateway to the lifespan context manager, standardises default service URLs to Docker Compose service names, and adds a CI gate to prevent version drift between `pyproject.toml` and `__init__.py`. v0.9.3 was the 45-issue bugfix and hardening release: it fixed the rate limiter bypass, OllamaPool stack overflow, and Vault KMS provider; activated the response inspection pipeline; embedded the ECDSA P-256 license key; pinned all Docker images; added the WebAuthn Alembic migration; shipped an integration test suite; replaced 18 bare-exception handlers with structured logging; gated CI on a valid license key; and fixed Redis scan_iter and IPv6-safe IP masking. v0.9.2 fixed the installer `.env` writer and `update.sh` bash 3.2 compatibility. v0.9.1 provisioned dual admin accounts with TOTP 2FA at install time and added HIBP k-Anonymity breach checking. v0.9.0 introduced ECDSA P-256 licence signing (ML-DSA-65 migration planned when the cryptography library ships FIPS 204 support), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
+Yashigani v0.9.5 is the current production release. v0.9.5 makes agent bundles (LangGraph, Goose, OpenClaw) work out of the box — the installer auto-registers each selected bundle with a PSK token, delivers first-class Podman support with runtime detection and auto-apply override, fixes DNS for Ollama/ollama-init external network access, adds fun animal/nature-themed codenames for auto-generated admin accounts, corrects PgBouncer password handling from `.env`, and includes Alembic migrations in the backoffice Docker image. The full stack of 18 services (15 core + 3 agent bundles) has been verified working from a clean-slate install. v0.9.4 fixed the classifier regex, migrated FastAPI to the lifespan context manager, standardised default service URLs to Docker Compose service names, and added a CI version consistency gate. v0.9.3 was the 45-issue bugfix and hardening release: it fixed the rate limiter bypass, OllamaPool stack overflow, and Vault KMS provider; activated the response inspection pipeline; embedded the ECDSA P-256 license key; pinned all Docker images; added the WebAuthn Alembic migration; shipped an integration test suite; replaced 18 bare-exception handlers with structured logging; gated CI on a valid license key; and fixed Redis scan_iter and IPv6-safe IP masking. v0.9.2 fixed the installer `.env` writer and `update.sh` bash 3.2 compatibility. v0.9.1 provisioned dual admin accounts with TOTP 2FA at install time and added HIBP k-Anonymity breach checking. v0.9.0 introduced ECDSA P-256 licence signing (ML-DSA-65 migration planned when the cryptography library ships FIPS 204 support), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and a tamper-evident SHA-384 Merkle audit chain, delivered real-time operator visibility via SSE and searchable/exportable audit logs, and redesigned the installer around three deployment modes (Demo, Production, Enterprise).
 
 The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
-v0.8.0 addressed operator demand for first-class agentic framework support without forcing Yashigani's security boundary to become optional. LangGraph, Goose, CrewAI, and OpenClaw are available as opt-in Docker Compose profiles and Helm toggles — all agent traffic from these containers routes through Yashigani's enforcement layer and is subject to the same inspection, authorization, and audit pipeline as any other agent. A new `GET /admin/agent-bundles` endpoint exposes the bundle catalogue with metadata and a third-party disclaimer for the UI banner. `GET /admin/agents/{id}/quickstart` returns copy-paste curl, Python httpx, and health check snippets on the agent detail page, reducing time-to-first-call for new agent deployments. The rate limit config endpoint was extended with a `last_changed` timestamp, making threshold change history auditable without requiring a full audit log query.
+v0.8.0 addressed operator demand for first-class agentic framework support without forcing Yashigani's security boundary to become optional. LangGraph, Goose, and OpenClaw are available as opt-in Docker Compose profiles and Helm toggles — all agent traffic from these containers routes through Yashigani's enforcement layer and is subject to the same inspection, authorization, and audit pipeline as any other agent. A new `GET /admin/agent-bundles` endpoint exposes the bundle catalogue with metadata and a third-party disclaimer for the UI banner. `GET /admin/agents/{id}/quickstart` returns copy-paste curl, Python httpx, and health check snippets on the agent detail page, reducing time-to-first-call for new agent deployments. The rate limit config endpoint was extended with a `last_changed` timestamp, making threshold change history auditable without requiring a full audit log query.
 
 ### v0.8.4 Delivered
 
@@ -644,6 +666,27 @@ v0.9.3 was a structured 45-issue audit hardening release — the most comprehens
 v0.9.4 is the final hardening release before v1.0 development begins. It closes the last known security-relevant bug in the inspection pipeline: the classifier's JSON extraction regex silently misclassified valid injection detections as CLEAN when the LLM response included nested objects in the `detected_payload_spans` field. The regex-based extraction was replaced with a brace-depth counting parser that correctly handles arbitrarily nested JSON.
 
 Additionally, the FastAPI gateway migrated from the deprecated `@app.on_event` pattern to the recommended `lifespan` context manager, eliminating all deprecation warnings. Default service URLs throughout the codebase were standardized to Docker Compose service names (`redis`, `ollama`, `policy`) instead of `localhost`, preventing silent failures in containerized deployments where localhost does not resolve to the expected service. A CI gate was added to verify that `__init__.py` and `pyproject.toml` versions remain in sync, preventing the version drift discovered during v0.9.3 QA.
+
+### v0.9.5 Delivered
+
+v0.9.5 makes the agent bundle experience zero-friction and adds first-class Podman support. Key changes:
+
+- **Agent bundles work out of the box** — the installer auto-registers LangGraph, Goose, and OpenClaw as agents with pre-shared key (PSK) tokens during installation, eliminating manual agent registration. Bundles are selected via `--agent-bundles langgraph,goose,openclaw`.
+  - **LangGraph** (port 8000): multi-agent orchestration framework; shares Postgres (separate database) and Redis (DB 5)
+  - **Goose** (port 3284): AI developer assistant; runs via `goose serve` ACP over HTTP
+  - **OpenClaw** (port 18789): personal AI with 30+ messaging integrations; `OPENCLAW_CONFIG_JSON` routes through the gateway
+- **First-class Podman support** — runtime detection identifies Docker Engine, Docker Desktop, or Podman; the correct compose command is selected automatically; the Podman override file is auto-applied when Podman is the active runtime
+- **DNS fix for Ollama** — `ollama` and `ollama-init` containers are now on the external network, restoring model registry access for model downloads without compromising internal network isolation
+- **Admin codenames** — auto-generated admin accounts use fun animal/nature-themed codenames as usernames, with TOTP pre-provisioned at install time
+- **PgBouncer password fix** — PgBouncer now reads its password from `.env` instead of using a hardcoded or missing value
+- **Alembic migrations in backoffice image** — database migrations are bundled in the backoffice Docker image and run automatically on container startup
+- **18-service full stack verified** — all health checks pass from a clean-slate install (15 core + 3 agent bundles)
+
+Full non-interactive install command:
+
+```bash
+bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langgraph,goose,openclaw
+```
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (5 agents, 10 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 

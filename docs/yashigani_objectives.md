@@ -1,8 +1,8 @@
 # Yashigani Security Gateway
 ## Product Features and Objectives
 
-**Current Version:** v0.9.4
-**Document Date:** 2026-03-31
+**Current Version:** v0.9.5
+**Document Date:** 2026-04-01
 **Classification:** Public — Product Overview
 
 ---
@@ -159,6 +159,7 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.9.0 | Post-quantum cryptography + security hardening | ML-DSA-65 (FIPS 204) licence signing, hybrid TLS X25519+ML-KEM-768 (pending Caddy 2.10), response-path inspection (F-01), WebAuthn/Passkeys (S-01), break-glass dual-control, SHA-384 Merkle audit chain, async SIEM queue, agent PSK auto-rotation, SSE real-time inspection feed, audit log search + CSV/JSON export, installer deployment modes redesign |
 | v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
 | v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
+| v0.9.5 | Agent bundles out of the box + Podman first-class | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with `--agent-bundles`; installer auto-registers agents via backoffice API with PSK tokens; first-class Podman support (runtime detection, `podman compose`, auto-apply override); DNS fix for Ollama external network; `POSTGRES_PASSWORD`/`REDIS_PASSWORD` in `.env` for Compose interpolation; PgBouncer `DATABASE_URL` auth; Alembic migrations in backoffice Docker image; `admin_initial_password` bootstrap detection; TOTP pre-provisioned from installer secrets; `openssl rand -base64 48` password generator; health check auto-detects compose command; Promtail `bash /dev/tcp` healthcheck; 18 services (15 core + 3 agent bundles); Compose profiles: `langgraph`, `goose`, `openclaw` |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -307,7 +308,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - Grafana dashboards
 - **SSE real-time inspection feed (v0.9.0)** — `GET /admin/events/inspection-feed` streams live inspection verdicts via `EventBus` asyncio pub/sub with 15-second heartbeat
 - OpenTelemetry distributed tracing (OTLP export to Jaeger)
-- Loki log aggregation + Promtail log shipping
+- Loki log aggregation + Promtail log shipping (Promtail healthcheck uses `bash /dev/tcp` instead of `wget`, v0.9.5)
 - Alertmanager 3-channel escalation: Slack + email (level 1) → PagerDuty (level 2)
 - **Direct webhook alerting** — Slack, Microsoft Teams, PagerDuty as lightweight sinks for P1 events, independent of Alertmanager (v0.7.0)
 - **`yashigani_audit_partition_missing` gauge** — fires when an upcoming monthly audit partition is absent; paired Alertmanager alert rule at `severity: critical` (v0.7.0)
@@ -320,7 +321,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 
 - Universal installer (Linux, macOS, cloud VM, bare-metal; auto-detects OS, arch, cloud provider, GPU, and container runtime)
 - GPU detection at install time: Apple Silicon M-series, NVIDIA (CUDA), AMD (ROCm), lspci fallback; model recommendations printed based on detected VRAM (v0.8.4)
-- Podman supported as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.4)
+- Podman supported as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.4); runtime auto-detection, `podman compose` resolution, and auto-apply of Podman Compose override (v0.9.5)
 - Interactive fallback prompts when detection fails; `update.sh` for in-place updates with rollback (v0.8.4)
 - Docker Compose single-node deployment
 - Kubernetes Helm charts (production-ready)
@@ -441,22 +442,31 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 
 ### 7.1 Docker Compose — Single Node
 
-The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with all services pre-configured: gateway, Postgres with PgBouncer, Redis, Vault, Prometheus, Grafana, Loki, Promtail, Alertmanager, and Jaeger.
+The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with 15 core services pre-configured and 3 optional agent bundles (18 total). Core services: gateway, backoffice, Caddy, Postgres with PgBouncer, Redis, Vault, OPA, Ollama, Prometheus, Grafana, Loki, Promtail, Alertmanager, OTEL Collector, and Jaeger.
 
 ```
-docker-compose.yml
+docker-compose.yml (15 core services)
 ├── yashigani-gateway       # Core proxy, port 8443 (TLS)
 ├── yashigani-backoffice    # Admin API/UI, port 8080
+├── caddy                   # TLS termination, reverse proxy
 ├── postgres:16             # Audit + config store
 ├── pgbouncer               # Connection pooler
 ├── redis                   # Rate limiting + caching
 ├── vault                   # KMS + secrets
+├── policy (OPA)            # Authorization engine
+├── ollama                  # Local LLM inference
 ├── prometheus              # Metrics scrape
 ├── grafana                 # Dashboards
 ├── loki                    # Log aggregation
 ├── promtail                # Log shipping
 ├── alertmanager            # Alert routing
+├── otel-collector          # OpenTelemetry collector
 └── jaeger                  # Distributed tracing
+
+Optional agent bundles (3, via Compose profiles):
+├── langgraph               # Profile: langgraph
+├── goose                   # Profile: goose
+└── openclaw                # Profile: openclaw (port 18789)
 ```
 
 Suitable for: development, staging, small production workloads, air-gapped environments.
@@ -527,13 +537,13 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.9.1 is the current production release. v0.9.1 is the installer security hardening release: it provisions two admin accounts at install time (random themed usernames) with TOTP 2FA configured immediately, checks all generated passwords against HIBP k-Anonymity before use, adds HIBP breach checking to the backoffice authentication flow (OWASP ASVS V2.1.7), and displays a one-time credential summary at the end of install. v0.9.0 migrated licence signing to ML-DSA-65 (FIPS 204), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and SHA-384 Merkle audit chain, and delivered real-time operator visibility.
+Yashigani v0.9.5 is the current production release. v0.9.5 makes agent bundles (LangGraph, Goose, OpenClaw) work out of the box with the `--agent-bundles` flag, introduces first-class Podman support with runtime auto-detection and automatic override application, fixes DNS resolution for Ollama model pulls, moves `POSTGRES_PASSWORD` and `REDIS_PASSWORD` into `.env` for Compose interpolation with proper PgBouncer auth, bundles Alembic migrations in the backoffice Docker image, pre-provisions TOTP at bootstrap, and upgrades the password generator to `openssl rand -base64 48`. v0.9.1 was the installer security hardening release: dual admin accounts with TOTP 2FA at install, HIBP k-Anonymity breach checks, and one-time credential summary. v0.9.0 migrated licence signing to ML-DSA-65 (FIPS 204), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and SHA-384 Merkle audit chain, and delivered real-time operator visibility.
 
 The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
-- **Optional agent bundles** — LangGraph, Goose, CrewAI, OpenClaw as opt-in Compose profiles and Helm toggles
+- **Optional agent bundles** — LangGraph, Goose, CrewAI, OpenClaw as opt-in Compose profiles and Helm toggles (v0.9.5: CrewAI removed; LangGraph, Goose, OpenClaw work out of the box with `--agent-bundles`)
 - **Installer agent bundle selection step** — interactive prompt with disclaimer, `--agent-bundles` flag for non-interactive use
 - **`GET /admin/agent-bundles`** — bundle catalogue with metadata and disclaimer for UI banner
 - **`GET /admin/agents/{id}/quickstart`** — copy-paste snippet endpoint on agent detail page
@@ -611,6 +621,21 @@ The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturi
 
 - **Installer env var fix** — `_write_aes_key_to_env` expanded into a full `.env` writer; sets `UPSTREAM_MCP_URL`, `YASHIGANI_TLS_DOMAIN`, `YASHIGANI_ADMIN_EMAIL`, `YASHIGANI_ENV`, and the AES key before `docker compose pull` runs; demo mode defaults `UPSTREAM_MCP_URL` to `http://localhost:8080/echo`
 - **bash 3.2 compat fix in `update.sh`** — `< <(find ...)` process substitution replaced with `find | while read` pipe; resolves failure on macOS default bash (3.2)
+
+### v0.9.5 Delivered
+
+- **Agent bundles out of the box** — LangGraph, Goose, and OpenClaw agent bundles work out of the box with `--agent-bundles` flag; CrewAI removed from bundle set
+- **Installer auto-registers agents** — the installer registers agent bundles via the backoffice API at install time and writes PSK tokens to `docker/secrets/`
+- **First-class Podman support** — runtime auto-detection, `podman compose` command resolution, and automatic application of Podman Compose override file
+- **DNS fix for Ollama** — Ollama service placed on an external network to resolve DNS for outbound model pulls from `ollama.ai` and Hugging Face
+- **`POSTGRES_PASSWORD` and `REDIS_PASSWORD` in `.env`** — passwords written to `.env` for Docker Compose interpolation; PgBouncer receives proper auth via `DATABASE_URL` with the Postgres password
+- **Alembic migrations in backoffice Docker image** — migrations are now bundled in the backoffice container image rather than requiring a separate step
+- **`admin_initial_password` bootstrap detection** — installer writes `admin_initial_password` to `docker/secrets/` for backoffice bootstrap detection
+- **TOTP pre-provisioned at bootstrap** — TOTP secrets are pre-provisioned during bootstrap from installer secrets rather than generated at first login
+- **Password generator upgrade** — `openssl rand -base64 48` (was `-base64 27`) to guarantee at least 36 printable characters in all generated passwords
+- **Health check auto-detects compose command** — the health check script detects whether Docker or Podman is the active compose command
+- **Promtail healthcheck** — uses `bash /dev/tcp` instead of `wget` for the Promtail container healthcheck
+- **18 total services** — 15 core services + 3 agent bundles (LangGraph, Goose, OpenClaw); Compose profiles: `langgraph`, `goose`, `openclaw`
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (Apache 2.0). Non-profit and educational institutions qualify for the Academic / Non-Profit tier (verified, free — see agnosticsec.com/academic). Teams with an SSO mandate but limited scale should consider the Starter tier. Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments. Enterprise provides unlimited scale with a dedicated Technical Account Manager. See agnosticsec.com/pricing for current tier details. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
