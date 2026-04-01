@@ -1745,19 +1745,23 @@ for agent in agents:
         resp = urllib.request.urlopen(req)
         body = json.loads(resp.read())
         token = body.get("token", "")
+        profile = agent["profile"]
+        aname = agent["name"]
         if token:
-            token_path = os.path.join(secrets, f"{agent[\"profile\"]}_token")
+            token_path = os.path.join(secrets, profile + "_token")
             with open(token_path, "w") as f:
                 f.write(token)
             os.chmod(token_path, 0o600)
-            results.append(f"OK:{agent[\"name\"]}")
+            results.append("OK:" + aname)
         else:
-            results.append(f"FAIL:{agent[\"name\"]}:no_token")
+            results.append("FAIL:" + aname + ":no_token")
     except urllib.error.HTTPError as e:
+        aname = agent.get("name", "?")
         detail = e.read().decode()[:100]
-        results.append(f"FAIL:{agent[\"name\"]}:{e.code}:{detail}")
+        results.append("FAIL:" + aname + ":" + str(e.code) + ":" + detail)
     except Exception as e:
-        results.append(f"FAIL:{agent[\"name\"]}:{e}")
+        aname = agent.get("name", "?")
+        results.append("FAIL:" + aname + ":" + str(e))
 
 for r in results:
     print(r)
