@@ -188,12 +188,17 @@ _check_compose_exec() {
 _info "Starting health checks (timeout: ${TIMEOUT}s per service)..."
 printf "\n"
 
-# 1. Gateway /healthz
-_check_http "Gateway" "https://${DOMAIN}/healthz"
+# 1. Gateway — try via Caddy (HTTPS), fall back to docker compose exec
+if ! _wait_for "Gateway" \
+  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:443:127.0.0.1' 'https://${DOMAIN}/healthz' -o /dev/null 2>/dev/null"; then
+  _info "Trying Gateway via container exec..."
+  _check_compose_exec "Gateway" "gateway" \
+    "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""
+fi
 
 # 2. Backoffice — try via Caddy first, fall back to docker compose exec
 if ! _wait_for "Backoffice" \
-  "curl --silent --fail --insecure --max-time 5 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
+  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:443:127.0.0.1' 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
   _info "Trying Backoffice via container exec..."
   _check_compose_exec "Backoffice" "backoffice" \
     "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""
