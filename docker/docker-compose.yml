@@ -220,6 +220,7 @@ services:
       start_period: 60s
     networks:
       - internal
+      - external    # Required for model pulls from registry.ollama.ai
     # Uncomment for NVIDIA GPU:
     # deploy:
     #   resources:
@@ -246,6 +247,7 @@ services:
         condition: service_healthy
     networks:
       - internal
+      - external    # Required for model registry DNS resolution
 
   # ---------------------------------------------------------------------------
   # Prometheus — metrics collection

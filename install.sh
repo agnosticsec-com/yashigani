@@ -331,7 +331,10 @@ require_cmd() {
 }
 
 # Resolve the compose command based on detected runtime
-# Sets COMPOSE_CMD as an array (e.g. "docker compose" or "docker-compose" or "podman-compose")
+# Sets COMPOSE_CMD as an array (e.g. "docker compose" or "podman compose")
+# Sets YSG_PODMAN_RUNTIME=true if using Podman (for auto-applying override file)
+YSG_PODMAN_RUNTIME=false
+
 resolve_compose_cmd() {
   COMPOSE_CMD=()
 
@@ -347,31 +350,37 @@ resolve_compose_cmd() {
     return 0
   fi
 
-  # Try podman-compose
+  # Try podman compose (Podman 4+ built-in subcommand)
+  if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=("podman" "compose")
+    YSG_PODMAN_RUNTIME=true
+    return 0
+  fi
+
+  # Try standalone podman-compose (pip install podman-compose)
   if command -v podman-compose >/dev/null 2>&1; then
     COMPOSE_CMD=("podman-compose")
+    YSG_PODMAN_RUNTIME=true
     return 0
   fi
 
   # Docker Desktop on macOS without CLI in PATH
   if [ "${YSG_RUNTIME:-}" = "docker_desktop_no_cli" ]; then
-    # Try known Docker Desktop CLI paths
     local dd_docker=""
-    if [ -x "$HOME/.docker/bin/docker" ]; then
-      dd_docker="$HOME/.docker/bin/docker"
-    elif [ -x "/usr/local/bin/com.docker.cli" ]; then
-      dd_docker="/usr/local/bin/com.docker.cli"
-    elif [ -x "/Applications/Docker.app/Contents/Resources/bin/docker" ]; then
-      dd_docker="/Applications/Docker.app/Contents/Resources/bin/docker"
-    fi
-
+    for p in "$HOME/.docker/bin/docker" "/usr/local/bin/com.docker.cli" \
+             "/Applications/Docker.app/Contents/Resources/bin/docker"; do
+      [ -x "$p" ] && dd_docker="$p" && break
+    done
     if [ -n "$dd_docker" ] && $dd_docker compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("$dd_docker" "compose")
       return 0
     fi
   fi
 
-  log_error "No compose command found. Install Docker Desktop, docker-compose, or podman-compose."
+  log_error "No compose command found. Install one of:"
+  log_error "  • Docker Desktop  — https://docker.com/products/docker-desktop"
+  log_error "  • Podman Desktop  — https://podman-desktop.io"
+  log_error "  • podman + podman-compose (pip install podman-compose)"
   exit 1
 }
 
@@ -1511,6 +1520,16 @@ compose_up() {
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
+  # Auto-apply Podman rootless override when running on Podman
+  local compose_files=("-f" "$compose_file")
+  if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
+    local podman_override="${WORK_DIR}/docker/docker-compose.podman-override.yml"
+    if [[ -f "$podman_override" ]]; then
+      compose_files+=("-f" "$podman_override")
+      log_info "Podman detected — applying rootless override"
+    fi
+  fi
+
   # Ensure all required directories and secret files exist (handles upgrades,
   # re-runs, and failed previous installs). Docker Desktop for Mac (VirtioFS)
   # does not reliably propagate files to the VM — verify all exist with content.
@@ -1551,21 +1570,21 @@ compose_up() {
   done
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "${COMPOSE_CMD[*]} -f $compose_file ${profile_args[*]+${profile_args[*]}} up -d"
+    dry_print "${COMPOSE_CMD[*]} ${compose_files[*]} ${profile_args[*]+${profile_args[*]}} up -d"
     return 0
   fi
 
   # Clean up any stale containers/networks from failed previous runs.
   # NEVER use -v (--volumes) — that destroys user data (Postgres, Redis, audit logs).
   log_info "Stopping any existing containers (preserving data volumes)..."
-  "${COMPOSE_CMD[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} down 2>/dev/null || true
+  "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} down 2>/dev/null || true
 
   if [[ "$UPGRADE" == "true" ]]; then
     log_info "Starting services (upgrade — removing orphaned containers)..."
-    "${COMPOSE_CMD[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans
   else
     log_info "Starting services..."
-    "${COMPOSE_CMD[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} up -d
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d
   fi
 
   log_success "Services started"

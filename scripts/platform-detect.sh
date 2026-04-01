@@ -198,38 +198,60 @@ _detect_vm() {
 # Container runtime detection
 # ---------------------------------------------------------------------------
 _detect_runtime() {
-  # On macOS, check for Docker Desktop first — it's the standard runtime
-  if [ "$YSG_OS" = "macos" ] && [ -d "/Applications/Docker.app" ]; then
-    # Docker Desktop is installed — ensure CLI is in PATH
-    # Docker Desktop puts its CLI at /usr/local/bin/docker or ~/.docker/bin/docker
-    local docker_cli=""
-    if command -v docker >/dev/null 2>&1; then
-      docker_cli="docker"
-    elif [ -x "/usr/local/bin/docker" ]; then
-      docker_cli="/usr/local/bin/docker"
-    elif [ -x "$HOME/.docker/bin/docker" ]; then
-      docker_cli="$HOME/.docker/bin/docker"
-    fi
-    if [ -n "$docker_cli" ]; then
-      if $docker_cli info >/dev/null 2>&1; then
-        echo "docker" && return
-      fi
-      # Docker Desktop installed, CLI found, but daemon not responding — still prefer it
-      echo "docker" && return
-    fi
+  # Detect which container runtime is available and responsive.
+  # Priority: whichever runtime is actually running > installed but not running.
+  # Both Docker and Podman are first-class citizens.
+
+  local docker_available=false
+  local podman_available=false
+  local docker_running=false
+  local podman_running=false
+
+  # --- Check Docker ---
+  if command -v docker >/dev/null 2>&1; then
+    docker_available=true
+    docker info >/dev/null 2>&1 && docker_running=true
+  elif [ "$YSG_OS" = "macos" ] && [ -d "/Applications/Docker.app" ]; then
     # Docker Desktop installed but CLI not in PATH
+    local dd_docker=""
+    for p in "$HOME/.docker/bin/docker" "/usr/local/bin/docker" \
+             "/usr/local/bin/com.docker.cli" \
+             "/Applications/Docker.app/Contents/Resources/bin/docker"; do
+      [ -x "$p" ] && dd_docker="$p" && break
+    done
+    if [ -n "$dd_docker" ]; then
+      docker_available=true
+      $dd_docker info >/dev/null 2>&1 && docker_running=true
+    fi
+  fi
+
+  # --- Check Podman ---
+  if command -v podman >/dev/null 2>&1; then
+    podman_available=true
+    podman info >/dev/null 2>&1 && podman_running=true
+  fi
+
+  # --- Decision: prefer whichever is running ---
+  if $docker_running; then
+    echo "docker" && return
+  fi
+  if $podman_running; then
+    echo "podman" && return
+  fi
+
+  # Neither is running — prefer whichever is installed
+  if $docker_available; then
+    echo "docker" && return
+  fi
+  if $podman_available; then
+    echo "podman" && return
+  fi
+
+  # Docker Desktop installed but no CLI in PATH
+  if [ "$YSG_OS" = "macos" ] && [ -d "/Applications/Docker.app" ]; then
     echo "docker_desktop_no_cli" && return
   fi
 
-  # Standard detection for Linux and fallback
-  if command -v docker >/dev/null 2>&1; then
-    if docker info >/dev/null 2>&1; then
-      echo "docker" && return
-    fi
-  fi
-  if command -v podman >/dev/null 2>&1; then
-    echo "podman" && return
-  fi
   echo "none"
 }
 
@@ -237,11 +259,19 @@ _detect_runtime() {
 # Compose detection
 # ---------------------------------------------------------------------------
 _detect_compose() {
-  if docker compose version >/dev/null 2>&1; then
+  # Check Docker compose (plugin or standalone)
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     echo "plugin" && return
   fi
   if command -v docker-compose >/dev/null 2>&1; then
     echo "standalone" && return
+  fi
+  # Check Podman compose (built-in subcommand in Podman 4+, or podman-compose)
+  if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+    echo "podman-plugin" && return
+  fi
+  if command -v podman-compose >/dev/null 2>&1; then
+    echo "podman-standalone" && return
   fi
   echo "none"
 }
