@@ -97,7 +97,7 @@ _ask() {
     # If already set (from CLI flags), keep it
     local current="${!var_name:-}"
     if [ -z "$current" ]; then
-      eval "${var_name}=\"${default}\""
+      printf -v "$var_name" '%s' "$default"
     fi
     return
   fi
@@ -109,9 +109,9 @@ _ask() {
   local input=""
   IFS= read -r input || true
   if [ -z "$input" ] && [ -n "$default" ]; then
-    eval "${var_name}=\"${default}\""
+    printf -v "$var_name" '%s' "$default"
   else
-    eval "${var_name}=\"${input}\""
+    printf -v "$var_name" '%s' "$input"
   fi
 }
 

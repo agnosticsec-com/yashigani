@@ -414,7 +414,7 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9080'"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9080' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -506,7 +506,7 @@ services:
     volumes:
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/8080 2>/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health 2>/dev/null || curl -sf http://localhost:8080/health 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -533,7 +533,7 @@ services:
     volumes:
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/8080 2>/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health 2>/dev/null || curl -sf http://localhost:8080/health 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -577,7 +577,7 @@ services:
       - openclaw_data:/data
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "cat < /dev/null > /dev/tcp/localhost/18789 2>/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18789/health 2>/dev/null || curl -sf http://localhost:18789/health 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

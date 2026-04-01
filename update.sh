@@ -444,9 +444,8 @@ do_rollback() {
   local restore_count=0
   # Use find + exec instead of process substitution (bash 3.2 compatible)
   find "$latest_backup" -type f -print 2>/dev/null | while IFS= read -r f; do
-    local rel_path="${f#${latest_backup}/}"
-    local dest="${INSTALL_DIR}/${rel_path}"
-    local dest_dir
+    rel_path="${f#${latest_backup}/}"
+    dest="${INSTALL_DIR}/${rel_path}"
     dest_dir="$(dirname "$dest")"
     mkdir -p "$dest_dir"
     cp "$f" "$dest"

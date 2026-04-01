@@ -85,7 +85,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 2: docker compose down
 # ---------------------------------------------------------------------------
-COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.yml"
+COMPOSE_FILE="${PROJECT_ROOT}/docker/docker-compose.yml"
 if [ -f "$COMPOSE_FILE" ]; then
   _info "Stopping and removing containers and networks..."
   docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || \
@@ -145,7 +145,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 5: Remove .env (prompt unless --force)
 # ---------------------------------------------------------------------------
-ENV_FILE="${PROJECT_ROOT}/.env"
+ENV_FILE="${PROJECT_ROOT}/docker/.env"
 if [ -f "$ENV_FILE" ]; then
   REMOVE_ENV=1
   if [ "$FORCE" -eq 0 ]; then

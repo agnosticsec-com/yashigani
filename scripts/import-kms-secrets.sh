@@ -32,7 +32,7 @@ prompt_secret() {
     local varname="$2"
     read -rsp "$prompt: " val
     echo ""
-    eval "$varname=\"\$val\""
+    printf -v "$varname" '%s' "$val"
 }
 
 prompt_secret "Anthropic API key (claude-haiku-4-5)" ANTHROPIC_KEY
@@ -48,7 +48,7 @@ read -rsp "Admin password: " ADMIN_PASS; echo ""
 SESSION_TOKEN=$(curl -sf -k \
     -X POST "${BACKOFFICE_URL}/auth/login" \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" \
+    -d "$(jq -n --arg u "$ADMIN_USER" --arg p "$ADMIN_PASS" '{username: $u, password: $p}')" \
     | jq -r '.session_token // empty')
 unset ADMIN_USER ADMIN_PASS
 
@@ -69,7 +69,7 @@ import_key() {
         -X POST "${BACKOFFICE_URL}/admin/kms/secrets" \
         -H "Authorization: Bearer $SESSION_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"key\":\"${key_name}\",\"value\":\"${key_value}\"}" \
+        -d "$(jq -n --arg k "$key_name" --arg v "$key_value" '{key: $k, value: $v}')" \
         | jq -r '.status // "error"')
     echo "  $key_name: $result"
     unset key_value
