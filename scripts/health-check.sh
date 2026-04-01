@@ -161,6 +161,22 @@ _check_http() {
   fi
 }
 
+  # Detect compose command (Docker or Podman)
+_compose_cmd() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    echo "docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    echo "docker-compose"
+  elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+    echo "podman compose"
+  elif command -v podman-compose >/dev/null 2>&1; then
+    echo "podman-compose"
+  else
+    echo "docker compose"  # fallback
+  fi
+}
+COMPOSE_CMD="$(_compose_cmd)"
+
 _check_compose_exec() {
   local label="$1"
   local service="$2"
@@ -169,10 +185,10 @@ _check_compose_exec() {
 
   local check
   if [ -n "$expect" ]; then
-    check="docker compose -f '${PROJECT_ROOT}/docker/docker-compose.yml' \
+    check="${COMPOSE_CMD} -f '${PROJECT_ROOT}/docker/docker-compose.yml' \
       exec -T ${service} ${cmd} 2>/dev/null | grep -q '${expect}'"
   else
-    check="docker compose -f '${PROJECT_ROOT}/docker/docker-compose.yml' \
+    check="${COMPOSE_CMD} -f '${PROJECT_ROOT}/docker/docker-compose.yml' \
       exec -T ${service} ${cmd}"
   fi
 
@@ -232,7 +248,7 @@ if [ "${#FAILED_SERVICES[@]}" -gt 0 ]; then
     # Map display name to compose service name
     local_svc_lower="$(printf '%s' "$svc" | tr '[:upper:]' '[:lower:]')"
     printf "\n--- %s logs ---\n" "$svc"
-    docker compose -f "${PROJECT_ROOT}/docker/docker-compose.yml" \
+    ${COMPOSE_CMD} -f "${PROJECT_ROOT}/docker/docker-compose.yml" \
       logs --tail=20 "$local_svc_lower" 2>/dev/null || \
       printf "(could not retrieve logs for %s)\n" "$local_svc_lower"
   done

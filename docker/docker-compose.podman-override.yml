@@ -27,6 +27,11 @@ services:
       - label=disable
     userns_mode: keep-id
 
+  ollama-init:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
   prometheus:
     security_opt:
       - label=disable
