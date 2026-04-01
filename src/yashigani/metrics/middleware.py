@@ -59,6 +59,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
         gateway_request_duration_seconds.labels(
             method=method,
             action=action,
+            agent_id=agent_id,
         ).observe(elapsed)
 
         if response.status_code:
