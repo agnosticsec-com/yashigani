@@ -31,6 +31,7 @@
 
     # ── Admin backoffice — /admin/* ─────────────────────────────────────────
     handle /admin/* {
+        uri strip_prefix /admin
         reverse_proxy backoffice:8443 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
