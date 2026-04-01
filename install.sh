@@ -1950,8 +1950,21 @@ generate_secrets() {
   GEN_ADMIN1_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin1_password"
   chmod 600 "${secrets_dir}/admin1_password"
+  # Also write as admin_initial_password — the backoffice bootstrap checks this
+  # file to decide whether to generate new credentials or use existing ones
+  printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin_initial_password"
+  chmod 600 "${secrets_dir}/admin_initial_password"
   printf "%s" "$GEN_ADMIN1_USERNAME" > "${secrets_dir}/admin1_username"
   chmod 600 "${secrets_dir}/admin1_username"
+  # Update .env so backoffice creates the account with the generated username
+  local env_file="${WORK_DIR}/docker/.env"
+  if grep -q "^YASHIGANI_ADMIN_USERNAME=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^YASHIGANI_ADMIN_USERNAME=.*|YASHIGANI_ADMIN_USERNAME=${GEN_ADMIN1_USERNAME}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "YASHIGANI_ADMIN_USERNAME=${GEN_ADMIN1_USERNAME}" >> "$env_file"
+  fi
 
   GEN_ADMIN1_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN1_TOTP_SECRET" > "${secrets_dir}/admin1_totp_secret"

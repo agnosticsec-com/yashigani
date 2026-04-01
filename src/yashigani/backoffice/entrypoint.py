@@ -54,6 +54,13 @@ def _bootstrap():
     creds = load_or_generate(admin_username=admin_username, secrets_dir=secrets_dir)
     if creds is not None:
         # New deployment — print credentials and store them
+        # If installer already wrote secrets, use those instead of generated ones
+        redis_pwd_file = os.path.join(secrets_dir, "redis_password")
+        if os.path.exists(redis_pwd_file):
+            creds.redis_password = open(redis_pwd_file).read().strip()
+        grafana_pwd_file = os.path.join(secrets_dir, "grafana_admin_password")
+        if os.path.exists(grafana_pwd_file):
+            creds.grafana_admin_password = open(grafana_pwd_file).read().strip()
         print_credentials(creds)
         write_docker_secrets(creds, secrets_dir=secrets_dir)
         mark_bootstrapped()
@@ -93,11 +100,20 @@ def _bootstrap():
     auth_service = LocalAuthService()
 
     if not auth_service._accounts:
-        auth_service.create_admin(
+        _, _ = auth_service.create_admin(
             username=admin_username,
             auto_generate=False,
             plaintext_password=initial_admin_password,
         )
+        # Pre-provision TOTP if the installer wrote a secret
+        totp_file = os.path.join(secrets_dir, "admin1_totp_secret")
+        if os.path.exists(totp_file):
+            totp_secret = open(totp_file).read().strip()
+            record = auth_service._accounts.get(admin_username)
+            if record and totp_secret:
+                record.totp_secret = totp_secret
+                record.force_totp_provision = False
+                logger.info("Bootstrap: TOTP pre-provisioned from installer secret")
         logger.info("Bootstrap: initial admin account created — %s", admin_username)
 
     # ── Resource monitor ───────────────────────────────────────────────────
