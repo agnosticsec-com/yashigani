@@ -1653,123 +1653,146 @@ register_agent_bundles() {
     [[ -f "$podman_override" ]] && compose_files+=("-f" "$podman_override")
   fi
 
-  # Read admin credentials from secrets
-  local admin_user admin_pass admin_totp_secret
-  admin_user="$(cat "${secrets_dir}/admin1_username" 2>/dev/null || echo "")"
-  admin_pass="$(cat "${secrets_dir}/admin1_password" 2>/dev/null || echo "")"
-  admin_totp_secret="$(cat "${secrets_dir}/admin1_totp_secret" 2>/dev/null || echo "")"
-
-  if [[ -z "$admin_user" || -z "$admin_pass" || -z "$admin_totp_secret" ]]; then
-    log_warn "Admin credentials not found in secrets — skipping agent registration"
-    return 0
-  fi
-
-  # Compute TOTP code using Python
-  local totp_code
-  totp_code="$(TOTP_SECRET="$admin_totp_secret" python3 -c "
-import os, hmac, hashlib, struct, time, base64
-secret = os.environ['TOTP_SECRET']
-# Pad base32 if needed
-secret += '=' * (-len(secret) % 8)
-key = base64.b32decode(secret, casefold=True)
-counter = struct.pack('>Q', int(time.time()) // 30)
-mac = hmac.new(key, counter, hashlib.sha1).digest()
-offset = mac[-1] & 0x0F
-code = struct.unpack('>I', mac[offset:offset+4])[0] & 0x7FFFFFFF
-print(f'{code % 1000000:06d}')
-" 2>/dev/null || echo "")"
-
-  if [[ -z "$totp_code" ]]; then
-    log_warn "Could not compute TOTP code — skipping agent registration"
-    return 0
-  fi
-
-  # Log in to backoffice (via compose exec to reach internal port)
-  local session_token
-  session_token="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T backoffice \
-    python3 -c "
-import urllib.request, json, os
-data = json.dumps({'username': '$admin_user', 'password': '$admin_pass', 'totp_code': '$totp_code'}).encode()
-req = urllib.request.Request('http://localhost:8443/auth/login', data=data, headers={'Content-Type': 'application/json'})
-try:
-    resp = urllib.request.urlopen(req)
-    # Session token is in the Set-Cookie header
-    cookie = resp.headers.get('Set-Cookie', '')
-    for part in cookie.split(';'):
-        part = part.strip()
-        if part.startswith('yashigani_session='):
-            print(part.split('=', 1)[1])
-            break
-except Exception as e:
-    import sys; print(str(e), file=sys.stderr)
-" 2>/dev/null || echo "")"
-
-  if [[ -z "$session_token" ]]; then
-    log_warn "Could not authenticate with backoffice — skipping agent registration"
-    log_warn "Register agents manually after install: POST /admin/agents"
-    return 0
-  fi
-
-  # Agent definitions: profile_name -> (display_name, upstream_url)
-  declare -A AGENT_DEFS
-  AGENT_DEFS[langgraph]="LangGraph|http://langgraph:8000"
-  AGENT_DEFS[goose]="Goose|http://goose:3284"
-  AGENT_DEFS[openclaw]="OpenClaw|http://openclaw:18789"
-
+  # Run the entire registration flow inside the backoffice container.
+  # This avoids shell interpolation issues and timing problems with TOTP.
+  # The Python script reads secrets from /run/secrets/, computes TOTP,
+  # authenticates, registers each agent, and writes tokens to /run/secrets/.
+  local agents_json='['
+  local first=true
   for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
     [[ -z "$_profile" ]] && continue
-    local def="${AGENT_DEFS[$_profile]:-}"
-    [[ -z "$def" ]] && continue
-
-    local agent_name="${def%%|*}"
-    local agent_url="${def#*|}"
-    local token_file="${secrets_dir}/${_profile}_token"
-
-    # Skip if token already exists (upgrade path)
-    if [[ -s "$token_file" ]] && ! grep -q "placeholder" "$token_file" 2>/dev/null; then
-      log_info "  ${agent_name}: token exists — skipping registration"
+    # Skip if token already exists and isn't a placeholder
+    if [[ -s "${secrets_dir}/${_profile}_token" ]] && ! grep -q "placeholder" "${secrets_dir}/${_profile}_token" 2>/dev/null; then
+      log_info "  ${_profile}: token exists — skipping"
       continue
     fi
+    case "$_profile" in
+      langgraph) local _name="LangGraph" _url="http://langgraph:8000" ;;
+      goose)     local _name="Goose"     _url="http://goose:3284" ;;
+      openclaw)  local _name="OpenClaw"  _url="http://openclaw:18789" ;;
+      *) continue ;;
+    esac
+    $first || agents_json+=','
+    agents_json+="{\"profile\":\"${_profile}\",\"name\":\"${_name}\",\"url\":\"${_url}\"}"
+    first=false
+  done
+  agents_json+=']'
 
-    # Register agent via backoffice API
-    local result
-    result="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T backoffice \
-      python3 -c "
-import urllib.request, json
-data = json.dumps({'name': '${agent_name}', 'upstream_url': '${agent_url}'}).encode()
-req = urllib.request.Request(
-    'http://localhost:8443/admin/agents',
-    data=data,
-    headers={'Content-Type': 'application/json', 'Cookie': 'yashigani_session=${session_token}'}
-)
+  if [[ "$agents_json" == "[]" ]]; then
+    log_info "No new agents to register"
+    return 0
+  fi
+
+  local reg_output
+  reg_output="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T -e AGENTS_JSON="${agents_json}" backoffice \
+    python3 -c '
+import json, os, sys, time, hmac, hashlib, struct, base64, urllib.request
+
+secrets = "/run/secrets"
+def read_secret(name):
+    try:
+        return open(os.path.join(secrets, name)).read().strip()
+    except:
+        return ""
+
+user = read_secret("admin1_username")
+pw = read_secret("admin1_password")
+totp_secret = read_secret("admin1_totp_secret")
+if not all([user, pw, totp_secret]):
+    print("ERROR:missing_secrets", file=sys.stderr)
+    sys.exit(1)
+
+# Compute TOTP
+padded = totp_secret + "=" * (-len(totp_secret) % 8)
+key = base64.b32decode(padded, casefold=True)
+counter = struct.pack(">Q", int(time.time()) // 30)
+mac = hmac.new(key, counter, hashlib.sha1).digest()
+offset = mac[-1] & 0x0F
+code = struct.unpack(">I", mac[offset:offset+4])[0] & 0x7FFFFFFF
+totp_code = f"{code % 1000000:06d}"
+
+# Login
+login_data = json.dumps({"username": user, "password": pw, "totp_code": totp_code}).encode()
+req = urllib.request.Request("http://localhost:8443/auth/login", data=login_data,
+                             headers={"Content-Type": "application/json"})
 try:
     resp = urllib.request.urlopen(req)
-    body = json.loads(resp.read())
-    print(body.get('token', ''))
-except urllib.error.HTTPError as e:
-    body = e.read().decode()
-    import sys; print(f'HTTP {e.code}: {body}', file=sys.stderr)
 except Exception as e:
-    import sys; print(str(e), file=sys.stderr)
-" 2>/dev/null || echo "")"
+    print(f"ERROR:login_failed:{e}", file=sys.stderr)
+    sys.exit(1)
 
-    if [[ -n "$result" && "$result" != "HTTP"* ]]; then
-      printf "%s" "$result" > "$token_file"
-      chmod 600 "$token_file"
-      log_success "  ${agent_name}: registered (token written to ${_profile}_token)"
-    else
-      log_warn "  ${agent_name}: registration failed — register manually via /admin/agents"
-    fi
-  done
+session = ""
+cookie = resp.headers.get("Set-Cookie", "")
+for part in cookie.split(";"):
+    part = part.strip()
+    if part.startswith("yashigani_session="):
+        session = part.split("=", 1)[1]
+        break
 
-  # Restart agent containers so they pick up the new tokens
-  log_info "Restarting agent containers with new tokens..."
-  for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
-    [[ -z "$_profile" ]] && continue
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" --profile "$_profile" restart "$_profile" 2>/dev/null || true
-  done
+if not session:
+    print("ERROR:no_session_cookie", file=sys.stderr)
+    sys.exit(1)
 
-  log_success "Agent bundle registration complete"
+# Register agents
+agents = json.loads(os.environ.get("AGENTS_JSON", "[]"))
+results = []
+for agent in agents:
+    reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"]}).encode()
+    req = urllib.request.Request("http://localhost:8443/admin/agents", data=reg_data,
+                                 headers={"Content-Type": "application/json",
+                                           "Cookie": f"yashigani_session={session}"})
+    try:
+        resp = urllib.request.urlopen(req)
+        body = json.loads(resp.read())
+        token = body.get("token", "")
+        if token:
+            token_path = os.path.join(secrets, f"{agent[\"profile\"]}_token")
+            with open(token_path, "w") as f:
+                f.write(token)
+            os.chmod(token_path, 0o600)
+            results.append(f"OK:{agent[\"name\"]}")
+        else:
+            results.append(f"FAIL:{agent[\"name\"]}:no_token")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode()[:100]
+        results.append(f"FAIL:{agent[\"name\"]}:{e.code}:{detail}")
+    except Exception as e:
+        results.append(f"FAIL:{agent[\"name\"]}:{e}")
+
+for r in results:
+    print(r)
+' 2>&1)" || true
+
+  # Parse results
+  local any_registered=false
+  while IFS= read -r line; do
+    case "$line" in
+      OK:*)
+        local _agent_name="${line#OK:}"
+        log_success "  ${_agent_name}: registered"
+        any_registered=true
+        ;;
+      FAIL:*)
+        local _fail_detail="${line#FAIL:}"
+        log_warn "  ${_fail_detail}"
+        ;;
+      ERROR:*)
+        log_warn "Agent registration: ${line#ERROR:}"
+        ;;
+    esac
+  done <<< "$reg_output"
+
+  if $any_registered; then
+    # Restart agent containers so they pick up the new tokens
+    log_info "Restarting agent containers with new tokens..."
+    for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
+      [[ -z "$_profile" ]] && continue
+      "${COMPOSE_CMD[@]}" "${compose_files[@]}" --profile "$_profile" restart "$_profile" 2>/dev/null || true
+    done
+    log_success "Agent bundle registration complete"
+  else
+    log_warn "No agents were registered — register manually via /admin/agents"
+  fi
 }
 
 # =============================================================================
