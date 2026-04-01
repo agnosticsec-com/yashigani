@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/test-installer.sh — Yashigani v0.9.4
+# scripts/test-installer.sh — Yashigani v0.9.5
 # Local installer test suite. Runs on the developer's machine to verify
 # install.sh, platform-detect.sh, and preflight.sh work correctly.
 #
@@ -219,10 +219,10 @@ test_install_dryrun() {
     _pass "install.sh --dry-run completed without errors"
 
     # Check version displayed
-    if echo "$result" | grep -q "0.9.4"; then
-      _pass "Version 0.9.4 displayed in banner"
+    if echo "$result" | grep -q "0.9.5"; then
+      _pass "Version 0.9.5 displayed in banner"
     else
-      _fail "Version 0.9.4 not found in output"
+      _fail "Version 0.9.5 not found in output"
     fi
 
     # Check platform summary is present
@@ -354,7 +354,7 @@ print_summary() {
 MODE="${1:---all}"
 
 printf "\n${BLUE}╔═══════════════════════════════════════════════╗${RESET}\n"
-printf "${BLUE}║  Yashigani Installer Test Suite v0.9.4         ║${RESET}\n"
+printf "${BLUE}║  Yashigani Installer Test Suite v0.9.5         ║${RESET}\n"
 printf "${BLUE}╚═══════════════════════════════════════════════╝${RESET}\n"
 
 case "$MODE" in

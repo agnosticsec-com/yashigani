@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Yashigani v0.9.4 Installer
+# Yashigani v0.9.5 Installer
 # https://yashigani.io
 #
 # Usage:
@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="0.9.4"
+YASHIGANI_VERSION="0.9.5"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -1628,6 +1628,151 @@ bootstrap_postgres() {
 }
 
 # =============================================================================
+# STEP 11b (compose): Register agent bundles via backoffice API
+# =============================================================================
+register_agent_bundles() {
+  if [[ ${#COMPOSE_PROFILES[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  log_info "Registering agent bundles with backoffice..."
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    dry_print "Register agent bundles: ${COMPOSE_PROFILES[*]}"
+    return 0
+  fi
+
+  local backoffice_url="http://localhost:8443"
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+  local compose_file="${WORK_DIR}/docker/docker-compose.yml"
+
+  # Rebuild compose file args (same logic as compose_up)
+  local compose_files=("-f" "$compose_file")
+  if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
+    local podman_override="${WORK_DIR}/docker/docker-compose.podman-override.yml"
+    [[ -f "$podman_override" ]] && compose_files+=("-f" "$podman_override")
+  fi
+
+  # Read admin credentials from secrets
+  local admin_user admin_pass admin_totp_secret
+  admin_user="$(cat "${secrets_dir}/admin1_username" 2>/dev/null || echo "")"
+  admin_pass="$(cat "${secrets_dir}/admin1_password" 2>/dev/null || echo "")"
+  admin_totp_secret="$(cat "${secrets_dir}/admin1_totp_secret" 2>/dev/null || echo "")"
+
+  if [[ -z "$admin_user" || -z "$admin_pass" || -z "$admin_totp_secret" ]]; then
+    log_warn "Admin credentials not found in secrets — skipping agent registration"
+    return 0
+  fi
+
+  # Compute TOTP code using Python
+  local totp_code
+  totp_code="$(TOTP_SECRET="$admin_totp_secret" python3 -c "
+import os, hmac, hashlib, struct, time, base64
+secret = os.environ['TOTP_SECRET']
+# Pad base32 if needed
+secret += '=' * (-len(secret) % 8)
+key = base64.b32decode(secret, casefold=True)
+counter = struct.pack('>Q', int(time.time()) // 30)
+mac = hmac.new(key, counter, hashlib.sha1).digest()
+offset = mac[-1] & 0x0F
+code = struct.unpack('>I', mac[offset:offset+4])[0] & 0x7FFFFFFF
+print(f'{code % 1000000:06d}')
+" 2>/dev/null || echo "")"
+
+  if [[ -z "$totp_code" ]]; then
+    log_warn "Could not compute TOTP code — skipping agent registration"
+    return 0
+  fi
+
+  # Log in to backoffice (via compose exec to reach internal port)
+  local session_token
+  session_token="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T backoffice \
+    python3 -c "
+import urllib.request, json, os
+data = json.dumps({'username': '$admin_user', 'password': '$admin_pass', 'totp_code': '$totp_code'}).encode()
+req = urllib.request.Request('http://localhost:8443/auth/login', data=data, headers={'Content-Type': 'application/json'})
+try:
+    resp = urllib.request.urlopen(req)
+    # Session token is in the Set-Cookie header
+    cookie = resp.headers.get('Set-Cookie', '')
+    for part in cookie.split(';'):
+        part = part.strip()
+        if part.startswith('yashigani_session='):
+            print(part.split('=', 1)[1])
+            break
+except Exception as e:
+    import sys; print(str(e), file=sys.stderr)
+" 2>/dev/null || echo "")"
+
+  if [[ -z "$session_token" ]]; then
+    log_warn "Could not authenticate with backoffice — skipping agent registration"
+    log_warn "Register agents manually after install: POST /admin/agents"
+    return 0
+  fi
+
+  # Agent definitions: profile_name -> (display_name, upstream_url)
+  declare -A AGENT_DEFS
+  AGENT_DEFS[langgraph]="LangGraph|http://langgraph:8000"
+  AGENT_DEFS[goose]="Goose|http://goose:3284"
+  AGENT_DEFS[openclaw]="OpenClaw|http://openclaw:18789"
+
+  for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
+    [[ -z "$_profile" ]] && continue
+    local def="${AGENT_DEFS[$_profile]:-}"
+    [[ -z "$def" ]] && continue
+
+    local agent_name="${def%%|*}"
+    local agent_url="${def#*|}"
+    local token_file="${secrets_dir}/${_profile}_token"
+
+    # Skip if token already exists (upgrade path)
+    if [[ -s "$token_file" ]] && ! grep -q "placeholder" "$token_file" 2>/dev/null; then
+      log_info "  ${agent_name}: token exists — skipping registration"
+      continue
+    fi
+
+    # Register agent via backoffice API
+    local result
+    result="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T backoffice \
+      python3 -c "
+import urllib.request, json
+data = json.dumps({'name': '${agent_name}', 'upstream_url': '${agent_url}'}).encode()
+req = urllib.request.Request(
+    'http://localhost:8443/admin/agents',
+    data=data,
+    headers={'Content-Type': 'application/json', 'Cookie': 'yashigani_session=${session_token}'}
+)
+try:
+    resp = urllib.request.urlopen(req)
+    body = json.loads(resp.read())
+    print(body.get('token', ''))
+except urllib.error.HTTPError as e:
+    body = e.read().decode()
+    import sys; print(f'HTTP {e.code}: {body}', file=sys.stderr)
+except Exception as e:
+    import sys; print(str(e), file=sys.stderr)
+" 2>/dev/null || echo "")"
+
+    if [[ -n "$result" && "$result" != "HTTP"* ]]; then
+      printf "%s" "$result" > "$token_file"
+      chmod 600 "$token_file"
+      log_success "  ${agent_name}: registered (token written to ${_profile}_token)"
+    else
+      log_warn "  ${agent_name}: registration failed — register manually via /admin/agents"
+    fi
+  done
+
+  # Restart agent containers so they pick up the new tokens
+  log_info "Restarting agent containers with new tokens..."
+  for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
+    [[ -z "$_profile" ]] && continue
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" --profile "$_profile" restart "$_profile" 2>/dev/null || true
+  done
+
+  log_success "Agent bundle registration complete"
+}
+
+# =============================================================================
 # STEP 12 (compose/vm): Health check
 # =============================================================================
 run_health_check() {
@@ -1755,16 +1900,26 @@ generate_secrets() {
     GEN_ADMIN2_TOTP_SECRET="[preserved]"
     GEN_ADMIN1_TOTP_URI=""
     GEN_ADMIN2_TOTP_URI=""
-    # Ensure POSTGRES_PASSWORD is in .env for Docker Compose interpolation
+    # Ensure passwords are in .env for Docker Compose interpolation
     local env_file="${WORK_DIR}/docker/.env"
-    if [[ "$GEN_POSTGRES_PASSWORD" != "[preserved]" ]]; then
-      if grep -q "^POSTGRES_PASSWORD=" "$env_file" 2>/dev/null; then
-        local tmp_env; tmp_env="$(mktemp)"
-        sed "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}|" "$env_file" > "$tmp_env"
-        mv "$tmp_env" "$env_file"
-      else
-        echo "POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}" >> "$env_file"
+    for _pw_key_val in "POSTGRES_PASSWORD:${GEN_POSTGRES_PASSWORD}" "REDIS_PASSWORD:${GEN_REDIS_PASSWORD}"; do
+      local _pw_key="${_pw_key_val%%:*}"
+      local _pw_val="${_pw_key_val#*:}"
+      if [[ "$_pw_val" != "[preserved]" && -n "$_pw_val" ]]; then
+        if grep -q "^${_pw_key}=" "$env_file" 2>/dev/null; then
+          local tmp_env; tmp_env="$(mktemp)"
+          sed "s|^${_pw_key}=.*|${_pw_key}=${_pw_val}|" "$env_file" > "$tmp_env"
+          mv "$tmp_env" "$env_file"
+        else
+          echo "${_pw_key}=${_pw_val}" >> "$env_file"
+        fi
       fi
+    done
+    # Ensure OpenClaw gateway token exists
+    if ! grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
+      local openclaw_token
+      openclaw_token="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+      echo "OPENCLAW_GATEWAY_TOKEN=${openclaw_token}" >> "$env_file"
     fi
     return 0
   fi
@@ -1834,6 +1989,27 @@ generate_secrets() {
   GEN_REDIS_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_REDIS_PASSWORD" > "${secrets_dir}/redis_password"
   chmod 600 "${secrets_dir}/redis_password"
+  # Write to .env for Compose interpolation (LangGraph REDIS_URI needs it)
+  if grep -q "^REDIS_PASSWORD=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=${GEN_REDIS_PASSWORD}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "REDIS_PASSWORD=${GEN_REDIS_PASSWORD}" >> "$env_file"
+  fi
+
+  # --- OpenClaw gateway token ---
+  local openclaw_token
+  openclaw_token="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  printf "%s" "$openclaw_token" > "${secrets_dir}/openclaw_gateway_token"
+  chmod 600 "${secrets_dir}/openclaw_gateway_token"
+  if grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^OPENCLAW_GATEWAY_TOKEN=.*|OPENCLAW_GATEWAY_TOKEN=${openclaw_token}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "OPENCLAW_GATEWAY_TOKEN=${openclaw_token}" >> "$env_file"
+  fi
 
   # --- Grafana ---
   GEN_GRAFANA_PASSWORD="$(_gen_password)"
@@ -2292,6 +2468,9 @@ main() {
 
     # Step 11: Bootstrap Postgres
     bootstrap_postgres
+
+    # Step 11b: Register agent bundles (after backoffice is healthy)
+    register_agent_bundles
 
     # Step 12: Health check
     run_health_check
