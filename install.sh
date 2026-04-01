@@ -1812,7 +1812,7 @@ GEN_GRAFANA_PASSWORD=""
 _gen_password() {
   # 36-char alphanumeric password (matches Agnostic Security policy)
   if command -v openssl >/dev/null 2>&1; then
-    openssl rand -base64 27 | tr -dc 'A-Za-z0-9' | head -c 36
+    openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 36
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits) for _ in range(36)))'
   else
