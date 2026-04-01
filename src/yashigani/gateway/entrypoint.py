@@ -191,7 +191,16 @@ def _build_app():
 
         loop = asyncio.get_event_loop()
         db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
-        if db_dsn:
+        if db_dsn and "${POSTGRES_PASSWORD}" in db_dsn:
+            pg_pwd_file = os.path.join(secrets_dir, "postgres_password")
+            try:
+                with open(pg_pwd_file) as f:
+                    pg_password = f.read().strip()
+                db_dsn = db_dsn.replace("${POSTGRES_PASSWORD}", pg_password)
+                os.environ["YASHIGANI_DB_DSN"] = db_dsn
+            except OSError:
+                logger.warning("postgres_password secret not found — DB DSN unresolved")
+        if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
             loop.run_until_complete(create_pool())
             db_pool = True  # sentinel; pool is module-level singleton
 
