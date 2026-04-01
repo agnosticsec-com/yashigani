@@ -323,6 +323,8 @@ services:
       # Postgres starts before backoffice populates secrets_volume, so it needs
       # the installer-generated password file from disk immediately.
       - ./secrets:/run/secrets:ro
+      # Init scripts — create additional databases (e.g. langgraph) on first start
+      - ./postgres/init-langgraph-db.sh:/docker-entrypoint-initdb.d/10-langgraph.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yashigani_app -d yashigani"]
       interval: 10s
@@ -496,24 +498,34 @@ services:
   # Agnostic Security. Direct issues to the upstream project teams.
   # ---------------------------------------------------------------------------
 
-  # LangGraph — Python MCP-native multi-agent orchestration (Apache 2.0)
+  # LangGraph — Python multi-agent orchestration (Elastic-2.0)
   # https://github.com/langchain-ai/langgraph
+  # Requires own Postgres DB + Redis. Uses shared Postgres instance (separate DB)
+  # and shared Redis (DB 5). No LangSmith API key needed for local/demo mode.
   langgraph:
-    # Image digest pinned per Yashigani release — do not change manually
     image: langchain/langgraph-api:0.7.91-py3.12-bookworm
     restart: unless-stopped
     environment:
-      LANGGRAPH_YASHIGANI_URL: http://gateway:8080
-      LANGGRAPH_AGENT_TOKEN_FILE: /run/secrets/langgraph_token
+      # LangGraph requires its own Postgres database and Redis for task queue
+      DATABASE_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/langgraph
+      REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/5
+      PORT: "8000"
+      # No LangSmith key needed — runs in local/demo mode without observability
+      LANGSMITH_API_KEY: ""
     volumes:
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health 2>/dev/null || curl -sf http://localhost:8080/health 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "python3 /api/healthcheck.py"]
       interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 30s
     depends_on:
       gateway:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
@@ -522,23 +534,33 @@ services:
     profiles:
       - langgraph
 
-  # Goose — Python MCP-native developer assistant (Apache 2.0)
+  # Goose — AI developer assistant with ACP server mode (Apache 2.0)
   # https://github.com/block/goose
+  # Runs goose serve (ACP over HTTP/WebSocket) on port 3284.
+  # LLM calls routed through Yashigani gateway via OpenAI-compatible endpoint.
   goose:
-    # Image digest pinned per Yashigani release — do not change manually
-    # No versioned tags published on GHCR — pin to latest
     image: ghcr.io/block/goose:latest
     restart: unless-stopped
+    entrypoint: ["goose"]
+    command: ["serve", "--host", "0.0.0.0", "--port", "3284"]
     environment:
-      GOOSE_YASHIGANI_URL: http://gateway:8080
-      GOOSE_AGENT_TOKEN_FILE: /run/secrets/goose_token
+      # Route all LLM calls through Yashigani gateway (OpenAI-compatible)
+      GOOSE_PROVIDER: openai
+      GOOSE_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      OPENAI_API_KEY: "yashigani"
+      OPENAI_HOST: http://gateway:8080/v1
+      # Disable telemetry in container
+      GOOSE_TELEMETRY_ENABLED: "false"
+      DO_NOT_TRACK: "true"
     volumes:
+      - goose_data:/home/goose
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health 2>/dev/null || curl -sf http://localhost:8080/health 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3284/status 2>/dev/null || curl -sf http://localhost:3284/status 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 15s
     depends_on:
       gateway:
         condition: service_healthy
@@ -553,36 +575,52 @@ services:
   # CrewAI Docker image is now an enterprise-only feature.
   # Contact sales@agnosticsec.com for Enterprise tier with CrewAI support.
 
-  # OpenClaw — Node.js 24 personal AI with 30+ messaging channel integrations
+  # OpenClaw — Node.js personal AI with 30+ messaging channel integrations
   # https://openclaw.ai  |  https://github.com/openclaw/openclaw
-  # NOTE: Node.js 24 image is larger than the Python agent images (~800 MB vs ~200 MB).
-  # OpenClaw runs its own Gateway on port 18789. Integration pattern:
-  #   OpenClaw Gateway (:18789) → Yashigani Gateway → LLM providers
+  # Runs its own Gateway on port 18789. All LLM requests route through Yashigani.
+  # Integration: OpenClaw (:18789) → Yashigani Gateway (:8080) → Ollama/LLM
   openclaw:
-    # Image digest pinned per Yashigani release — do not change manually
-    # GHCR registry — no versioned tags published
     image: ghcr.io/openclaw/openclaw:latest
     restart: unless-stopped
     ports:
       - "18789:18789"
     environment:
-      # Point OpenClaw's outbound LLM proxy at Yashigani
-      OPENCLAW_UPSTREAM_URL: http://gateway:8080
-      OPENCLAW_AGENT_TOKEN_FILE: /run/secrets/openclaw_token
-      # Server mode: disables audio, camera, location, and voice-wake nodes
+      # Gateway binding — allow access from Docker network
+      OPENCLAW_GATEWAY_BIND: all
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      # Route ALL LLM calls through Yashigani gateway as OpenAI-compatible provider
+      OPENCLAW_CONFIG_JSON: |
+        {
+          "gateway": {"port": 18789, "bind": "all"},
+          "models": {
+            "providers": {
+              "yashigani": {
+                "baseUrl": "http://gateway:8080/v1",
+                "apiKey": "yashigani",
+                "api": "openai-completions",
+                "models": [
+                  {"id": "qwen2.5:3b", "name": "Qwen 2.5 3B (via Yashigani)", "contextWindow": 32768, "maxTokens": 4096}
+                ]
+              }
+            }
+          },
+          "agents": {"defaults": {"models": ["yashigani/qwen2.5:3b"]}}
+        }
+      # Server mode: disable hardware nodes unsuitable for containers
       OPENCLAW_SERVER_MODE: "true"
       OPENCLAW_DISABLE_AUDIO: "true"
       OPENCLAW_DISABLE_CAMERA: "true"
       OPENCLAW_DISABLE_LOCATION: "true"
       OPENCLAW_DISABLE_VOICE_WAKE: "true"
     volumes:
-      - openclaw_data:/data
+      - openclaw_data:/home/node/.openclaw
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:18789/health 2>/dev/null || curl -sf http://localhost:18789/health 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:18789/healthz 2>/dev/null || wget -qO- http://localhost:18789/healthz 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 20s
     depends_on:
       gateway:
         condition: service_healthy
@@ -590,7 +628,7 @@ services:
       - no-new-privileges:true
     networks:
       - internal
-      - external      # Gateway port 18789 must be reachable by messaging channel webhooks
+      - external      # Port 18789 must be reachable by messaging channel webhooks
     profiles:
       - openclaw
 
@@ -629,6 +667,8 @@ volumes:
     driver: local
   # Agent bundle volumes
   openclaw_data:
+    driver: local
+  goose_data:
     driver: local
 
 # ---------------------------------------------------------------------------
