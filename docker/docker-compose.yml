@@ -232,14 +232,15 @@ services:
   # Model bootstrap — pull classifier model on first start
   ollama-init:
     image: ollama/ollama:0.6.2
-    restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
+    restart: on-failure:3
+    entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        until bash -c '</dev/tcp/ollama/11434' 2>/dev/null; do
+        until </dev/tcp/ollama/11434 2>/dev/null; do
           echo "waiting for ollama..."; sleep 3
         done
-        ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}
+        echo "ollama is ready, pulling model..."
+        OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_MODEL:-qwen2.5:3b}
     depends_on:
       ollama:
         condition: service_healthy

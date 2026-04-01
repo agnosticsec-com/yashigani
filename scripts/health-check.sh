@@ -205,7 +205,7 @@ _check_compose_exec "Postgres" "postgres" \
 
 # 4. Redis
 _check_compose_exec "Redis" "redis" \
-  "redis-cli -a \$(cat /run/secrets/redis_password) ping" "PONG"
+  "sh -c 'redis-cli -a \"\$(cat /run/secrets/redis_password)\" ping 2>/dev/null'" "PONG"
 
 # 5. OPA — internal network only, check via docker compose exec
 _check_compose_exec "OPA" "policy" "/opa eval true"
