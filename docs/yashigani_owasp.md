@@ -1,8 +1,9 @@
-# Yashigani Security Gateway — OWASP Compliance Mapping
+# Yashigani Security Gateway -- OWASP Compliance Mapping
 
-**Document Version:** 1.4
-**Date:** 2026-03-31
-**Codebase version:** v0.9.4
+**Document Version:** 2.0
+**Date:** 2026-04-01
+**Codebase version:** v0.9.5
+**Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
 
@@ -11,7 +12,7 @@
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [Section 1: OWASP ASVS v5 Mapping](#section-1-owasp-asvs-v5-mapping)
+2. [Section 1: OWASP ASVS v5 Level 3 Assessment](#section-1-owasp-asvs-v5-level-3-assessment)
 3. [Section 2: OWASP API Security Top 10 (2023) Mapping](#section-2-owasp-api-security-top-10-2023-mapping)
 4. [Section 3: OWASP Agentic AI and LLM Top 10 Mapping](#section-3-owasp-agentic-ai-and-llm-top-10-mapping)
 5. [Section 4: Compliance Summary Table](#section-4-compliance-summary-table)
@@ -26,415 +27,496 @@ Yashigani is a security enforcement gateway purpose-built for MCP (Model Context
 
 This document maps Yashigani's security controls against three authoritative OWASP frameworks:
 
-- **OWASP Application Security Verification Standard (ASVS) v5** — 13 control chapters
-- **OWASP API Security Top 10 (2023)** — 10 API-specific risk categories
-- **OWASP LLM Top 10 and Agentic AI Security** — 10 LLM risk categories plus agent-specific controls
+- **OWASP Application Security Verification Standard (ASVS) v5.0** -- 14 control chapters assessed at **Level 3** (highest assurance)
+- **OWASP API Security Top 10 (2023)** -- 10 API-specific risk categories
+- **OWASP LLM Top 10 and Agentic AI Security** -- 10 LLM risk categories plus agent-specific controls
 
-The mapping is intended to serve security architects performing due diligence, procurement teams evaluating vendor risk, and compliance engineers preparing evidence packages for audits (SOC 2, ISO 27001, etc.).
+ASVS v5 (released 2025) restructured significantly from v4.x. The chapter numbering, requirement identifiers, and several control areas were reorganized. This document follows the v5 structure exclusively.
 
-### Summary Coverage
+### Assessment Level
+
+This assessment targets **ASVS v5 Level 3**, the highest assurance tier intended for applications that handle highly sensitive data, perform critical business functions, or operate in high-threat environments. Level 3 requires all Level 1 and Level 2 controls plus additional high-assurance controls including formal verification, hardware-backed security, and advanced cryptographic protections.
+
+### Summary Coverage (ASVS v5 Level 3)
+
+| Verdict | Count | Percentage |
+|---|---|---|
+| PASS | 89 | 59% |
+| PARTIAL | 37 | 25% |
+| FAIL | 15 | 10% |
+| N/A | 9 | 6% |
 
 | Framework | Full Coverage | Partial Coverage | Not Applicable | Not Covered |
 |---|---|---|---|---|
-| OWASP ASVS v5 (L2) | 67% | 24% | 6% | 3% |
+| OWASP ASVS v5 (L3) | 59% | 25% | 6% | 10% |
 | OWASP API Security Top 10 | 80% | 20% | 0% | 0% |
 | OWASP LLM Top 10 | 70% | 20% | 10% | 0% |
 
-Controls marked PARTIAL reflect areas where Yashigani provides meaningful mitigations but cannot achieve full coverage due to architectural scope boundaries (e.g., client-side controls, training-time concerns). These are documented in detail in Section 5.
+Controls marked PARTIAL reflect areas where Yashigani provides meaningful mitigations but cannot achieve full L3 coverage due to architectural scope boundaries (e.g., client-side controls, hardware attestation, training-time concerns). Controls marked FAIL identify specific L3 requirements not currently implemented.
+
+### Coverage Ratings
+
+- **PASS** -- Yashigani directly implements or enforces this control at L3
+- **PARTIAL** -- Control is present but does not fully satisfy L3 requirements
+- **FAIL** -- Control is not currently implemented or insufficient for L3
+- **N/A** -- Requirement does not apply to a gateway/proxy architecture
 
 ---
 
-## Section 1: OWASP ASVS v5 Mapping
+## Section 1: OWASP ASVS v5 Level 3 Assessment
 
-The OWASP Application Security Verification Standard (ASVS) v5 defines a framework of security requirements organized into 14 chapters. This section maps Yashigani controls to ASVS Level 2 requirements — the standard baseline for most enterprise applications handling sensitive data.
+ASVS v5 defines three verification levels:
+- **L1** -- Minimum security baseline (opportunistic)
+- **L2** -- Standard for most applications (structured)
+- **L3** -- High-assurance for critical and high-value applications (comprehensive)
 
-ASVS levels are defined as:
-- **L1** — Minimum security baseline
-- **L2** — Standard for most applications
-- **L3** — High-assurance / highly sensitive applications
-
-Coverage ratings:
-- **FULL** — Yashigani directly implements or enforces this control
-- **PARTIAL** — Control is present but may depend on operator configuration or has scope boundaries
-- **N/A** — Requirement does not apply to a gateway/proxy architecture
-- **GAP** — Control is not currently implemented
+Level 3 includes all L1 and L2 requirements plus additional controls for defense against advanced attackers, insider threats, and nation-state adversaries.
 
 ---
 
-### V1 — Encoding and Sanitization
+### V1 -- Architecture, Design, and Threat Modeling
 
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V1.1.1 — Verify that all request data is validated and sanitized on a trusted server | L1 | FastText ML first-pass + OPA policy engine inspect and validate all inbound requests at the gateway data plane before forwarding | FULL |
-| V1.1.2 — Verify that all input fields, including hidden fields, cookies, and HTTP headers, are validated | L1 | OPA input object includes the full request context: all headers, path, method, query parameters, and body metadata | FULL |
-| V1.1.3 — Verify that all output is encoded appropriately for the context | L2 | Response inspection pipeline validates upstream responses when YASHIGANI_INSPECT_RESPONSES is enabled; backoffice renders with strict CSP | PARTIAL |
-| V1.1.4 — Verify that all untrusted HTML data is sanitized before being sent to the browser | L2 | Backoffice admin panel serves strict Content-Security-Policy headers, X-Frame-Options: DENY, and encodes dynamic content | FULL |
-| V1.1.5 — Verify that body size limits are enforced | L2 | Hard limit of 4 MB enforced by FastAPI middleware on all inbound request bodies; requests exceeding this limit are rejected before inspection | FULL |
-| V1.1.6 — Verify that UTF-8 safe decoding is enforced | L2 | UTF-8 safe decode applied during inspection pipeline ingestion; malformed byte sequences trigger rejection before forwarding | FULL |
+ASVS v5 V1 requires documented security architecture, threat models, and secure design principles applied throughout the SDLC.
 
-**Chapter Notes:** The gateway's position as a reverse proxy provides a centralized enforcement point for input validation that is consistent across all upstream MCP tool servers, regardless of each server's own validation posture. This is a significant architectural advantage — a misconfigured upstream cannot introduce encoding vulnerabilities through Yashigani.
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V1.1.1 | Verify that a security architecture document exists describing the application's security controls | L1 | This document, plus architecture docs in `/docs/`, threat model in `THREAT_MODEL.md` | PASS |
+| V1.1.2 | Verify that a threat model exists and is updated for design changes | L2 | Threat model maintained for the gateway proxy, OPA policy engine, and inspection pipeline; updated per release | PASS |
+| V1.1.3 | Verify that all security controls have a centralized implementation | L1 | OPA policy engine is the single authorization decision point; CHS is the single credential stripping point; inspection pipeline is the single content analysis point | PASS |
+| V1.1.4 | Verify that security controls are applied on a trusted system | L1 | All controls execute server-side in the gateway process; no security decisions delegated to clients | PASS |
+| V1.2.1 | Verify that all authentication pathways and identity management flows are defined in the architecture | L2 | Auth flows documented: local password+TOTP, SAML, OIDC, agent bearer token, JWT validation, WebAuthn/FIDO2 | PASS |
+| V1.2.2 | Verify that all access control decisions are documented and centralized | L2 | OPA is the sole authorization engine; RBAC groups and policy bundles are the sole access control definitions | PASS |
+| V1.3.1 | Verify that input validation is performed on a trusted system and applied consistently | L1 | FastText+OPA inspection pipeline operates server-side on every request before forwarding | PASS |
+| V1.4.1 | Verify that the application uses a vetted cryptographic module | L2 | Python `cryptography` library (OpenSSL backend), `argon2-cffi`, `secrets` module for CSPRNG | PASS |
+| V1.4.2 | Verify that all cryptographic operations use a single, approved implementation | L3 | All crypto operations use `cryptography` library or `argon2-cffi`; no hand-rolled crypto; no fallback to weaker implementations | PASS |
+| V1.5.1 | Verify that the application segregates sensitive data by sensitivity level | L2 | Credentials in secrets backends (Docker Secrets, Vault, cloud KMS); sensitive DB columns encrypted with AES-256-GCM; audit logs separated from application data | PASS |
+| V1.5.2 | Verify that the architecture enforces tenant isolation | L2 | PostgreSQL RLS, separate Redis DB indices per tenant, OPA tenant context in every policy evaluation | PASS |
+| V1.6.1 | Verify that the application has a defined secure SDLC process | L3 | GitHub Actions CI with Trivy scanning, CODEOWNERS on security-critical paths, locked dependencies, digest-pinned base images | PARTIAL |
+| V1.6.2 | Verify that formal code review is required for security-sensitive changes | L3 | CODEOWNERS enforces review on auth, policy, inspection, and Dockerfile changes; however, no formal security sign-off gate beyond PR review | PARTIAL |
+| V1.7.1 | Verify that the architecture documents all third-party components | L2 | `pyproject.toml` with locked/hashed dependencies; Trivy SBOM generation in CI | PASS |
+| V1.7.2 | Verify that all third-party components are monitored for vulnerabilities | L2 | Trivy scanning in CI; GitHub Dependabot alerts enabled | PASS |
 
----
-
-### V2 — Authentication
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V2.1.1 — Verify that passwords are stored using an approved adaptive one-way function | L1 | Argon2id is the default password hashing algorithm for all user accounts; bcrypt is supported as a legacy compatibility option | FULL |
-| V2.1.2 — Verify that passwords at least 12 characters in length are permitted | L1 | Minimum password length is configurable with a system-enforced floor; argon2 parameters (memory, iterations, parallelism) are operator-configurable | FULL |
-| V2.2.1 — Verify that TOTP authentication is available | L2 | TOTP 2FA is mandatory for backoffice admin accounts; enforced at session creation, not opt-in | FULL |
-| V2.2.2 — Verify that multi-factor authentication (MFA) is enforced for privileged users | L2 | Admin sessions require TOTP verification before any privileged operation is permitted; TOTP enforcement is not bypassable via configuration | FULL |
-| V2.3.1 — Verify that credential reset uses a secure out-of-band mechanism | L2 | Operator-managed; Yashigani provides secure session invalidation but credential reset flow is delegated to the operator's identity infrastructure | PARTIAL |
-| V2.4.1 — Verify that SAML assertions are validated | L2 | SAML v2 integration validates assertions, enforces NotBefore/NotOnOrAfter time bounds, and verifies signature against configured IdP metadata | FULL |
-| V2.4.2 — Verify that OIDC tokens are validated | L2 | OIDC ID token validation enforces signature verification, issuer, audience, and expiry checks against the configured JWKS endpoint | FULL |
-| V2.5.1 — Verify that JWT tokens use only permitted algorithms | L2 | JWT introspection rejects alg:none unconditionally; only RS256, RS384, RS512, ES256, ES384, ES512 are permitted; HS* (HMAC-based) algorithms are rejected | FULL |
-| V2.5.2 — Verify that JWKS key material is validated | L2 | JWKS waterfall: primary JWKS endpoint, fallback to secondary, then static key file; key rotation is handled automatically on 401 from upstream | FULL |
-| V2.1.7 — Verify that submitted passwords are checked against a set of breached passwords | L1 | `password.py` checks every password change against the HIBP k-Anonymity breach database; raises `PasswordBreachedError` if the password is found in a known breach; the installer also checks all generated passwords against HIBP before writing to disk; fail-open if API unreachable (v0.9.1) | FULL |
-| V2.6.1 — Verify that agent/API token credentials meet minimum entropy requirements | L2 | Agent bearer tokens must meet a minimum length of 64 characters; tokens below this threshold are rejected at registration time | FULL |
-
-**Chapter Notes:** The combination of Argon2id hashing, mandatory TOTP, strict JWT algorithm enforcement, and HIBP breach checking provides strong authentication coverage. The SAML and OIDC integrations allow Yashigani to participate in enterprise SSO ecosystems without weakening its own authentication posture. HIBP integration (v0.9.1) satisfies ASVS V2.1.7 at both the installer level (all generated credentials screened) and the runtime level (every password change screened).
+**Chapter Notes:** Yashigani has strong architectural separation (control plane vs data plane, OPA as single policy engine, CHS as single credential handler). The L3 gaps are in formal SDLC process documentation and formal security sign-off gates, which are process-level requirements rather than technical controls.
 
 ---
 
-### V3 — Session Management
+### V2 -- Authentication
 
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V3.1.1 — Verify that the application never reveals session tokens in URLs | L1 | Session identifiers are transmitted exclusively via HttpOnly cookies; no URL-based session token patterns are supported | FULL |
-| V3.2.1 — Verify that session cookies use HttpOnly, Secure, and SameSite attributes | L1 | All session cookies are set with HttpOnly=true, Secure=true, SameSite=Strict; backoffice enforces SameSite=Strict | FULL |
-| V3.2.2 — Verify that session tokens are invalidated on logout | L1 | Redis session store invalidates tokens synchronously on logout; server-side session records are deleted, not merely expired | FULL |
-| V3.3.1 — Verify that session expiry is enforced | L2 | Session TTL is configurable per deployment; idle timeout and absolute expiry are both enforced independently at the Redis session store | FULL |
-| V3.4.1 — Verify that concurrent session limits are enforced | L2 | Configurable maximum concurrent sessions per user; exceeding the limit invalidates the oldest session (configurable to reject new sessions instead) | FULL |
-| V3.5.1 — Verify that session identifiers have sufficient entropy | L2 | Session tokens generated via cryptographically secure PRNG; minimum 128-bit entropy enforced by generation policy | FULL |
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V2.1.1 | Verify that user-set passwords are at least 8 characters | L1 | Minimum password length enforced with configurable floor (default 12 chars) | PASS |
+| V2.1.2 | Verify that passwords of at least 64 characters are permitted | L1 | No upper bound below 64 chars; Argon2id handles arbitrarily long passwords | PASS |
+| V2.1.3 | Verify that password truncation is not performed | L1 | Argon2id hashes the full password; no truncation | PASS |
+| V2.1.4 | Verify that Unicode characters are permitted in passwords | L1 | UTF-8 passwords accepted and hashed as-is by Argon2id | PASS |
+| V2.1.5 | Verify that users can change their password | L1 | Password change available in backoffice; requires current password + TOTP verification | PASS |
+| V2.1.6 | Verify that password change requires the current password | L1 | Current password required for password change operations | PASS |
+| V2.1.7 | Verify that passwords are checked against a set of breached passwords | L1 | HIBP k-Anonymity breach database checked on every password change and at install time; `PasswordBreachedError` raised if found; fail-open if API unreachable | PASS |
+| V2.1.8 | Verify that a password strength meter is provided | L1 | No client-side strength meter in backoffice UI | FAIL |
+| V2.1.9 | Verify that there are no composition rules beyond minimum length | L1 | No composition rules enforced (no "must contain uppercase" etc.); compliant with NIST 800-63B | PASS |
+| V2.2.1 | Verify that anti-automation controls are effective against credential stuffing | L1 | Per-IP rate limiting on auth endpoints; progressive lockout after failed attempts | PASS |
+| V2.2.2 | Verify that weak authenticators (SMS, email OTP) are not offered as primary MFA | L2 | Only TOTP and WebAuthn/FIDO2 supported; no SMS or email OTP | PASS |
+| V2.2.3 | Verify that credential recovery does not reveal the current password | L1 | Recovery codes (8 codes, Argon2id-hashed) do not reveal the password; admin-initiated reset creates new password | PASS |
+| V2.3.1 | Verify that system-generated initial passwords or activation codes are securely random | L1 | All generated passwords use `secrets.token_urlsafe()` with minimum 36 chars entropy; HIBP-checked before use | PASS |
+| V2.3.2 | Verify that enrollment or activation links expire after a defined period | L2 | Recovery codes are single-use; session tokens have absolute expiry; however, no time-limited enrollment links (admin creates accounts directly) | PARTIAL |
+| V2.4.1 | Verify that passwords are stored using an approved one-way key derivation function | L1 | Argon2id (m=65536, t=3, p=4) for all user passwords; bcrypt for Prometheus basic auth | PASS |
+| V2.4.2 | Verify that the salt is generated using a CSPRNG and is at least 128 bits | L1 | Argon2id generates its own salt via CSPRNG; salt length meets OWASP minimum | PASS |
+| V2.4.3 | Verify that if PBKDF2 is used, iteration count is sufficient | L1 | N/A -- Argon2id is used, not PBKDF2 | N/A |
+| V2.5.1 | Verify that MFA is required for all users accessing sensitive functions | L2 | TOTP mandatory for all admin accounts; required before any privileged operation | PASS |
+| V2.5.2 | Verify that MFA verification occurs at authentication time | L2 | TOTP verified during login flow, not deferred | PASS |
+| V2.5.3 | Verify that TOTP shared secrets are stored encrypted | L2 | TOTP secrets stored in AES-256-GCM encrypted PostgreSQL columns | PASS |
+| V2.5.4 | Verify that MFA recovery mechanisms are at least as strong as primary MFA | L3 | Recovery codes are 8 single-use codes hashed with Argon2id; recovery invalidates existing session and requires re-enrollment of TOTP | PASS |
+| V2.5.5 | Verify that hardware-based authenticators (WebAuthn/FIDO2) are supported | L3 | WebAuthn/FIDO2 passkey support implemented; known constructor bug exists (partially functional) | PARTIAL |
+| V2.5.6 | Verify that replay prevention is implemented for OTP mechanisms | L2 | TOTP used-code cache prevents replay within the current time window | PASS |
+| V2.5.7 | Verify that MFA lockout is progressive and rate-limited | L2 | Progressive lockout on failed TOTP attempts; lockout duration increases with consecutive failures | PASS |
+| V2.6.1 | Verify that lookup secrets (recovery codes) are hashed | L2 | Recovery codes hashed with Argon2id; plaintext shown once at generation, never stored | PASS |
+| V2.7.1 | Verify that service-to-service authentication uses strong credentials | L2 | Agent PSK tokens with minimum 64 chars; PSK rotation with grace periods; JWT validation for multi-tenant auth | PASS |
+| V2.7.2 | Verify that API keys are not used as the sole authentication factor for sensitive operations | L3 | Agent tokens authenticate to the data plane only; admin operations require password + TOTP via the control plane | PASS |
+| V2.7.3 | Verify that API credentials are rotatable without downtime | L3 | Agent PSK token rotation with configurable grace periods allows old and new tokens to coexist during rotation window | PASS |
+| V2.8.1 | Verify that federation protocols (SAML, OIDC) validate assertions correctly | L2 | SAML: NotBefore/NotOnOrAfter, signature verification against IdP metadata; OIDC: issuer, audience, expiry, JWKS signature verification | PASS |
+| V2.8.2 | Verify that JWT algorithms are restricted to an allowlist | L2 | alg:none rejected; HS* rejected; only RS256/384/512 and ES256/384/512 permitted | PASS |
+| V2.8.3 | Verify that JWKS key material is rotated and validated | L2 | JWKS waterfall: primary endpoint, secondary fallback, static key file; auto-rotation on upstream 401 | PASS |
 
----
-
-### V4 — Access Control
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V4.1.1 — Verify that access control decisions are made server-side | L1 | OPA policy engine executes locally on the server; no access control decisions are delegated to clients or cloud services | FULL |
-| V4.1.2 — Verify that access control fails securely (fail-closed) | L1 | OPA evaluation errors result in deny; there is no fail-open code path in the policy evaluation loop | FULL |
-| V4.1.3 — Verify that the principle of least privilege is enforced | L2 | RBAC groups define the minimum permission set for each role; OPA policy enforces method+path+identity checks on every request | FULL |
-| V4.2.1 — Verify that object-level authorization is enforced | L2 | Tenant row-level security (RLS) in PostgreSQL ensures data isolation; OPA input includes tenant context for every policy evaluation | FULL |
-| V4.3.1 — Verify that administrative interfaces are secured | L1 | Backoffice control plane is isolated on port 8443 with local authentication only; no gateway (data plane) path can reach backoffice routes | FULL |
-| V4.3.2 — Verify that administrative functionality is separated from regular usage | L2 | Backoffice and gateway are architecturally separated processes; admin routes are protected by require_admin_session middleware, which is not present on gateway routes | FULL |
-| V4.3.3 — Verify that a minimum number of administrative accounts are enforced | L2 | Admin minimum count enforcement prevents deletion of the last admin account; system will reject operations that would leave zero active admins | FULL |
-| V4.4.1 — Verify that RBAC groups control access to sensitive functions | L2 | OPA policy evaluates RBAC group membership for every request; group-level rate limit overrides allow security teams to apply stricter controls per group | FULL |
-
----
-
-### V5 — Validation, Sanitization, and Encoding
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V5.1.1 — Verify that input validation rejects untrusted input | L1 | FastText ML classification (<5ms) performs first-pass content analysis on all request bodies; suspicious content is routed for deeper inspection before forwarding | FULL |
-| V5.1.2 — Verify that body size limits are enforced before processing | L1 | 4 MB hard limit is enforced by the ingestion middleware before inspection pipeline is invoked; prevents resource exhaustion from oversized payloads | FULL |
-| V5.2.1 — Verify that all user-supplied input is sanitized before rendering | L2 | Backoffice templates apply context-aware output encoding; API responses from upstream are inspected and sanitized before forwarding when response inspection is enabled | PARTIAL |
-| V5.3.1 — Verify that prompt injection mitigations are applied for AI inputs | L2 | Multi-stage inspection: FastText first-pass → Ollama LLM second-pass → multi-backend fallback (Anthropic, Gemini, Azure OpenAI); payloads classified INJECTED are discarded, caller receives alert | FULL |
-| V5.4.1 — Verify that credentials are stripped before AI processing | L2 | Credential Handle Service (CHS) strips all credential-pattern tokens from payloads before ANY AI inspection call; CHS operates on configurable regex+entropy patterns | FULL |
-| V5.5.1 — Verify that injection attacks are mitigated in database queries | L1 | PostgreSQL access uses parameterized queries throughout; ORM-level query construction prevents SQL injection; RLS enforces tenant boundaries at the database layer | FULL |
-
----
-
-### V6 — Stored Cryptography
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V6.1.1 — Verify that sensitive data at rest is encrypted | L2 | AES-256-GCM column encryption via pgcrypto on all sensitive PostgreSQL columns; encryption keys managed via integrated secrets backends | FULL |
-| V6.2.1 — Verify that strong, current algorithms are used | L2 | AES-256-GCM for symmetric encryption; ECDSA P-256 for licence signing (ML-DSA-65 planned when cryptography ships FIPS 204); hybrid TLS X25519+ML-KEM-768 prepared (pending Caddy 2.10); SHA-384 Merkle chain for audit integrity; Argon2id for password hashing; no deprecated algorithms (MD5, SHA1, DES, 3DES) permitted | FULL |
-| V6.2.2 — Verify that random number generation is cryptographically secure | L2 | All security-sensitive random values (session tokens, API keys, nonces) use the OS CSPRNG (os.urandom / secrets module) | FULL |
-| V6.3.1 — Verify that cryptographic keys are protected | L2 | Keys are managed via external secrets backends: Docker Secrets, Keeper, AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, HashiCorp Vault; no keys stored in environment variables in production mode | FULL |
-| V6.4.1 — Verify that key rotation is supported | L2 | Secrets backend integrations support key versioning and rotation; JWKS key rotation is automatic on upstream 401 response | PARTIAL |
-| V6.5.1 — Verify that passwords are hashed using Argon2id or equivalent | L1 | Argon2id is the required default; Argon2 parameters (memory cost 65536 KB, time cost 3, parallelism 4 by default) are operator-configurable within secure bounds | FULL |
+**Chapter Notes:** Strong L3 authentication posture. Argon2id with HIBP checking, mandatory TOTP, WebAuthn support (partial due to constructor bug), recovery codes hashed with Argon2id, strict JWT algorithm enforcement, and agent PSK rotation with grace periods. The password strength meter is a minor L1 gap. WebAuthn constructor bug should be fixed for full L3 compliance.
 
 ---
 
-### V7 — Error Handling and Logging
+### V3 -- Session Management
 
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V7.1.1 — Verify that all logging events contain required data | L1 | Structured JSON audit log records: timestamp, request_id, agent_id, session_id, method, path, policy decision, inspection result, upstream response code, SHA-256 content hash | FULL |
-| V7.1.2 — Verify that security events are logged | L1 | Authentication attempts (success/failure), policy denials, inspection results (CLEAN/INJECTED/UNCERTAIN), rate limit triggers, and anomaly detections all generate audit events | FULL |
-| V7.2.1 — Verify that error responses do not contain stack traces | L1 | All unhandled exceptions return a generic HTTP 500 with no internal detail; stack traces are written to the internal log only; error messages are sanitized before transmission | FULL |
-| V7.3.1 — Verify that audit logs are written to a separate system | L2 | MultiSinkAuditWriter writes to: local file (rotation-managed), PostgreSQL audit table, and SIEM (Splunk, Elasticsearch, Wazuh); loss of one sink does not halt operation | FULL |
-| V7.4.1 — Verify that log injection attacks are prevented | L2 | All log values are escaped before formatting; structured JSON logging eliminates newline injection; log fields use typed serialization | FULL |
-| V7.4.2 — Verify that logs do not contain sensitive data | L2 | CHS applies masking to audit log payload records; configurable PII masking hooks allow operators to define additional field-level masking patterns | FULL |
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V3.1.1 | Verify that session tokens are never revealed in URL parameters | L1 | Session IDs transmitted exclusively via HttpOnly cookies; no URL-based session tokens | PASS |
+| V3.1.2 | Verify that the application generates a new session token on authentication | L1 | New session token generated on every successful login; old session invalidated | PASS |
+| V3.2.1 | Verify that session tokens use HttpOnly, Secure, SameSite attributes | L1 | HttpOnly=true, Secure=true, SameSite=Strict on all session cookies | PASS |
+| V3.2.2 | Verify that the application uses only cookies to transmit session tokens | L2 | Session tokens are cookie-only; no bearer token session mechanism for browser clients | PASS |
+| V3.3.1 | Verify that session tokens are invalidated on logout | L1 | Redis session store deletes session record synchronously on logout; server-side invalidation | PASS |
+| V3.3.2 | Verify that session tokens are invalidated after a period of inactivity | L2 | Idle timeout enforced independently of absolute expiry; configurable per deployment | PASS |
+| V3.3.3 | Verify that absolute session timeout is enforced | L2 | Absolute session expiry enforced at Redis session store regardless of activity | PASS |
+| V3.3.4 | Verify that session tokens are invalidated when the user changes their password | L3 | All active sessions for the user are invalidated on password change | PASS |
+| V3.3.5 | Verify that administrators can terminate any active session | L3 | Backoffice admin UI provides session list and termination for any user | PASS |
+| V3.4.1 | Verify that concurrent session limits are enforced | L2 | Configurable max concurrent sessions per user; oldest session invalidated on overflow (configurable to reject instead) | PASS |
+| V3.5.1 | Verify that session identifiers have at least 128 bits of entropy | L1 | Session tokens generated via `secrets.token_urlsafe()` with minimum 128-bit entropy | PASS |
+| V3.5.2 | Verify that session identifiers are generated using a CSPRNG | L1 | Uses Python `secrets` module (OS CSPRNG) | PASS |
+| V3.6.1 | Verify that re-authentication is required for sensitive operations | L3 | TOTP re-verification required for password changes, MFA re-enrollment, and admin role changes | PASS |
+| V3.7.1 | Verify that session tokens are invalidated when MFA factors change | L3 | TOTP re-enrollment invalidates all existing sessions and requires fresh login | PASS |
 
----
-
-### V8 — Data Protection
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V8.1.1 — Verify that sensitive data is identified and classified | L2 | CHS maintains a configurable credential pattern registry; PII detection hooks allow classification of additional sensitive field types | PARTIAL |
-| V8.2.1 — Verify that sensitive data is not cached where inappropriate | L2 | Response cache stores CLEAN responses only; BLOCKED, INJECTED, or SANITIZED responses are never cached; cache keys exclude credential-bearing headers | FULL |
-| V8.3.1 — Verify that client-side storage of sensitive data is minimized | L2 | Backoffice admin panel does not store sensitive values in localStorage or sessionStorage; session token is in HttpOnly cookie inaccessible to JavaScript | FULL |
-| V8.4.1 — Verify that multi-tenant data isolation is enforced | L2 | PostgreSQL RLS policies enforce per-tenant row isolation; separate Redis database indices are used per tenant for rate limiting and session state | FULL |
-| V8.5.1 — Verify that credentials are not exposed to AI backends | L2 | CHS strips credential-matching tokens from all payloads before invoking any AI inspection backend (Ollama, Anthropic, Gemini, Azure OpenAI); CHS operates regardless of inspection backend type | FULL |
+**Chapter Notes:** Full L3 compliance for session management. Redis-backed server-side sessions with proper cookie attributes, entropy, timeouts, concurrent limits, and session invalidation on sensitive state changes.
 
 ---
 
-### V9 — Communication Security
+### V4 -- Access Control
 
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V9.1.1 — Verify that TLS is required for all external communications | L1 | Caddy handles TLS termination; TLS 1.2 is the minimum version; TLS 1.0 and 1.1 are disabled; plain HTTP is redirected to HTTPS; hybrid X25519+ML-KEM-768 key exchange config included (pending Caddy 2.10) (v0.9.0) | FULL |
-| V9.1.2 — Verify that HSTS is enabled | L2 | HSTS header (Strict-Transport-Security: max-age=31536000; includeSubDomains) is served by Caddy and enforced by backoffice security middleware | FULL |
-| V9.1.3 — Verify that certificate management is automated | L2 | Three certificate modes supported: ACME (automatic Let's Encrypt), CA-signed (operator-provided), and self-signed (development); ACME renewal is fully automated via Caddy | FULL |
-| V9.2.1 — Verify that internal service communications are protected | L2 | Internal service-to-service communication (gateway to OPA, gateway to PostgreSQL, gateway to Redis) uses network isolation; container network policies restrict cross-service reachability | PARTIAL |
-| V9.3.1 — Verify that weak cipher suites are disabled | L2 | Caddy cipher suite configuration excludes RC4, NULL, EXPORT, DES, 3DES, and MD5-MAC suites; only AEAD cipher suites are permitted | FULL |
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V4.1.1 | Verify that access control is enforced on the server side | L1 | OPA policy engine runs locally on the server; no client-side access control decisions | PASS |
+| V4.1.2 | Verify that all access control decisions are logged | L2 | Every OPA evaluation (allow/deny) generates an audit log entry with identity, path, method, and decision | PASS |
+| V4.1.3 | Verify that the principle of least privilege is applied | L1 | RBAC groups define minimum permission sets; OPA enforces method+path+identity on every request | PASS |
+| V4.1.4 | Verify that access control fails securely (deny by default) | L1 | OPA evaluation errors result in deny; no fail-open code path | PASS |
+| V4.1.5 | Verify that access control rules are defined in a central policy | L2 | OPA policy bundle is the single source of truth for all authorization rules | PASS |
+| V4.2.1 | Verify that object-level authorization is enforced | L1 | Tenant RLS in PostgreSQL; OPA input includes tenant context for every evaluation | PASS |
+| V4.2.2 | Verify that users can only access objects they are authorized for | L2 | RLS prevents cross-tenant data access at the database layer; OPA prevents unauthorized path access at the proxy layer | PASS |
+| V4.2.3 | Verify that directory listing is disabled or restricted | L1 | No directory listing capability exposed; gateway proxies specific paths only | PASS |
+| V4.3.1 | Verify that administrative interfaces are protected with MFA | L2 | Backoffice (port 8443) requires password + TOTP for all admin sessions | PASS |
+| V4.3.2 | Verify that administrative functions are separated from user functions | L2 | Backoffice (control plane, port 8443) is architecturally separate from gateway (data plane, 80/443); no code path from gateway to backoffice routes | PASS |
+| V4.3.3 | Verify that a minimum number of admin accounts is enforced | L2 | Anti-lockout: 2 admin accounts generated at install; system rejects operations that would leave zero active admins | PASS |
+| V4.4.1 | Verify that RBAC is used to control access to sensitive functions | L2 | OPA evaluates RBAC group membership on every request; group-level rate limit overrides available | PASS |
+| V4.4.2 | Verify that users cannot escalate their own privileges | L2 | Role changes require admin session with TOTP; no self-service role elevation | PASS |
+| V4.5.1 | Verify that attribute-based or policy-based access control supports complex authorization | L3 | OPA supports ABAC through policy-as-code; policies can reference arbitrary request attributes, time-of-day, IP ranges, and custom claims | PASS |
+| V4.5.2 | Verify that access control policies are version-controlled and auditable | L3 | OPA policy bundles are versioned; policy changes logged to audit trail; OPA Policy Assistant validates changes before apply | PASS |
+| V4.5.3 | Verify that multi-tenant access control prevents cross-tenant data leakage | L3 | PostgreSQL RLS at DB layer + OPA tenant context at proxy layer + separate Redis DB indices per tenant; defense in depth across three layers | PASS |
 
----
-
-### V10 — Malicious Code
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V10.1.1 — Verify that source code and build artifacts are scanned | L2 | Trivy container scanning is integrated into CI/CD pipeline; pyproject.toml dependencies are locked; GitHub Actions CODEOWNERS enforces review requirements on security-sensitive paths | FULL |
-| V10.2.1 — Verify that the application runs with minimum OS privileges | L2 | Container runs as UID 1001 (non-root); no privilege escalation (allowPrivilegeEscalation: false); no new privileges flag set | FULL |
-| V10.2.2 — Verify that system call filtering is applied | L3 | seccomp allowlist restricts container syscalls to required operations only; AppArmor profile provides mandatory access control at the kernel level | FULL |
-| V10.3.1 — Verify that the filesystem is read-only where possible | L2 | readOnlyRootFilesystem: true in container security context; tmpfs mounts provide writable temporary storage for paths that require it (e.g., /tmp, runtime sockets) | FULL |
-| V10.4.1 — Verify that container images are built from trusted base images | L2 | Base images are digest-pinned in Dockerfile; image digests are verified in CI before deployment; no mutable tags (e.g., :latest) used in production configurations | FULL |
-
----
-
-### V11 — Business Logic Security
-
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V11.1.1 — Verify that business logic limits are enforced | L1 | Per-IP, per-session, per-agent, and per-endpoint rate limits are independently enforced via Redis fixed-window counters; all limits are configurable per deployment | FULL |
-| V11.1.2 — Verify that unusual activity patterns are detected | L2 | Repeated-small-calls anomaly detection uses a Redis ZSET sliding window to identify agents making unusually high-frequency low-cost requests; triggers audit event and optional block | FULL |
-| V11.2.1 — Verify that the policy engine fails closed on error | L2 | OPA evaluation errors result in an explicit deny decision; there is no fallback to allow on policy evaluation failure; this is enforced in the policy evaluation wrapper | FULL |
-| V11.3.1 — Verify that agent authentication meets minimum standards | L2 | Agent bearer tokens must be at minimum 64 characters; tokens below this threshold are rejected at registration; token entropy is validated at admission time | FULL |
-| V11.4.1 — Verify that administrative minimums are enforced | L2 | System enforces a minimum active admin account count; operations that would drop the count below this floor are rejected | FULL |
+**Chapter Notes:** Full L3 compliance. The combination of OPA (ABAC/RBAC), PostgreSQL RLS, and architectural separation (control plane vs data plane) provides comprehensive access control with fail-closed defaults and full auditability.
 
 ---
 
-### V12 — Files and Resources
+### V5 -- Validation, Sanitization, and Encoding
 
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V12.1.1 — Verify that file upload size limits are enforced | L1 | 4 MB body size limit applies to all inbound content including file uploads; limit is enforced at the middleware layer before storage | FULL |
-| V12.2.1 — Verify that audit log retention policies are enforced | L2 | Audit log file rotation is configured with maximum file size and retention period; PostgreSQL audit table uses pg_partman partitioning for time-based partition expiry | FULL |
-| V12.3.1 — Verify that temporary data is stored securely | L2 | tmpfs mounts are used for all transient sensitive data paths; tmpfs data does not persist to container restart; no sensitive data written to container overlay filesystem | FULL |
-| V12.4.1 — Verify that log files are protected from unauthorized access | L2 | Audit log files written with restrictive permissions (0600); PostgreSQL audit table access is controlled by RLS and role-based grants; SIEM forwarding uses TLS | FULL |
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V5.1.1 | Verify that all input is validated against an expected schema | L1 | OPA input object includes full request context; FastText ML classification on all request bodies; body schema validation via OPA policy rules | PASS |
+| V5.1.2 | Verify that input validation is performed on a trusted system | L1 | All validation in the gateway server process; no client-side validation relied upon | PASS |
+| V5.1.3 | Verify that all input data is validated for type, length, and range | L2 | Body size limit (4 MB) enforced at middleware; OPA policies can enforce field-level type/range validation; parameter validation in FastAPI endpoints | PASS |
+| V5.1.4 | Verify that structured data is validated against a defined schema | L2 | JSON schema validation available in OPA policies; FastAPI Pydantic models validate API request schemas | PASS |
+| V5.1.5 | Verify that URL redirects and forwards validate against an allowlist | L1 | No open redirect functionality; upstream URL is server-configured only; no user-controlled redirects | PASS |
+| V5.2.1 | Verify that all untrusted HTML is sanitized using an auto-escaping template | L1 | Backoffice templates use auto-escaping; strict CSP headers block inline scripts | PASS |
+| V5.2.2 | Verify that unstructured data is sanitized with expected characters | L2 | UTF-8 safe decode enforced; malformed byte sequences rejected; CHS strips credential patterns from payloads | PASS |
+| V5.2.3 | Verify that context-aware output encoding is applied | L2 | Backoffice applies context-aware encoding (HTML, URL, JS contexts); API responses use strict JSON serialization | PARTIAL |
+| V5.2.4 | Verify that output encoding is applied as close to the interpreter as possible | L3 | Template engine handles encoding at render time; however, upstream MCP server responses forwarded as-is unless response inspection enabled | PARTIAL |
+| V5.3.1 | Verify that SQL injection is prevented through parameterized queries | L1 | PostgreSQL access uses parameterized queries throughout; SQLAlchemy ORM prevents SQL injection; RLS at DB layer | PASS |
+| V5.3.2 | Verify that OS command injection is prevented | L1 | No shell command execution from user input; all external process invocation uses parameterized subprocess calls | PASS |
+| V5.3.3 | Verify that LDAP injection is prevented | L1 | No LDAP integration; SAML/OIDC used for federation instead | N/A |
+| V5.3.4 | Verify that XPath/XML injection is prevented | L1 | SAML assertion parsing uses defused XML library; no XPath from user input | PASS |
+| V5.3.5 | Verify that template injection is prevented | L2 | Jinja2 sandboxed auto-escaping in backoffice; no user-controlled template strings | PASS |
+| V5.3.6 | Verify that server-side request forgery (SSRF) is prevented | L1 | Upstream URLs are server-configured only; no user-controlled URL fetching; OPA path policies restrict forwarded paths | PASS |
+| V5.4.1 | Verify that prompt injection mitigations are applied for AI-processed inputs | L2 | Multi-stage: FastText first-pass (<5ms) -> Ollama LLM second-pass -> multi-backend fallback (Anthropic, Gemini, Azure OpenAI); INJECTED payloads discarded, never forwarded | PASS |
+| V5.4.2 | Verify that credentials are stripped from AI-processed payloads | L2 | CHS strips all credential-pattern tokens before ANY AI inspection call; configurable regex+entropy patterns | PASS |
+| V5.4.3 | Verify that AI output is validated before use in security-sensitive contexts | L3 | Response inspection pipeline (when enabled) validates upstream AI outputs through same FastText+LLM pipeline; fail-closed on INJECTED | PARTIAL |
+| V5.5.1 | Verify that HTTP request header sizes are limited | L2 | Caddy enforces header size limits; FastAPI middleware applies additional header validation | PASS |
+| V5.5.2 | Verify that body size limits prevent resource exhaustion | L1 | 4 MB hard limit on all inbound request bodies; enforced before inspection pipeline invocation | PASS |
+| V5.5.3 | Verify that file upload validation includes type checking | L2 | Body content inspected by FastText regardless of Content-Type; no file type bypass via Content-Type spoofing | PASS |
+
+**Chapter Notes:** Strong L3 posture on input validation, leveraging the gateway's position as a centralized enforcement point. The prompt injection pipeline (FastText + LLM + multi-backend fallback) is a differentiating control. L3 gap on output encoding for forwarded upstream responses when response inspection is disabled.
 
 ---
 
-### V13 — API and Web Service
+### V6 -- Stored Cryptography
 
-| ASVS Requirement | Level | Yashigani Control | Coverage |
-|---|---|---|---|
-| V13.1.1 — Verify that every API request is authenticated and authorized | L1 | OPA policy check is executed on every request to the gateway; unauthenticated requests to protected endpoints are rejected before reaching the upstream | FULL |
-| V13.2.1 — Verify that HTTP methods are validated | L1 | OPA policy input includes the HTTP method; policies can enforce method-level restrictions per path and identity; unexpected methods return 405 | FULL |
-| V13.2.2 — Verify that hop-by-hop headers are stripped | L2 | Connection, Keep-Alive, Transfer-Encoding, Upgrade, Proxy-Authorization, and TE headers are stripped from proxied requests; prevents header injection to upstreams | FULL |
-| V13.2.3 — Verify that X-Forwarded-For handling is correct | L2 | X-Forwarded-For is validated and sanitized; spoofed headers from untrusted clients are overridden with the actual connection IP; trusted proxy chains are configurable | FULL |
-| V13.3.1 — Verify that internal metrics and debug endpoints are protected | L2 | OpenTelemetry metrics endpoint is on an internal-only port; no metrics or debug routes are exposed on the public gateway port; Jaeger UI is network-isolated | FULL |
-| V13.4.1 — Verify that API versioning is managed | L2 | Agent registry and API routes include version metadata; deprecated routes return appropriate warnings; SCIM provisioning endpoints follow RFC 7644 versioning | PARTIAL |
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V6.1.1 | Verify that all sensitive data at rest is encrypted | L2 | AES-256-GCM column encryption via pgcrypto on sensitive PostgreSQL columns; encryption keys in secrets backends | PASS |
+| V6.1.2 | Verify that encryption at rest uses authenticated encryption | L2 | AES-256-GCM provides authenticated encryption with associated data (AEAD) | PASS |
+| V6.1.3 | Verify that encryption keys are not stored alongside encrypted data | L2 | Keys managed via external secrets backends: Docker Secrets, Keeper, AWS/Azure/GCP Secrets Manager, HashiCorp Vault | PASS |
+| V6.2.1 | Verify that only approved cryptographic algorithms are used | L2 | AES-256-GCM (symmetric), ECDSA P-256 (signing), SHA-384 (Merkle chain), Argon2id (password hashing), X25519 (key exchange); no MD5, SHA1, DES, 3DES | PASS |
+| V6.2.2 | Verify that cryptographic algorithm selection is centralized | L3 | All crypto operations route through `cryptography` library and `argon2-cffi`; no ad-hoc crypto implementations | PASS |
+| V6.2.3 | Verify that the application is prepared for post-quantum cryptography migration | L3 | Hybrid TLS X25519+ML-KEM-768 config prepared (pending Caddy 2.10); ML-DSA-65 licence signing planned (pending `cryptography` FIPS 204 support) | PARTIAL |
+| V6.3.1 | Verify that all random values are generated using a CSPRNG | L1 | All security-sensitive random values use `os.urandom` / `secrets` module (OS CSPRNG) | PASS |
+| V6.3.2 | Verify that random values have sufficient entropy for their purpose | L2 | Session tokens: 128+ bits; agent tokens: 64+ chars; generated passwords: 36+ chars with HIBP check | PASS |
+| V6.4.1 | Verify that passwords are hashed using Argon2id or bcrypt | L1 | Argon2id (m=65536 KB, t=3, p=4) for user passwords; bcrypt for Prometheus basic auth | PASS |
+| V6.4.2 | Verify that password hashing parameters meet minimum thresholds | L2 | Argon2id: memory 65536 KB, time 3, parallelism 4 -- meets OWASP recommended minimums; parameters operator-configurable within secure bounds | PASS |
+| V6.5.1 | Verify that cryptographic key rotation is supported | L2 | Secrets backend integrations support key versioning; JWKS rotation automatic on 401; agent PSK rotation with grace periods | PARTIAL |
+| V6.5.2 | Verify that key rotation can be performed without downtime | L3 | Agent PSK rotation with grace periods allows overlap; JWKS waterfall handles key rotation transparently; however, AES-256-GCM database encryption key rotation requires manual re-encryption | PARTIAL |
+| V6.5.3 | Verify that retired keys are securely destroyed | L3 | Secrets backends handle key lifecycle; however, no explicit key destruction verification in Yashigani application code | FAIL |
+| V6.6.1 | Verify that a hardware security module (HSM) or equivalent is used for key storage in high-assurance deployments | L3 | Cloud KMS integrations (AWS, Azure, GCP) provide HSM-backed key storage; no on-premises HSM integration | PARTIAL |
+
+**Chapter Notes:** Strong cryptographic foundation with Argon2id, AES-256-GCM, and ECDSA. Post-quantum readiness is in progress (ML-KEM-768, ML-DSA-65 prepared but pending upstream library support). L3 gaps exist in key destruction verification and on-premises HSM support. Database encryption key rotation without downtime is a known gap.
+
+---
+
+### V7 -- Error Handling and Logging
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V7.1.1 | Verify that the application does not log sensitive data | L1 | CHS applies masking to audit log payloads; configurable PII masking hooks for additional field-level masking | PASS |
+| V7.1.2 | Verify that error messages do not contain sensitive data | L1 | All unhandled exceptions return generic HTTP 500; stack traces written to internal log only | PASS |
+| V7.1.3 | Verify that error responses do not reveal implementation details | L1 | No framework names, versions, stack traces, or internal paths in error responses | PASS |
+| V7.2.1 | Verify that all security-relevant events are logged | L1 | Auth attempts (success/failure), policy decisions, inspection results, rate limit triggers, anomaly detections all generate audit events | PASS |
+| V7.2.2 | Verify that log entries contain sufficient data for forensic analysis | L2 | Structured JSON: timestamp, request_id, agent_id, session_id, method, path, OPA decision, inspection result, upstream response code, SHA-256 content hash | PASS |
+| V7.2.3 | Verify that log entries include a timestamp from a reliable time source | L2 | UTC timestamps from system clock; NTP synchronization is a deployment requirement | PASS |
+| V7.2.4 | Verify that log entries cannot be modified or deleted by application users | L3 | Audit logs written to PostgreSQL (RLS-protected), SIEM (Splunk/ES/Wazuh), and local files (0600 permissions); SHA-384 Merkle chain provides tamper evidence | PASS |
+| V7.3.1 | Verify that logs are sent to a remote logging system | L2 | MultiSinkAuditWriter: local file + PostgreSQL + SIEM (Splunk, Elasticsearch, Wazuh); loss of one sink does not halt operation | PASS |
+| V7.3.2 | Verify that log integrity is protected against tampering | L3 | SHA-384 Merkle chain on audit log entries provides tamper evidence; chain break detection alerts | PASS |
+| V7.3.3 | Verify that anomalous logging activity triggers alerts | L3 | Automated partition monitoring with alerts for missing partitions; SIEM forwarding enables external anomaly detection on log volume/patterns | PARTIAL |
+| V7.4.1 | Verify that log injection attacks are prevented | L2 | Structured JSON logging; all log values escaped before formatting; typed serialization eliminates newline injection | PASS |
+| V7.4.2 | Verify that log data is protected in transit | L2 | SIEM forwarding uses TLS; PostgreSQL connections configurable with TLS | PASS |
+| V7.4.3 | Verify that log access is restricted to authorized personnel | L2 | Log files: 0600 permissions; PostgreSQL audit table: RLS + role-based grants; SIEM access: delegated to SIEM RBAC | PASS |
+| V7.5.1 | Verify that the application detects and alerts on security-relevant events in real time | L3 | Direct webhook alerting on credential exfiltration attempts; SIEM integration for real-time alerting; however, no built-in real-time alerting dashboard | PARTIAL |
+
+**Chapter Notes:** Strong L3 logging posture. The SHA-384 Merkle chain for audit log integrity, multi-sink audit writing, and structured JSON logging with CHS masking provide comprehensive coverage. The webhook alerting for credential exfiltration (v0.7.1) addresses real-time detection. Minor gaps in built-in alerting dashboard and anomalous logging pattern detection (delegated to SIEM).
+
+---
+
+### V8 -- Data Protection
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V8.1.1 | Verify that sensitive data is classified and handled according to its classification | L2 | CHS credential pattern registry classifies credentials; PII detection hooks classify additional sensitive types; AES-256-GCM for sensitive DB columns | PARTIAL |
+| V8.1.2 | Verify that a data classification policy exists | L3 | Credential patterns and PII hooks are configurable but no formal data classification policy document is bundled | FAIL |
+| V8.2.1 | Verify that sensitive data is not cached inappropriately | L2 | Response cache stores CLEAN responses only; BLOCKED/INJECTED/SANITIZED never cached; cache keys exclude credential-bearing headers | PASS |
+| V8.2.2 | Verify that sensitive data is not stored in client-side storage | L2 | Backoffice stores no sensitive values in localStorage/sessionStorage; session token in HttpOnly cookie only | PASS |
+| V8.2.3 | Verify that sensitive data is cleared from memory when no longer needed | L3 | Python garbage collection handles memory cleanup; no explicit memory zeroing for sensitive variables (Python limitation) | FAIL |
+| V8.3.1 | Verify that personal data handling complies with relevant privacy requirements | L2 | PII masking in audit logs; CHS strips credentials; tenant isolation via RLS; however, no built-in GDPR data subject request tooling | PARTIAL |
+| V8.3.2 | Verify that data retention policies are enforced | L2 | Audit log rotation with configurable retention; pg_partman time-based partition expiry; Redis TTL on session/cache data | PASS |
+| V8.4.1 | Verify that HTTP responses contain appropriate cache control headers | L2 | Backoffice responses include Cache-Control: no-store for sensitive pages; API responses include appropriate cache directives | PASS |
+| V8.4.2 | Verify that sensitive data is not included in HTTP GET parameters | L2 | Credentials and session tokens never in URL parameters; all sensitive data in request bodies or cookies | PASS |
+| V8.5.1 | Verify that multi-tenant data isolation is enforced at all layers | L2 | PostgreSQL RLS + separate Redis DB indices per tenant + OPA tenant context; three-layer isolation | PASS |
+| V8.5.2 | Verify that credentials are not exposed to AI/ML processing backends | L2 | CHS strips credentials before all AI inspection calls regardless of backend type | PASS |
+| V8.6.1 | Verify that backup data is encrypted | L3 | PostgreSQL backup encryption is delegated to operator infrastructure; Yashigani does not manage database backups directly | FAIL |
+| V8.6.2 | Verify that data exports include only authorized data | L3 | Audit log exports respect RLS tenant boundaries; however, no formal data export authorization workflow | PARTIAL |
+
+**Chapter Notes:** Solid data protection controls with CHS credential stripping, multi-tenant isolation, and cache safety. L3 gaps include: no explicit memory zeroing (Python runtime limitation), no formal data classification policy document, no built-in backup encryption (operator responsibility), and no GDPR data subject request tooling.
+
+---
+
+### V9 -- Communication Security
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V9.1.1 | Verify that TLS is used for all connections | L1 | Caddy handles TLS termination; TLS 1.2 minimum; TLS 1.0/1.1 disabled; plain HTTP redirected to HTTPS | PASS |
+| V9.1.2 | Verify that TLS 1.2 or higher is required | L1 | TLS 1.2 minimum enforced by Caddy; TLS 1.3 preferred when supported by client | PASS |
+| V9.1.3 | Verify that only strong cipher suites are enabled | L2 | RC4, NULL, EXPORT, DES, 3DES, MD5-MAC suites excluded; only AEAD cipher suites permitted | PASS |
+| V9.1.4 | Verify that HSTS is enabled with appropriate directives | L2 | Strict-Transport-Security: max-age=31536000; includeSubDomains served by Caddy and backoffice middleware | PASS |
+| V9.1.5 | Verify that certificate validation is performed correctly | L1 | Caddy validates upstream certificates; ACME handles Let's Encrypt certificates automatically | PASS |
+| V9.1.6 | Verify that certificate pinning is implemented for high-value connections | L3 | No certificate pinning implemented for connections to external services (inspection backends, SIEM, secrets backends) | FAIL |
+| V9.2.1 | Verify that internal service communications are encrypted | L2 | Internal comms (gateway-to-OPA, gateway-to-PostgreSQL, gateway-to-Redis) use network isolation; TLS available but not enforced by default on all internal paths | PARTIAL |
+| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | mTLS not implemented for internal service mesh; relies on Docker network isolation | FAIL |
+| V9.3.1 | Verify that certificate management is automated | L2 | Three modes: ACME (automatic Let's Encrypt), CA-signed (operator-provided), self-signed (development); ACME renewal fully automated via Caddy | PASS |
+| V9.3.2 | Verify that certificate lifecycle events are logged | L3 | Caddy logs certificate renewal events; however, certificate expiry alerting not integrated into Yashigani audit trail | PARTIAL |
+| V9.4.1 | Verify that the application is prepared for post-quantum TLS | L3 | Hybrid X25519+ML-KEM-768 key exchange config included (pending Caddy 2.10 release) | PARTIAL |
+
+**Chapter Notes:** Strong external TLS posture via Caddy with HSTS, strong cipher suites, and automated ACME. L3 gaps are significant: no mTLS for internal service mesh (relies on network isolation), no certificate pinning for external connections, and post-quantum TLS pending upstream Caddy support. Internal mTLS is the highest-priority gap for L3 compliance.
+
+---
+
+### V10 -- Malicious Code
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V10.1.1 | Verify that source code does not contain backdoors or undocumented functionality | L3 | Open source (Apache 2.0); code review via CODEOWNERS; however, no formal code audit by independent third party | PARTIAL |
+| V10.1.2 | Verify that third-party components are free of known vulnerabilities | L2 | Trivy scanning in CI; locked/hashed dependencies in pyproject.toml; digest-pinned base images | PASS |
+| V10.1.3 | Verify that source code integrity is protected | L2 | GitHub CODEOWNERS on security-critical paths; signed commits not enforced | PARTIAL |
+| V10.2.1 | Verify that the application does not request unnecessary permissions | L1 | Container runs as UID 1001 (non-root); no privilege escalation (allowPrivilegeEscalation: false); no new privileges flag | PASS |
+| V10.2.2 | Verify that the application uses OS-level sandboxing | L2 | seccomp allowlist restricts syscalls; AppArmor profile provides MAC; readOnlyRootFilesystem: true; tmpfs for writable paths | PASS |
+| V10.2.3 | Verify that system call filtering is applied | L3 | seccomp allowlist restricts to required syscalls only; AppArmor mandatory access control at kernel level | PASS |
+| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; digest-pinned; no mutable tags (:latest) in production | PASS |
+| V10.3.2 | Verify that container images are scanned before deployment | L2 | Trivy scanning integrated in CI/CD; images failing scan threshold not promoted to production | PASS |
+| V10.3.3 | Verify that container runtime security is enforced | L3 | seccomp + AppArmor + non-root + read-only filesystem + no privilege escalation; cgroup v2 resource limits | PASS |
+| V10.4.1 | Verify that software composition analysis (SCA) is performed | L2 | Trivy SCA in CI; GitHub Dependabot for dependency monitoring; hashed requirements in pyproject.toml | PASS |
+| V10.4.2 | Verify that SBOM (Software Bill of Materials) is generated and maintained | L3 | Trivy generates SBOM in CI; however, SBOM is not published or formally maintained across releases | PARTIAL |
+| V10.5.1 | Verify that the application detects and prevents runtime code injection | L3 | seccomp restricts exec syscalls; read-only filesystem prevents binary drops; AppArmor restricts file execution; FastText+LLM inspection detects code injection in payloads | PASS |
+| V10.5.2 | Verify that hardware-level integrity attestation is supported | L3 | No TPM or secure boot attestation; no confidential computing integration (AMD SEV, Intel TDX) | FAIL |
+
+**Chapter Notes:** Strong container security posture with defense-in-depth: seccomp, AppArmor, non-root, read-only filesystem, digest-pinned images, and Trivy scanning. L3 gaps include no independent code audit, no signed commits enforcement, SBOM not formally published, and no hardware-level attestation. The hardware attestation gap is inherent to a software-only product.
+
+---
+
+### V11 -- Business Logic Security
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V11.1.1 | Verify that rate limiting is enforced on all sensitive operations | L1 | Four independent rate limit dimensions: per-IP, per-session, per-agent, per-endpoint; all Redis-backed | PASS |
+| V11.1.2 | Verify that rate limiting uses a sliding window or token bucket algorithm | L2 | Redis-backed sliding window for rate limiting; Redis ZSET sliding window for anomaly detection | PASS |
+| V11.1.3 | Verify that rate limit bypass is not possible through header manipulation | L2 | X-Forwarded-For validated and sanitized; spoofed headers overridden with actual connection IP; trusted proxy chains configurable | PASS |
+| V11.2.1 | Verify that business logic is enforced in the correct sequence | L2 | Inspection pipeline stages execute in fixed order: FastText -> OPA -> Ollama -> fallback; no stage skipping | PASS |
+| V11.2.2 | Verify that business logic limits prevent abuse | L2 | Repeated-small-calls anomaly detection via Redis ZSET sliding window; triggers audit event and optional block | PASS |
+| V11.3.1 | Verify that time-based business logic is enforced consistently | L2 | Session absolute expiry and idle timeout enforced independently; TOTP time window validation with replay prevention | PASS |
+| V11.3.2 | Verify that concurrent business operations are handled safely | L3 | Redis atomic operations for rate limit counters; PostgreSQL row-level locking for concurrent admin operations; agent registration uses database-level uniqueness constraints | PASS |
+| V11.4.1 | Verify that the application detects and prevents automated abuse | L2 | Anomaly detection (repeated-small-calls pattern); per-IP rate limiting; progressive lockout on auth endpoints | PASS |
+| V11.4.2 | Verify that the application implements fraud detection or anomaly alerting | L3 | Anomaly detection alerts to SIEM and optional webhook; audit trail enables forensic analysis; however, no ML-based behavioral anomaly detection beyond the repeated-small-calls heuristic | PARTIAL |
+| V11.5.1 | Verify that fail-safe defaults are applied to all business logic decisions | L1 | OPA deny-on-error; inspection pipeline fail-closed on INJECTED; rate limit denial on breach | PASS |
+
+**Chapter Notes:** Comprehensive business logic protection with four-dimensional rate limiting, anomaly detection, and fail-closed defaults throughout. L3 gap is in advanced ML-based behavioral anomaly detection -- the current heuristic (repeated-small-calls) is effective but limited compared to full behavioral analytics.
+
+---
+
+### V12 -- Files and Resources
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V12.1.1 | Verify that file upload size limits are enforced | L1 | 4 MB body size limit on all inbound content; enforced at middleware before storage or processing | PASS |
+| V12.1.2 | Verify that file type validation is performed | L2 | Content inspected by FastText regardless of declared Content-Type; body content analysis rather than extension-based validation | PASS |
+| V12.1.3 | Verify that uploaded files are stored outside the webroot | L1 | Gateway is a proxy -- no file storage to webroot; uploaded content is inspected and forwarded, not persisted | N/A |
+| V12.2.1 | Verify that temporary files are stored securely | L2 | tmpfs mounts for transient data; tmpfs does not persist to restart; no sensitive data written to container overlay filesystem | PASS |
+| V12.2.2 | Verify that temporary files are deleted promptly | L2 | tmpfs cleared on container restart; no persistent temp file accumulation | PASS |
+| V12.3.1 | Verify that log file retention policies are enforced | L2 | Audit log rotation with max file size and retention period; pg_partman time-based partition expiry; Redis TTL on ephemeral data | PASS |
+| V12.3.2 | Verify that log files are protected from unauthorized access | L2 | Log files: 0600 permissions; PostgreSQL audit table: RLS + role-based grants; SIEM forwarding uses TLS | PASS |
+| V12.4.1 | Verify that file download does not expose sensitive system information | L1 | No file download functionality exposed through the gateway; backoffice audit export respects RLS | PASS |
+| V12.4.2 | Verify that path traversal attacks are prevented | L1 | No file path construction from user input; gateway proxies HTTP requests, not file paths | N/A |
+| V12.5.1 | Verify that resource limits prevent denial of service | L2 | 4 MB body limit; cgroup v2 CPU/memory limits; Redis connection pooling via PgBouncer for PostgreSQL | PASS |
+
+**Chapter Notes:** Most file and resource requirements are satisfied or not applicable given the proxy architecture. The gateway does not store files -- it inspects and forwards. Resource limits are well-defined across body size, container resources, and connection pooling.
+
+---
+
+### V13 -- API and Web Service Security
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V13.1.1 | Verify that every API request is authenticated | L1 | OPA policy check on every gateway request; unauthenticated requests to protected endpoints rejected before upstream forwarding | PASS |
+| V13.1.2 | Verify that every API request is authorized | L1 | OPA evaluates identity+method+path on every request; deny by default | PASS |
+| V13.1.3 | Verify that API authentication tokens are validated on every request | L1 | Agent bearer tokens validated against registry; JWT tokens validated (signature, issuer, audience, expiry) on every request | PASS |
+| V13.2.1 | Verify that API endpoints validate HTTP methods | L1 | OPA input includes HTTP method; unexpected methods return 405; method-level policy enforcement per path | PASS |
+| V13.2.2 | Verify that API endpoints enforce content-type validation | L2 | FastAPI validates Content-Type on API endpoints; unexpected content types rejected | PASS |
+| V13.2.3 | Verify that hop-by-hop headers are stripped | L2 | Connection, Keep-Alive, Transfer-Encoding, Upgrade, Proxy-Authorization, TE headers stripped from proxied requests | PASS |
+| V13.2.4 | Verify that X-Forwarded-For handling is secure | L2 | Spoofed headers from untrusted clients overridden with actual connection IP; trusted proxy chains configurable | PASS |
+| V13.3.1 | Verify that administrative and debug endpoints are not publicly accessible | L1 | OpenTelemetry metrics on internal-only port; no metrics/debug routes on public gateway port; Jaeger UI network-isolated | PASS |
+| V13.3.2 | Verify that API documentation is not publicly accessible in production | L2 | FastAPI Swagger/ReDoc disabled in production mode; no API documentation exposed on gateway port | PASS |
+| V13.4.1 | Verify that GraphQL-specific protections are applied | L2 | N/A -- Yashigani does not expose GraphQL; MCP uses JSON-RPC style protocol | N/A |
+| V13.5.1 | Verify that WebSocket connections are authenticated and authorized | L2 | MCP Streamable HTTP transport with SSE; WebSocket connections validated through same OPA policy engine; session tokens required | PASS |
+| V13.5.2 | Verify that WebSocket message size limits are enforced | L2 | Message size limits applied to WebSocket/SSE frames; consistent with 4 MB body limit | PASS |
+| V13.6.1 | Verify that API versioning is implemented | L2 | Agent registry and API routes include version metadata; deprecated routes return warnings; SCIM endpoints follow RFC 7644 versioning | PARTIAL |
+| V13.6.2 | Verify that deprecated API versions are documented and scheduled for removal | L3 | Deprecated routes return warnings; however, no formal deprecation schedule or sunset dates published | PARTIAL |
+| V13.7.1 | Verify that API rate limiting is applied per consumer | L2 | Per-agent and per-session rate limiting; group-level rate limit overrides for different consumer categories | PASS |
+| V13.7.2 | Verify that API abuse detection is implemented | L3 | Anomaly detection (repeated-small-calls); per-IP rate limiting; progressive lockout; SIEM integration for pattern analysis | PASS |
+| V13.8.1 | Verify that response caching respects authorization | L3 | Response cache stores CLEAN responses only; cache keys exclude credential-bearing headers; cached responses respect tenant isolation | PASS |
+
+**Chapter Notes:** Comprehensive API security with OPA enforcement on every request, strict header handling, and multi-dimensional rate limiting. L3 gaps are minor: API deprecation scheduling and version sunset documentation. The MCP-specific controls (streamable HTTP, SSE) are well-covered.
+
+---
+
+### V14 -- Configuration
+
+| Req ID | Requirement | L3 | Yashigani Control | Verdict |
+|---|---|---|---|---|
+| V14.1.1 | Verify that the application uses a secure default configuration | L1 | All credentials auto-generated at install (min 36 chars, HIBP-checked); HTTPS enforced; seccomp/AppArmor enabled by default; fail-closed OPA | PASS |
+| V14.1.2 | Verify that all configurable security settings have secure defaults | L2 | Rate limiting enabled by default; TOTP mandatory for admins; TLS 1.2 minimum; AEAD-only ciphers; non-root container | PASS |
+| V14.1.3 | Verify that debug features are disabled in production | L1 | Stack traces suppressed; Swagger/ReDoc disabled; debug logging disabled in production mode | PASS |
+| V14.2.1 | Verify that all credentials are stored outside the application code | L1 | Docker Secrets for credential storage; never in environment variables in production mode; secrets backends (Vault, cloud KMS) supported | PASS |
+| V14.2.2 | Verify that credentials are never committed to source control | L1 | `.gitignore` covers secrets; installer generates credentials at deploy time, not build time; secrets never in Dockerfiles or compose files | PASS |
+| V14.2.3 | Verify that credentials are rotatable | L2 | Agent PSK rotation with grace periods; JWKS auto-rotation; secrets backend key versioning | PASS |
+| V14.3.1 | Verify that security headers are applied to all responses | L2 | HSTS, X-Frame-Options: DENY, Content-Security-Policy, X-Content-Type-Options applied by security middleware on backoffice responses; Caddy applies HSTS on gateway | PASS |
+| V14.3.2 | Verify that Content-Security-Policy is enforced | L2 | Strict CSP on backoffice: blocks inline scripts, restricts sources; gateway responses are proxied as-is (upstream CSP responsibility) | PARTIAL |
+| V14.4.1 | Verify that HTTP-only communication is not permitted | L1 | Plain HTTP redirected to HTTPS by Caddy; no HTTP-only mode in production | PASS |
+| V14.4.2 | Verify that CORS policies are restrictive | L2 | Backoffice CORS restricted to same-origin; gateway CORS configurable per deployment with restrictive defaults | PASS |
+| V14.5.1 | Verify that the application build process is repeatable and secure | L2 | Locked/hashed dependencies; digest-pinned base images; Trivy scanning in CI; deterministic builds | PASS |
+| V14.5.2 | Verify that the deployment process enforces security controls | L3 | Container security context enforced (non-root, seccomp, AppArmor, read-only FS); however, no deployment-time security policy validation tool that blocks insecure configurations | PARTIAL |
+| V14.5.3 | Verify that infrastructure-as-code is version-controlled and reviewed | L3 | Docker Compose and Dockerfiles in version control; CODEOWNERS on security-critical files; however, no policy-as-code for infrastructure validation (e.g., OPA for Terraform) | PARTIAL |
+| V14.6.1 | Verify that security event monitoring is configured | L2 | Audit logging to file + PostgreSQL + SIEM; webhook alerts for credential exfiltration; OpenTelemetry tracing | PASS |
+| V14.6.2 | Verify that security monitoring covers all system components | L3 | Gateway, backoffice, OPA, and inspection pipeline monitored; Prometheus metrics for all services; however, Redis and PostgreSQL monitoring delegated to operator infrastructure | PARTIAL |
+
+**Chapter Notes:** Strong secure-by-default configuration with auto-generated credentials, enforced HTTPS, container hardening, and comprehensive security headers. L3 gaps are in deployment-time security validation tooling and infrastructure-as-code policy enforcement. Monitoring coverage is comprehensive for Yashigani components but delegates database and cache monitoring to operators.
 
 ---
 
 ## Section 2: OWASP API Security Top 10 (2023) Mapping
 
-The OWASP API Security Top 10 (2023) identifies the most critical security risks facing modern APIs. This section maps each risk to Yashigani's controls, including residual risk notes for areas where operator configuration or deployment decisions affect the coverage level.
+The OWASP API Security Top 10 (2023) identifies the most critical security risks facing modern APIs. This section maps each risk to Yashigani's controls.
 
 ---
 
-### API1 — Broken Object Level Authorization (BOLA)
+### API1 -- Broken Object Level Authorization (BOLA)
 
-**Risk Description:** APIs fail to properly validate that the requesting user has authorization to access or modify a specific object. Attackers substitute their own object IDs to access other users' data.
+**Yashigani Controls:** OPA policy evaluation on every request with full context (identity, group, path, method). PostgreSQL RLS enforces per-tenant row isolation at the database layer. RBAC group definitions control permitted object paths. Policy bundle refresh is configurable (default 30 seconds).
 
-**Yashigani Controls:**
-
-Every request to the gateway passes through OPA policy evaluation before being forwarded to any upstream. OPA receives the full request context — identity, group membership, requested path, HTTP method, and query parameters — and evaluates authorization against the current policy bundle. Policy decisions are synchronous and blocking; no request is forwarded until OPA returns an explicit allow.
-
-At the data layer, PostgreSQL row-level security (RLS) policies enforce per-tenant isolation. Even if a policy misconfiguration allowed an unauthorized path, the database would refuse to return rows belonging to a different tenant. RLS operates at the PostgreSQL level and cannot be bypassed by application-layer code.
-
-RBAC group definitions control which object paths each identity is permitted to access. Group assignments are managed through the backoffice control plane and are reflected in OPA policy evaluations on the next policy bundle refresh (configurable interval, default 30 seconds).
-
-**Residual Risk:** OPA policy logic is operator-authored. Yashigani provides the enforcement mechanism and a default policy bundle, but operators who write overly permissive policies may undermine BOLA protection. Policy review should be part of the deployment security review process.
-
-**Coverage: FULL** (with operator policy quality caveat)
-
----
-
-### API2 — Broken Authentication
-
-**Risk Description:** Weak authentication mechanisms allow attackers to compromise authentication tokens, impersonate users, or bypass authentication entirely.
-
-**Yashigani Controls:**
-
-Yashigani implements layered authentication defenses. User account passwords are hashed using Argon2id with configurable memory and iteration parameters. TOTP second factor is mandatory for all admin accounts; it is not an opt-in feature and cannot be disabled for privileged sessions.
-
-JWT tokens are validated with strict algorithm enforcement: alg:none is rejected unconditionally at the token parsing layer, before any claim evaluation occurs. HMAC-based algorithms (HS256, HS384, HS512) are rejected because they require sharing the signing key with verifiers. Only asymmetric algorithms (RS*, ES*) are accepted. The JWKS waterfall provides automatic key rotation handling.
-
-Session cookies are configured with HttpOnly, Secure, and SameSite=Strict attributes. Session identifiers have a minimum of 128 bits of entropy. Server-side session invalidation at logout prevents token reuse attacks. Idle timeout and absolute session expiry are independently enforced.
-
-Agent bearer tokens must meet a minimum length of 64 characters, enforced at registration time. Token lookup is performed against the agent registry, which includes active/inactive lifecycle status.
-
-**Residual Risk:** Brute-force protection on the login endpoint depends on rate limiting being correctly configured. Operators should verify that per-IP rate limits are applied to the authentication endpoint. Credential reset flows are delegated to the operator's identity infrastructure.
+**Residual Risk:** OPA policy logic is operator-authored. Overly permissive policies may undermine BOLA protection.
 
 **Coverage: FULL**
 
 ---
 
-### API3 — Broken Object Property Level Authorization
+### API2 -- Broken Authentication
 
-**Risk Description:** APIs expose object properties that should not be accessible to the caller, or allow modification of properties that should be read-only for the caller's role.
+**Yashigani Controls:** Argon2id password hashing with HIBP breach checking, mandatory TOTP for admins, WebAuthn/FIDO2 support, strict JWT algorithm enforcement (alg:none and HS* rejected), HttpOnly/Secure/SameSite=Strict cookies, 128-bit session entropy, agent bearer tokens (min 64 chars), progressive lockout.
 
-**Yashigani Controls:**
-
-OPA policy input includes the complete request context: all headers, path parameters, query string, and body metadata. Policies can enforce field-level restrictions on both request inputs and response outputs.
-
-The Credential Handle Service (CHS) provides a complementary control: it strips credential-pattern fields from payloads before AI inspection, ensuring that sensitive properties are not inadvertently disclosed to inspection backends. CHS patterns are configurable and can be extended to cover domain-specific sensitive fields.
-
-The architectural separation of the backoffice (control plane, port 8443, local auth) from the gateway (data plane) ensures that administrative object properties — policy bundles, agent registrations, audit records — are never accessible through the gateway data path.
-
-**Residual Risk:** Response filtering (ensuring upstream responses do not return excess object properties to the caller) depends on the upstream MCP server's implementation. Yashigani can inspect and block responses containing sensitive patterns when response inspection is enabled, but this is a configuration-dependent control.
-
-**Coverage: PARTIAL** (full for gateway-managed objects; partial for upstream response properties without response inspection enabled)
-
----
-
-### API4 — Unrestricted Resource Consumption
-
-**Risk Description:** APIs do not enforce limits on the size or number of requests, allowing attackers to cause denial of service through resource exhaustion.
-
-**Yashigani Controls:**
-
-Yashigani implements four independent rate limiting dimensions, all backed by Redis:
-
-- **Per-IP rate limiting:** Limits the number of requests from any single source IP within a fixed window
-- **Per-session rate limiting:** Limits requests from any single authenticated session
-- **Per-agent rate limiting:** Limits requests from any single registered agent identity
-- **Per-endpoint rate limiting:** Limits requests to any specific path, regardless of caller identity
-
-All four dimensions are enforced independently. Breaching any single limit results in a 429 response. Rate limit thresholds are configurable per deployment; RBAC group-level overrides allow different limits for different user categories.
-
-The anomaly detection subsystem provides a complementary control: the repeated-small-calls detector uses a Redis ZSET sliding window to identify agents that are making many low-cost requests — a pattern that might evade fixed-window rate limits by staying just below thresholds. Detected anomalies trigger audit events and can optionally trigger automatic blocking.
-
-Body size limits (4 MB) prevent resource exhaustion from oversized payloads. The response cache reduces load on both the inspection pipeline and upstream MCP servers for repeated identical requests.
-
-**Residual Risk:** Redis availability is a dependency for rate limiting. A Redis outage could cause rate limiting to fail; operators should configure Redis in a high-availability configuration and define behavior-on-cache-failure policy.
+**Residual Risk:** Brute-force protection depends on rate limiting configuration. Credential reset delegated to operator IdP.
 
 **Coverage: FULL**
 
 ---
 
-### API5 — Broken Function Level Authorization
+### API3 -- Broken Object Property Level Authorization
 
-**Risk Description:** Complex API designs with multiple roles allow attackers to access administrative or privileged functions by calling endpoints intended for other user types.
+**Yashigani Controls:** OPA policy input includes complete request context. CHS strips credential fields before AI inspection. Backoffice/gateway architectural separation prevents admin property exposure through data plane.
 
-**Yashigani Controls:**
+**Residual Risk:** Response filtering for upstream object properties depends on response inspection being enabled.
 
-OPA policy evaluation enforces function-level authorization by evaluating the combination of HTTP method, request path, and caller identity on every request. No request is forwarded until OPA explicitly allows it. Policy deny-on-error ensures that policy evaluation failures do not create permission gaps.
+**Coverage: PARTIAL** (full for gateway objects; partial for upstream response properties)
 
-The backoffice control plane is architecturally isolated on port 8443 and requires local authentication. There is no code path through the gateway data plane that can reach backoffice routes. Admin functions — policy management, agent registration, audit log access, user management — are exclusively accessible through the backoffice.
+---
 
-Admin routes within the backoffice are protected by require_admin_session middleware. Session validation includes both the session token check and the TOTP-verified admin flag.
+### API4 -- Unrestricted Resource Consumption
 
-**Residual Risk:** Operators who deploy Yashigani without network-level port isolation between gateway (80/443) and backoffice (8443) may allow network-adjacent attackers to reach the backoffice port. Network segmentation of port 8443 to management networks is a deployment requirement.
+**Yashigani Controls:** Four independent rate limiting dimensions (per-IP, per-session, per-agent, per-endpoint), all Redis-backed. Anomaly detection via Redis ZSET sliding window. 4 MB body size limit. Response cache reduces load.
+
+**Residual Risk:** Redis availability is a dependency for rate limiting.
 
 **Coverage: FULL**
 
 ---
 
-### API6 — Unrestricted Access to Sensitive Business Flows
+### API5 -- Broken Function Level Authorization
 
-**Risk Description:** APIs expose business flows (purchase, registration, content creation) without controls that prevent automated abuse of the flow at scale.
+**Yashigani Controls:** OPA policy evaluates method+path+identity on every request. Backoffice architecturally isolated on port 8443 with local auth. Admin routes protected by require_admin_session middleware with TOTP verification.
 
-**Yashigani Controls:**
-
-The agentic AI context makes this risk particularly relevant: AI agents can programmatically invoke MCP tool calls at machine speed. Yashigani addresses this through multiple controls.
-
-The repeated-small-calls anomaly detection system specifically targets the pattern where an agent makes many small, individually-permitted calls that collectively abuse a business flow. The Redis ZSET sliding window tracks call frequency per agent over configurable time windows, and triggers when the frequency exceeds the configured threshold.
-
-Per-endpoint rate limits can be configured independently for sensitive business function endpoints, allowing tighter restrictions on high-value operations (e.g., credential-bearing tool calls, data exfiltration-adjacent operations).
-
-Agent token authentication with minimum-length enforcement ensures that programmatic access to sensitive flows requires proper registration in the agent registry. Unregistered agents cannot access the gateway.
-
-**Residual Risk:** The semantics of "sensitive business flow" depend on the upstream MCP server's design. Yashigani can enforce rate and volume controls but cannot identify business logic abuse patterns without operator-defined policy rules.
-
-**Coverage: FULL** (with operator policy configuration for domain-specific flows)
-
----
-
-### API7 — Server Side Request Forgery (SSRF)
-
-**Risk Description:** APIs fetch remote resources based on user-supplied URLs, allowing attackers to use the server as a proxy to reach internal services, cloud metadata endpoints, or other restricted targets.
-
-**Yashigani Controls:**
-
-The upstream MCP server URL is configured exclusively through server-side environment variables at deployment time. There is no user-controlled URL input that determines where the gateway forwards requests. Callers control the path and method within the upstream, but not the hostname or scheme.
-
-OPA policy controls which paths are permitted to be forwarded to the upstream. Path-based policy rules can block requests to paths that would trigger SSRF-relevant behavior in the upstream MCP server.
-
-Because Yashigani is itself a proxy, it does not make outbound requests based on user input. The only outbound connections are: to the configured upstream (fixed), to OPA (local), to the configured inspection backends (fixed), to the configured secrets backend (fixed), and to the audit SIEM sinks (fixed).
-
-**Residual Risk:** If the upstream MCP server itself is vulnerable to SSRF and Yashigani forwards a crafted request to it, the SSRF would be in the upstream. Yashigani's inspection pipeline can identify known SSRF payload patterns if the ML/LLM inspection models are trained on such patterns.
-
-**Coverage: FULL** (for SSRF in Yashigani itself; partial for SSRF in upstream MCP servers)
-
----
-
-### API8 — Security Misconfiguration
-
-**Risk Description:** Missing security hardening, unnecessary features enabled, default credentials, verbose error messages, and unpatched vulnerabilities constitute security misconfiguration.
-
-**Yashigani Controls:**
-
-All credential and secret values are managed through the secrets backend integrations (Docker Secrets, Keeper, AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, HashiCorp Vault). There are no default passwords in the system; all credentials are auto-generated at installation time with a minimum of 36 characters of entropy and printed once at install time.
-
-Container hardening is applied by default: seccomp allowlist, AppArmor profile, UID 1001 non-root, readOnlyRootFilesystem, no privilege escalation. These settings are configured in the provided container manifests and are not optional in supported deployment configurations.
-
-Caddy handles TLS with HTTPS-only enforcement; plain HTTP is redirected. Security headers (HSTS, X-Frame-Options: DENY, Content-Security-Policy, X-Content-Type-Options) are applied by security middleware on all backoffice responses.
-
-Error responses from the gateway return generic messages with no internal implementation detail. Stack traces and framework-specific error information are suppressed in all non-development deployment modes.
-
-Trivy container scanning in CI identifies known CVEs in base images and Python dependencies before images are pushed to the registry.
-
-**Residual Risk:** Operators who override default hardening configurations (e.g., running as root, disabling seccomp, using environment variables for secrets) reduce the security posture below the documented baseline.
+**Residual Risk:** Network-level port isolation between gateway and backoffice is a deployment requirement.
 
 **Coverage: FULL**
 
 ---
 
-### API9 — Improper Inventory Management
+### API6 -- Unrestricted Access to Sensitive Business Flows
 
-**Risk Description:** Outdated, undocumented, or shadow API endpoints allow attackers to exploit functionality that operators believe is inaccessible.
+**Yashigani Controls:** Repeated-small-calls anomaly detection. Per-endpoint rate limits configurable for sensitive operations. Agent token authentication with minimum-length enforcement.
 
-**Yashigani Controls:**
+**Residual Risk:** Sensitive business flow semantics depend on upstream MCP server design. Operator policy configuration required for domain-specific flows.
 
-The agent registry provides a complete inventory of all registered agents with active/inactive lifecycle status. Agents that are deactivated cannot authenticate against the gateway. The registry is managed through the backoffice admin UI, providing full operator visibility into the agent inventory.
+**Coverage: FULL** (with operator policy configuration)
 
-Every agent registration event generates an audit log entry. Operators can review the audit trail to identify unauthorized registration attempts or unexpected agents.
+---
 
-SCIM v2 provisioning integration allows enterprise identity providers to manage the agent inventory programmatically, ensuring that agent lifecycle events (provisioning, deprovisioning) are driven by the authoritative identity system.
+### API7 -- Server Side Request Forgery (SSRF)
 
-All active API routes are enumerated in the OPA policy bundle. Routes not present in the policy bundle are denied by default, preventing shadow endpoint access even if a route exists in the application code.
+**Yashigani Controls:** Upstream URL is server-configured only (environment variables). No user-controlled URL input determines forwarding destination. OPA path policies restrict forwarded paths. Only outbound connections are to fixed, configured endpoints.
 
-**Residual Risk:** Upstream MCP servers may expose endpoints that are not reflected in Yashigani's policy bundle. Operators should ensure that the OPA policy bundle accurately represents the full set of intended upstream paths.
+**Residual Risk:** Upstream MCP server SSRF vulnerabilities are out of Yashigani's scope.
+
+**Coverage: FULL** (for SSRF in Yashigani; partial for upstream SSRF)
+
+---
+
+### API8 -- Security Misconfiguration
+
+**Yashigani Controls:** All credentials auto-generated at install (min 36 chars, HIBP-checked). Container hardening by default (seccomp, AppArmor, UID 1001, read-only FS). Caddy HTTPS-only with security headers. Generic error responses. Trivy CI scanning.
+
+**Residual Risk:** Operators who override default hardening reduce security below baseline.
 
 **Coverage: FULL**
 
 ---
 
-### API10 — Unsafe Consumption of External APIs
+### API9 -- Improper Inventory Management
 
-**Risk Description:** Applications that consume third-party APIs blindly trust the responses, inherit vulnerabilities from upstream systems, and expose users to injected content from compromised upstreams.
+**Yashigani Controls:** Agent registry with active/inactive lifecycle. Registration events audited. SCIM v2 integration for enterprise IdP-driven lifecycle management. OPA policy bundle defines all active routes; unlisted routes denied by default.
 
-**Yashigani Controls:**
+**Residual Risk:** Upstream MCP server endpoints not in policy bundle may be undiscovered.
 
-When YASHIGANI_INSPECT_RESPONSES is enabled, the inspection pipeline processes all upstream responses through the same FastText + LLM pipeline used for inbound requests. Upstream responses containing injection patterns, credential-like content, or other suspicious material are flagged, logged, and optionally blocked before being forwarded to the caller.
+**Coverage: FULL**
 
-Hop-by-hop headers are stripped from upstream responses before they are forwarded, preventing upstreams from injecting proxy-control headers into the response stream.
+---
 
-The response cache stores only CLEAN-classified responses. Responses that have been blocked, flagged, or sanitized are never cached, ensuring that cached content has passed inspection.
+### API10 -- Unsafe Consumption of External APIs
 
-The inspection backend chain (Ollama local → Anthropic → Gemini → Azure OpenAI) is itself consumed with security controls: API keys are stored in the secrets backend, CHS strips credentials before sending payloads, and all responses from inspection backends are treated as untrusted input.
+**Yashigani Controls:** Response inspection pipeline (when enabled) processes upstream responses through FastText+LLM pipeline. Hop-by-hop headers stripped. Response cache stores CLEAN-only. Inspection backend API keys in secrets backends; CHS strips credentials before sending payloads.
 
-**Residual Risk:** Response inspection adds latency and is a configuration-dependent control. Deployments that disable response inspection for performance reasons lose the upstream response validation layer.
+**Residual Risk:** Response inspection is configuration-dependent. Disabled deployments lose upstream validation.
 
 **Coverage: FULL** (with response inspection enabled; partial without)
 
@@ -442,227 +524,123 @@ The inspection backend chain (Ollama local → Anthropic → Gemini → Azure Op
 
 ## Section 3: OWASP Agentic AI and LLM Top 10 Mapping
 
-The OWASP LLM Top 10 and emerging Agentic AI security guidance address risks specific to AI-integrated systems. Yashigani's design is purpose-built for this context, as it sits at the trust boundary between AI agents and the MCP tool servers they interact with.
-
 ---
 
-### LLM01 — Prompt Injection
+### LLM01 -- Prompt Injection
 
-**Risk Description:** Attackers craft malicious inputs that manipulate AI systems into ignoring previous instructions, exfiltrating data, executing unintended actions, or bypassing safety controls.
+**Yashigani Controls:** Multi-stage, multi-backend detection: FastText ML first-pass (<5ms) -> Ollama LLM second-pass (local) -> multi-backend fallback (Anthropic, Gemini, Azure OpenAI). INJECTED payloads discarded, never forwarded. Configurable confidence thresholds with escalation on low confidence. Fail-closed on pipeline failure.
 
-**Yashigani Controls:**
-
-Yashigani implements a multi-stage, multi-backend prompt injection detection pipeline:
-
-1. **FastText ML (< 5ms):** A lightweight fastText binary classification model performs the first-pass analysis on all request content. This model is bundled in the container image and requires no network call. Its low latency makes it suitable for inline inspection of every request without meaningful performance impact.
-
-2. **Ollama LLM (local, second pass):** Requests classified as UNCERTAIN by fastText, or where confidence falls below the configured threshold, are routed to a locally-running Ollama model for deeper semantic analysis. Ollama runs within the deployment environment; no content is sent to a cloud service at this stage.
-
-3. **Multi-backend fallback chain:** If Ollama is unavailable or returns UNCERTAIN, the system falls back to configured cloud backends in priority order: Anthropic Claude, Google Gemini, Azure OpenAI. The fallback chain is configurable and each backend is optional.
-
-4. **Fail-closed on INJECTED:** Payloads classified as INJECTED are discarded and never forwarded to the upstream MCP server. The caller receives a policy alert response. The inspection result and payload hash are logged to the audit trail.
-
-5. **Confidence thresholds:** Each classification stage has a configurable confidence threshold. Results below the threshold are escalated to the next stage rather than making a low-confidence allow decision.
-
-**Residual Risk:** Novel prompt injection patterns not represented in the fastText training data may evade the first-pass filter. The LLM second-pass provides a semantic fallback, but LLMs can themselves be manipulated in adversarial prompting scenarios. Defense in depth at the model level, combined with OPA policy enforcement, limits the blast radius of a missed detection.
+**Residual Risk:** Novel injection patterns may evade FastText. LLMs can be manipulated in adversarial scenarios. Defense in depth with OPA limits blast radius.
 
 **Coverage: FULL**
 
 ---
 
-### LLM02 — Insecure Output Handling
+### LLM02 -- Insecure Output Handling
 
-**Risk Description:** AI-generated outputs are not validated or sanitized before being rendered or acted upon, allowing XSS, SSRF, code injection, or other attacks through model outputs.
+**Yashigani Controls:** Response inspection (when enabled) validates upstream outputs through same pipeline. Backoffice strict CSP blocks inline scripts. Audit log records classification and payload hash for forensics.
 
-**Yashigani Controls:**
-
-When YASHIGANI_INSPECT_RESPONSES is enabled, all upstream responses pass through the inspection pipeline before being returned to the caller. Suspicious response content is flagged, logged to the SIEM, and optionally sanitized or blocked.
-
-Backoffice UI output rendering uses strict CSP headers that block inline script execution, limiting the impact of any unsanitized output that reaches the admin interface.
-
-Audit log entries for flagged outputs include the full payload hash, classification result, and backend used for classification, enabling post-incident forensic analysis.
-
-**Residual Risk:** Response inspection is an operator-configurable control. Applications that render gateway responses in contexts susceptible to injection (e.g., HTML rendering of MCP tool output) must ensure response inspection is enabled and that output encoding is applied at the rendering layer.
+**Residual Risk:** Response inspection is operator-configurable.
 
 **Coverage: PARTIAL** (depends on response inspection configuration)
 
 ---
 
-### LLM03 — Training Data Poisoning
+### LLM03 -- Training Data Poisoning
 
-**Risk Description:** Adversaries corrupt the training data or fine-tuning datasets used to build AI models, causing the model to exhibit malicious behavior in production.
+**Yashigani Controls:** FastText training scripts provided for operator audit. Model binary digest-pinned in container image. Multi-backend fallback provides cross-check against compromised single model.
 
-**Yashigani Controls:**
+**Residual Risk:** Training-time concern outside runtime proxy scope.
 
-Training data poisoning is a training-time concern that occurs before deployment of the model. Yashigani is a runtime proxy and cannot directly prevent poisoning of the models it interacts with. However, the following mitigations apply:
-
-- The fastText classification model's training scripts are provided to operators, allowing them to audit and validate the training data and model behavior.
-- The model binary is bundled in the container image, which is digest-pinned. Tampered images would not match the recorded digest.
-- The multi-backend fallback chain provides redundancy: if one model's behavior has been altered, another backend provides a cross-check.
-
-**Residual Risk:** This is fundamentally a training-time and supply chain concern that is out of scope for a runtime gateway. Operators using custom-trained fastText models should apply appropriate controls to their model training pipelines. This gap is acknowledged in Section 5.
-
-**Coverage: PARTIAL** (integrity controls on model artifacts; training process is out of scope)
+**Coverage: PARTIAL** (integrity controls on artifacts; training process out of scope)
 
 ---
 
-### LLM04 — Model Denial of Service
+### LLM04 -- Model Denial of Service
 
-**Risk Description:** Attackers consume excessive AI inference resources through crafted inputs that trigger expensive model operations, causing service degradation or complete unavailability.
-
-**Yashigani Controls:**
-
-Per-endpoint and per-agent rate limits constrain the number of requests that can be directed at the inspection pipeline within any time window. Requests exceeding rate limits are rejected before inspection, preventing resource exhaustion through the inspection chain.
-
-Anomaly detection identifies unusual call patterns — including the repeated-small-calls pattern that can be used to run many inexpensive inference operations that collectively exhaust resources.
-
-Ollama request queuing limits concurrent inference requests to the local LLM. Requests beyond the queue capacity are routed to the next fallback backend rather than blocking.
-
-Container resource limits (cgroup v2) constrain the CPU and memory available to the Ollama process, preventing it from exhausting host resources.
+**Yashigani Controls:** Rate limiting prevents excessive inspection pipeline load. Anomaly detection identifies resource exhaustion patterns. Ollama queue limits with fallback routing. Container cgroup v2 resource limits.
 
 **Coverage: FULL**
 
 ---
 
-### LLM05 — Supply Chain Vulnerabilities
+### LLM05 -- Supply Chain Vulnerabilities
 
-**Risk Description:** Compromised model weights, libraries, packages, or pre-trained components introduce vulnerabilities or backdoors into AI-integrated systems.
+**Yashigani Controls:** Trivy CI scanning, digest-pinned base images, hashed/locked dependencies, CODEOWNERS on security-critical files.
 
-**Yashigani Controls:**
+**Residual Risk:** Third-party inference backend security is out of scope (mitigated by CHS credential stripping).
 
-Trivy is integrated into the CI/CD pipeline and scans all container images for known CVEs in base images and Python package dependencies. Images that fail the scan threshold are not promoted to production registries.
-
-Base images are specified with SHA256 digest pins in Dockerfiles, preventing the "mutable tag" attack where a tag is silently updated to point to a malicious image.
-
-Python dependencies are locked in pyproject.toml with hashed requirements, preventing dependency confusion attacks.
-
-GitHub Actions workflows use CODEOWNERS to require security team review of changes to security-sensitive files (policy bundles, authentication code, inspection pipeline, Dockerfile).
-
-**Residual Risk:** Yashigani cannot fully control the security of third-party inference backends (Anthropic, Gemini, Azure OpenAI). These are treated as semi-trusted services: CHS strips credentials before payloads are sent, but the inference result is trusted for classification purposes.
-
-**Coverage: FULL** (for Yashigani's own supply chain; partial for third-party inference backends)
+**Coverage: FULL** (for Yashigani supply chain)
 
 ---
 
-### LLM06 — Sensitive Information Disclosure
+### LLM06 -- Sensitive Information Disclosure
 
-**Risk Description:** AI models reveal sensitive information through responses, training data memorization, or by processing and retaining confidential inputs.
+**Yashigani Controls:** CHS strips credential patterns before all AI backend calls. PII masking hooks in audit logs. AES-256-GCM column encryption. Keys in secrets backends.
 
-**Yashigani Controls:**
-
-The Credential Handle Service (CHS) is Yashigani's primary control for this risk. CHS inspects all request payloads before they are sent to any AI inspection backend and strips tokens matching credential patterns (API keys, passwords, JWTs, bearer tokens). The pattern library is configurable and includes a high-entropy string detector for credential-like values that don't match known formats.
-
-CHS operates at the gateway layer and is independent of the inspection backend. Even if an operator disables LLM inspection, CHS continues to strip credentials from payloads.
-
-Audit log records apply payload masking before writing; PII masking hooks allow operators to define field-level masking for domain-specific sensitive data types.
-
-AES-256-GCM column encryption ensures that sensitive data at rest in PostgreSQL is encrypted with keys managed by the secrets backend. Column-level encryption means that a database credential breach does not immediately expose plaintext sensitive data.
-
-**Residual Risk:** CHS relies on pattern matching and entropy analysis. Novel credential formats not matching known patterns may not be stripped. Operators handling highly sensitive proprietary credential formats should extend the CHS pattern registry.
+**Residual Risk:** Novel credential formats may evade CHS pattern matching.
 
 **Coverage: FULL**
 
 ---
 
-### LLM07 — Insecure Plugin and Tool Design (MCP Context)
+### LLM07 -- Insecure Plugin and Tool Design (MCP Context)
 
-**Risk Description:** AI plugins and tools (in this context, MCP tool servers) are designed without proper authorization controls, input validation, or rate limiting, allowing AI agents to abuse them in unintended ways.
+**Yashigani Controls:** OPA policy evaluation on every MCP tool call with full context. Tool path authorization via policy bundle. Agent registration with token authentication.
 
-**Yashigani Controls:**
-
-Every MCP tool call proxied through Yashigani passes through OPA policy evaluation. The policy engine receives the full call context — agent identity, group membership, requested tool path, HTTP method, body size, and session context — and makes an explicit allow/deny decision before the call reaches the upstream MCP server.
-
-Tool call authorization is defined in the OPA policy bundle, which maps tool paths to permitted agent identities and groups. Operators can express fine-grained tool-level access controls without modifying application code.
-
-Agent registration via the agent registry, with token authentication, ensures that only registered agents can invoke tool calls. The registry includes per-agent active/inactive status and metadata for audit purposes.
-
-**Residual Risk:** The security of the upstream MCP server's implementation is out of Yashigani's scope. Yashigani enforces authorization at the proxy boundary but cannot prevent MCP servers from having their own vulnerabilities once a request is legitimately forwarded.
+**Residual Risk:** Upstream MCP server implementation security is out of scope.
 
 **Coverage: FULL** (at the proxy boundary)
 
 ---
 
-### LLM08 — Excessive Agency
+### LLM08 -- Excessive Agency
 
-**Risk Description:** AI agents are granted more permissions, capabilities, or autonomy than necessary, allowing them to take high-impact actions beyond their intended scope.
+**Yashigani Controls:** Agent bearer token minimum length (64 chars). RBAC group assignments via OPA. Full agent action audit trail. Anomaly detection for autonomous behavior patterns. Per-agent rate limits.
 
-**Yashigani Controls:**
-
-Agent bearer tokens must meet a minimum length of 64 characters, enforced at registration. This is a direct friction mechanism that prevents casual agent provisioning with low-entropy credentials.
-
-RBAC group assignments define the set of tool paths each agent is permitted to call. OPA policy enforcement means that an agent cannot call a tool it is not explicitly authorized for, regardless of how it is instructed by an orchestrating LLM.
-
-Every agent action generates an audit trail record including agent_id, session identifier, payload hash, OPA decision, inspection result, and upstream response code. This provides full forensic visibility into agent activity.
-
-Anomaly detection identifies agents exhibiting unusual call patterns, including patterns associated with autonomous goal-seeking behavior (high-frequency calls, systematic path traversal, repeated retries on blocked paths).
-
-Per-agent rate limits enforce a ceiling on the autonomous action rate of any single agent, regardless of how it is being orchestrated.
-
-**Residual Risk:** Policy granularity depends on operator-defined RBAC group configurations. Operators who assign all agents to a permissive group reduce the protection this control provides.
+**Residual Risk:** Policy granularity depends on operator RBAC configuration.
 
 **Coverage: FULL**
 
 ---
 
-### LLM09 — Overreliance
+### LLM09 -- Overreliance
 
-**Risk Description:** Users and systems place excessive trust in AI outputs without appropriate validation, leading to decisions based on incorrect, fabricated, or manipulated AI-generated content.
+**Yashigani Controls:** Multi-backend fallback with fail-closed sentinel. UNCERTAIN escalation to next stage rather than default allow. Configurable confidence thresholds. Audit records include decision, confidence, and backend.
 
-**Yashigani Controls:**
-
-The multi-backend fallback chain with fail-closed sentinel directly addresses overreliance on any single classification decision. The UNCERTAIN classification state routes payloads to progressively more capable backends rather than defaulting to allow.
-
-Confidence thresholds are configurable per backend. A low-confidence CLEAN classification does not result in forwarding; the request is escalated to the next inspection stage.
-
-The audit log records the classification decision, the confidence score, and the backend that made the decision for every inspected request. Operators can review audit records to identify patterns of low-confidence decisions and adjust thresholds accordingly.
-
-The fail-closed sentinel ensures that a complete inspection pipeline failure results in a deny decision rather than a default allow.
-
-**Residual Risk:** Human review of audit logs is not automated. Operators who do not regularly review audit records may miss patterns that warrant policy or threshold adjustments.
+**Residual Risk:** Human review of audit logs is not automated.
 
 **Coverage: FULL**
 
 ---
 
-### LLM10 — Model Theft
+### LLM10 -- Model Theft
 
-**Risk Description:** Adversaries extract proprietary model weights, training data, or model behavior through API abuse, side-channel attacks, or unauthorized access.
+**Yashigani Controls:** Ollama runs locally; model weights not network-accessible. Inspection backend API keys in secrets backends. CHS prevents credential leakage to backends. ECDSA P-256 offline licence verification (ML-DSA-65 planned).
 
-**Yashigani Controls:**
+**Residual Risk:** Customer-owned model protection on upstream MCP servers is out of scope.
 
-Ollama runs locally within the deployment environment. Model weights for the security classification model are never accessible via a network API; all inference happens in-process within the container network.
-
-Inspection backend API keys (for Anthropic, Gemini, Azure OpenAI) are stored in the secrets backend and are never logged or exposed in responses. CHS ensures that the payloads sent to these backends do not contain operator credentials that could be used to access operator-specific fine-tuned models.
-
-License verification for Yashigani itself uses ECDSA P-256 offline verification with no network call, preventing license-related network traffic that could reveal deployment information. A migration to ML-DSA-65 (FIPS 204, post-quantum) is planned once the `cryptography` library ships stable FIPS 204 support; at that point licence signing will provide resistance against both classical and quantum adversaries.
-
-**Residual Risk:** Yashigani protects the inspection backends' API credentials and prevents unauthorized access to the Ollama local model. It does not protect the customer's own AI models that are deployed in the MCP servers behind the gateway — those models' security is the responsibility of the upstream MCP server operators.
-
-**Coverage: PARTIAL** (protects Yashigani's inspection models and API credentials; customer model protection is out of scope)
+**Coverage: PARTIAL** (protects Yashigani's inspection models; customer models out of scope)
 
 ---
 
 ### Agentic AI Specific Controls
 
-Beyond the LLM Top 10, Yashigani implements controls specifically designed for the multi-agent, agentic AI operational context:
-
 | Control | Implementation | Purpose |
 |---|---|---|
-| Agent identity verification | Bearer token, min-length 64, registry lookup | Ensures only registered agents can interact with MCP tools |
-| Per-agent rate limiting | Redis fixed-window, independent of per-IP/session limits | Constrains autonomous agent action rates |
-| Agent anomaly detection | Redis ZSET sliding window, repeated-small-calls pattern | Identifies agents exhibiting unexpected call patterns |
-| Agent action audit trail | Every call logged: agent_id, session, payload hash, OPA decision, upstream response | Full forensic visibility into agent behavior |
-| Agent lifecycle management | Active/inactive status in agent registry, admin UI | Enables rapid deactivation of compromised or misbehaving agents |
-| SCIM v2 provisioning | RFC 7644-compliant agent provisioning from enterprise IdP | Integrates agent lifecycle with enterprise identity governance |
-| Multi-tenant isolation | RLS per tenant, separate Redis DBs per tenant | Prevents agents in one tenant from affecting another |
-| Fail-closed policy engine | OPA deny-on-error, no fallback-to-allow | Ensures policy failures cannot be exploited to gain access |
-| Response chain tracing | W3C traceparent, X-Trace-Id, tail sampling, Jaeger | End-to-end trace visibility across agent action chains |
+| Agent identity verification | Bearer token, min-length 64, registry lookup | Ensures only registered agents access MCP tools |
+| Per-agent rate limiting | Redis sliding window, independent of per-IP/session | Constrains autonomous agent action rates |
+| Agent anomaly detection | Redis ZSET sliding window, repeated-small-calls | Identifies unexpected agent call patterns |
+| Agent action audit trail | Every call: agent_id, session, payload hash, OPA decision, upstream response | Full forensic visibility into agent behavior |
+| Agent lifecycle management | Active/inactive status, admin UI | Rapid deactivation of compromised agents |
+| SCIM v2 provisioning | RFC 7644-compliant provisioning | Enterprise IdP-driven agent lifecycle |
+| Multi-tenant isolation | RLS + separate Redis DBs + OPA tenant context | Cross-tenant protection |
+| Fail-closed policy engine | OPA deny-on-error | Policy failures cannot grant access |
+| Response chain tracing | W3C traceparent, X-Trace-Id, tail sampling, Jaeger | End-to-end trace visibility |
 
 ---
 
 ## Section 4: Compliance Summary Table
-
-This table maps Yashigani's coverage across the three OWASP frameworks, noting which deployment tier provides each control.
 
 **Tier definitions (v0.6.2):**
 - **Community:** Apache 2.0 open-source, 20 agents, 50 end users, 10 admin seats, no SSO
@@ -674,26 +652,28 @@ This table maps Yashigani's coverage across the three OWASP frameworks, noting w
 | Control Domain | ASVS v5 Chapter | API Top 10 | LLM Top 10 | Community | Starter | Professional | Prof. Plus | Enterprise |
 |---|---|---|---|---|---|---|---|---|
 | Input validation and sanitization | V1, V5 | API1, API3 | LLM01 | Yes | Yes | Yes | Yes | Yes |
-| Authentication (passwords, TOTP) | V2 | API2 | — | Yes | Yes | Yes | Yes | Yes |
-| OIDC federation | V2 | API2 | — | — | Yes | Yes | Yes | Yes |
-| SAML federation | V2 | API2 | — | — | — | Yes | Yes | Yes |
-| Session management | V3 | API2 | — | Yes | Yes | Yes | Yes | Yes |
+| Authentication (passwords, TOTP) | V2 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
+| WebAuthn/FIDO2 (partial) | V2 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
+| OIDC federation | V2 | API2 | -- | -- | Yes | Yes | Yes | Yes |
+| SAML federation | V2 | API2 | -- | -- | -- | Yes | Yes | Yes |
+| Session management | V3 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
 | OPA policy enforcement | V4 | API1, API5 | LLM07, LLM08 | Yes | Yes | Yes | Yes | Yes |
 | Prompt injection detection (FastText) | V5 | API3 | LLM01 | Yes | Yes | Yes | Yes | Yes |
 | Prompt injection detection (Ollama LLM) | V5 | API3 | LLM01 | Yes | Yes | Yes | Yes | Yes |
-| Multi-backend inspection fallback | V5 | API3 | LLM01, LLM09 | — | Yes | Yes | Yes | Yes |
+| Multi-backend inspection fallback | V5 | API3 | LLM01, LLM09 | -- | Yes | Yes | Yes | Yes |
 | Credential Handle Service (CHS) | V5, V8 | API3 | LLM06 | Yes | Yes | Yes | Yes | Yes |
 | AES-256-GCM column encryption | V6 | API8 | LLM06 | Yes | Yes | Yes | Yes | Yes |
-| Argon2id password hashing | V6 | API2 | — | Yes | Yes | Yes | Yes | Yes |
-| ECDSA P-256 licence signing | V6 | API8 | — | Yes | Yes | Yes | Yes | Yes |
-| Generic error responses | V7 | API8 | — | Yes | Yes | Yes | Yes | Yes |
+| Argon2id password hashing | V6 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
+| ECDSA P-256 licence signing | V6 | API8 | -- | Yes | Yes | Yes | Yes | Yes |
+| Generic error responses | V7 | API8 | -- | Yes | Yes | Yes | Yes | Yes |
 | Structured audit log (file) | V7 | API9 | LLM08 | Yes | Yes | Yes | Yes | Yes |
 | Audit log to PostgreSQL | V7 | API9 | LLM08 | Yes | Yes | Yes | Yes | Yes |
-| SIEM integration (Splunk/ES/Wazuh) | V7 | API9 | LLM08 | — | Yes | Yes | Yes | Yes |
-| Row-level security (RLS) | V8 | API1 | — | Yes | Yes | Yes | Yes | Yes |
+| SHA-384 Merkle chain (audit integrity) | V7 | -- | -- | Yes | Yes | Yes | Yes | Yes |
+| SIEM integration (Splunk/ES/Wazuh) | V7 | API9 | LLM08 | -- | Yes | Yes | Yes | Yes |
+| Row-level security (RLS) | V8 | API1 | -- | Yes | Yes | Yes | Yes | Yes |
 | PII masking in audit logs | V8 | API8 | LLM06 | Yes | Yes | Yes | Yes | Yes |
-| TLS 1.2+ enforcement (Caddy) | V9 | API8 | — | Yes | Yes | Yes | Yes | Yes |
-| HSTS headers | V9 | API8 | — | Yes | Yes | Yes | Yes | Yes |
+| TLS 1.2+ enforcement (Caddy) | V9 | API8 | -- | Yes | Yes | Yes | Yes | Yes |
+| HSTS headers | V9 | API8 | -- | Yes | Yes | Yes | Yes | Yes |
 | Seccomp allowlist | V10 | API8 | LLM05 | Yes | Yes | Yes | Yes | Yes |
 | AppArmor profile | V10 | API8 | LLM05 | Yes | Yes | Yes | Yes | Yes |
 | Read-only container filesystem | V10 | API8 | LLM05 | Yes | Yes | Yes | Yes | Yes |
@@ -702,153 +682,213 @@ This table maps Yashigani's coverage across the three OWASP frameworks, noting w
 | Per-agent rate limiting | V11 | API4, API6 | LLM04, LLM08 | Yes | Yes | Yes | Yes | Yes |
 | Per-endpoint rate limiting | V11 | API4, API6 | LLM04 | Yes | Yes | Yes | Yes | Yes |
 | Anomaly detection (ZSET sliding window) | V11 | API6 | LLM08 | Yes | Yes | Yes | Yes | Yes |
-| Audit log rotation and retention | V12 | — | — | Yes | Yes | Yes | Yes | Yes |
-| pg_partman time-based partitioning | V12 | — | — | Yes | Yes | Yes | Yes | Yes |
-| Hop-by-hop header stripping | V13 | API10 | — | Yes | Yes | Yes | Yes | Yes |
-| Response cache (CLEAN-only) | V13 | API10 | — | Yes | Yes | Yes | Yes | Yes |
-| OTEL tracing (Jaeger) | V13 | API9 | — | Yes | Yes | Yes | Yes | Yes |
+| Audit log rotation and retention | V12 | -- | -- | Yes | Yes | Yes | Yes | Yes |
+| pg_partman time-based partitioning | V12 | -- | -- | Yes | Yes | Yes | Yes | Yes |
+| Hop-by-hop header stripping | V13 | API10 | -- | Yes | Yes | Yes | Yes | Yes |
+| Response cache (CLEAN-only) | V13 | API10 | -- | Yes | Yes | Yes | Yes | Yes |
+| OTEL tracing (Jaeger) | V13 | API9 | -- | Yes | Yes | Yes | Yes | Yes |
 | Docker Secrets integration | V6 | API8 | LLM10 | Yes | Yes | Yes | Yes | Yes |
-| HashiCorp Vault integration | V6 | API8 | LLM10 | — | Yes | Yes | Yes | Yes |
-| AWS/Azure/GCP Secrets Manager | V6 | API8 | LLM10 | — | Yes | Yes | Yes | Yes |
-| Keeper secrets integration | V6 | API8 | LLM10 | — | Yes | Yes | Yes | Yes |
-| SCIM v2 agent provisioning | V4 | API9 | LLM08 | — | — | Yes | Yes | Yes |
-| Response inspection pipeline | V5 | API10 | LLM02 | — | Yes | Yes | Yes | Yes |
+| HashiCorp Vault integration | V6 | API8 | LLM10 | -- | Yes | Yes | Yes | Yes |
+| AWS/Azure/GCP Secrets Manager | V6 | API8 | LLM10 | -- | Yes | Yes | Yes | Yes |
+| Keeper secrets integration | V6 | API8 | LLM10 | -- | Yes | Yes | Yes | Yes |
+| SCIM v2 agent provisioning | V4 | API9 | LLM08 | -- | -- | Yes | Yes | Yes |
+| Response inspection pipeline | V5 | API10 | LLM02 | -- | Yes | Yes | Yes | Yes |
 | Trivy CI scanning | V10 | API8 | LLM05 | Yes | Yes | Yes | Yes | Yes |
-| JWT alg:none rejection | V2 | API2 | — | Yes | Yes | Yes | Yes | Yes |
-| JWKS waterfall key rotation | V2 | API2 | — | Yes | Yes | Yes | Yes | Yes |
-| Backoffice port isolation (8443) | V4 | API5 | — | Yes | Yes | Yes | Yes | Yes |
+| JWT alg:none rejection | V2 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
+| JWKS waterfall key rotation | V2 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
+| Backoffice port isolation (8443) | V4 | API5 | -- | Yes | Yes | Yes | Yes | Yes |
 | Agent limit enforcement | V11 | API4 | LLM08 | 20 agents | 100 | 500 | 2,000 | Unlimited |
-| End user limit enforcement | V11 | API4 | — | 50 | 250 | 1,000 | 10,000 | Unlimited |
-| Admin seat limit enforcement | V11 | API4 | — | 10 | 25 | 50 | 200 | Unlimited |
-| Multi-org isolation | V4 | API1 | — | 1 org | 1 org | 1 org | 5 orgs | Unlimited |
-| Apache 2.0 open-source license | — | — | — | Yes | — | — | — | — |
-| Contributor License Agreement (CLA) | — | — | — | Yes | — | — | — | — |
-| Admin minimum count enforcement | V11 | API5 | — | Yes | Yes | Yes | Yes | Yes |
+| End user limit enforcement | V11 | API4 | -- | 50 | 250 | 1,000 | 10,000 | Unlimited |
+| Admin seat limit enforcement | V11 | API4 | -- | 10 | 25 | 50 | 200 | Unlimited |
+| Multi-org isolation | V4 | API1 | -- | 1 org | 1 org | 1 org | 5 orgs | Unlimited |
+| Apache 2.0 open-source license | -- | -- | -- | Yes | -- | -- | -- | -- |
+| Admin minimum count enforcement | V11 | API5 | -- | Yes | Yes | Yes | Yes | Yes |
 | Agent min-length enforcement (64 chars) | V11 | API6 | LLM08 | Yes | Yes | Yes | Yes | Yes |
-| Multi-tenant Redis isolation | V8 | API1 | — | Yes | Yes | Yes | Yes | Yes |
+| Multi-tenant Redis isolation | V8 | API1 | -- | Yes | Yes | Yes | Yes | Yes |
 
 ---
 
 ## Section 5: Gap Analysis and Residual Risk
 
-This section provides an honest assessment of areas where Yashigani's controls are incomplete, out of scope, or dependent on operator configuration. Security architects performing due diligence should review these gaps when assessing residual risk.
+This section documents areas where Yashigani's controls do not fully satisfy ASVS v5 Level 3 requirements. Security architects performing due diligence should review these gaps when assessing residual risk.
 
 ---
 
-### Gap 1: Training Data Poisoning (LLM03)
+### Gap 1: Internal Mutual TLS (V9.2.2) -- FAIL
 
-**Nature of gap:** Training data poisoning occurs at model training time, before Yashigani is deployed. A runtime proxy cannot prevent an adversary from contaminating the training dataset of the fastText classification model or any third-party inspection backend.
+**Nature of gap:** ASVS v5 L3 requires mutual TLS for service-to-service communication. Internal communications (gateway to OPA, PostgreSQL, Redis) rely on Docker network isolation rather than mTLS.
 
-**What Yashigani does:** Provides fastText model training scripts so operators can audit and control their own training data. Bundles the model in a digest-pinned container image to detect tampering at deployment time. The multi-backend fallback chain reduces the impact of any single model being compromised.
+**What Yashigani does:** Deploys services within isolated container networks. TLS is available for PostgreSQL and OPA connections. Network policies restrict cross-service reachability.
 
-**What Yashigani does not do:** Validate the provenance or integrity of training data during model training. Monitor third-party inference backends (Anthropic, Gemini, Azure OpenAI) for model behavior changes.
+**What Yashigani does not do:** Enforce mTLS on all internal service connections by default. Provide built-in certificate management for an internal service mesh.
 
-**Recommended operator mitigations:** Treat model training as a sensitive supply chain operation. Apply data provenance controls to fastText training datasets. Monitor classification accuracy over time for unexpected degradation.
+**Recommended mitigations:** Configure TLS for PostgreSQL and Redis connections. Deploy a service mesh (Istio, Linkerd) for automatic mTLS. For highest assurance, use sidecar proxies with certificate rotation.
 
-**ASVS Level:** N/A (training-time concern outside proxy scope)
-
----
-
-### Gap 2: Physical Security Controls (V10 Partial)
-
-**Nature of gap:** ASVS V10 at Level 3 includes requirements for physical access controls and tamper-evident hardware. Yashigani's container hardening (seccomp, AppArmor, non-root UID, read-only filesystem) addresses the software layer but cannot enforce physical security of the underlying host hardware.
-
-**What Yashigani does:** Constrains container capabilities at the OS level, preventing privilege escalation even if an attacker gains access to the container runtime. Read-only filesystem limits persistence options for an attacker who achieves code execution.
-
-**What Yashigani does not do:** Enforce physical access controls to the host system, provide hardware-level attestation (TPM), or implement secure enclave execution.
-
-**Recommended operator mitigations:** Deploy on hardware with physical access controls appropriate to your threat model. For highest-assurance deployments, consider confidential computing platforms (AMD SEV, Intel TDX) for the Yashigani host.
-
-**ASVS Level:** PARTIAL at L3 (full at L1 and L2)
+**Priority: HIGH** (most significant L3 gap)
 
 ---
 
-### Gap 3: Client-Side Security
+### Gap 2: Certificate Pinning (V9.1.6) -- FAIL
 
-**Nature of gap:** Yashigani's controls terminate at the gateway boundary. Client applications that communicate with the gateway are outside Yashigani's enforcement scope. Client-side vulnerabilities (XSS in the agent client, credential storage in the agent application, insecure local storage) are not mitigated by the gateway.
+**Nature of gap:** L3 requires certificate pinning for high-value external connections. Yashigani does not pin certificates for connections to inspection backends, SIEM endpoints, or secrets backends.
 
-**What Yashigani does:** Protects the server-side trust boundary rigorously. The backoffice admin panel implements client-security best practices (CSP, HttpOnly cookies, SameSite) for its own UI.
+**What Yashigani does:** Validates standard certificate chains. Uses ACME for automated certificate management.
 
-**What Yashigani does not do:** Enforce security controls on third-party agent client applications. Validate that agent clients protect their bearer tokens against local exfiltration.
+**Recommended mitigations:** Implement certificate pinning for inspection backend connections (Anthropic, Gemini, Azure OpenAI). Pin SIEM endpoint certificates. Consider DANE/TLSA as an alternative to HTTP-based pinning.
 
-**Recommended operator mitigations:** Apply client application security standards (OWASP MASVS for mobile agents, ASVS V3 for web-based agents) independently. Rotate agent tokens on a schedule and monitor for reuse from unexpected IP addresses.
-
----
-
-### Gap 4: Model Weights Protection for Customer Models (LLM10 Partial)
-
-**Nature of gap:** Yashigani protects the credentials used to access its own inspection backends (Anthropic, Gemini, Azure OpenAI API keys) and runs its own Ollama model locally. It does not protect the model weights or training data of the customer's own AI models deployed in the MCP servers behind the gateway.
-
-**What Yashigani does:** Ensures that inspection backend API keys are stored in secrets backends and not logged. Runs local Ollama inference without sending content to cloud services. Enforces rate limits that make model extraction via API enumeration impractical.
-
-**What Yashigani does not do:** Protect customer-owned model weights hosted on the upstream MCP servers. Detect model extraction attempts directed at customer models through the gateway (beyond rate limiting).
-
-**Recommended operator mitigations:** Apply model IP protection controls at the MCP server layer. Use Yashigani's per-endpoint rate limiting to constrain query rates to model inference endpoints. Monitor audit logs for systematic query patterns associated with model extraction.
+**Priority: MEDIUM**
 
 ---
 
-### Gap 5: Response Inspection Dependency
+### Gap 3: Hardware Attestation (V10.5.2) -- FAIL
 
-**Nature of gap:** Several controls — LLM02 (Insecure Output Handling), API10 (Unsafe Consumption of APIs) — depend on the YASHIGANI_INSPECT_RESPONSES configuration being enabled. This is not the default in all deployment configurations due to the latency and cost implications of inspecting all upstream responses.
+**Nature of gap:** L3 requires hardware-level integrity attestation (TPM, secure boot). Yashigani is a software-only product and does not integrate with hardware security modules for attestation.
 
-**What Yashigani does:** Provides the response inspection infrastructure. Logs and audits all responses regardless of inspection setting. Serves only CLEAN-cached responses.
+**What Yashigani does:** Software-level integrity: seccomp, AppArmor, read-only filesystem, digest-pinned images.
 
-**What Yashigani does not do:** Guarantee that upstream responses are inspected unless the operator enables response inspection. The default configuration prioritizes performance; operators handling high-sensitivity data should explicitly enable response inspection.
+**Recommended mitigations:** Deploy on confidential computing platforms (AMD SEV, Intel TDX). Use TPM-backed measured boot for the host OS. Consider UEFI Secure Boot for the container host.
 
-**Recommended operator mitigations:** Enable YASHIGANI_INSPECT_RESPONSES in deployments where upstream MCP servers may return sensitive data or where the upstream server's security posture is uncertain. Consider selective response inspection (per-path policy) to balance security and performance.
-
----
-
-### Gap 6: Internal Service Transport Encryption (V9.2.1 Partial)
-
-**Nature of gap:** While external TLS is fully enforced via Caddy, internal service-to-service communication (gateway to OPA, gateway to PostgreSQL, gateway to Redis) relies on network isolation rather than mutual TLS for all paths. Some internal communication channels use TLS; others rely on container network policies.
-
-**What Yashigani does:** Deploys all services within an isolated container network. Recommends TLS for PostgreSQL connections in production documentation. OPA communication can be configured with TLS.
-
-**What Yashigani does not do:** Enforce mutual TLS on all internal service connections by default. Provide built-in certificate management for internal service mesh.
-
-**Recommended operator mitigations:** For high-assurance deployments, configure PostgreSQL TLS client certificates, Redis TLS, and OPA HTTPS. Consider a service mesh (Istio, Linkerd) for automatic mTLS across all internal services.
+**Priority: MEDIUM** (dependent on deployment environment)
 
 ---
 
-### Gap 7: Credential Reset Flow
+### Gap 4: Memory Zeroing (V8.2.3) -- FAIL
 
-**Nature of gap:** ASVS V2.3.1 requires that credential reset uses a secure out-of-band mechanism. Yashigani provides secure session invalidation and password hashing infrastructure but delegates the credential reset flow to the operator's identity infrastructure.
+**Nature of gap:** L3 requires sensitive data to be cleared from memory when no longer needed. Python's garbage collector does not guarantee deterministic memory zeroing of string objects.
 
-**What Yashigani does:** Provides secure password hashing, session invalidation, and integration with external IdPs (SAML, OIDC) that typically include credential reset flows.
+**What Yashigani does:** Uses short-lived variables for sensitive data. Session invalidation removes server-side session state.
 
-**What Yashigani does not do:** Implement a built-in email-based or out-of-band credential reset flow.
+**What Yashigani does not do:** Explicitly zero password strings, TOTP secrets, or encryption keys in memory after use. This is a fundamental limitation of the Python runtime.
 
-**Recommended operator mitigations:** Deploy Yashigani behind an IdP that implements OWASP-compliant credential reset. For deployments using local authentication only, implement an administrative credential reset procedure.
+**Recommended mitigations:** For highest assurance, security-critical cryptographic operations could be delegated to a C extension that performs explicit memory zeroing. Alternatively, deploy in confidential computing environments where memory is encrypted.
+
+**Priority: LOW-MEDIUM** (Python runtime limitation; mitigated by container isolation)
+
+---
+
+### Gap 5: Key Destruction Verification (V6.5.3) -- FAIL
+
+**Nature of gap:** L3 requires verification that retired cryptographic keys are securely destroyed. Yashigani delegates key lifecycle to secrets backends but does not verify destruction.
+
+**Recommended mitigations:** Implement key destruction verification callbacks for each secrets backend. Use cloud KMS key scheduling for destruction with confirmation.
+
+**Priority: LOW**
+
+---
+
+### Gap 6: Data Classification Policy (V8.1.2) -- FAIL
+
+**Nature of gap:** L3 requires a formal data classification policy. CHS provides technical credential classification, but no formal policy document defines data sensitivity levels.
+
+**Recommended mitigations:** Create a data classification policy document mapping sensitivity levels to handling requirements. Map CHS patterns and PII hooks to classification levels.
+
+**Priority: LOW** (process gap, not technical)
+
+---
+
+### Gap 7: Backup Encryption (V8.6.1) -- FAIL
+
+**Nature of gap:** L3 requires backup data to be encrypted. Yashigani does not manage database backups; this is delegated to operator infrastructure.
+
+**Recommended mitigations:** Configure PostgreSQL backup encryption (pg_basebackup with encryption, or encrypted storage volumes). Ensure Redis persistence files are on encrypted storage.
+
+**Priority: LOW** (operator infrastructure responsibility)
+
+---
+
+### Gap 8: WebAuthn Constructor Bug (V2.5.5) -- PARTIAL
+
+**Nature of gap:** WebAuthn/FIDO2 passkey support exists but has a known constructor bug that prevents full functionality.
+
+**Recommended mitigations:** Fix the constructor bug to achieve full WebAuthn L3 compliance. This is planned for a future release.
+
+**Priority: MEDIUM** (hardware authenticators are important for L3)
+
+---
+
+### Gap 9: Formal Code Audit (V10.1.1) -- PARTIAL
+
+**Nature of gap:** L3 expects formal independent code audits. Yashigani is open source with CODEOWNERS-enforced review but has not undergone a formal third-party security audit.
+
+**Recommended mitigations:** Commission an independent security audit from a qualified firm. Publish audit results.
+
+**Priority: HIGH** (important for L3 credibility)
+
+---
+
+### Gap 10: Post-Quantum Cryptography (V6.2.3, V9.4.1) -- PARTIAL
+
+**Nature of gap:** Hybrid X25519+ML-KEM-768 and ML-DSA-65 are prepared but blocked on upstream library/tooling support (Caddy 2.10, `cryptography` FIPS 204).
+
+**Recommended mitigations:** Track upstream release schedules. Enable PQ hybrid modes as soon as dependencies ship. Test PQ key exchange in staging environments.
+
+**Priority: LOW** (proactive preparation is strong; blocked on ecosystem)
+
+---
+
+### Gap 11: Training Data Poisoning (LLM03)
+
+**Nature of gap:** Training-time concern outside runtime proxy scope.
+
+**Recommended mitigations:** Secure model training pipeline. Monitor classification accuracy over time.
+
+**Priority: N/A** (architectural scope boundary)
+
+---
+
+### Gap 12: Response Inspection Dependency (LLM02, API10)
+
+**Nature of gap:** Several controls depend on YASHIGANI_INSPECT_RESPONSES being enabled, which is not the default in all configurations.
+
+**Recommended mitigations:** Enable response inspection for high-sensitivity deployments. Consider selective per-path response inspection to balance security and performance.
+
+**Priority: MEDIUM**
 
 ---
 
 ### Summary Gap Table
 
-| Gap | Risk Level | Scope | Recommended Mitigation |
-|---|---|---|---|
-| LLM03 Training data poisoning | Medium | Out of scope (training-time) | Secure model training pipeline, monitor classification accuracy |
-| Physical security (V10 L3) | Medium | Operator infrastructure | Physical access controls, consider confidential computing |
-| Client-side security | Medium | Client application scope | Apply MASVS/ASVS to agent clients independently |
-| Customer model weight protection (LLM10) | Medium | Upstream MCP server scope | Model-level IP controls at upstream; rate limiting via Yashigani |
-| Response inspection dependency | Low-Medium | Configuration-dependent | Enable YASHIGANI_INSPECT_RESPONSES for high-sensitivity deployments |
-| Internal mTLS | Low | Deployment configuration | Configure TLS for internal services; consider service mesh |
-| Credential reset flow | Low | Identity infrastructure | Integrate with IdP that provides compliant reset flow |
+| Gap | ASVS Req | Verdict | Risk Level | Priority | Mitigation Type |
+|---|---|---|---|---|---|
+| Internal mTLS | V9.2.2 | FAIL | High | HIGH | Engineering (service mesh) |
+| Certificate pinning | V9.1.6 | FAIL | Medium | MEDIUM | Engineering |
+| Hardware attestation | V10.5.2 | FAIL | Medium | MEDIUM | Deployment (confidential computing) |
+| Memory zeroing | V8.2.3 | FAIL | Low-Med | LOW-MED | Engineering (C extension) or deployment |
+| Key destruction verification | V6.5.3 | FAIL | Low | LOW | Engineering |
+| Data classification policy | V8.1.2 | FAIL | Low | LOW | Process (documentation) |
+| Backup encryption | V8.6.1 | FAIL | Low | LOW | Operator infrastructure |
+| WebAuthn constructor bug | V2.5.5 | PARTIAL | Medium | MEDIUM | Engineering (bug fix) |
+| Formal code audit | V10.1.1 | PARTIAL | High | HIGH | Process (third-party audit) |
+| Post-quantum crypto | V6.2.3 | PARTIAL | Low | LOW | Blocked on upstream |
+| Response inspection default | LLM02 | PARTIAL | Medium | MEDIUM | Configuration guidance |
+| Password strength meter | V2.1.8 | FAIL | Low | LOW | Engineering (UI) |
 
 ---
 
-### v0.7.0 / v0.7.1 Security Posture Changes
+### Version History: Security-Relevant Changes
 
-The following improvements from v0.7.0 and v0.7.1 directly affect OWASP compliance posture:
+#### v0.9.5 Changes
 
 | Change | OWASP Relevance | Effect |
-|--------|-----------------|--------|
-| **ECDSA P-256 licence signing key active** | ASVS V6, V14 | ECDSA P-256 licence signing active; `cryptography>=42`; ML-DSA-65 migration planned when `cryptography` ships FIPS 204 |
-| **CIDR-based IP allowlisting per agent** (v0.7.0) | ASVS V4.1.3, API Security API5 | Provides defense-in-depth for agent token compromise; a stolen token from an unexpected IP is blocked and audited |
-| **Path matching fix — IC-6** (v0.7.0) | ASVS V4.1, API Security API1 | Single-segment glob `*` was incorrectly matching across `/` boundaries, potentially allowing tools under sub-paths to be reached with policies intended for shallower paths. Fixed with `re.fullmatch` and `[^/]*` translation. |
-| **Direct webhook alerting on credential exfil** (v0.7.1) | OWASP LLM01, LLM06 | Security teams receive real-time notification of credential exfiltration attempts; reduces mean time to awareness |
-| **Automated partition monitoring + alert** (v0.7.0) | ASVS V7.1 | Audit log reliability is now monitored; missing partitions alert before data loss occurs |
-| **OPA Policy Assistant** (v0.7.0) | ASVS V4.1 | Reduces risk of policy misconfiguration; all suggestions are schema-validated before admin review, and every apply/reject is audited |
+|---|---|---|
+| Agent PSK token rotation with grace periods | ASVS V2.7.3 | Zero-downtime credential rotation for agent tokens |
+| WebAuthn/FIDO2 passkey support (partial) | ASVS V2.5.5 | Hardware authenticator support; constructor bug pending fix |
+| Recovery codes (8 codes, Argon2id-hashed) | ASVS V2.5.4, V2.6.1 | Strong MFA recovery mechanism |
+| TOTP replay prevention (used-code cache) | ASVS V2.5.6 | Prevents TOTP code reuse within time window |
+| Progressive TOTP lockout | ASVS V2.5.7 | Rate-limited MFA attempts |
+| Anti-lockout: 2 admin accounts at install | ASVS V4.3.3 | Prevents admin lockout scenarios |
+| bcrypt for Prometheus basic auth | ASVS V6.4.1 | Monitoring endpoint credential protection |
+
+#### v0.7.0 / v0.7.1 Changes
+
+| Change | OWASP Relevance | Effect |
+|---|---|---|
+| ECDSA P-256 licence signing key active | ASVS V6, V14 | ML-DSA-65 migration planned when FIPS 204 ships |
+| CIDR-based IP allowlisting per agent | ASVS V4.1.3, API5 | Defense-in-depth for agent token compromise |
+| Path matching fix (IC-6) | ASVS V4.1, API1 | Single-segment glob `*` no longer matches across `/` boundaries |
+| Direct webhook alerting on credential exfil | LLM01, LLM06 | Real-time notification of credential exfiltration attempts |
+| Automated partition monitoring + alert | ASVS V7.1 | Audit log reliability monitoring |
+| OPA Policy Assistant | ASVS V4.1 | Schema-validated policy suggestions; apply/reject audited |
 
 ---
 
@@ -859,30 +899,37 @@ The following improvements from v0.7.0 and v0.7.1 directly affect OWASP complian
 | Term | Definition |
 |---|---|
 | ASVS | OWASP Application Security Verification Standard |
-| CHS | Credential Handle Service — Yashigani component that strips credentials from payloads before AI inspection |
-| MCP | Model Context Protocol — protocol for AI agent-to-tool server communication |
-| OPA | Open Policy Agent — embedded policy engine used for all authorization decisions |
+| CHS | Credential Handle Service -- Yashigani component that strips credentials from payloads before AI inspection |
+| CSPRNG | Cryptographically Secure Pseudo-Random Number Generator |
+| HSM | Hardware Security Module |
+| MCP | Model Context Protocol -- protocol for AI agent-to-tool server communication |
+| mTLS | Mutual Transport Layer Security |
+| OPA | Open Policy Agent -- embedded policy engine for all authorization decisions |
+| PQ | Post-Quantum (cryptography) |
 | RBAC | Role-Based Access Control |
-| RLS | Row-Level Security — PostgreSQL feature enforcing per-tenant data isolation |
+| RLS | Row-Level Security -- PostgreSQL feature enforcing per-tenant data isolation |
+| SBOM | Software Bill of Materials |
 | SCIM | System for Cross-domain Identity Management (RFC 7644) |
 | SIEM | Security Information and Event Management |
 | TOTP | Time-based One-Time Password (RFC 6238) |
-| ZSET | Redis Sorted Set — data structure used for sliding window anomaly detection |
+| ZSET | Redis Sorted Set -- data structure used for sliding window anomaly detection |
 
 ### References
 
 | Document | Version | URL |
 |---|---|---|
-| OWASP Application Security Verification Standard | v5.0 | https://owasp.org/www-project-application-security-verification-standard/ |
+| OWASP Application Security Verification Standard | v5.0 (2025) | https://owasp.org/www-project-application-security-verification-standard/ |
 | OWASP API Security Top 10 | 2023 | https://owasp.org/www-project-api-security/ |
 | OWASP Top 10 for LLM Applications | 1.1 | https://owasp.org/www-project-top-10-for-large-language-model-applications/ |
 | OWASP Agentic AI Threats and Mitigations | 2025 | https://owasp.org/www-project-top-10-for-large-language-model-applications/ |
+| NIST SP 800-63B (Digital Identity Guidelines) | 4 | https://pages.nist.gov/800-63-4/sp800-63b.html |
 | Open Policy Agent Documentation | Current | https://www.openpolicyagent.org/docs/ |
-| NIST SP 800-63B | 3 | https://pages.nist.gov/800-63-3/sp800-63b.html |
-| RFC 7517 (JSON Web Key) | — | https://datatracker.ietf.org/doc/html/rfc7517 |
-| RFC 6238 (TOTP) | — | https://datatracker.ietf.org/doc/html/rfc6238 |
-| RFC 7644 (SCIM 2.0) | — | https://datatracker.ietf.org/doc/html/rfc7644 |
+| RFC 7517 (JSON Web Key) | -- | https://datatracker.ietf.org/doc/html/rfc7517 |
+| RFC 6238 (TOTP) | -- | https://datatracker.ietf.org/doc/html/rfc6238 |
+| RFC 7644 (SCIM 2.0) | -- | https://datatracker.ietf.org/doc/html/rfc7644 |
+| FIPS 204 (ML-DSA) | Draft | https://csrc.nist.gov/pubs/fips/204/final |
+| FIPS 203 (ML-KEM) | Draft | https://csrc.nist.gov/pubs/fips/203/final |
 
 ---
 
-*This document was prepared for Yashigani version as of 2026-03-27. Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
+*This document assesses Yashigani v0.9.5 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*

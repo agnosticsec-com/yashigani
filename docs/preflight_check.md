@@ -1,7 +1,7 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v0.9.4
-**Last updated:** 2026-03-31
+**Version:** v0.9.5
+**Last updated:** 2026-04-01
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
 ---
@@ -176,7 +176,7 @@ The installer auto-detects these but you should confirm them in advance for non-
 |------|-----------|-------|
 | Cloud provider | Recommended | AWS / GCP / Azure / DigitalOcean / Hetzner / none |
 | VM hypervisor | Info only | KVM / VMware / VirtualBox / HyperV / bare metal |
-| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.4). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. If Docker Desktop is installed but the `docker` CLI is not in PATH, the preflight offers to create the symlink automatically with a single Y/n prompt. |
+| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.4). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. If Docker Desktop is installed but the `docker` CLI is not in PATH, the preflight offers to create the symlink automatically with a single Y/n prompt. In v0.9.5, Podman support includes runtime auto-detection, `podman compose` command resolution, and automatic application of the Podman Compose override file. The health check script auto-detects the compose command for Docker or Podman. |
 | If AWS: region | Required for AWS KMS | e.g. `us-east-1` |
 | If AWS: IAM role or access keys | Required for AWS KMS | EC2 instance role preferred over static keys |
 | If GCP: project ID | Required for GCP KMS | e.g. `my-project-123456` |
@@ -887,13 +887,15 @@ Print this page and tick every item before running the installer.
 [ ] StorageClass confirmed
 ```
 
-### Optional Agent Bundles (v0.8.0 — if using LangGraph / Goose / CrewAI / OpenClaw)
+### Optional Agent Bundles (v0.9.5 — if using LangGraph / Goose / OpenClaw)
 
 ```
 [ ] Decision made: which bundles to enable (or none)
-[ ] Sufficient disk space confirmed (LangGraph/Goose/CrewAI ~200 MB each; OpenClaw ~800 MB)
+[ ] Sufficient disk space confirmed (LangGraph/Goose ~200 MB each; OpenClaw ~800 MB)
 [ ] OpenClaw only: port 18789 open inbound if messaging webhooks are required
 [ ] OpenClaw only: no other service using port 18789 on the host
+[ ] Agent bundles work out of the box with --agent-bundles flag (v0.9.5)
+[ ] Installer auto-registers agents via backoffice API and writes PSK tokens to docker/secrets/
 ```
 
 ### Production Go-Live
