@@ -1725,7 +1725,7 @@ session = ""
 cookie = resp.headers.get("Set-Cookie", "")
 for part in cookie.split(";"):
     part = part.strip()
-    if part.startswith("yashigani_session="):
+    if part.startswith("yashigani_admin_session="):
         session = part.split("=", 1)[1]
         break
 
@@ -1740,7 +1740,7 @@ for agent in agents:
     reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"]}).encode()
     req = urllib.request.Request("http://localhost:8443/admin/agents", data=reg_data,
                                  headers={"Content-Type": "application/json",
-                                           "Cookie": f"yashigani_session={session}"})
+                                           "Cookie": f"yashigani_admin_session={session}"})
     try:
         resp = urllib.request.urlopen(req)
         body = json.loads(resp.read())
