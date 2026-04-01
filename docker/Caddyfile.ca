@@ -24,9 +24,29 @@
         -Server
     }
 
-    # ── Admin backoffice — /admin/* ─────────────────────────────────────────
+    # ── Backoffice routes: /admin/*, /auth/*, /dashboard/*, /scim/* ───────
     handle /admin/* {
-        uri strip_prefix /admin
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /auth/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /dashboard/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /scim/* {
         reverse_proxy backoffice:8443 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}

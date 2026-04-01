@@ -666,6 +666,7 @@ _interactive_platform_fallback() {
       1)
         YSG_GPU_TYPE=nvidia; YSG_GPU_COMPUTE=cuda; YSG_GPU_NAME="NVIDIA (user-reported)"
         printf "  Enter GPU VRAM in GB (e.g. 8, 16, 24, 48): "; read -r vram_gb
+        [[ "${vram_gb:-0}" =~ ^[0-9]+$ ]] || vram_gb=0
         YSG_GPU_VRAM_MB=$(( ${vram_gb:-0} * 1024 )) ;;
       2)
         YSG_GPU_TYPE=apple_metal; YSG_GPU_COMPUTE=metal
@@ -676,11 +677,13 @@ _interactive_platform_fallback() {
         else
           YSG_GPU_NAME="Apple Silicon (user-reported)"
           printf "  Enter total system RAM in GB: "; read -r ram_gb
+          [[ "${ram_gb:-8}" =~ ^[0-9]+$ ]] || ram_gb=8
           YSG_GPU_VRAM_MB=$(( ${ram_gb:-8} * 1024 ))
         fi ;;
       3)
         YSG_GPU_TYPE=amd_rocm; YSG_GPU_COMPUTE=rocm; YSG_GPU_NAME="AMD GPU (user-reported)"
         printf "  Enter GPU VRAM in GB: "; read -r vram_gb
+        [[ "${vram_gb:-0}" =~ ^[0-9]+$ ]] || vram_gb=0
         YSG_GPU_VRAM_MB=$(( ${vram_gb:-0} * 1024 )) ;;
       4|*) YSG_GPU_TYPE=none ;;
     esac
@@ -836,7 +839,7 @@ provision_aes_key() {
   local env_file="${WORK_DIR}/docker/.env"
   if [[ -f "$env_file" ]]; then
     local existing_key
-    existing_key="$(grep -oP 'YASHIGANI_DB_AES_KEY=\K.+' "$env_file" 2>/dev/null || echo "")"
+    existing_key="$(grep '^YASHIGANI_DB_AES_KEY=' "$env_file" 2>/dev/null | sed 's/^YASHIGANI_DB_AES_KEY=//' || echo "")"
     if [[ -n "$existing_key" ]]; then
       DB_AES_KEY="$existing_key"
       log_info "Database AES key: preserved from existing .env"
@@ -990,19 +993,30 @@ _write_aes_key_to_env() {
 
   # Method 2: python3 bcrypt module (installed as yashigani dependency)
   if [[ -z "$prom_hash" ]] && command -v python3 >/dev/null 2>&1; then
-    prom_hash="$(python3 -c "
-import bcrypt
-print(bcrypt.hashpw(b'${prom_password}', bcrypt.gensalt(rounds=12)).decode())
+    prom_hash="$(YASHIGANI_PROM_PW="$prom_password" python3 -c "
+import bcrypt, os
+pw = os.environ['YASHIGANI_PROM_PW'].encode()
+print(bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode())
 " 2>/dev/null || echo "")"
   fi
 
-  # Method 3: python3 hashlib fallback (no external deps)
+  # Method 3: python3 stdlib bcrypt via hashlib (no external deps)
+  # Caddy requires bcrypt ($2a$/$2b$) — PBKDF2 is incompatible
   if [[ -z "$prom_hash" ]] && command -v python3 >/dev/null 2>&1; then
-    prom_hash="$(python3 -c "
-import hashlib, base64, os
-salt = os.urandom(16)
-h = hashlib.pbkdf2_hmac('sha256', b'${prom_password}', salt, 100000)
-print(base64.b64encode(salt + h).decode())
+    prom_hash="$(YASHIGANI_PROM_PW="$prom_password" python3 -c "
+import os, hashlib, base64, struct
+pw = os.environ['YASHIGANI_PROM_PW'].encode()
+# bcrypt via subprocess htpasswd or fail
+import subprocess, sys
+try:
+    r = subprocess.run(['htpasswd', '-nbBC', '12', '', pw.decode()], capture_output=True, text=True)
+    if r.returncode == 0:
+        print(r.stdout.strip().lstrip(':'))
+        sys.exit(0)
+except FileNotFoundError:
+    pass
+# No bcrypt available — cannot generate compatible hash
+sys.exit(1)
 " 2>/dev/null || echo "")"
   fi
 
@@ -1293,7 +1307,7 @@ select_agent_bundles() {
     local unique_profiles=()
     for p in "${COMPOSE_PROFILES[@]}"; do
       local already=false
-      for u in "${unique_profiles[@]:-}"; do
+      for u in "${unique_profiles[@]+"${unique_profiles[@]}"}"; do
         [[ "$u" == "$p" ]] && already=true
       done
       [[ "$already" == "false" ]] && unique_profiles+=("$p")
@@ -1504,6 +1518,7 @@ compose_up() {
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
   mkdir -p "${data_dir}/audit"
+  mkdir -p "${WORK_DIR}/docker/tls"
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
@@ -1518,7 +1533,7 @@ compose_up() {
   sleep 2
 
   # Ensure agent bundle token files exist if profiles are selected
-  for _profile in "${COMPOSE_PROFILES[@]:-}"; do
+  for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
     if [[ -n "$_profile" ]]; then
       local _token_file="${secrets_dir}/${_profile}_token"
       if [[ ! -s "$_token_file" ]]; then
@@ -1531,26 +1546,26 @@ compose_up() {
 
   # Build --profile flags for any selected agent bundles
   local profile_args=()
-  for _profile in "${COMPOSE_PROFILES[@]:-}"; do
+  for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
     [[ -n "$_profile" ]] && profile_args+=("--profile" "$_profile")
   done
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "${COMPOSE_CMD[*]} -f $compose_file ${profile_args[*]:-} up -d"
+    dry_print "${COMPOSE_CMD[*]} -f $compose_file ${profile_args[*]+${profile_args[*]}} up -d"
     return 0
   fi
 
   # Clean up any stale containers/networks from failed previous runs.
   # NEVER use -v (--volumes) — that destroys user data (Postgres, Redis, audit logs).
   log_info "Stopping any existing containers (preserving data volumes)..."
-  "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" down 2>/dev/null || true
+  "${COMPOSE_CMD[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} down 2>/dev/null || true
 
   if [[ "$UPGRADE" == "true" ]]; then
     log_info "Starting services (upgrade — removing orphaned containers)..."
-    "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" up -d --remove-orphans
+    "${COMPOSE_CMD[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans
   else
     log_info "Starting services..."
-    "${COMPOSE_CMD[@]}" -f "$compose_file" "${profile_args[@]:-}" up -d
+    "${COMPOSE_CMD[@]}" -f "$compose_file" ${profile_args[@]+"${profile_args[@]}"} up -d
   fi
 
   log_success "Services started"
@@ -1638,7 +1653,7 @@ _gen_password() {
     python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits) for _ in range(36)))'
   else
     # Last resort — /dev/urandom
-    cat /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 36
+    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 36
   fi
 }
 
@@ -1647,9 +1662,10 @@ _gen_totp_secret() {
   if command -v python3 >/dev/null 2>&1; then
     python3 -c 'import secrets,base64; print(base64.b32encode(secrets.token_bytes(20)).decode().rstrip("="))'
   elif command -v openssl >/dev/null 2>&1; then
-    openssl rand 20 | base64 | tr '+/' '-_' | tr -d '=' | head -c 32
+    openssl rand 20 | python3 -c 'import sys,base64; print(base64.b32encode(sys.stdin.buffer.read()).decode().rstrip("="))' 2>/dev/null || \
+      openssl rand 20 | base64 | tr -dc 'A-Z2-7' | head -c 32
   else
-    cat /dev/urandom | head -c 20 | base64 | tr '+/' '-_' | tr -d '=' | head -c 32
+    LC_ALL=C tr -dc 'A-Z2-7' < /dev/urandom | head -c 32
   fi
 }
 
@@ -1905,7 +1921,7 @@ _hibp_check_and_regen() {
   # Update the module-level variable
   local upper_label
   upper_label="$(echo "$label" | tr '[:lower:]' '[:upper:]')"
-  eval "GEN_${upper_label}_PASSWORD='${password}'"
+  printf -v "GEN_${upper_label}_PASSWORD" '%s' "$password"
 }
 
 # =============================================================================
