@@ -1736,6 +1736,17 @@ generate_secrets() {
     GEN_ADMIN2_TOTP_SECRET="[preserved]"
     GEN_ADMIN1_TOTP_URI=""
     GEN_ADMIN2_TOTP_URI=""
+    # Ensure POSTGRES_PASSWORD is in .env for Docker Compose interpolation
+    local env_file="${WORK_DIR}/docker/.env"
+    if [[ "$GEN_POSTGRES_PASSWORD" != "[preserved]" ]]; then
+      if grep -q "^POSTGRES_PASSWORD=" "$env_file" 2>/dev/null; then
+        local tmp_env; tmp_env="$(mktemp)"
+        sed "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}|" "$env_file" > "$tmp_env"
+        mv "$tmp_env" "$env_file"
+      else
+        echo "POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}" >> "$env_file"
+      fi
+    fi
     return 0
   fi
 
@@ -1789,6 +1800,16 @@ generate_secrets() {
   GEN_POSTGRES_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_POSTGRES_PASSWORD" > "${secrets_dir}/postgres_password"
   chmod 600 "${secrets_dir}/postgres_password"
+  # Also write to .env so Docker Compose can interpolate ${POSTGRES_PASSWORD}
+  # in service DSN and PgBouncer DATABASE_URL
+  local env_file="${WORK_DIR}/docker/.env"
+  if grep -q "^POSTGRES_PASSWORD=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}" >> "$env_file"
+  fi
 
   # --- Redis ---
   GEN_REDIS_PASSWORD="$(_gen_password)"

@@ -82,7 +82,7 @@ services:
       YASHIGANI_AGENT_ROUTING_ENABLED: "true"
       YASHIGANI_AGENT_PATH_PREFIX: "/agents"
       YASHIGANI_AGENT_TOKEN_MIN_LENGTH: "64"
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:$${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
@@ -128,7 +128,7 @@ services:
       YASHIGANI_SECRETS_DIR: /run/secrets
       YASHIGANI_INSPECTION_DEFAULT_BACKEND: ${YASHIGANI_INSPECTION_DEFAULT_BACKEND:-ollama}
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,gemini,fail_closed}
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:$${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
     volumes:
       - audit_data:/data/audit
@@ -338,7 +338,7 @@ services:
     image: edoburu/pgbouncer:v1.23.1-p0
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://yashigani_app@postgres:5432/yashigani
+      DATABASE_URL: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/yashigani
       AUTH_TYPE: scram-sha-256
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "100"
