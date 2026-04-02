@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/health-check.sh — Yashigani v2.0.0
+# scripts/health-check.sh — Yashigani v2.1.0
 # Post-install health verification with retries and spinner.
 
 set -euo pipefail
@@ -265,7 +265,7 @@ LICENSE_TIER="${YASHIGANI_LICENSE_TIER:-Community (10 agents max)}"
 
 printf "\n"
 printf "╔══════════════════════════════════════════╗\n"
-printf "║   Yashigani v2.0.0 — Installation OK    ║\n"
+printf "║   Yashigani v2.1.0 — Installation OK    ║\n"
 printf "╠══════════════════════════════════════════╣\n"
 printf "║ %-8s %-33s║\n" "URL:"     "https://${DOMAIN}"
 printf "║ %-8s %-33s║\n" "Admin:"   "https://${DOMAIN}/admin"
