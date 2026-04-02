@@ -25,6 +25,7 @@ from yashigani.metrics.collectors import MetricsCollector
 from yashigani.metrics.middleware import PrometheusMiddleware
 from yashigani.gateway.proxy import GatewayConfig, create_gateway_app
 from yashigani.gateway.agent_auth import AgentAuthMiddleware
+from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -150,6 +151,7 @@ def _build_app():
     # RBAC store and Agent registry — Redis DB 3 (shared instance, separate key namespaces)
     rbac_store = None
     agent_registry = None
+    redis_client_rbac = None
     try:
         import redis as _redis
         redis_client_rbac = _redis.from_url(f"{redis_base}/3", decode_responses=False)
@@ -217,6 +219,74 @@ def _build_app():
     except Exception as exc:
         logger.warning("DB/inference init failed (%s) — Postgres features disabled", exc)
 
+    # ── v1.0: Unified Identity Registry (Redis DB 3, same as agents) ────────
+    identity_registry = None
+    try:
+        from yashigani.identity import IdentityRegistry
+        if redis_client_rbac:
+            identity_registry = IdentityRegistry(redis_client=redis_client_rbac)
+    except Exception as exc:
+        logger.warning("Identity registry unavailable (%s)", exc)
+
+    # ── v1.0: Sensitivity Classifier (three-layer pipeline) ───────────────
+    sensitivity_classifier = None
+    try:
+        from yashigani.optimization.sensitivity_classifier import SensitivityClassifier
+        sensitivity_classifier = SensitivityClassifier(
+            enable_fasttext=fasttext_backend is not None,
+            enable_ollama=True,
+            fasttext_backend=fasttext_backend,
+            ollama_url=ollama_url,
+            ollama_model=model,
+        )
+    except Exception as exc:
+        logger.warning("Sensitivity classifier unavailable (%s)", exc)
+
+    # ── v1.0: Complexity Scorer ───────────────────────────────────────────
+    complexity_scorer = None
+    try:
+        from yashigani.optimization.complexity_scorer import ComplexityScorer
+        threshold = int(os.getenv("YASHIGANI_COMPLEXITY_THRESHOLD", "2000"))
+        complexity_scorer = ComplexityScorer(token_threshold=threshold)
+    except Exception as exc:
+        logger.warning("Complexity scorer unavailable (%s)", exc)
+
+    # ── v1.0: Budget Enforcer (budget-redis) ──────────────────────────────
+    budget_enforcer = None
+    try:
+        import redis as _redis
+        budget_redis_host = os.getenv("BUDGET_REDIS_HOST", "budget-redis")
+        budget_redis_port = os.getenv("BUDGET_REDIS_PORT", "6379")
+        budget_redis_client = _redis.from_url(
+            f"redis://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0",
+            decode_responses=False,
+        )
+        budget_redis_client.ping()
+        from yashigani.billing.budget_enforcer import BudgetEnforcer
+        budget_enforcer = BudgetEnforcer(redis_client=budget_redis_client)
+    except Exception as exc:
+        logger.warning("Budget enforcer unavailable (%s) — budget enforcement disabled", exc)
+
+    # ── v1.0: Token Counter ───────────────────────────────────────────────
+    token_counter = None
+    try:
+        from yashigani.billing.token_counter import TokenCounter
+        token_counter = TokenCounter()
+    except Exception as exc:
+        logger.warning("Token counter unavailable (%s)", exc)
+
+    # ── v1.0: Optimization Engine ─────────────────────────────────────────
+    optimization_engine = None
+    try:
+        from yashigani.optimization.engine import OptimizationEngine
+        optimization_engine = OptimizationEngine(
+            default_model=model,
+            default_cloud_provider=os.getenv("YASHIGANI_DEFAULT_CLOUD_PROVIDER", "anthropic"),
+            default_cloud_model=os.getenv("YASHIGANI_DEFAULT_CLOUD_MODEL", "claude-sonnet-4-6"),
+        )
+    except Exception as exc:
+        logger.warning("Optimization Engine unavailable (%s)", exc)
+
     gateway_app = create_gateway_app(
         config=cfg,
         inspection_pipeline=pipeline,
@@ -233,6 +303,20 @@ def _build_app():
         anomaly_detector=anomaly_detector,
         response_inspection_pipeline=response_pipeline,
     )
+
+    # ── v1.0: Mount OpenAI-compatible /v1 router ───────────────────────────
+    configure_openai_router(
+        identity_registry=identity_registry,
+        sensitivity_classifier=sensitivity_classifier,
+        complexity_scorer=complexity_scorer,
+        budget_enforcer=budget_enforcer,
+        token_counter=token_counter,
+        audit_writer=audit_writer,
+        ollama_url=ollama_url,
+        default_model=model,
+    )
+    gateway_app.include_router(openai_router)
+    logger.info("OpenAI-compatible /v1 router mounted")
 
     # Agent auth middleware — must run before Prometheus middleware so agent
     # requests are authenticated before metrics are emitted.
