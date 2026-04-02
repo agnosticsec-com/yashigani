@@ -75,6 +75,9 @@ dev     = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"yashigani.backoffice" = ["templates/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
 asyncio_mode = "auto"
