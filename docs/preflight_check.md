@@ -1,6 +1,6 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v0.9.5
+**Version:** v1.0
 **Last updated:** 2026-04-01
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
@@ -58,6 +58,7 @@ Yashigani proxies ALL traffic to one primary upstream. You must know where it is
 | 22/tcp | Inbound | Recommended | SSH admin access |
 | 5432/tcp | Internal only | Must NOT be exposed externally | PostgreSQL |
 | 6379/tcp | Internal only | Must NOT be exposed externally | Redis |
+| 6380/tcp | Internal only | Must NOT be exposed externally | Budget-Redis (v1.0) |
 | 8181/tcp | Internal only | Must NOT be exposed externally | OPA |
 | 11434/tcp | Internal only | Must NOT be exposed externally | Ollama |
 | 8080/tcp | Internal only | Must NOT be exposed externally | Gateway |
@@ -74,7 +75,7 @@ Yashigani proxies ALL traffic to one primary upstream. You must know where it is
 [ ] Upstream MCP server URL confirmed reachable
 [ ] Upstream MCP tool paths documented for OPA policy
 [ ] Ports 80 and 443 open inbound (or 443 only if you redirect 80 externally)
-[ ] Internal ports (5432, 6379, 8181, etc.) blocked at host firewall
+[ ] Internal ports (5432, 6379, 6380, 8181, etc.) blocked at host firewall
 [ ] Server has ≥ 2 GB RAM (4 GB recommended), ≥ 10 GB free disk
 ```
 
@@ -176,7 +177,7 @@ The installer auto-detects these but you should confirm them in advance for non-
 |------|-----------|-------|
 | Cloud provider | Recommended | AWS / GCP / Azure / DigitalOcean / Hetzner / none |
 | VM hypervisor | Info only | KVM / VMware / VirtualBox / HyperV / bare metal |
-| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes (v0.8.4). On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. If Docker Desktop is installed but the `docker` CLI is not in PATH, the preflight offers to create the symlink automatically with a single Y/n prompt. In v0.9.5, Podman support includes runtime auto-detection, `podman compose` command resolution, and automatic application of the Podman Compose override file. The health check script auto-detects the compose command for Docker or Podman. |
+| Container runtime preference | Recommended | Docker Engine, Docker Desktop, or Podman — all supported as first-class runtimes. On macOS the installer checks for Docker Desktop at `/Applications/Docker.app` first. If Docker Desktop is installed but the `docker` CLI is not in PATH, the preflight offers to create the symlink automatically with a single Y/n prompt. Podman support includes runtime auto-detection, `podman compose` command resolution, and automatic application of the Podman Compose override file. The health check script auto-detects the compose command for Docker or Podman. In v1.0, the Container Pool Manager requires Docker or Podman API access for managing per-identity isolation containers. |
 | If AWS: region | Required for AWS KMS | e.g. `us-east-1` |
 | If AWS: IAM role or access keys | Required for AWS KMS | EC2 instance role preferred over static keys |
 | If GCP: project ID | Required for GCP KMS | e.g. `my-project-123456` |
@@ -887,25 +888,41 @@ Print this page and tick every item before running the installer.
 [ ] StorageClass confirmed
 ```
 
-### Optional Agent Bundles (v0.9.5 — if using LangGraph / Goose / OpenClaw)
+### Optional Agent Bundles (if using LangGraph / Goose / OpenClaw)
 
 ```
 [ ] Decision made: which bundles to enable (or none)
 [ ] Sufficient disk space confirmed (LangGraph/Goose ~200 MB each; OpenClaw ~800 MB)
 [ ] OpenClaw only: port 18789 open inbound if messaging webhooks are required
 [ ] OpenClaw only: no other service using port 18789 on the host
-[ ] Agent bundles work out of the box with --agent-bundles flag (v0.9.5)
+[ ] Agent bundles work out of the box with --agent-bundles flag
 [ ] Installer auto-registers agents via backoffice API and writes PSK tokens to docker/secrets/
+[ ] (v1.0) Agent bundles registered with unified identity model (kind: service)
+```
+
+### v1.0 Systems
+
+```
+[ ] Budget system: org cap, group budgets, and individual budgets planned
+[ ] Budget-redis: port 6380 not exposed externally
+[ ] Optimization Engine: default priority level decided (default P5)
+[ ] Container Pool Manager: min warm containers and max containers planned
+[ ] Open WebUI: trusted header authentication confirmed (YASHIGANI_OPENWEBUI_ENABLED)
+[ ] Sensitivity pipeline: all three stages (regex + FastText + Ollama) enabled by default
+[ ] Identity model: existing agents migrated to unified model with kind field
+[ ] Multi-IdP: additional OIDC/SAML v2 providers identified (if applicable)
+[ ] OPA: policy/v1_routing.rego reviewed for routing safety net rules
 ```
 
 ### Production Go-Live
 
 ```
-[ ] OPA policy reviewed
+[ ] OPA policy reviewed (including v1_routing.rego)
 [ ] 2+ admin accounts planned
 [ ] Postgres backup strategy confirmed
 [ ] Image versions pinned in docker-compose.yml
 [ ] Monitoring/alerting receivers configured
+[ ] Budget tiers configured and tested
 ```
 
 ---

@@ -1,6 +1,6 @@
 # Yashigani — OPA Policy Manual
 
-**Version:** v0.9.5
+**Version:** v1.0
 **Last updated:** 2026-04-01
 **Policy engine:** Open Policy Agent (OPA) v0.x, rootless container
 **Policy language:** Rego (v1 import keywords)
@@ -76,13 +76,14 @@ Agent / User
 
 ## 2. Policy Files and Package Structure
 
-All three policy files belong to `package yashigani`. OPA loads the entire `policy/` directory as a bundle.
+All policy files belong to `package yashigani`. OPA loads the entire `policy/` directory as a bundle.
 
 ```
 policy/
 ├── yashigani.rego          # Main policy — default deny, session gate, blocked paths
 ├── rbac.rego               # RBAC module — user group membership → resource access
 ├── agents.rego             # Agent-to-agent authorization
+├── v1_routing.rego         # Optimization Engine routing safety net (v1.0)
 └── data/
     └── rbac_data.json      # Bootstrap data (empty by default — populated at runtime)
 ```
@@ -109,6 +110,17 @@ Responsibilities:
 - Defines `agent_call_allowed`: verifies caller's groups are in target's `allowed_caller_groups`, then checks path against `allowed_paths`
 - Defines `agent_call_deny_reason`: human-readable string used in audit events (one of three reasons)
 - Path helper `_agent_path_matches`: exact match, `"**"`, `/prefix/**`, or bare prefix (implicit subtree)
+
+### `v1_routing.rego` — Optimization Engine Routing Safety Net (v1.0)
+
+Responsibilities:
+- Validates routing decisions made by the Optimization Engine before they are executed
+- Defines `routing_allowed`: checks that the proposed route does not violate RBAC, budget, or identity constraints
+- Defines `routing_override`: allows OPA to override the Optimization Engine's priority assignment (e.g., downgrade P1 to P3 if the identity lacks sufficient budget)
+- Integrates with the unified identity model (`kind` field) to apply identity-type-specific routing rules
+- Supports optional LLM policy review for high-priority (P1-P3) routing decisions — when enabled, the proposed route is sent to the configured LLM for semantic policy analysis before execution
+
+The Optimization Engine consults OPA at `/v1/data/yashigani/routing_allowed` after computing its 4-signal routing decision. If OPA denies the route, the request is either re-routed to a lower priority or denied entirely.
 
 ---
 
@@ -178,6 +190,11 @@ The gateway builds a single JSON object and sends it to OPA as `{"input": {...}}
 | `input.target_agent.allowed_caller_groups` | array | Data doc | `agents.rego` | Groups permitted to call the target |
 | `input.target_agent.allowed_paths` | array | Data doc | `agents.rego` | Path patterns the target agent accepts |
 | `input.request.remainder_path` | string | Gateway | `agents.rego` | Path after `/agents/{target_id}` |
+| `input.identity.kind` | string | Gateway | `v1_routing.rego` | `"human"` or `"service"` — unified identity type (v1.0) |
+| `input.routing.priority` | string | Optimization Engine | `v1_routing.rego` | Proposed priority level `"P1"`–`"P9"` (v1.0) |
+| `input.routing.signals` | object | Optimization Engine | `v1_routing.rego` | Four routing signals: identity priority, budget remaining, latency target, model capability (v1.0) |
+| `input.budget.remaining` | number | Budget system | `v1_routing.rego` | Remaining budget for the requesting identity (v1.0) |
+| `input.budget.tier` | string | Budget system | `v1_routing.rego` | Budget tier: `"org"`, `"group"`, or `"individual"` (v1.0) |
 
 > **Note:** `input.headers` intentionally omits `Authorization` and `Cookie`. The gateway strips these before building the OPA input to prevent policies from accidentally leaking credential values into audit logs.
 
@@ -271,7 +288,12 @@ The OPA engine evaluates all rules in `package yashigani` and combines them. Her
      AND agent_call_allowed = false
    THEN allow = false  (deny_agent_call fires)
 
-5. Return allow
+5. Check routing override (v1.0):
+   IF input.routing.priority is set
+     AND routing_allowed(input.routing, input.identity, input.budget) = false
+   THEN allow = false  (deny_routing fires)
+
+6. Return allow
 ```
 
 The override rules (steps 3 and 4) use `allow := false if { ... }` which in Rego means: if the condition is met, the rule contributes `false` to the set of `allow` values. Since there is also a rule that contributes `true` (step 2), the overall result is the *least permissive* value — `false` wins.

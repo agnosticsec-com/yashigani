@@ -2,7 +2,7 @@
 
 **Document Version:** 2.0
 **Date:** 2026-04-01
-**Codebase version:** v0.9.5
+**Codebase version:** v1.0
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
@@ -879,6 +879,22 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Anti-lockout: 2 admin accounts at install | ASVS V4.3.3 | Prevents admin lockout scenarios |
 | bcrypt for Prometheus basic auth | ASVS V6.4.1 | Monitoring endpoint credential protection |
 
+#### v1.0 Changes
+
+| Change | OWASP Relevance | Effect |
+|---|---|---|
+| Unified identity model (human + service, kind field) | ASVS V1.2, V4.1 | Single identity model simplifies access control and audit; reduces identity confusion risks |
+| Optimization Engine (4-signal routing, P1-P9) | ASVS V4.1, API4 | Priority-based routing with OPA safety net prevents unauthorized resource access |
+| Three-tier budget system (org cap, group, individual) | API4, LLM10 | Prevents uncontrolled API spend and resource exhaustion via hierarchical budget enforcement |
+| Budget-redis (dedicated, noeviction) | ASVS V7.1 | Budget state persistence guaranteed; no silent data loss under memory pressure |
+| Open WebUI with trusted headers | ASVS V3.1, V4.1 | Identity propagation via trusted headers; no credential exposure to Open WebUI |
+| Container Pool Manager (per-identity isolation) | ASVS V1.5.2, V14.2 | Strong tenant isolation via per-identity containers; self-healing reduces attack window |
+| Multi-IdP identity broker (OIDC + SAML v2) | ASVS V1.2.1, V3.3 | Federated identity with tier-gated access; supports multiple simultaneous providers |
+| Sensitivity pipeline (regex + FastText + Ollama) | LLM01, LLM02, LLM06 | Three-stage content analysis with all stages on by default; defense-in-depth for prompt injection |
+| OPA v1_routing.rego safety net | ASVS V4.1, API1 | Policy-enforced routing decisions prevent Optimization Engine bypass |
+| LLM policy review for P1-P3 routing | ASVS V4.1, LLM01 | Semantic policy analysis for high-priority routing decisions |
+| 363 tests | ASVS V1.6.1, V14.1 | Comprehensive test coverage across all modules including identity, billing, optimization, and pool |
+
 #### v0.7.0 / v0.7.1 Changes
 
 | Change | OWASP Relevance | Effect |
@@ -932,4 +948,4 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 ---
 
-*This document assesses Yashigani v0.9.5 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
+*This document assesses Yashigani v1.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
