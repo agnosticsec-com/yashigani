@@ -19,10 +19,16 @@ from yashigani.optimization.complexity_scorer import (
     ComplexityScorer,
     ComplexityLevel,
 )
+from yashigani.optimization.engine import (
+    OptimizationEngine,
+    RoutingDecision,
+)
 
 __all__ = [
     "SensitivityClassifier",
     "SensitivityLevel",
     "ComplexityScorer",
     "ComplexityLevel",
+    "OptimizationEngine",
+    "RoutingDecision",
 ]

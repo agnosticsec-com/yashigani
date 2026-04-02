@@ -24,12 +24,16 @@
         -Server
     }
 
-    # ── Open WebUI — /chat/* ──────────────────────────────────────────────
-    handle /chat/* {
-        request_header -X-Forwarded-User
-        request_header -X-Forwarded-Name
-        request_header -X-Forwarded-Groups
-        reverse_proxy open-webui:8080 {
+    # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
+    handle /v1/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /mcp/* {
+        reverse_proxy gateway:8080 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -80,9 +84,12 @@
         }
     }
 
-    # ── Gateway (data plane) — all other traffic ────────────────────────────
+    # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
     handle {
-        reverse_proxy gateway:8080 {
+        request_header -X-Forwarded-User
+        request_header -X-Forwarded-Name
+        request_header -X-Forwarded-Groups
+        reverse_proxy open-webui:8080 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }

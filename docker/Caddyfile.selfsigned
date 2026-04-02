@@ -27,13 +27,17 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         -Server
     }
 
-    # ── Open WebUI — /chat/* ──────────────────────────────────────────────
-    handle /chat/* {
-        # Strip any externally-supplied identity headers (anti-spoofing)
-        request_header -X-Forwarded-User
-        request_header -X-Forwarded-Name
-        request_header -X-Forwarded-Groups
-        reverse_proxy open-webui:8080 {
+    # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
+    handle /v1/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── MCP proxy — /mcp/* ─────────────────────────────────────────────
+    handle /mcp/* {
+        reverse_proxy gateway:8080 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -83,8 +87,13 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         }
     }
 
+    # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
     handle {
-        reverse_proxy gateway:8080 {
+        # Strip any externally-supplied identity headers (anti-spoofing)
+        request_header -X-Forwarded-User
+        request_header -X-Forwarded-Name
+        request_header -X-Forwarded-Groups
+        reverse_proxy open-webui:8080 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }

@@ -92,6 +92,7 @@ class OpenAIRouterState:
         self.budget_enforcer = None
         self.token_counter = None
         self.audit_writer = None
+        self.optimization_engine = None
         self.ollama_url: str = "http://ollama:11434"
         self.default_model: str = "qwen2.5:3b"
         self.available_models: list[dict] = []
@@ -106,6 +107,7 @@ def configure(
     complexity_scorer=None,
     budget_enforcer=None,
     token_counter=None,
+    optimization_engine=None,
     audit_writer=None,
     ollama_url: str = "http://ollama:11434",
     default_model: str = "qwen2.5:3b",
@@ -117,6 +119,7 @@ def configure(
     _state.complexity_scorer = complexity_scorer
     _state.budget_enforcer = budget_enforcer
     _state.token_counter = token_counter
+    _state.optimization_engine = optimization_engine
     _state.audit_writer = audit_writer
     _state.ollama_url = ollama_url
     _state.default_model = default_model
@@ -157,36 +160,64 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # ── 3. Sensitivity scan ───────────────────────────────────────────
     sensitivity_level = "PUBLIC"
     sensitivity_triggers = []
+    s_result = None
     if _state.sensitivity_classifier:
         s_result = _state.sensitivity_classifier.classify(prompt_text)
         sensitivity_level = s_result.level.value
         sensitivity_triggers = s_result.triggers
+    if s_result is None:
+        from yashigani.optimization.sensitivity_classifier import SensitivityLevel, SensitivityResult
+        s_result = SensitivityResult(level=SensitivityLevel.PUBLIC)
 
     # ── 4. Complexity scoring ─────────────────────────────────────────
     complexity_level = "MEDIUM"
     token_estimate = len(prompt_text) // 4
+    c_result = None
     if _state.complexity_scorer:
         c_result = _state.complexity_scorer.score(prompt_text, token_estimate)
         complexity_level = c_result.level.value
+    if c_result is None:
+        from yashigani.optimization.complexity_scorer import ComplexityLevel, ComplexityResult
+        c_result = ComplexityResult(level=ComplexityLevel.MEDIUM, token_count=token_estimate, heuristic_score=0.0, reasons=[])
 
     # ── 5. Budget check ───────────────────────────────────────────────
     budget_signal = "normal"
     budget_pct = 0
     budget_used = 0
     budget_total = 0
-    # Budget check would go here when budget_enforcer is wired
+    if _state.budget_enforcer and identity:
+        from yashigani.billing.budget_enforcer import BudgetState
+        budget_state = _state.budget_enforcer.check(
+            identity_id, "cloud", budget_total=10000,  # TODO: read from identity's budget allocation
+        )
+        budget_signal = budget_state.signal.value
+        budget_pct = budget_state.pct
+        budget_used = budget_state.used
+        budget_total = budget_state.total
+    else:
+        from yashigani.billing.budget_enforcer import BudgetSignal, BudgetState
+        budget_state = BudgetState(identity_id=identity_id, provider="cloud", used=0, total=0, signal=BudgetSignal.NORMAL, pct=0)
 
-    # ── 6. Route decision (simplified for now — full OE in Wave 3) ────
-    # For v1.0 initial: route to local Ollama
-    # Full OE (A-09) will replace this with the P1-P9 priority matrix
-    selected_provider = "ollama"
+    # ── 6. Route decision via Optimization Engine ─────────────────────
     selected_model = body.model or _state.default_model
-    route_reason = "default_local"
-
-    # Sensitivity override: CONFIDENTIAL/RESTRICTED always local
-    if sensitivity_level in ("CONFIDENTIAL", "RESTRICTED"):
+    if _state.optimization_engine and _state.sensitivity_classifier and _state.complexity_scorer:
+        decision = _state.optimization_engine.route(
+            requested_model=selected_model,
+            sensitivity=s_result,
+            complexity=c_result,
+            budget=budget_state,
+            force_local=body.force_local or False,
+            force_cloud=body.force_cloud or False,
+        )
+        selected_provider = decision.provider
+        selected_model = decision.model
+        route_reason = f"{decision.rule}:{decision.reason}"
+    else:
+        # Fallback: simplified routing if OE not available
         selected_provider = "ollama"
-        route_reason = "sensitivity_local"
+        route_reason = "fallback_local"
+        if sensitivity_level in ("CONFIDENTIAL", "RESTRICTED"):
+            route_reason = "sensitivity_local"
 
     # ── 7. Forward to backend (buffered) ──────────────────────────────
     try:
@@ -229,10 +260,21 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             detail="Backend communication error",
         )
 
-    # ── 8. Token counting ─────────────────────────────────────────────
+    # ── 8. Token counting + budget recording ─────────────────────────
     input_tokens = backend_body.get("prompt_eval_count", token_estimate)
     output_tokens = backend_body.get("eval_count", len(assistant_content) // 4)
     total_tokens = input_tokens + output_tokens
+
+    # Record token usage in budget system
+    if _state.budget_enforcer and selected_provider != "ollama":
+        try:
+            _state.budget_enforcer.record(
+                identity_id=identity_id,
+                provider=selected_provider,
+                tokens=total_tokens,
+            )
+        except Exception as exc:
+            logger.warning("Budget recording failed: %s", exc)
 
     # ── 9. Build response ─────────────────────────────────────────────
     elapsed_ms = int((time.time() - start_time) * 1000)

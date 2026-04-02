@@ -58,6 +58,8 @@ services:
         condition: service_healthy
       backoffice:
         condition: service_healthy
+      open-webui:
+        condition: service_healthy
     networks:
       - external
       - internal
@@ -161,7 +163,7 @@ services:
       WEBUI_AUTH: "false"
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: "X-Forwarded-User"
       WEBUI_AUTH_TRUSTED_NAME_HEADER: "X-Forwarded-Name"
-      ENABLE_SIGNUP: "true"
+      ENABLE_SIGNUP: "false"
       # Point ALL inference at Yashigani gateway — OpenAI-compatible
       OPENAI_API_BASE_URL: http://gateway:8080/v1
       OPENAI_API_KEY: "yashigani-internal"
@@ -194,23 +196,23 @@ services:
   budget-redis:
     image: redis:7-alpine
     restart: unless-stopped
+    entrypoint: ["sh", "-c"]
     command:
-      - "redis-server"
-      - "--maxmemory-policy"
-      - "noeviction"
-      - "--maxmemory"
-      - "256mb"
-      - "--requirepass"
-      - "${REDIS_PASSWORD}"
-      - "--appendonly"
-      - "yes"
+      - |
+        redis-server \
+          --maxmemory-policy noeviction \
+          --maxmemory 256mb \
+          --requirepass "$(cat /run/secrets/redis_password)" \
+          --appendonly yes
     volumes:
       - budget_redis_data:/data
+      - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD}\" ping 2>/dev/null | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli -a \"$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 10s
     security_opt:
       - no-new-privileges:true
     networks:
