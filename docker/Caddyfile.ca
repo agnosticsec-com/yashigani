@@ -24,6 +24,17 @@
         -Server
     }
 
+    # ── Open WebUI — /chat/* ──────────────────────────────────────────────
+    handle /chat/* {
+        request_header -X-Forwarded-User
+        request_header -X-Forwarded-Name
+        request_header -X-Forwarded-Groups
+        reverse_proxy open-webui:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
     # ── Backoffice routes: /admin/*, /auth/*, /dashboard/*, /scim/* ───────
     handle /admin/* {
         reverse_proxy backoffice:8443 {

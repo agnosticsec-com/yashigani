@@ -149,6 +149,74 @@ services:
       - internal
 
   # ---------------------------------------------------------------------------
+  # Open WebUI — User-facing chat interface (v1.0)
+  # Internal network only. No external port. All LLM calls route through gateway.
+  # Auth: trusts X-Forwarded-User from Caddy (SSO) or API key passthrough.
+  # ---------------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    environment:
+      # Disable Open WebUI's own auth — Caddy/Yashigani handles identity
+      WEBUI_AUTH: "false"
+      WEBUI_AUTH_TRUSTED_EMAIL_HEADER: "X-Forwarded-User"
+      WEBUI_AUTH_TRUSTED_NAME_HEADER: "X-Forwarded-Name"
+      ENABLE_SIGNUP: "true"
+      # Point ALL inference at Yashigani gateway — OpenAI-compatible
+      OPENAI_API_BASE_URL: http://gateway:8080/v1
+      OPENAI_API_KEY: "yashigani-internal"
+      # Disable direct Ollama access — everything through gateway
+      OLLAMA_BASE_URL: ""
+      ENABLE_OLLAMA_API: "false"
+      # UI settings
+      DEFAULT_MODELS: "qwen2.5:3b"
+      WEBUI_NAME: "Yashigani AI"
+    volumes:
+      - openwebui_data:/app/backend/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      gateway:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Budget Redis — Dedicated Redis for budget counters (noeviction)
+  # Separate from main Redis to prevent counter loss under memory pressure.
+  # ---------------------------------------------------------------------------
+  budget-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - "redis-server"
+      - "--maxmemory-policy"
+      - "noeviction"
+      - "--maxmemory"
+      - "256mb"
+      - "--requirepass"
+      - "${REDIS_PASSWORD}"
+      - "--appendonly"
+      - "yes"
+    volumes:
+      - budget_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD}\" ping 2>/dev/null | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
   # Policy — OPA (Open Policy Agent) — always local, never cloud-delegated
   # ---------------------------------------------------------------------------
   policy:
@@ -669,6 +737,10 @@ volumes:
   openclaw_data:
     driver: local
   goose_data:
+    driver: local
+  openwebui_data:
+    driver: local
+  budget_redis_data:
     driver: local
 
 # ---------------------------------------------------------------------------

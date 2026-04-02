@@ -86,3 +86,13 @@ services:
     security_opt:
       - label=disable
     userns_mode: keep-id
+
+  open-webui:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
+
+  budget-redis:
+    security_opt:
+      - label=disable
+    userns_mode: keep-id
