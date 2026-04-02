@@ -1534,26 +1534,45 @@ compose_up() {
   # Auto-apply Podman rootless override when running on Podman
   local compose_files=("-f" "$compose_file")
   if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
-    local podman_override="${WORK_DIR}/docker/docker-compose.podman-override.yml"
-    if [[ -f "$podman_override" ]]; then
-      compose_files+=("-f" "$podman_override")
-      log_info "Podman detected — applying rootless override"
-    fi
+    log_info "Podman detected — configuring rootless deployment"
 
-    # Podman-specific setup
-    # 1. Ensure Podman socket is running (compose provider needs it)
+    # 1. Ensure Podman socket is running
     systemctl --user start podman.socket 2>/dev/null || true
     export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 
-    # 2. Create Docker-compatible directories that Podman doesn't have
-    #    (promtail mounts /var/lib/docker/containers for log collection)
+    # 2. Check sysctl for privileged port binding (Caddy needs 80/443)
+    local port_start
+    port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+    if [[ "$port_start" -gt 80 ]]; then
+      log_warn "Podman rootless: ports 80/443 require sysctl change"
+      log_warn "Run: echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p"
+      log_warn "Caddy will not start until this is configured"
+    fi
+
+    # 3. Create Docker-compatible directories for promtail
     if [[ ! -d "/var/lib/docker/containers" ]]; then
       sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
         mkdir -p /var/lib/docker/containers 2>/dev/null || \
-        log_warn "Could not create /var/lib/docker/containers — promtail may not start"
+        log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
     fi
 
-    # 3. Build images with podman build (compose build uses Docker buildx)
+    # 4. Use podman-compose if available (sequential, no socket crashes)
+    #    Don't apply podman-override.yml with podman-compose (userns conflicts with pods)
+    if command -v podman-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman-compose")
+      log_info "Using podman-compose (native, sequential)"
+      # No override needed — podman-compose handles rootless natively
+    else
+      # Fall back to podman compose (delegates to docker-compose)
+      # Apply override for security_opt only (no userns_mode)
+      local podman_override="${WORK_DIR}/docker/docker-compose.podman-override.yml"
+      if [[ -f "$podman_override" ]]; then
+        compose_files+=("-f" "$podman_override")
+        log_info "Using podman compose with rootless override"
+      fi
+    fi
+
+    # 5. Build images with podman build (compose build uses Docker buildx)
     log_info "Building images with Podman..."
     podman build -f "${WORK_DIR}/docker/Dockerfile.gateway" -t yashigani/gateway:latest "${WORK_DIR}" 2>&1 | tail -1
     podman build -f "${WORK_DIR}/docker/Dockerfile.backoffice" -t yashigani/backoffice:latest "${WORK_DIR}" 2>&1 | tail -1
