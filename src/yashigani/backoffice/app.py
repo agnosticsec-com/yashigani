@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
 def create_backoffice_app() -> FastAPI:
     app = FastAPI(
         title="Yashigani Backoffice",
-        version="1.0.0",
+        version="2.0.0",
         docs_url=None,          # disable Swagger in production
         redoc_url=None,
         openapi_url=None,       # never expose schema externally

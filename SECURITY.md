@@ -4,14 +4,14 @@
 
 Two release lines are actively supported. Security fixes are backported to both.
 
-| Version | Supported | Notes |
-|---------|-----------|-------|
-| 1.0.x   | ✅ | Current — full stack with Open WebUI, OE, budget system |
-| 0.9.5   | ✅ | LTS — gateway + agent bundles, no Open WebUI dependency |
-| 0.9.4   | ❌ | Upgrade to 0.9.5 |
-| < 0.9.4 | ❌ | End of life |
+| Version | Supported | Branch | Notes |
+|---------|-----------|--------|-------|
+| 2.x     | ✅ | `main` | Full stack — Open WebUI, OE, budget system, Pool Manager |
+| 1.x     | ✅ | `release/1.x` | Gateway-only — same security core, no Open WebUI |
+| 0.9.4   | ❌ | — | End of life |
+| < 0.9.4 | ❌ | — | End of life |
 
-**v0.9.5** is maintained on the `release/0.9.x` branch for deployments that do not require Open WebUI. It receives security patches and infrastructure improvements.
+**v1.x** is maintained on the `release/1.x` branch for deployments that do not require Open WebUI. It receives security patches and infrastructure improvements. Same security foundation as v2.x.
 
 ## Reporting a Vulnerability
 
