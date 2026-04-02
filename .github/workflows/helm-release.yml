@@ -35,7 +35,7 @@ jobs:
           mkdir -p .helm-packages
           helm package helm/yashigani/ --destination .helm-packages/
       - name: Publish via chart-releaser
-        uses: helm/chart-releaser-action@v1.6.0
+        uses: helm/chart-releaser-action@v1.7.0
         with:
           config: .cr.yaml
         env:
