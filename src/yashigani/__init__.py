@@ -12,4 +12,4 @@ Modules:
   yashigani.sso         — SAMLv2 and OIDC identity provider integration
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
