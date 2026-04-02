@@ -15,7 +15,7 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v2.0.0
+**Latest Stable Version:** v2.1.0
 
 ---
 **Release Lines:** v2.x (full stack with Open WebUI, branch: `main`) | v1.x (gateway-only, branch: `release/1.x`)
@@ -199,6 +199,7 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 
 | Version | Theme | Key Additions |
 |---|---|---|
+| **v2.1** | **Admin Dashboard + Alerting + Persistence** | **Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), OPA v1_routing.rego verified operational, 388 tests (363 + 25 e2e)** |
 | **v2.0** | **First production-grade release** | **Unified Identity Model (kind field, no separate user/agent stores), Optimization Engine (4D routing: sensitivity + complexity + budget + cost, P1-P9 priority matrix), three-tier Budget System (org cap → group → individual, budget-redis noeviction), Open WebUI integration (/chat/*, internal only), Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling), Multi-IdP Identity Broker (OIDC + SAML v2), sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 21 core services + dynamic per-identity containers, 363 tests (252 + 111 new), 12 Grafana dashboards** |
 | v1.09.5 | Agent bundles GA + Podman | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with PSK auto-registration, first-class Podman support (runtime detection, compose command, auto-apply podman override), DNS fix for Ollama external network access, admin accounts with fun codenames (animal/nature themed), PgBouncer password from .env, Alembic migrations in backoffice image, 18-service full stack verified from clean slate |
 | v0.9.4 | Final hardening | Classifier regex fix (security: nested braces in inspection response no longer misclassified as CLEAN), FastAPI lifespan migration, localhost defaults replaced with Docker service names, CI version consistency gate |
@@ -218,6 +219,23 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 | v0.3.0 | Enterprise identity + inspection | RBAC via OPA, agent routing, multi-backend inspection (5 providers), OIDC + SAML v2 SSO, SCIM, fail-closed sentinel, response masking, payload masking |
 | v0.2.0 | TLS and identity hardening | ACME/CA/self-signed TLS, Prometheus metrics, bcrypt, multi-admin with lockout protection |
 | v0.1.0 | Core gateway | MCP proxy, prompt injection (Ollama), CHS, OPA, session/API key auth, audit log, Redis rate limiting, TOTP/2FA, Argon2 |
+
+### v2.1 — Admin Dashboard, Alerting, and Persistence
+
+v2.1 adds the management layer that makes Yashigani self-service. The Admin Dashboard provides a login page and a 9-section admin panel covering identities, budgets, routing, policies, alerts, audit, models, agents, and system health. Operators no longer need curl or API knowledge to manage the platform.
+
+**Admin Dashboard UI** -- A web-based admin panel served behind Caddy authentication. The login page authenticates against the backoffice identity broker. Nine sections provide full visibility and control: identity management, budget configuration and status, routing policy, OPA policy editor, alert configuration, audit log viewer, model alias management, agent registry, and system health overview.
+
+**Alertmanager Rules** -- 12 Alertmanager rules covering P1-P5 severity levels for routing and budget conditions. Rules fire on sensitivity breaches, OPA overrides, classification conflicts, spending anomalies, budget exhaustion, and budget auto-switch events. All rules route through the existing SIEM integration pipeline.
+
+**Budget Postgres Persistence** -- Budget counters are now persisted to PostgreSQL in addition to budget-redis. Budget state survives container restarts and Redis eviction. The persistence layer writes asynchronously to avoid adding latency to the request path.
+
+**Pool Manager Background Health Monitor** -- The Pool Manager now runs a daemon thread that continuously monitors container health. Unhealthy containers are detected and replaced without waiting for a failed request to trigger self-healing.
+
+**OPA v1_routing.rego Verified Operational** -- The OPA routing safety net policy (v1_routing.rego) has been verified end-to-end in the production configuration. Policy evaluation, LLM validation of policy changes, and SAFE/WARNING/BLOCK verdicts are all confirmed operational.
+
+**Additional v2.1 changes:**
+- 388 tests passing (363 + 25 new e2e tests)
 
 ### v2.0 — First Production-Grade Release
 
@@ -487,7 +505,7 @@ The initial release established the core security envelope. Yashigani began as a
 - **Container Pool Manager (v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
 - **Dynamic per-identity containers (v2.0)** — managed by Pool Manager; license tier gates container limits
 - **21 core services (v2.0)** — up from 18 in v1.09.5; plus dynamic per-identity containers
-- **363 tests passing (v2.0)** — 252 original + 111 new
+- **388 tests passing (v2.1)** — 363 + 25 e2e
 
 ### 5.10 Licensing and Tiers
 
@@ -717,13 +735,15 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v2.0 is the current production release — the first production-grade release of the platform. v2.0 introduces five major subsystems: the Unified Identity Model (every entity is an identity with a `kind` field, no separate stores), the Optimization Engine (four-dimensional routing with P1-P9 priority matrix), the three-tier Budget System (org cap → group → individual, enforced by dedicated budget-redis), Open WebUI integration at `/chat/*` (internal only, all LLM calls through gateway), and the Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling). Additional v2.0 additions include the Multi-IdP Identity Broker (OIDC + SAML v2), the three-layer sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 21 core services plus dynamic per-identity containers, 363 tests (252 original + 111 new), and 12 Grafana dashboards.
+Yashigani v2.1 is the current production release. v2.1 adds the Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), and OPA v1_routing.rego verified operational. The admin panel is the management layer that makes the product fully self-service — no curl or API knowledge needed. v2.1 brings the test count to 388 (363 + 25 e2e).
+
+v2.0 introduced five major subsystems: the Unified Identity Model (every entity is an identity with a `kind` field, no separate stores), the Optimization Engine (four-dimensional routing with P1-P9 priority matrix), the three-tier Budget System (org cap → group → individual, enforced by dedicated budget-redis), Open WebUI integration at `/chat/*` (internal only, all LLM calls through gateway), and the Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling). Additional v2.0 additions include the Multi-IdP Identity Broker (OIDC + SAML v2), the three-layer sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 21 core services plus dynamic per-identity containers, and 12 Grafana dashboards.
 
 **Two release lines are maintained:**
 - **v2.x** (branch: `main`) — Full stack: gateway + Open WebUI + Optimization Engine + Budget System + Container Pool Manager
 - **v1.x** (branch: `release/1.x`) — Gateway-only: security enforcement proxy without Open WebUI or full-stack subsystems
 
-The progression from v0.1.0 through v2.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade AI operations platform with intelligent routing, budget governance, unified identity management, and an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget exhaustion — results in an insecure pass-through or silent rejection. Every failure mode has been designed to be fail-closed or gracefully degraded.
+The progression from v0.1.0 through v2.1 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade AI operations platform with intelligent routing, budget governance, unified identity management, and an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget exhaustion — results in an insecure pass-through or silent rejection. Every failure mode has been designed to be fail-closed or gracefully degraded.
 
 ### v0.8.0 Delivered
 

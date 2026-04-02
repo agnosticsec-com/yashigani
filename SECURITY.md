@@ -6,10 +6,11 @@ Two release lines are actively supported. Security fixes are backported to both.
 
 | Version | Supported | Branch | Notes |
 |---------|-----------|--------|-------|
-| 2.x     | ✅ | `main` | Full stack — Open WebUI, OE, budget system, Pool Manager |
-| 1.x     | ✅ | `release/1.x` | Gateway-only — same security core, no Open WebUI |
-| 0.9.4   | ❌ | — | End of life |
-| < 0.9.4 | ❌ | — | End of life |
+| 2.1.x   | ✅ Current | `main` | Full stack — Open WebUI, OE, budget system, Pool Manager, Admin Dashboard |
+| 1.10.x  | ✅ Supported | `release/1.x` | Gateway-only — same security core, no Open WebUI |
+| 2.0.x   | ❌ | — | Superseded by 2.1.x |
+| 1.09.x  | ❌ | — | Superseded by 1.10.x |
+| < 1.09  | ❌ | — | End of life |
 
 **v1.x** is maintained on the `release/1.x` branch for deployments that do not require Open WebUI. It receives security patches and infrastructure improvements. Same security foundation as v2.x.
 
