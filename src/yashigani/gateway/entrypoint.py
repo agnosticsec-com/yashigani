@@ -311,6 +311,7 @@ def _build_app():
         complexity_scorer=complexity_scorer,
         budget_enforcer=budget_enforcer,
         token_counter=token_counter,
+        optimization_engine=optimization_engine,
         audit_writer=audit_writer,
         ollama_url=ollama_url,
         default_model=model,
