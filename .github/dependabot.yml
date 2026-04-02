@@ -1,0 +1,42 @@
+version: 2
+
+updates:
+  # Python dependencies (pyproject.toml)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    reviewers:
+      - "n0n0iz"
+    target-branch: "main"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "ci"
+      - "dependencies"
+    reviewers:
+      - "n0n0iz"
+
+  # Docker base images
+  - package-ecosystem: "docker"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "docker"
+      - "dependencies"
+    reviewers:
+      - "n0n0iz"
