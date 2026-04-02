@@ -338,29 +338,36 @@ YSG_PODMAN_RUNTIME=false
 resolve_compose_cmd() {
   COMPOSE_CMD=()
 
-  # Try docker compose plugin first
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    COMPOSE_CMD=("docker" "compose")
-    return 0
-  fi
-
-  # Try standalone docker-compose
-  if command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE_CMD=("docker-compose")
-    return 0
-  fi
+  # Prefer Podman (rootless, daemonless, more secure)
+  # Check Podman FIRST — matches platform-detect.sh priority
 
   # Try podman compose (Podman 4+ built-in subcommand)
-  if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
-    COMPOSE_CMD=("podman" "compose")
-    YSG_PODMAN_RUNTIME=true
-    return 0
+  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    if podman compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman" "compose")
+      YSG_PODMAN_RUNTIME=true
+      return 0
+    fi
   fi
 
   # Try standalone podman-compose (pip install podman-compose)
-  if command -v podman-compose >/dev/null 2>&1; then
+  if command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
     COMPOSE_CMD=("podman-compose")
     YSG_PODMAN_RUNTIME=true
+    return 0
+  fi
+
+  # Fall back to Docker — verify daemon is running (not just CLI installed)
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if docker compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker" "compose")
+      return 0
+    fi
+  fi
+
+  # Try standalone docker-compose
+  if command -v docker-compose >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    COMPOSE_CMD=("docker-compose")
     return 0
   fi
 
