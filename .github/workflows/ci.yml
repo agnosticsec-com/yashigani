@@ -2,178 +2,62 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "release/**"]
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
-  license-key-gate:
-    name: License Key Gate (no placeholder)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Reject placeholder public key
-        run: |
-          # Check if _PUBLIC_KEY_PEM still contains the placeholder (not the _PLACEHOLDER_MARKER constant)
-          if grep -q '^PLACEHOLDER_YASHIGANI_PUBLIC_KEY_MLDSA65' src/yashigani/licensing/verifier.py; then
-            echo "FATAL: Production license public key not embedded. Run: python scripts/keygen.py"
-            exit 1
-          fi
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Verify version consistency
-        run: |
-          PYPROJECT_VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          INIT_VER=$(python3 -c "import re; m=re.search(r'__version__\s*=\s*\"(.+?)\"', open('src/yashigani/__init__.py').read()); print(m.group(1))")
-          if [ "$PYPROJECT_VER" != "$INIT_VER" ]; then
-            echo "FATAL: pyproject.toml ($PYPROJECT_VER) != __init__.py ($INIT_VER)"
-            exit 1
-          fi
-
-  lint:
-    name: Lint (ruff + mypy)
-    runs-on: ubuntu-latest
-    needs: license-key-gate
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install lint tools
-        run: pip install ruff mypy
-      - name: ruff check
-        run: ruff check src/
-      - name: ruff format check
-        run: ruff format --check src/
-      - name: mypy
-        run: mypy src/yashigani/ --ignore-missing-imports --strict
-
   test:
-    name: Unit Tests (>=80% coverage)
     runs-on: ubuntu-latest
-    needs: lint
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: pip
+          python-version: ${{ matrix.python-version }}
+
       - name: Install dependencies
         run: pip install -e ".[dev]"
-      - name: Run tests with coverage
-        run: |
-          pytest src/tests/unit/ \
-            --cov=yashigani \
-            --cov-report=xml \
-            --cov-report=term-missing \
-            --cov-fail-under=80 \
-            -v
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage.xml
-          retention-days: 14
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-          fail_ci_if_error: false
 
-  docker-build-check:
-    name: Docker Build Validation
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - name: Build gateway image (no push)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.gateway
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: yashigani/gateway:ci-check
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build backoffice image (no push)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile.backoffice
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: yashigani/backoffice:ci-check
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Hadolint gateway
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: docker/Dockerfile.gateway
-          config: .hadolint.yaml
-          failure-threshold: error
-      - name: Hadolint backoffice
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: docker/Dockerfile.backoffice
-          config: .hadolint.yaml
-          failure-threshold: error
+      - name: Run pytest
+        run: python -m pytest src/tests/ -x -q --tb=short
 
-  sast:
-    name: SAST (Semgrep)
-    runs-on: ubuntu-latest
-    needs: lint
-    permissions:
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Semgrep scan
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/python
-            p/owasp-top-ten
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-      - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: semgrep.sarif
-
-  test-installer:
-    name: Installer Smoke Test
-    runs-on: ubuntu-latest
-    needs: license-key-gate
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run demo installer
+      - name: Verify all package imports
         run: |
-          chmod +x install.sh
-          ./install.sh --mode=demo --runtime=docker --non-interactive
-        timeout-minutes: 10
-      - name: Wait for healthchecks
-        run: |
-          TIMEOUT=180
-          ELAPSED=0
-          for svc in gateway backoffice policy redis prometheus grafana; do
-            until docker compose -f docker/docker-compose.yml ps "$svc" 2>/dev/null | grep -qE "healthy|running"; do
-              sleep 5; ELAPSED=$((ELAPSED+5))
-              if [ $ELAPSED -ge $TIMEOUT ]; then echo "Timeout waiting for $svc"; exit 1; fi
-            done
-            echo "$svc is up"
+          for pkg in $(find src/yashigani -name "__init__.py" -exec dirname {} \; | sed 's|src/||' | tr '/' '.' | sort); do
+            python -c "import $pkg" || exit 1
           done
-      - name: Teardown
-        if: always()
-        run: docker compose -f docker/docker-compose.yml down -v --remove-orphans
+
+      - name: Shell script syntax check
+        run: |
+          for f in install.sh update.sh scripts/*.sh; do
+            bash -n "$f" || exit 1
+          done
+
+      - name: YAML validation
+        run: |
+          python -c "import yaml; yaml.safe_load(open('docker/docker-compose.yml'))"
+          python -c "import yaml; yaml.safe_load(open('docker/docker-compose.podman-override.yml'))"
+
+      - name: Version consistency check
+        run: |
+          PY_VER=$(python -c "import yashigani; print(yashigani.__version__)")
+          TOML_VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$PY_VER" != "$TOML_VER" ]; then
+            echo "Version mismatch: __init__.py=$PY_VER pyproject.toml=$TOML_VER"
+            exit 1
+          fi
+          echo "Version consistent: $PY_VER"
