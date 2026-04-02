@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
 def create_backoffice_app() -> FastAPI:
     app = FastAPI(
         title="Yashigani Backoffice",
-        version="0.8.0",
+        version="1.0.0",
         docs_url=None,          # disable Swagger in production
         redoc_url=None,
         openapi_url=None,       # never expose schema externally
@@ -145,6 +145,10 @@ def create_backoffice_app() -> FastAPI:
     app.include_router(opa_assistant_router, prefix="/admin/opa-assistant", tags=["opa-assistant"])
     app.include_router(alerts_router, prefix="/admin/alerts", tags=["alerts"])
     app.include_router(agent_bundles_router, prefix="/admin/agent-bundles", tags=["agent-bundles"])
+    # v1.0 — Budget admin API
+    from yashigani.backoffice.routes.budget import router as budget_router
+    app.include_router(budget_router, tags=["budget"])
+
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)
     app.include_router(webauthn_router, tags=["webauthn"])

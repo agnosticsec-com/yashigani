@@ -1,5 +1,5 @@
 ---
-# Yashigani v0.8.0 — Docker Compose stack
+# Yashigani v1.0.0 — Docker Compose stack
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
