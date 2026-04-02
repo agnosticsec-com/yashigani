@@ -11,7 +11,7 @@ Two release lines are actively supported. Security fixes are backported to both.
 | 0.9.4   | ❌ | Upgrade to 0.9.5 |
 | < 0.9.4 | ❌ | End of life |
 
-**v0.9.5** is maintained on the `release/0.9.x` branch for deployments that do not require Open WebUI, the Optimization Engine, or the budget system. It receives security patches only — no new features.
+**v0.9.5** is maintained on the `release/0.9.x` branch for deployments that do not require Open WebUI. It receives security patches and infrastructure improvements.
 
 ## Reporting a Vulnerability
 
