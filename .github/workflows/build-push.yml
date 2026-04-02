@@ -50,7 +50,7 @@ jobs:
             type=sha,prefix=sha-
       - name: Build & push gateway
         id: build-gateway
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.gateway
@@ -64,7 +64,7 @@ jobs:
           sbom: true
       - name: Build & push backoffice
         id: build-backoffice
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.backoffice
