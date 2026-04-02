@@ -2,7 +2,7 @@
 
 **Document Version:** 2.0
 **Date:** 2026-04-01
-**Codebase version:** v1.0
+**Codebase version:** v2.0
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
@@ -867,7 +867,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 ### Version History: Security-Relevant Changes
 
-#### v0.9.5 Changes
+#### v1.09.5 Changes
 
 | Change | OWASP Relevance | Effect |
 |---|---|---|
@@ -879,7 +879,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Anti-lockout: 2 admin accounts at install | ASVS V4.3.3 | Prevents admin lockout scenarios |
 | bcrypt for Prometheus basic auth | ASVS V6.4.1 | Monitoring endpoint credential protection |
 
-#### v1.0 Changes
+#### v2.0 Changes
 
 | Change | OWASP Relevance | Effect |
 |---|---|---|
@@ -948,4 +948,4 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 ---
 
-*This document assesses Yashigani v1.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
+*This document assesses Yashigani v2.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
