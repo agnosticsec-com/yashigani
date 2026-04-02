@@ -123,6 +123,20 @@ def create_backoffice_app() -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
+    # Admin UI — HTML pages
+    import pathlib
+    _templates_dir = pathlib.Path(__file__).parent / "templates"
+    if _templates_dir.exists():
+        _templates = Jinja2Templates(directory=str(_templates_dir))
+
+        @app.get("/admin/login", include_in_schema=False)
+        async def admin_login_page(request: Request):
+            return _templates.TemplateResponse("login.html", {"request": request})
+
+        @app.get("/admin/", include_in_schema=False)
+        async def admin_dashboard_page(request: Request):
+            return _templates.TemplateResponse("dashboard.html", {"request": request})
+
     # Routers
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])

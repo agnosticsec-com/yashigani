@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yashigani Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .ysg-gradient { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+    </style>
+</head>
+<body class="ysg-gradient min-h-screen flex items-center justify-center">
+    <div x-data="loginForm()" class="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md">
+        <div class="text-center mb-8">
+            <h1 class="text-2xl font-bold text-slate-800">Yashigani</h1>
+            <p class="text-slate-500 text-sm mt-1">Admin Control Plane</p>
+        </div>
+
+        <div x-show="error" x-cloak class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm" x-text="error"></div>
+
+        <form @submit.prevent="login" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
+                <input type="text" x-model="username" required autocomplete="username"
+                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                <input type="password" x-model="password" required autocomplete="current-password"
+                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">TOTP Code</label>
+                <input type="text" x-model="totp_code" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none tracking-widest text-center text-lg">
+            </div>
+            <button type="submit" :disabled="loading"
+                class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2.5 rounded-lg transition-colors">
+                <span x-show="!loading">Sign In</span>
+                <span x-show="loading">Authenticating...</span>
+            </button>
+        </form>
+
+        <p class="text-center text-xs text-slate-400 mt-6">Yashigani v2.0 &mdash; Agnostic Security</p>
+    </div>
+
+    <script>
+    function loginForm() {
+        return {
+            username: '', password: '', totp_code: '', error: '', loading: false,
+            async login() {
+                this.error = '';
+                this.loading = true;
+                try {
+                    const resp = await fetch('/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username: this.username,
+                            password: this.password,
+                            totp_code: this.totp_code,
+                        }),
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        window.location.href = '/admin/';
+                    } else {
+                        this.error = data.detail?.error || 'Authentication failed';
+                    }
+                } catch (e) {
+                    this.error = 'Connection error';
+                } finally {
+                    this.loading = false;
+                }
+            }
+        };
+    }
+    </script>
+</body>
+</html>

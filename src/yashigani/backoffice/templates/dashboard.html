@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yashigani Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen" x-data="adminApp()">
+
+    <!-- Top Nav -->
+    <nav class="bg-slate-900 text-white px-6 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-6">
+            <h1 class="text-lg font-bold">Yashigani</h1>
+            <div class="flex space-x-1 text-sm">
+                <button @click="page='dashboard'" :class="page==='dashboard' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Dashboard</button>
+                <button @click="page='identities'" :class="page==='identities' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Identities</button>
+                <button @click="page='agents'" :class="page==='agents' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Agents</button>
+                <button @click="page='budgets'" :class="page==='budgets' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Budgets</button>
+                <button @click="page='models'" :class="page==='models' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Models</button>
+                <button @click="page='sensitivity'" :class="page==='sensitivity' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Sensitivity</button>
+                <button @click="page='audit'" :class="page==='audit' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Audit</button>
+                <button @click="page='alerts'" :class="page==='alerts' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Alerts</button>
+                <button @click="page='settings'" :class="page==='settings' ? 'bg-slate-700' : 'hover:bg-slate-800'" class="px-3 py-1.5 rounded transition-colors">Settings</button>
+            </div>
+        </div>
+        <div class="flex items-center space-x-4 text-sm">
+            <span class="text-slate-400" x-text="'v2.1'"></span>
+            <button @click="logout()" class="text-slate-400 hover:text-white transition-colors">Logout</button>
+        </div>
+    </nav>
+
+    <!-- Content -->
+    <main class="max-w-7xl mx-auto px-6 py-6">
+
+        <!-- Dashboard -->
+        <div x-show="page==='dashboard'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">System Health</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <template x-for="s in health" :key="s.name">
+                    <div class="bg-white rounded-lg shadow p-4">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm font-medium text-slate-600" x-text="s.name"></span>
+                            <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                                :class="s.status==='healthy' ? 'bg-green-100 text-green-700' : s.status==='unhealthy' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'"
+                                x-text="s.status"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-1">Active Identities</h3>
+                    <p class="text-2xl font-bold text-slate-800" x-text="stats.identities"></p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-1">Registered Agents</h3>
+                    <p class="text-2xl font-bold text-slate-800" x-text="stats.agents"></p>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-1">Requests Today</h3>
+                    <p class="text-2xl font-bold text-slate-800" x-text="stats.requests_today"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Identities -->
+        <div x-show="page==='identities'" x-cloak>
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold text-slate-800">Identities</h2>
+                <button @click="showCreateIdentity=true" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-2 rounded-lg transition-colors">New Identity</button>
+            </div>
+            <div class="bg-white rounded-lg shadow overflow-hidden">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-600">
+                        <tr>
+                            <th class="text-left px-4 py-3 font-medium">Name</th>
+                            <th class="text-left px-4 py-3 font-medium">Slug</th>
+                            <th class="text-left px-4 py-3 font-medium">Kind</th>
+                            <th class="text-left px-4 py-3 font-medium">Status</th>
+                            <th class="text-left px-4 py-3 font-medium">Last Seen</th>
+                            <th class="text-left px-4 py-3 font-medium">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        <template x-for="id in identities" :key="id.identity_id">
+                            <tr class="hover:bg-slate-50">
+                                <td class="px-4 py-3 font-medium text-slate-800" x-text="id.name"></td>
+                                <td class="px-4 py-3 text-slate-500">@<span x-text="id.slug"></span></td>
+                                <td class="px-4 py-3">
+                                    <span class="text-xs px-2 py-0.5 rounded-full"
+                                        :class="id.kind==='human' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'"
+                                        x-text="id.kind"></span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span class="text-xs px-2 py-0.5 rounded-full"
+                                        :class="id.status==='active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+                                        x-text="id.status"></span>
+                                </td>
+                                <td class="px-4 py-3 text-slate-500 text-xs" x-text="id.last_seen_at || 'Never'"></td>
+                                <td class="px-4 py-3">
+                                    <button class="text-blue-600 hover:text-blue-800 text-xs mr-2">Edit</button>
+                                    <button class="text-red-600 hover:text-red-800 text-xs">Suspend</button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                <div x-show="identities.length===0" class="px-4 py-8 text-center text-slate-400">No identities registered</div>
+            </div>
+        </div>
+
+        <!-- Agents -->
+        <div x-show="page==='agents'" x-cloak>
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold text-slate-800">Agents</h2>
+                <button @click="showCreateAgent=true" class="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-2 rounded-lg transition-colors">Register Agent</button>
+            </div>
+            <div class="bg-white rounded-lg shadow overflow-hidden">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-600">
+                        <tr>
+                            <th class="text-left px-4 py-3 font-medium">Name</th>
+                            <th class="text-left px-4 py-3 font-medium">Agent ID</th>
+                            <th class="text-left px-4 py-3 font-medium">Upstream URL</th>
+                            <th class="text-left px-4 py-3 font-medium">Status</th>
+                            <th class="text-left px-4 py-3 font-medium">Last Seen</th>
+                            <th class="text-left px-4 py-3 font-medium">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        <template x-for="a in agents" :key="a.agent_id">
+                            <tr class="hover:bg-slate-50">
+                                <td class="px-4 py-3 font-medium text-slate-800" x-text="a.name"></td>
+                                <td class="px-4 py-3 text-slate-500 text-xs font-mono" x-text="a.agent_id"></td>
+                                <td class="px-4 py-3 text-slate-500 text-xs" x-text="a.upstream_url"></td>
+                                <td class="px-4 py-3">
+                                    <span class="text-xs px-2 py-0.5 rounded-full"
+                                        :class="a.status==='active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+                                        x-text="a.status"></span>
+                                </td>
+                                <td class="px-4 py-3 text-slate-500 text-xs" x-text="a.last_seen_at || 'Never'"></td>
+                                <td class="px-4 py-3">
+                                    <button class="text-blue-600 hover:text-blue-800 text-xs mr-2">Rotate Token</button>
+                                    <button class="text-red-600 hover:text-red-800 text-xs">Deactivate</button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                <div x-show="agents.length===0" class="px-4 py-8 text-center text-slate-400">No agents registered</div>
+            </div>
+        </div>
+
+        <!-- Budgets -->
+        <div x-show="page==='budgets'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">Budget Management</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-2">Organisation Cloud Caps</h3>
+                    <p class="text-sm text-slate-400">Configure per-provider token limits</p>
+                    <button class="mt-3 text-blue-600 hover:text-blue-800 text-sm">Manage Caps</button>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-2">Group Budgets</h3>
+                    <p class="text-sm text-slate-400">Allocate tokens per group</p>
+                    <button class="mt-3 text-blue-600 hover:text-blue-800 text-sm">Manage Groups</button>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-2">Individual Budgets</h3>
+                    <p class="text-sm text-slate-400">Per-identity token allocation</p>
+                    <button class="mt-3 text-blue-600 hover:text-blue-800 text-sm">Manage Individuals</button>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-sm font-medium text-slate-500 mb-2">Budget Tree</h3>
+                <p class="text-sm text-slate-400">Visual hierarchy: Org Cap &rarr; Group &rarr; Individual</p>
+                <div class="mt-4 text-center text-slate-300 py-8">Configure org caps to see the budget tree</div>
+            </div>
+        </div>
+
+        <!-- Models -->
+        <div x-show="page==='models'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">Model Aliases</h2>
+            <div class="bg-white rounded-lg shadow p-4">
+                <table class="w-full text-sm">
+                    <thead class="text-slate-600">
+                        <tr>
+                            <th class="text-left px-4 py-2 font-medium">Alias</th>
+                            <th class="text-left px-4 py-2 font-medium">Provider</th>
+                            <th class="text-left px-4 py-2 font-medium">Model</th>
+                            <th class="text-left px-4 py-2 font-medium">Force Local</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        <tr><td class="px-4 py-2 font-mono">fast</td><td class="px-4 py-2">ollama</td><td class="px-4 py-2">qwen2.5:3b</td><td class="px-4 py-2 text-green-600">Yes</td></tr>
+                        <tr><td class="px-4 py-2 font-mono">smart</td><td class="px-4 py-2">anthropic</td><td class="px-4 py-2">claude-sonnet-4-6</td><td class="px-4 py-2 text-slate-400">No</td></tr>
+                        <tr><td class="px-4 py-2 font-mono">secure</td><td class="px-4 py-2">ollama</td><td class="px-4 py-2">qwen2.5:3b</td><td class="px-4 py-2 text-green-600">Yes</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Sensitivity -->
+        <div x-show="page==='sensitivity'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">Sensitivity Classification</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-2">Pipeline Status</h3>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between"><span>Layer 1: Regex</span><span class="text-green-600 font-medium">Active (cannot disable)</span></div>
+                        <div class="flex justify-between"><span>Layer 2: FastText</span><span class="text-green-600 font-medium">Active</span></div>
+                        <div class="flex justify-between"><span>Layer 3: Ollama</span><span class="text-green-600 font-medium">Active</span></div>
+                    </div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-500 mb-2">Test Classifier</h3>
+                    <textarea x-model="testText" placeholder="Paste text to classify..." class="w-full border rounded-lg p-2 text-sm h-20"></textarea>
+                    <button @click="classifyText()" class="mt-2 bg-blue-600 text-white text-sm px-3 py-1.5 rounded-lg">Classify</button>
+                    <div x-show="classResult" class="mt-2 text-sm">
+                        <span class="font-medium">Result:</span>
+                        <span :class="{
+                            'text-green-600': classResult==='PUBLIC',
+                            'text-yellow-600': classResult==='INTERNAL',
+                            'text-orange-600': classResult==='CONFIDENTIAL',
+                            'text-red-600': classResult==='RESTRICTED'
+                        }" x-text="classResult"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit -->
+        <div x-show="page==='audit'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">Audit Log</h2>
+            <div class="bg-white rounded-lg shadow p-4">
+                <div class="flex space-x-2 mb-4">
+                    <input type="text" placeholder="Search events..." class="flex-1 border rounded-lg px-3 py-2 text-sm">
+                    <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm px-4 py-2 rounded-lg">Search</button>
+                    <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm px-4 py-2 rounded-lg">Export</button>
+                </div>
+                <div class="text-center text-slate-300 py-8">Audit events will appear here</div>
+            </div>
+        </div>
+
+        <!-- Alerts -->
+        <div x-show="page==='alerts'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">Alert Configuration</h2>
+            <div class="bg-white rounded-lg shadow p-4">
+                <table class="w-full text-sm">
+                    <thead class="text-slate-600">
+                        <tr>
+                            <th class="text-left px-4 py-2 font-medium">Priority</th>
+                            <th class="text-left px-4 py-2 font-medium">Trigger</th>
+                            <th class="text-left px-4 py-2 font-medium">Response Time</th>
+                            <th class="text-left px-4 py-2 font-medium">Sinks</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-sm">
+                        <tr><td class="px-4 py-2"><span class="bg-red-100 text-red-700 px-2 py-0.5 rounded-full text-xs font-medium">P1</span></td><td class="px-4 py-2">OPA override, sensitivity breach, resources exhausted</td><td class="px-4 py-2">Immediate</td><td class="px-4 py-2 text-slate-400">Configure sinks</td></tr>
+                        <tr><td class="px-4 py-2"><span class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full text-xs font-medium">P2</span></td><td class="px-4 py-2">Classification conflict, 3+ replacements/hr, spending anomaly</td><td class="px-4 py-2">1 hour</td><td class="px-4 py-2 text-slate-400">Configure sinks</td></tr>
+                        <tr><td class="px-4 py-2"><span class="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full text-xs font-medium">P3</span></td><td class="px-4 py-2">Budget exhausted auto-switch, identity degraded</td><td class="px-4 py-2">Business day</td><td class="px-4 py-2 text-slate-400">Configure sinks</td></tr>
+                        <tr><td class="px-4 py-2"><span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">P4</span></td><td class="px-4 py-2">Routing drift, model degradation</td><td class="px-4 py-2">Week</td><td class="px-4 py-2 text-slate-400">Configure sinks</td></tr>
+                        <tr><td class="px-4 py-2"><span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-xs font-medium">P5</span></td><td class="px-4 py-2">Container replaced, budget crossed, routine rotation</td><td class="px-4 py-2">Informational</td><td class="px-4 py-2 text-slate-400">Configure sinks</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div x-show="page==='settings'" x-cloak>
+            <h2 class="text-xl font-semibold text-slate-800 mb-4">Settings</h2>
+            <div class="space-y-4">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-700 mb-2">Identity Providers</h3>
+                    <p class="text-sm text-slate-400 mb-3">Configure OIDC and SAML v2 identity providers for SSO</p>
+                    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-lg">Add IdP</button>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-700 mb-2">SIEM Integration</h3>
+                    <p class="text-sm text-slate-400 mb-3">Configure audit event forwarding to Splunk, Wazuh, Elastic, or syslog</p>
+                    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded-lg">Configure SIEM</button>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-sm font-medium text-slate-700 mb-2">License</h3>
+                    <p class="text-sm text-slate-400">Tier: <span class="font-medium text-slate-600" x-text="license.tier"></span> | Agents: <span x-text="license.max_agents"></span> | Expires: <span x-text="license.expires || 'Never'"></span></p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+    function adminApp() {
+        return {
+            page: 'dashboard',
+            health: [],
+            stats: { identities: 0, agents: 0, requests_today: 0 },
+            identities: [],
+            agents: [],
+            license: { tier: 'Loading...', max_agents: '...', expires: '...' },
+            testText: '',
+            classResult: '',
+            showCreateIdentity: false,
+            showCreateAgent: false,
+
+            async init() {
+                await this.loadDashboard();
+                await this.loadAgents();
+            },
+
+            async loadDashboard() {
+                try {
+                    const resp = await fetch('/dashboard/health');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        this.health = data.services || [];
+                        this.stats = data.stats || this.stats;
+                    }
+                } catch (e) { console.error('Dashboard load failed:', e); }
+
+                try {
+                    const resp = await fetch('/admin/license/admin/license');
+                    if (resp.ok) {
+                        this.license = await resp.json();
+                    }
+                } catch (e) { /* license endpoint may not exist */ }
+            },
+
+            async loadAgents() {
+                try {
+                    const resp = await fetch('/admin/agents');
+                    if (resp.ok) {
+                        this.agents = await resp.json();
+                    }
+                } catch (e) { console.error('Agents load failed:', e); }
+            },
+
+            async classifyText() {
+                this.classResult = 'Classifying...';
+                // Use the sensitivity patterns locally for demo
+                const text = this.testText;
+                if (/\b\d{3}-\d{2}-\d{4}\b/.test(text)) { this.classResult = 'CONFIDENTIAL'; return; }
+                if (/\b(?:\d[ -]*?){13,19}\b/.test(text)) { this.classResult = 'RESTRICTED'; return; }
+                if (/\b(?:sk-|sk-ant-)[A-Za-z0-9_-]{20,}\b/.test(text)) { this.classResult = 'RESTRICTED'; return; }
+                if (/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/.test(text)) { this.classResult = 'INTERNAL'; return; }
+                this.classResult = 'PUBLIC';
+            },
+
+            async logout() {
+                await fetch('/auth/logout', { method: 'POST' });
+                window.location.href = '/admin/login';
+            }
+        };
+    }
+    </script>
+</body>
+</html>
