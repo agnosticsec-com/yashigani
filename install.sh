@@ -1355,13 +1355,17 @@ compose_pull() {
   fi
 
   # Build local images first (gateway + backoffice have Dockerfiles, not on Docker Hub)
-  # Use --no-cache to ensure fresh pip install picks up latest pyproject.toml deps.
-  log_info "Building gateway and backoffice images from source..."
-  "${COMPOSE_CMD[@]}" -f "$compose_file" build --no-cache gateway backoffice || {
-    log_error "Failed to build gateway/backoffice images. Check Dockerfiles."
-    exit 1
-  }
-  log_success "Local images built"
+  # Podman builds are handled in compose_up() — skip here if already built
+  if [[ "$YSG_PODMAN_RUNTIME" != "true" ]]; then
+    log_info "Building gateway and backoffice images from source..."
+    "${COMPOSE_CMD[@]}" -f "$compose_file" build --no-cache gateway backoffice || {
+      log_error "Failed to build gateway/backoffice images. Check Dockerfiles."
+      exit 1
+    }
+    log_success "Local images built"
+  else
+    log_info "Podman images already built — skipping compose build"
+  fi
 
   # Pull all remote images (skip services that are built locally)
   log_info "Pulling remote container images..."
@@ -1528,6 +1532,25 @@ compose_up() {
       compose_files+=("-f" "$podman_override")
       log_info "Podman detected — applying rootless override"
     fi
+
+    # Podman-specific setup
+    # 1. Ensure Podman socket is running (compose provider needs it)
+    systemctl --user start podman.socket 2>/dev/null || true
+    export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+
+    # 2. Create Docker-compatible directories that Podman doesn't have
+    #    (promtail mounts /var/lib/docker/containers for log collection)
+    if [[ ! -d "/var/lib/docker/containers" ]]; then
+      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
+        mkdir -p /var/lib/docker/containers 2>/dev/null || \
+        log_warn "Could not create /var/lib/docker/containers — promtail may not start"
+    fi
+
+    # 3. Build images with podman build (compose build uses Docker buildx)
+    log_info "Building images with Podman..."
+    podman build -f "${WORK_DIR}/docker/Dockerfile.gateway" -t yashigani/gateway:latest "${WORK_DIR}" 2>&1 | tail -1
+    podman build -f "${WORK_DIR}/docker/Dockerfile.backoffice" -t yashigani/backoffice:latest "${WORK_DIR}" 2>&1 | tail -1
+    log_success "Images built with Podman"
   fi
 
   # Ensure all required directories and secret files exist (handles upgrades,

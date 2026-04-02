@@ -71,10 +71,11 @@ services:
     security_opt:
       - label=disable
     userns_mode: keep-id
+    # Override volumes to replace Docker-specific paths with Podman equivalents
     volumes:
       - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
-      # Podman: skip /var/lib/docker/containers (doesn't exist)
-      # and /var/run/docker.sock (use Podman socket instead)
+      - /var/log:/var/log:ro
+      # Podman container logs are in /var/log, not /var/lib/docker/containers
 
   otel-collector:
     security_opt:
