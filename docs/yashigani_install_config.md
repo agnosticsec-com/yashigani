@@ -1,6 +1,6 @@
-# Yashigani v1.0 — Installation and Configuration Guide
+# Yashigani v2.0 — Installation and Configuration Guide
 
-**Version:** 1.0
+**Version:** 2.0
 **Last updated:** 2026-04-01
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
@@ -29,11 +29,11 @@
 18. [Response Path Inspection (v0.9.0)](#18-response-path-inspection-v090)
 19. [WebAuthn / Passkeys Configuration (v0.9.0)](#19-webauthn--passkeys-configuration-v090)
 20. [Credential Summary and Dual Admin Accounts (v0.9.1)](#20-credential-summary-and-dual-admin-accounts-v091)
-21. [Open WebUI Configuration (v1.0)](#21-open-webui-configuration-v10)
-22. [Optimization Engine (v1.0)](#22-optimization-engine-v10)
-23. [Budget System (v1.0)](#23-budget-system-v10)
-24. [Container Pool Manager (v1.0)](#24-container-pool-manager-v10)
-25. [Multi-IdP Identity Broker (v1.0)](#25-multi-idp-identity-broker-v10)
+21. [Open WebUI Configuration (v2.0)](#21-open-webui-configuration-v20)
+22. [Optimization Engine (v2.0)](#22-optimization-engine-v20)
+23. [Budget System (v2.0)](#23-budget-system-v20)
+24. [Container Pool Manager (v2.0)](#24-container-pool-manager-v20)
+25. [Multi-IdP Identity Broker (v2.0)](#25-multi-idp-identity-broker-v20)
 
 ---
 
@@ -97,7 +97,7 @@ Before starting, confirm the following network conditions are met:
 - **Ports 80 and 443** must be open and reachable from the internet if using ACME (Let's Encrypt) TLS mode. Port 80 is used for the ACME HTTP-01 challenge; port 443 is your application traffic. If your load balancer or upstream firewall handles 80→443 redirect externally, port 80 must still reach the host for the initial certificate issuance.
 - **DNS A record** (or AAAA for IPv6) pointing your fully qualified domain name (FQDN) to the server's public IP address. This is mandatory for ACME mode. Allow up to 5 minutes for DNS propagation before starting the stack.
 - **Outbound HTTPS** (port 443) must be permitted from the host for Let's Encrypt ACME endpoints and for Ollama model pulls from `ollama.ai` and Hugging Face registries.
-- **Internal Docker networking** is isolated by default. All non-edge services (gateway, backoffice, policy, redis, budget-redis, postgres, etc.) attach to an internal bridge network with `internal: true`. Only Caddy (ports 80/443) is exposed to the host. Ollama attaches to an external network to allow outbound model pulls from `ollama.ai` and Hugging Face registries. Budget-redis runs as a dedicated Redis instance with `maxmemory-policy noeviction` for budget state persistence (v1.0).
+- **Internal Docker networking** is isolated by default. All non-edge services (gateway, backoffice, policy, redis, budget-redis, postgres, etc.) attach to an internal bridge network with `internal: true`. Only Caddy (ports 80/443) is exposed to the host. Ollama attaches to an external network to allow outbound model pulls from `ollama.ai` and Hugging Face registries. Budget-redis runs as a dedicated Redis instance with `maxmemory-policy noeviction` for budget state persistence (v2.0).
 
 > **Warning:** Do not expose Redis (6379), budget-redis (6380), Postgres (5432), or Prometheus (9090) ports to the host in production. These services are intentionally not bound to host interfaces in the default `docker-compose.yml`.
 
@@ -191,7 +191,7 @@ Alternatively, supply the flag non-interactively:
 
 ### 3.2 Full Wizard (Production / Enterprise)
 
-**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. GPU hardware is detected via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed based on detected VRAM (v0.8.4). The health check script auto-detects the compose command for Docker or Podman environments. The preflight now also verifies that the sensitivity pipeline prerequisites (regex, FastText, Ollama) are available (v1.0).
+**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. GPU hardware is detected via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed based on detected VRAM (v0.8.4). The health check script auto-detects the compose command for Docker or Podman environments. The preflight now also verifies that the sensitivity pipeline prerequisites (regex, FastText, Ollama) are available (v2.0).
 
 **Step 2 — Container platform.** Asks whether you are deploying to Docker Compose or Kubernetes (Helm). Choose **Docker Compose** for standalone hosts; choose **Kubernetes** if you have an existing cluster and `kubectl` configured.
 
@@ -291,8 +291,8 @@ cd yashigani
 **Step 2.** Verify the release tag matches the version you intend to deploy:
 
 ```bash
-git tag --list | grep "v1.0"
-git checkout v1.0.0
+git tag --list | grep "v2.0"
+git checkout v2.0.0
 ```
 
 **Step 3.** Verify file integrity (if the project provides checksums):
@@ -386,7 +386,7 @@ The following tables document every significant variable, grouped by category.
 |---|---|---|---|
 | `POSTGRES_PASSWORD` | No | string | Set in `.env` for Compose interpolation; PgBouncer uses this via `DATABASE_URL` for proper auth. Auto-generated by the installer. |
 | `REDIS_PASSWORD` | No | string | Set in `.env` for Compose interpolation. Auto-generated by the installer. |
-| `BUDGET_REDIS_PASSWORD` | No | string | Set in `.env` for Compose interpolation. Dedicated budget-redis instance (v1.0). Auto-generated by the installer. |
+| `BUDGET_REDIS_PASSWORD` | No | string | Set in `.env` for Compose interpolation. Dedicated budget-redis instance (v2.0). Auto-generated by the installer. |
 | `YASHIGANI_DB_DSN` | No | PostgreSQL DSN | Auto-constructed from the `postgres_password` secret on first run. Override only if using an external Postgres instance. |
 
 ---
@@ -538,8 +538,8 @@ On first start, the backoffice service automatically runs `scripts/bootstrap_pos
 4. **Runs all Alembic migrations** in order, creating the full schema (`yashigani` database, all tables including identity, billing, optimization, and pool tables, indexes, and constraint definitions). Alembic migrations are bundled in the backoffice Docker image.
 5. **Seeds initial configuration** rows (default OPA policy including `policy/v1_routing.rego`, default rate limits, default audit retention settings, default budget tiers).
 6. **Writes `admin_initial_password`** to `docker/secrets/` for bootstrap detection. TOTP secrets are pre-provisioned from the installer secrets directory during bootstrap.
-7. **Initializes the budget-redis instance** with `noeviction` policy and seeds default org-cap, group, and individual budget tiers (v1.0).
-8. **Starts the Container Pool Manager** which pre-warms per-identity isolation containers and begins self-healing monitors (v1.0).
+7. **Initializes the budget-redis instance** with `noeviction` policy and seeds default org-cap, group, and individual budget tiers (v2.0).
+8. **Starts the Container Pool Manager** which pre-warms per-identity isolation containers and begins self-healing monitors (v2.0).
 
 If this process fails (e.g., because Postgres is not yet ready), backoffice will retry with exponential backoff for up to 5 minutes before exiting. Check `docker compose logs backoffice` and `docker compose logs postgres` together if the backoffice container restarts repeatedly.
 
@@ -1288,8 +1288,8 @@ kubectl logs -n yashigani \
 | `global.tlsDomain` | Your FQDN | `yashigani.example.com` |
 | `global.tlsMode` | TLS mode | `acme` |
 | `gateway.env.upstreamUrl` | MCP backend URL | `http://mcp-server:8080` |
-| `gateway.image.tag` | Gateway image tag | `v1.0.0` |
-| `backoffice.image.tag` | Backoffice image tag | `v1.0.0` |
+| `gateway.image.tag` | Gateway image tag | `v2.0.0` |
+| `backoffice.image.tag` | Backoffice image tag | `v2.0.0` |
 | `redis.existingSecretName` | Use existing Redis secret | `my-redis-secret` |
 | `caddy.enabled` | Enable/disable Caddy | `false` (if using nginx-ingress) |
 | `ollama.enabled` | Enable/disable local Ollama | `false` (if using cloud backend) |
@@ -1497,7 +1497,7 @@ For existing installations at v0.8.4 or later, use the `update.sh` script. It ha
 For a specific target version:
 
 ```bash
-./update.sh --version v1.0.0
+./update.sh --version v2.0.0
 ```
 
 `update.sh` automatically backs up `.env`, `docker/secrets/`, and `config/` before pulling new images. If the backoffice fails to reach a healthy state within the timeout, it restores the pre-update backup and brings up the previous image versions.
@@ -1518,7 +1518,7 @@ The installer pulls the latest images, checks for breaking `.env` changes, backs
 
 ```bash
 git fetch origin
-git checkout v1.0.0   # replace with target version
+git checkout v2.0.0   # replace with target version
 ```
 
 **Step 2.** Pull updated images:
@@ -1564,7 +1564,7 @@ docker compose ps
 
 > **Disclaimer:** These third-party agent containers are provided **AS IS** by Agnostic Security as a courtesy integration. Image digests are pinned to upstream-tagged releases and updated as part of the Yashigani release cycle. **All support, bug reports, and feature requests must go to the upstream maintainers.** Agnostic Security accepts no support obligation for these integrations.
 
-Three agent bundles are available as opt-in installs. They are **not installed by default** but work out of the box with the `--agent-bundles` flag. The installer auto-registers agents via the backoffice API and writes PSK tokens to `docker/secrets/`. In v1.0, agent bundles use the unified identity model with the `kind` field to distinguish human and service identities.
+Three agent bundles are available as opt-in installs. They are **not installed by default** but work out of the box with the `--agent-bundles` flag. The installer auto-registers agents via the backoffice API and writes PSK tokens to `docker/secrets/`. In v2.0, agent bundles use the unified identity model with the `kind` field to distinguish human and service identities.
 
 | Agent | Stack | License | Integration | Compose Profile |
 |-------|-------|---------|-------------|-----------------|
@@ -1638,12 +1638,12 @@ The backoffice exposes bundle metadata and the disclaimer via:
 
 ### 17.4 Agent Token Auto-Registration
 
-The installer auto-registers agent bundles via the backoffice API at install time. When an agent bundle container starts, it uses the token in its secret file to authenticate with Yashigani's agent registry. In v1.0, all identities (human and service) share a unified identity model with a `kind` field (`human` or `service`); agent bundles are registered as `kind: service`. The installer generates these tokens and places them in:
+The installer auto-registers agent bundles via the backoffice API at install time. When an agent bundle container starts, it uses the token in its secret file to authenticate with Yashigani's agent registry. In v2.0, all identities (human and service) share a unified identity model with a `kind` field (`human` or `service`); agent bundles are registered as `kind: service`. The installer generates these tokens and places them in:
 
 - **Compose:** `docker/secrets/{name}_token`
 - **Helm:** Kubernetes Secret `yashigani-{name}-token` (must be pre-created before install)
 
-Each bundle is assigned a **restricted RBAC policy** by default — it can only reach LLM provider paths and is not granted access to internal Yashigani management endpoints. The OPA data document is pre-populated with the bundle agent entries immediately after bootstrap. In v1.0, routing decisions for agent bundles are also governed by `policy/v1_routing.rego` and the Optimization Engine's 4-signal routing logic (P1-P9 priority levels).
+Each bundle is assigned a **restricted RBAC policy** by default — it can only reach LLM provider paths and is not granted access to internal Yashigani management endpoints. The OPA data document is pre-populated with the bundle agent entries immediately after bootstrap. In v2.0, routing decisions for agent bundles are also governed by `policy/v1_routing.rego` and the Optimization Engine's 4-signal routing logic (P1-P9 priority levels).
 
 ---
 
@@ -1802,9 +1802,9 @@ All credentials are also written to `docker/secrets/` with chmod 600. On upgrade
 
 ---
 
-## 21. Open WebUI Configuration (v1.0)
+## 21. Open WebUI Configuration (v2.0)
 
-v1.0 integrates Open WebUI as the primary chat interface, served at `/chat/*` behind Caddy. Open WebUI uses trusted headers injected by the gateway for seamless identity propagation.
+v2.0 integrates Open WebUI as the primary chat interface, served at `/chat/*` behind Caddy. Open WebUI uses trusted headers injected by the gateway for seamless identity propagation.
 
 ### 21.1 Routing
 
@@ -1813,7 +1813,7 @@ Caddy routes all `/chat/*` requests to the Open WebUI container. Authentication 
 ### 21.2 `.env` Settings
 
 ```dotenv
-YASHIGANI_OPENWEBUI_ENABLED=true              # Enable Open WebUI (default: true in v1.0)
+YASHIGANI_OPENWEBUI_ENABLED=true              # Enable Open WebUI (default: true in v2.0)
 YASHIGANI_OPENWEBUI_TRUSTED_HEADER=X-Yashigani-User-Id   # Header containing authenticated user identity
 ```
 
@@ -1823,7 +1823,7 @@ Set `YASHIGANI_OPENWEBUI_ENABLED=false` in `.env` and restart Caddy. The `/chat/
 
 ---
 
-## 22. Optimization Engine (v1.0)
+## 22. Optimization Engine (v2.0)
 
 The Optimization Engine provides 4-signal routing with P1-P9 priority levels for all MCP requests.
 
@@ -1844,9 +1844,9 @@ The Optimization Engine consults `policy/v1_routing.rego` as a safety net before
 
 ---
 
-## 23. Budget System (v1.0)
+## 23. Budget System (v2.0)
 
-v1.0 introduces a three-tier budget system: organization cap, group budget, and individual budget. Budget state is stored in a dedicated budget-redis instance with `noeviction` policy to prevent data loss.
+v2.0 introduces a three-tier budget system: organization cap, group budget, and individual budget. Budget state is stored in a dedicated budget-redis instance with `noeviction` policy to prevent data loss.
 
 ### 23.1 Budget Tiers
 
@@ -1871,7 +1871,7 @@ Budget tiers are managed via the backoffice: Admin -> Budget -> Organization Cap
 
 ---
 
-## 24. Container Pool Manager (v1.0)
+## 24. Container Pool Manager (v2.0)
 
 The Container Pool Manager provides per-identity container isolation with self-healing and postmortem capabilities.
 
@@ -1894,9 +1894,9 @@ When a container fails, the pool manager captures logs, resource usage, and the 
 
 ---
 
-## 25. Multi-IdP Identity Broker (v1.0)
+## 25. Multi-IdP Identity Broker (v2.0)
 
-v1.0 adds a multi-IdP identity broker supporting both OIDC and SAML v2, with tier-gated access.
+v2.0 adds a multi-IdP identity broker supporting both OIDC and SAML v2, with tier-gated access.
 
 ### 25.1 Unified Identity Model
 
@@ -1918,4 +1918,4 @@ Multiple OIDC and SAML v2 identity providers can be configured simultaneously. T
 
 ---
 
-*Yashigani v1.0 — Installation and Configuration Guide — 2026-04-01*
+*Yashigani v2.0 — Installation and Configuration Guide — 2026-04-01*
