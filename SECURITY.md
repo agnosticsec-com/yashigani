@@ -2,14 +2,16 @@
 
 ## Supported Versions
 
-Only the latest release is supported. All previous versions have been deprecated and are no longer receiving security fixes.
+Two release lines are actively supported. Security fixes are backported to both.
 
-| Version | Supported |
-|---------|-----------|
-| 0.9.4   | ✅ |
-| 0.8.x-0.9.3 | ❌ |
-| 0.7.x   | ❌ |
-| < 0.7.0 | ❌ |
+| Version | Supported | Notes |
+|---------|-----------|-------|
+| 1.0.x   | ✅ | Current — full stack with Open WebUI, OE, budget system |
+| 0.9.5   | ✅ | LTS — gateway + agent bundles, no Open WebUI dependency |
+| 0.9.4   | ❌ | Upgrade to 0.9.5 |
+| < 0.9.4 | ❌ | End of life |
+
+**v0.9.5** is maintained on the `release/0.9.x` branch for deployments that do not require Open WebUI, the Optimization Engine, or the budget system. It receives security patches only — no new features.
 
 ## Reporting a Vulnerability
 
@@ -28,7 +30,7 @@ We aim to acknowledge all reports within **2 business days** and provide a remed
 
 ## Scope
 
-Only vulnerabilities in Yashigani's own code are in scope. Vulnerabilities in third-party dependencies, optional agent bundle containers (LangGraph, Goose, CrewAI, OpenClaw), or upstream MCP tool servers should be reported directly to the respective project maintainers.
+Only vulnerabilities in Yashigani's own code are in scope. Vulnerabilities in third-party dependencies, optional agent bundle containers (LangGraph, Goose, OpenClaw), or upstream MCP tool servers should be reported directly to the respective project maintainers.
 
 ## Disclosure Policy
 
