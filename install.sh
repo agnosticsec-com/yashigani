@@ -1542,7 +1542,7 @@ compose_up() {
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
       echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}"
-      chmod 600 "${secrets_dir}/${_secret_file}"
+      chmod 644 "${secrets_dir}/${_secret_file}"
       log_info "Created secret placeholder: ${_secret_file}"
     fi
   done
@@ -1976,13 +1976,13 @@ generate_secrets() {
   # --- Admin 1 (primary) ---
   GEN_ADMIN1_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin1_password"
-  chmod 600 "${secrets_dir}/admin1_password"
+  chmod 644 "${secrets_dir}/admin1_password"
   # Also write as admin_initial_password — the backoffice bootstrap checks this
   # file to decide whether to generate new credentials or use existing ones
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin_initial_password"
-  chmod 600 "${secrets_dir}/admin_initial_password"
+  chmod 644 "${secrets_dir}/admin_initial_password"
   printf "%s" "$GEN_ADMIN1_USERNAME" > "${secrets_dir}/admin1_username"
-  chmod 600 "${secrets_dir}/admin1_username"
+  chmod 644 "${secrets_dir}/admin1_username"
   # Update .env so backoffice creates the account with the generated username
   local env_file="${WORK_DIR}/docker/.env"
   if grep -q "^YASHIGANI_ADMIN_USERNAME=" "$env_file" 2>/dev/null; then
@@ -1995,25 +1995,25 @@ generate_secrets() {
 
   GEN_ADMIN1_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN1_TOTP_SECRET" > "${secrets_dir}/admin1_totp_secret"
-  chmod 600 "${secrets_dir}/admin1_totp_secret"
+  chmod 644 "${secrets_dir}/admin1_totp_secret"
   GEN_ADMIN1_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN1_USERNAME" "$GEN_ADMIN1_TOTP_SECRET")"
 
   # --- Admin 2 (backup — anti-lockout) ---
   GEN_ADMIN2_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN2_PASSWORD" > "${secrets_dir}/admin2_password"
-  chmod 600 "${secrets_dir}/admin2_password"
+  chmod 644 "${secrets_dir}/admin2_password"
   printf "%s" "$GEN_ADMIN2_USERNAME" > "${secrets_dir}/admin2_username"
-  chmod 600 "${secrets_dir}/admin2_username"
+  chmod 644 "${secrets_dir}/admin2_username"
 
   GEN_ADMIN2_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN2_TOTP_SECRET" > "${secrets_dir}/admin2_totp_secret"
-  chmod 600 "${secrets_dir}/admin2_totp_secret"
+  chmod 644 "${secrets_dir}/admin2_totp_secret"
   GEN_ADMIN2_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN2_USERNAME" "$GEN_ADMIN2_TOTP_SECRET")"
 
   # --- PostgreSQL ---
   GEN_POSTGRES_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_POSTGRES_PASSWORD" > "${secrets_dir}/postgres_password"
-  chmod 600 "${secrets_dir}/postgres_password"
+  chmod 644 "${secrets_dir}/postgres_password"
   # Also write to .env so Docker Compose can interpolate ${POSTGRES_PASSWORD}
   # in service DSN and PgBouncer DATABASE_URL
   local env_file="${WORK_DIR}/docker/.env"
@@ -2028,7 +2028,7 @@ generate_secrets() {
   # --- Redis ---
   GEN_REDIS_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_REDIS_PASSWORD" > "${secrets_dir}/redis_password"
-  chmod 600 "${secrets_dir}/redis_password"
+  chmod 644 "${secrets_dir}/redis_password"
   # Write to .env for Compose interpolation (LangGraph REDIS_URI needs it)
   if grep -q "^REDIS_PASSWORD=" "$env_file" 2>/dev/null; then
     local tmp_env; tmp_env="$(mktemp)"
@@ -2042,7 +2042,7 @@ generate_secrets() {
   local openclaw_token
   openclaw_token="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
   printf "%s" "$openclaw_token" > "${secrets_dir}/openclaw_gateway_token"
-  chmod 600 "${secrets_dir}/openclaw_gateway_token"
+  chmod 644 "${secrets_dir}/openclaw_gateway_token"
   if grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
     local tmp_env; tmp_env="$(mktemp)"
     sed "s|^OPENCLAW_GATEWAY_TOKEN=.*|OPENCLAW_GATEWAY_TOKEN=${openclaw_token}|" "$env_file" > "$tmp_env"
@@ -2054,7 +2054,7 @@ generate_secrets() {
   # --- Grafana ---
   GEN_GRAFANA_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_GRAFANA_PASSWORD" > "${secrets_dir}/grafana_admin_password"
-  chmod 600 "${secrets_dir}/grafana_admin_password"
+  chmod 644 "${secrets_dir}/grafana_admin_password"
 
   # --- HIBP breach check on generated passwords (defense-in-depth) ---
   _hibp_check_passwords
