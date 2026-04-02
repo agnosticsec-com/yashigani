@@ -1,7 +1,7 @@
 # Yashigani Security Gateway
 ## Product Features and Objectives
 
-**Current Version:** v0.9.5
+**Current Version:** v1.0
 **Document Date:** 2026-04-01
 **Classification:** Public — Product Overview
 
@@ -74,7 +74,7 @@ An agent that can make HTTP requests through an MCP tool can be manipulated into
 
 ## 3. Architecture Overview
 
-Yashigani is structured as a two-plane system: a **data plane** that handles the real-time request path, and a **control plane** (backoffice) that manages configuration, identity, policies, and audit storage.
+Yashigani is structured as a two-plane system: a **data plane** that handles the real-time request path, and a **control plane** (backoffice) that manages configuration, identity, policies, budgets, and audit storage. In v1.0, Open WebUI provides a chat interface at `/chat/*`, the Optimization Engine handles 4-signal routing with P1-P9 priority levels, and the Container Pool Manager provides per-identity isolation.
 
 ### 3.1 Request Flow
 
@@ -100,8 +100,14 @@ AI Agent / Client
 [ Rate Limiting ]           <-- Redis fixed-window, per-endpoint
         |
         v
-[ OPA Policy Decision ]     <-- Allow / Deny / Transform
+[ Budget Check ]            <-- Three-tier: org cap -> group -> individual
+        |                       (budget-redis, noeviction)
+        v
+[ Optimization Engine ]     <-- 4-signal routing, P1-P9 priority
         |
+        v
+[ OPA Policy Decision ]     <-- Allow / Deny / Transform
+        |                       (v1_routing.rego safety net + LLM review)
         v
 [ Upstream MCP Server ]     <-- Tool execution
         |
@@ -121,11 +127,18 @@ AI Agent / Client (response)
 |---|---|
 | **Gateway (data plane)** | Reverse proxy, TLS, auth, inspection, rate limiting, routing |
 | **Backoffice (control plane)** | Admin UI/API, user/agent management, policy editor, license validation |
-| **OPA Policy Engine** | Declarative, version-controlled authorization for every tool call |
+| **Open WebUI** | Chat interface at `/chat/*` with trusted header identity propagation (v1.0) |
+| **OPA Policy Engine** | Declarative, version-controlled authorization for every tool call; `v1_routing.rego` safety net (v1.0) |
+| **Optimization Engine** | 4-signal routing with P1-P9 priority levels (v1.0) |
+| **Sensitivity Pipeline** | Three-stage content analysis: regex + FastText + Ollama, all on by default (v1.0) |
 | **Inspection Pipeline** | FastText ML + multi-backend LLM inspection with fail-closed sentinel |
+| **Identity Broker** | Multi-IdP identity broker (OIDC + SAML v2), unified identity model with `kind` field (v1.0) |
+| **Container Pool Manager** | Per-identity container isolation, self-healing, postmortem (v1.0) |
+| **Budget System** | Three-tier budget enforcement: org cap, group, individual (v1.0) |
 | **Audit Pipeline** | Multi-sink writer: file, PostgreSQL, Splunk, Elasticsearch, Wazuh |
 | **PgBouncer** | PostgreSQL connection pooler, prevents connection exhaustion |
 | **Redis** | Rate limiting, response caching, anomaly detection sliding windows |
+| **Budget-Redis** | Dedicated Redis instance for budget state (noeviction policy) (v1.0) |
 | **HashiCorp Vault** | KMS: AppRole auth, KV v2 secrets, AES-256-GCM key management |
 | **Prometheus / Grafana** | Metrics collection and dashboards |
 | **Loki / Promtail** | Log aggregation and shipping |
@@ -160,6 +173,7 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.9.1 | Installer security hardening — credential bootstrap | Dual admin accounts (random themed usernames) with TOTP 2FA at install, HIBP k-Anonymity breach check on all generated passwords, credential summary at install completion, secrets written to docker/secrets/ chmod 600 |
 | v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
 | v0.9.5 | Agent bundles out of the box + Podman first-class | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with `--agent-bundles`; installer auto-registers agents via backoffice API with PSK tokens; first-class Podman support (runtime detection, `podman compose`, auto-apply override); DNS fix for Ollama external network; `POSTGRES_PASSWORD`/`REDIS_PASSWORD` in `.env` for Compose interpolation; PgBouncer `DATABASE_URL` auth; Alembic migrations in backoffice Docker image; `admin_initial_password` bootstrap detection; TOTP pre-provisioned from installer secrets; `openssl rand -base64 48` password generator; health check auto-detects compose command; Promtail `bash /dev/tcp` healthcheck; 18 services (15 core + 3 agent bundles); Compose profiles: `langgraph`, `goose`, `openclaw` |
+| v1.0 | Open WebUI + Optimization + Budget + Pool | Unified identity model (human + service, `kind` field); Optimization Engine (4-signal routing, P1-P9 priority levels); three-tier budget system (org cap -> group -> individual); Open WebUI at `/chat/*` with trusted headers; Container Pool Manager (per-identity isolation, self-healing, postmortem); multi-IdP identity broker (OIDC + SAML v2, tier-gated); sensitivity pipeline (regex + FastText + Ollama, all on by default); budget-redis (dedicated, noeviction); OPA routing safety net + LLM policy review; `policy/v1_routing.rego`; new modules: `identity/`, `billing/`, `optimization/`, `pool/`; 21 core services + dynamic containers; 363 tests |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -227,6 +241,8 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - **Dual admin accounts provisioned at install (v0.9.1)** — two accounts with random themed usernames created at install; TOTP 2FA configured for both immediately
 - Admin account lockout protection (brute-force resistance)
 - **HIBP k-Anonymity breach check on password change (v0.9.1)** — `PasswordBreachedError` raised on known-breached passwords; OWASP ASVS V2.1.7 compliant; fail-open if API unreachable
+- **Unified identity model (v1.0)** — human and service identities share a single model with a `kind` field (`human` or `service`); managed by the `identity/` module
+- **Multi-IdP identity broker (v1.0)** — multiple simultaneous OIDC and SAML v2 identity providers; domain-based IdP routing; tier-gated
 
 ### 5.2 Authorization and Policy
 
@@ -239,6 +255,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - Agent and organization limits enforced per license tier
 - **OPA Policy Assistant** — natural language → RBAC JSON suggestion with admin approve/reject flow and full audit trail (v0.7.0)
 - **CIDR-based IP allowlisting per agent** — requests from authenticated agents outside their IP allowlist are blocked 403 and audited (v0.7.0)
+- **OPA routing safety net (v1.0)** — `policy/v1_routing.rego` validates Optimization Engine routing decisions; LLM policy review for P1-P3 decisions
 
 ### 5.3 Content Inspection and AI Safety
 
@@ -257,6 +274,7 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - Response masking and sanitization
 - Anomaly detection: repeated-small-call pattern detection (Redis ZSET sliding window)
 - Inference payload logging (AES-256-GCM encrypted, stored in Postgres)
+- **Sensitivity pipeline (v1.0)** — three-stage content analysis: regex pattern matching + FastText ML classifier + Ollama LLM deep analysis; all three stages enabled by default
 
 ### 5.4 Audit and Compliance
 
@@ -290,6 +308,8 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 - Anomaly detection for enumeration and bulk extraction patterns
 - Admin account lockout on repeated failed authentication
 - **Runtime-configurable RPI scale thresholds** — tune medium/high/critical throttle multipliers from the backoffice without a gateway restart; changes audited (v0.7.0)
+- **Three-tier budget system (v1.0)** — organization cap, group budget, and individual budget; enforced before routing; budget state in dedicated budget-redis (noeviction); managed by the `billing/` module
+- **Optimization Engine (v1.0)** — 4-signal routing (identity priority, budget remaining, latency target, model capability match) with P1-P9 priority levels; managed by the `optimization/` module
 
 ### 5.6 Cryptography and Secrets
 
@@ -339,6 +359,9 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
   - tmpfs mounts for `/tmp` and audit buffer
   - Read-only root filesystem
 - PgBouncer PostgreSQL connection pooling
+- **Open WebUI (v1.0)** — chat interface at `/chat/*` with trusted header identity propagation
+- **Container Pool Manager (v1.0)** — per-identity container isolation, self-healing, postmortem generation; managed by the `pool/` module
+- **Budget-redis (v1.0)** — dedicated Redis instance for budget state with `maxmemory-policy noeviction`
 
 ### 5.9 Licensing and Tiers
 
@@ -442,19 +465,25 @@ v0.7.1 completed the three remaining code gaps from v0.7.0. The direct webhook a
 
 ### 7.1 Docker Compose — Single Node
 
-The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with 15 core services pre-configured and 3 optional agent bundles (18 total). Core services: gateway, backoffice, Caddy, Postgres with PgBouncer, Redis, Vault, OPA, Ollama, Prometheus, Grafana, Loki, Promtail, Alertmanager, OTEL Collector, and Jaeger.
+The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with 21 core services pre-configured and 3 optional agent bundles, plus dynamic containers managed by the Container Pool Manager. Core services: gateway, backoffice, Open WebUI, Caddy, Postgres with PgBouncer, Redis, budget-redis, Vault, OPA, Ollama, optimization-engine, container-pool-manager, identity-broker, Prometheus, Grafana, Loki, Promtail, Alertmanager, OTEL Collector, Jaeger, and the sensitivity pipeline.
 
 ```
-docker-compose.yml (15 core services)
+docker-compose.yml (21 core services)
 ├── yashigani-gateway       # Core proxy, port 8443 (TLS)
 ├── yashigani-backoffice    # Admin API/UI, port 8080
+├── open-webui              # Chat interface at /chat/*
 ├── caddy                   # TLS termination, reverse proxy
-├── postgres:16             # Audit + config store
+├── postgres:16             # Audit + config + identity + billing store
 ├── pgbouncer               # Connection pooler
 ├── redis                   # Rate limiting + caching
+├── budget-redis            # Dedicated budget state (noeviction)
 ├── vault                   # KMS + secrets
-├── policy (OPA)            # Authorization engine
+├── policy (OPA)            # Authorization engine + v1_routing.rego
 ├── ollama                  # Local LLM inference
+├── optimization-engine     # 4-signal routing, P1-P9
+├── container-pool-manager  # Per-identity isolation, self-healing
+├── identity-broker         # Multi-IdP (OIDC + SAML v2)
+├── sensitivity-pipeline    # Regex + FastText + Ollama
 ├── prometheus              # Metrics scrape
 ├── grafana                 # Dashboards
 ├── loki                    # Log aggregation
@@ -462,6 +491,9 @@ docker-compose.yml (15 core services)
 ├── alertmanager            # Alert routing
 ├── otel-collector          # OpenTelemetry collector
 └── jaeger                  # Distributed tracing
+
+Dynamic containers (managed by Container Pool Manager):
+└── per-identity isolated containers (pre-warmed pool)
 
 Optional agent bundles (3, via Compose profiles):
 ├── langgraph               # Profile: langgraph
@@ -537,9 +569,9 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v0.9.5 is the current production release. v0.9.5 makes agent bundles (LangGraph, Goose, OpenClaw) work out of the box with the `--agent-bundles` flag, introduces first-class Podman support with runtime auto-detection and automatic override application, fixes DNS resolution for Ollama model pulls, moves `POSTGRES_PASSWORD` and `REDIS_PASSWORD` into `.env` for Compose interpolation with proper PgBouncer auth, bundles Alembic migrations in the backoffice Docker image, pre-provisions TOTP at bootstrap, and upgrades the password generator to `openssl rand -base64 48`. v0.9.1 was the installer security hardening release: dual admin accounts with TOTP 2FA at install, HIBP k-Anonymity breach checks, and one-time credential summary. v0.9.0 migrated licence signing to ML-DSA-65 (FIPS 204), closed the response-path injection vector, added WebAuthn/Passkey MFA, hardened operations with break-glass dual-control and SHA-384 Merkle audit chain, and delivered real-time operator visibility.
+Yashigani v1.0 is the current production release. v1.0 introduces the unified identity model (human + service identities with a `kind` field), the Optimization Engine for 4-signal routing with P1-P9 priority levels, a three-tier budget system (org cap, group, individual) backed by a dedicated budget-redis instance, Open WebUI integration at `/chat/*` with trusted header authentication, the Container Pool Manager for per-identity isolation with self-healing and postmortem, the multi-IdP identity broker supporting simultaneous OIDC and SAML v2 providers, and the sensitivity pipeline (regex + FastText + Ollama, all on by default). OPA gains `policy/v1_routing.rego` as a routing safety net with optional LLM policy review. The system now runs 21 core services plus dynamic containers, with 363 tests covering all modules.
 
-The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
+The progression from v0.1.0 through v1.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents, budget controls, and intelligent routing. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget-redis downtime — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
@@ -636,6 +668,21 @@ The progression from v0.1.0 through v0.9.0 reflects a deliberate security maturi
 - **Health check auto-detects compose command** — the health check script detects whether Docker or Podman is the active compose command
 - **Promtail healthcheck** — uses `bash /dev/tcp` instead of `wget` for the Promtail container healthcheck
 - **18 total services** — 15 core services + 3 agent bundles (LangGraph, Goose, OpenClaw); Compose profiles: `langgraph`, `goose`, `openclaw`
+
+### v1.0 Delivered
+
+- **Unified identity model** — human and service identities share a single model with a `kind` field (`human` or `service`); all identity lifecycle managed by the `identity/` module
+- **Optimization Engine** — 4-signal routing (identity priority, budget remaining, latency target, model capability match) with P1-P9 priority levels; managed by the `optimization/` module
+- **Three-tier budget system** — organization cap, group budget, and individual budget; budget state stored in dedicated budget-redis instance with `noeviction` policy; managed by the `billing/` module
+- **Open WebUI integration** — chat interface served at `/chat/*` behind Caddy; authentication via trusted headers (`X-Yashigani-User-Id`, `X-Yashigani-User-Kind`, `X-Yashigani-Groups`) injected by the gateway
+- **Container Pool Manager** — per-identity container isolation from a pre-warmed pool; self-healing with automatic replacement of failed containers; postmortem generation for container failures; managed by the `pool/` module
+- **Multi-IdP identity broker** — supports multiple simultaneous OIDC and SAML v2 identity providers; domain-based IdP routing; tier-gated (Enterprise for multi-IdP)
+- **Sensitivity pipeline** — three-stage content analysis (regex + FastText + Ollama), all stages enabled by default; replaces the previous two-stage inspection as the default pipeline
+- **Budget-redis** — dedicated Redis instance for budget state with `maxmemory-policy noeviction` to prevent budget data loss under memory pressure
+- **OPA routing safety net** — `policy/v1_routing.rego` validates Optimization Engine routing decisions; LLM policy review available for high-priority (P1-P3) decisions
+- **21 core services + dynamic containers** — 21 core services (up from 15) plus dynamically managed per-identity containers via the Container Pool Manager; 3 optional agent bundles remain available via Compose profiles
+- **New modules** — `identity/` (unified identity lifecycle), `billing/` (budget enforcement), `optimization/` (routing engine), `pool/` (container pool management)
+- **363 tests** — comprehensive test suite covering all new and existing modules
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (Apache 2.0). Non-profit and educational institutions qualify for the Academic / Non-Profit tier (verified, free — see agnosticsec.com/academic). Teams with an SSO mandate but limited scale should consider the Starter tier. Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments. Enterprise provides unlimited scale with a dedicated Technical Account Manager. See agnosticsec.com/pricing for current tier details. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 
