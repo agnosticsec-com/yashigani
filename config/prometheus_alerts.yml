@@ -281,3 +281,119 @@ groups:
             Immediate action required: run scripts/partition_maintenance.py.
             See IC-10 / O-05 in QA_REPORT.md and PLAN_v0.7.0.md for context.
           runbook_url: "https://wiki.internal/yashigani/runbooks/partition-maintenance"
+
+  # ---------------------------------------------------------------------------
+  # v2.0 — Routing and Budget alerts (P1-P5 severity scale)
+  # ---------------------------------------------------------------------------
+  - name: yashigani.routing
+    rules:
+
+      # P1: OPA routing safety net override — sensitive data heading to cloud
+      - alert: OPARoutingOverride
+        expr: increase(yashigani_opa_safety_blocks_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: P1
+        annotations:
+          summary: "P1: OPA routing safety net triggered"
+          description: "The OPA second-pass blocked a routing decision. Possible OE bug or policy conflict. {{ $value }} block(s) in 5 minutes."
+
+      # P1: Sensitivity ceiling breach — identity accessed data above clearance
+      - alert: SensitivityCeilingBreach
+        expr: increase(yashigani_sensitivity_ceiling_breaches_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: P1
+        annotations:
+          summary: "P1: Identity exceeded sensitivity ceiling"
+          description: "An identity attempted to process data above their clearance level."
+
+      # P1: Cannot scale — resources exhausted
+      - alert: ScalingResourcesExhausted
+        expr: increase(yashigani_pool_scale_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: P1
+        annotations:
+          summary: "P1: Cannot scale — system resources exhausted"
+          description: "Pool Manager failed to scale. CPU/memory/disk at capacity."
+
+      # P2: Classification conflict between scanner layers
+      - alert: ClassificationConflict
+        expr: increase(yashigani_sensitivity_conflicts_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: P2
+        annotations:
+          summary: "P2: Sensitivity classification conflict"
+          description: "Scanner layers disagree on sensitivity level. Conservative route applied. {{ $value }} conflict(s) in 15 minutes."
+
+      # P2: Excessive container replacements
+      - alert: ExcessiveContainerReplacements
+        expr: increase(yashigani_pool_containers_replaced_total[1h]) > 3
+        for: 0m
+        labels:
+          severity: P2
+        annotations:
+          summary: "P2: 3+ container replacements in 1 hour"
+          description: "{{ $value }} containers replaced in the last hour. Possible systemic issue."
+
+      # P2: Agent spending anomaly
+      - alert: AgentSpendingAnomaly
+        expr: rate(yashigani_budget_tokens_total{kind="service"}[1h]) > 2 * avg_over_time(rate(yashigani_budget_tokens_total{kind="service"}[1h])[24h:1h])
+        for: 15m
+        labels:
+          severity: P2
+        annotations:
+          summary: "P2: Agent token burn rate anomaly"
+          description: "An autonomous agent is consuming tokens at >2x its 24-hour baseline."
+
+      # P3: Budget exhausted — auto-switch to local
+      - alert: BudgetExhausted
+        expr: yashigani_budget_utilisation_pct >= 100
+        for: 0m
+        labels:
+          severity: P3
+        annotations:
+          summary: "P3: Cloud budget exhausted — routed to local"
+          description: "Identity {{ $labels.identity_id }} cloud budget at {{ $value }}%. All requests routed to local model."
+
+      # P4: Routing pattern drift
+      - alert: RoutingPatternDrift
+        expr: abs(rate(yashigani_routing_decisions_total{route="cloud"}[1h]) - rate(yashigani_routing_decisions_total{route="cloud"}[24h])) > 0.5
+        for: 30m
+        labels:
+          severity: P4
+        annotations:
+          summary: "P4: Routing pattern drift detected"
+          description: "Cloud routing rate changed significantly in the last hour vs 24-hour baseline."
+
+      # P5: Container self-healed
+      - alert: ContainerSelfHealed
+        expr: increase(yashigani_pool_containers_replaced_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: P5
+        annotations:
+          summary: "P5: Container replaced (self-healed)"
+          description: "Pool Manager replaced an unhealthy container. Service restored automatically."
+
+      # P5: Budget threshold crossed
+      - alert: BudgetWarningThreshold
+        expr: yashigani_budget_utilisation_pct >= 80 and yashigani_budget_utilisation_pct < 100
+        for: 0m
+        labels:
+          severity: P5
+        annotations:
+          summary: "P5: Cloud budget at {{ $value }}%"
+          description: "Identity {{ $labels.identity_id }} budget at {{ $value }}%. Preferring local routes."
+
+      # P5: Sensitive data correctly routed local
+      - alert: SensitiveDataRoutedLocal
+        expr: increase(yashigani_routing_decisions_total{rule="P1",route="local"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: P5
+        annotations:
+          summary: "P5: CONFIDENTIAL/RESTRICTED data correctly routed to local model"
+          description: "{{ $value }} sensitive request(s) routed locally in the last hour. System working as designed."
