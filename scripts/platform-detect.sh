@@ -231,20 +231,20 @@ _detect_runtime() {
     podman info >/dev/null 2>&1 && podman_running=true
   fi
 
-  # --- Decision: prefer whichever is running ---
-  if $docker_running; then
-    echo "docker" && return
-  fi
+  # --- Decision: prefer Podman (rootless, daemonless, more secure) ---
   if $podman_running; then
     echo "podman" && return
   fi
-
-  # Neither is running — prefer whichever is installed
-  if $docker_available; then
+  if $docker_running; then
     echo "docker" && return
   fi
+
+  # Neither is running — prefer Podman if installed
   if $podman_available; then
     echo "podman" && return
+  fi
+  if $docker_available; then
+    echo "docker" && return
   fi
 
   # Docker Desktop installed but no CLI in PATH
