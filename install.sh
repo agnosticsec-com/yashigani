@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Yashigani v2.0.0 Installer
+# Yashigani v2.1.0 Installer
 # https://yashigani.io
 #
 # Usage:
@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="2.0.0"
+YASHIGANI_VERSION="2.1.0"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
