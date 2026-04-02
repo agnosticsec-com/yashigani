@@ -71,6 +71,10 @@ services:
     security_opt:
       - label=disable
     userns_mode: keep-id
+    volumes:
+      - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      # Podman: skip /var/lib/docker/containers (doesn't exist)
+      # and /var/run/docker.sock (use Podman socket instead)
 
   otel-collector:
     security_opt:
