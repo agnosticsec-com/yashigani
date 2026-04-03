@@ -57,3 +57,7 @@ Thumbs.db
 # Internal / agent memory — never publish
 .claude/
 prompt_logs/
+
+# Internal testing — never commit
+scripts/deploy-vm.sh
+scripts/test-ui.py
