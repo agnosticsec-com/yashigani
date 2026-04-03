@@ -106,8 +106,12 @@ def create_backoffice_app() -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # CSP: relaxed for admin UI pages (inline scripts/styles), strict for API
+        if request.url.path.startswith("/admin/login") or request.url.path == "/admin/":
+            response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline'"
+        else:
+            response.headers["Content-Security-Policy"] = "default-src 'self'"
         return response
 
     # Generic error handlers — never leak internal state
