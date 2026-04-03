@@ -20,7 +20,6 @@ class CreateAdminRequest(BaseModel):
         max_length=254,
         pattern=r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$",
     )
-    password: str = Field(min_length=36)
 
 
 class ForceResetRequest(BaseModel):
@@ -57,21 +56,39 @@ async def list_admins(session: AdminSession):
 
 @router.post("")
 async def create_admin(body: CreateAdminRequest, session: AdminSession):
+    """
+    Create an admin account. Server generates a 36-char temporary password
+    and a TOTP secret. Both are returned once — caller shares them
+    out-of-band. Admin must change password and provision TOTP at first login.
+    """
     state = backoffice_state
     if body.username in state.auth_service._accounts:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": "username_taken"},
         )
-    record, _ = state.auth_service.create_admin(
+    record, temp_password = state.auth_service.create_admin(
         username=body.username,
-        auto_generate=False,
-        plaintext_password=body.password,
+        auto_generate=True,
     )
+
+    # Generate TOTP secret for provisioning
+    from yashigani.auth.totp import generate_provisioning
+    totp = generate_provisioning(account_name=body.username, issuer="Yashigani")
+    record.totp_secret = totp.secret_b32
+    record.force_totp_provision = False  # pre-provisioned
+
     state.audit_writer.write(_config_event(
         session.account_id, "admin_account_created", "", body.username
     ))
-    return {"status": "ok", "account_id": record.account_id, "username": record.username}
+    return {
+        "status": "ok",
+        "account_id": record.account_id,
+        "username": record.username,
+        "temporary_password": temp_password,
+        "totp_secret": totp.secret_b32,
+        "totp_uri": totp.provisioning_uri,
+    }
 
 
 @router.delete("/{username}")

@@ -81,10 +81,33 @@
         <div class="page" id="page-agents">
             <h2>Registered Agents</h2>
             <div class="panel">
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Agents</span>
+                    <button onclick="toggleForm('register-agent-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Register Agent</button>
+                </div>
+                <div id="register-agent-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Name</label><br><input id="agent-name" type="text" placeholder="my-agent" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:150px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Upstream URL</label><br><input id="agent-url" type="text" placeholder="http://agent:8000" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:250px"></div>
+                        <button onclick="registerAgent()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Register</button>
+                    </div>
+                    <div id="register-agent-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
-                    <thead><tr><th>Name</th><th>Agent ID</th><th>Upstream URL</th><th>Status</th><th>Last Seen</th></tr></thead>
-                    <tbody id="agents-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+                    <thead><tr><th>Name</th><th>Agent ID</th><th>Upstream URL</th><th>Status</th><th>Last Seen</th><th>Actions</th></tr></thead>
+                    <tbody id="agents-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
                 </table>
+            </div>
+
+            <!-- Agent token display (shown once after registration/rotation) -->
+            <div id="agent-token-panel" style="display:none;margin-top:16px;" class="panel">
+                <div class="panel-header" style="background:#fefce8;color:#a16207;">Agent Token (shown once — copy now)</div>
+                <div class="panel-body">
+                    <p style="font-size:0.85rem;margin-bottom:8px;"><strong>Agent:</strong> <code id="agent-token-name"></code></p>
+                    <p style="font-size:0.85rem;margin-bottom:8px;"><strong>Token:</strong> <code id="agent-token-value" style="user-select:all;background:#f1f5f9;padding:2px 6px;border-radius:3px;word-break:break-all"></code></p>
+                    <p style="font-size:0.75rem;color:#64748b;margin-top:8px;">This token is never stored and cannot be retrieved. If lost, rotate to generate a new one.</p>
+                    <button onclick="document.getElementById('agent-token-panel').style.display='none'" style="margin-top:8px;padding:6px 16px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Dismiss</button>
+                </div>
             </div>
         </div>
 
@@ -98,15 +121,14 @@
                 </div>
                 <div id="create-admin-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
                     <div style="display:flex;gap:8px;align-items:end;">
-                        <div><label style="font-size:0.75rem;color:#64748b">Email</label><br><input id="new-admin-email" type="email" placeholder="admin@example.com" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:220px"></div>
-                        <div><label style="font-size:0.75rem;color:#64748b">Password (36+ chars)</label><br><input id="new-admin-password" type="text" placeholder="Auto-generated" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:320px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Email</label><br><input id="new-admin-email" type="email" placeholder="admin@example.com" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:280px"></div>
                         <button onclick="createAdmin()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Create</button>
                     </div>
                     <div id="create-admin-result" style="margin-top:6px;font-size:0.8rem"></div>
                 </div>
                 <table>
-                    <thead><tr><th>Username</th><th>Status</th><th>Password Change</th><th>TOTP</th></tr></thead>
-                    <tbody id="accounts-tbody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+                    <thead><tr><th>Username</th><th>Status</th><th>Password</th><th>TOTP</th><th>Actions</th></tr></thead>
+                    <tbody id="accounts-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
                 </table>
             </div>
 
@@ -118,16 +140,28 @@
                 </div>
                 <div id="create-user-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
                     <div style="display:flex;gap:8px;align-items:end;">
-                        <div><label style="font-size:0.75rem;color:#64748b">Username</label><br><input id="new-user-name" type="text" placeholder="username" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:220px"></div>
-                        <div><label style="font-size:0.75rem;color:#64748b">Password (36+ chars)</label><br><input id="new-user-password" type="text" placeholder="Auto-generated" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:320px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Username</label><br><input id="new-user-name" type="text" placeholder="username" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:280px"></div>
                         <button onclick="createUser()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Create</button>
                     </div>
                     <div id="create-user-result" style="margin-top:6px;font-size:0.8rem"></div>
                 </div>
                 <table>
-                    <thead><tr><th>Username</th><th>Status</th><th>Password Change</th><th>Created</th></tr></thead>
-                    <tbody id="users-tbody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+                    <thead><tr><th>Username</th><th>Status</th><th>Password</th><th>TOTP</th><th>Actions</th></tr></thead>
+                    <tbody id="users-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
                 </table>
+            </div>
+
+            <!-- Credentials display (shown once after creation) -->
+            <div id="credentials-panel" style="display:none;margin-top:16px;" class="panel">
+                <div class="panel-header" style="background:#f0fdf4;color:#166534;">New Account Credentials (shown once — copy now)</div>
+                <div class="panel-body">
+                    <p style="font-size:0.85rem;margin-bottom:8px;"><strong>Username:</strong> <code id="cred-username"></code></p>
+                    <p style="font-size:0.85rem;margin-bottom:8px;"><strong>Temporary Password:</strong> <code id="cred-password" style="user-select:all;background:#f1f5f9;padding:2px 6px;border-radius:3px"></code></p>
+                    <p style="font-size:0.85rem;margin-bottom:8px;"><strong>TOTP Secret:</strong> <code id="cred-totp" style="user-select:all;background:#f1f5f9;padding:2px 6px;border-radius:3px"></code></p>
+                    <p style="font-size:0.85rem;margin-bottom:8px;"><strong>TOTP URI:</strong> <code id="cred-totp-uri" style="user-select:all;background:#f1f5f9;padding:2px 6px;border-radius:3px;font-size:0.7rem;word-break:break-all"></code></p>
+                    <p style="font-size:0.75rem;color:#64748b;margin-top:12px;">Share these credentials securely with the user. They must change their password at first login.</p>
+                    <button onclick="document.getElementById('credentials-panel').style.display='none'" style="margin-top:8px;padding:6px 16px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Dismiss</button>
+                </div>
             </div>
         </div>
 
@@ -166,21 +200,60 @@
                 </div>
             </div>
             <div class="panel">
-                <div class="panel-header">Organisation Cloud Caps</div>
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Organisation Cloud Caps</span>
+                    <button onclick="toggleForm('add-orgcap-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add Cap</button>
+                </div>
+                <div id="add-orgcap-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Org ID</label><br><input id="orgcap-org" type="text" value="default" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:120px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Provider</label><br><select id="orgcap-provider" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="anthropic">anthropic</option><option value="openai">openai</option><option value="ollama">ollama</option><option value="*">* (all)</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Token Cap</label><br><input id="orgcap-tokens" type="number" min="1" value="1000000" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:140px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Period</label><br><select id="orgcap-period" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="monthly">monthly</option><option value="weekly">weekly</option><option value="daily">daily</option></select></div>
+                        <button onclick="addOrgCap()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Save</button>
+                    </div>
+                    <div id="orgcap-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
                     <thead><tr><th>Provider</th><th>Token Cap</th><th>Period</th></tr></thead>
-                    <tbody id="orgcaps-tbody"><tr><td colspan="3" class="empty">No caps configured — POST /admin/budget/org-caps to add</td></tr></tbody>
+                    <tbody id="orgcaps-tbody"><tr><td colspan="3" class="empty">No caps configured</td></tr></tbody>
                 </table>
             </div>
             <div class="panel">
-                <div class="panel-header">Group Budgets</div>
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Group Budgets</span>
+                    <button onclick="toggleForm('add-group-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add Group</button>
+                </div>
+                <div id="add-group-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Group ID</label><br><input id="group-id" type="text" placeholder="engineering" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:150px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Provider</label><br><select id="group-provider" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="*">* (all)</option><option value="anthropic">anthropic</option><option value="openai">openai</option><option value="ollama">ollama</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Token Budget</label><br><input id="group-tokens" type="number" min="1" value="500000" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:140px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Period</label><br><select id="group-period" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="monthly">monthly</option><option value="weekly">weekly</option><option value="daily">daily</option></select></div>
+                        <button onclick="addGroupBudget()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Save</button>
+                    </div>
+                    <div id="group-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
                     <thead><tr><th>Group</th><th>Provider</th><th>Budget</th><th>Period</th></tr></thead>
                     <tbody id="groupbudgets-tbody"><tr><td colspan="4" class="empty">No group budgets configured</td></tr></tbody>
                 </table>
             </div>
             <div class="panel">
-                <div class="panel-header">Individual Budgets</div>
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Individual Budgets</span>
+                    <button onclick="toggleForm('add-ind-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add Individual</button>
+                </div>
+                <div id="add-ind-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Identity ID</label><br><input id="ind-id" type="text" placeholder="user@example.com" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:200px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Provider</label><br><select id="ind-provider" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="*">* (all)</option><option value="anthropic">anthropic</option><option value="openai">openai</option><option value="ollama">ollama</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Token Budget</label><br><input id="ind-tokens" type="number" min="1" value="100000" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:140px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Period</label><br><select id="ind-period" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="monthly">monthly</option><option value="weekly">weekly</option><option value="daily">daily</option></select></div>
+                        <button onclick="addIndBudget()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Save</button>
+                    </div>
+                    <div id="ind-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
                     <thead><tr><th>Identity</th><th>Provider</th><th>Budget</th><th>Period</th></tr></thead>
                     <tbody id="indbudgets-tbody"><tr><td colspan="4" class="empty">No individual budgets configured</td></tr></tbody>
@@ -285,10 +358,19 @@
     }
 
     async function api(path) {
-        var resp = await fetch(path, { credentials: 'same-origin' });
-        if (resp.status === 401) { window.location.href = '/admin/login'; return null; }
-        if (!resp.ok) return null;
-        return await resp.json();
+        try {
+            var controller = new AbortController();
+            var timeout = setTimeout(function() { controller.abort(); }, 10000);
+            var resp = await fetch(path, { credentials: 'same-origin', signal: controller.signal });
+            clearTimeout(timeout);
+            if (resp.status === 401) { window.location.href = '/admin/login'; return null; }
+            if (!resp.ok) { console.error('API error: ' + path + ' → ' + resp.status); return null; }
+            return await resp.json();
+        } catch (err) {
+            if (err.name === 'AbortError') { console.error('API timeout: ' + path); }
+            else { console.error('API fetch failed: ' + path + ' — ' + err.message); }
+            return null;
+        }
     }
 
     // Dashboard
@@ -305,7 +387,7 @@
             }
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<div class="card"><span class="badge badge-yellow">Could not load health data</span></div>';
+            container.innerHTML = '<div class="card"><span class="badge badge-red">Error loading health data</span></div>';
         }
 
         // Accounts count
@@ -333,12 +415,66 @@
             for (var i = 0; i < agents.length; i++) {
                 var a = agents[i];
                 var statusBadge = a.status === 'active' ? 'badge-green' : 'badge-red';
-                html += '<tr><td>' + a.name + '</td><td style="font-family:monospace;font-size:0.8rem;">' + a.agent_id + '</td><td style="font-size:0.8rem;">' + a.upstream_url + '</td><td><span class="badge ' + statusBadge + '">' + a.status + '</span></td><td style="font-size:0.8rem;">' + (a.last_seen_at || 'Never') + '</td></tr>';
+                var actions = '<button onclick="rotateAgentToken(\'' + a.agent_id + '\',\'' + a.name + '\')" style="padding:2px 8px;background:#2563eb;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Rotate Token</button>';
+                if (a.status === 'active') {
+                    actions += ' <button onclick="deactivateAgent(\'' + a.agent_id + '\')" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Deactivate</button>';
+                }
+                html += '<tr><td>' + a.name + '</td><td style="font-family:monospace;font-size:0.8rem;">' + a.agent_id + '</td><td style="font-size:0.8rem;">' + a.upstream_url + '</td><td><span class="badge ' + statusBadge + '">' + a.status + '</span></td><td style="font-size:0.8rem;">' + (a.last_seen_at || 'Never') + '</td><td>' + actions + '</td></tr>';
             }
             tbody.innerHTML = html;
         } else {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty">No agents registered</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="empty">No agents registered</td></tr>';
         }
+    }
+
+    async function registerAgent() {
+        var name = document.getElementById('agent-name').value.trim();
+        var url = document.getElementById('agent-url').value.trim();
+        var result = document.getElementById('register-agent-result');
+        if (!name || !url) { result.textContent = 'Name and URL are required.'; return; }
+        result.innerHTML = '<span class="loading">Registering...</span>';
+        var resp = await fetch('/admin/agents', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, upstream_url: url })
+        });
+        if (resp.ok) {
+            var data = await resp.json();
+            result.innerHTML = '<span class="badge badge-green">Registered</span>';
+            document.getElementById('agent-name').value = '';
+            document.getElementById('agent-url').value = '';
+            document.getElementById('agent-token-name').textContent = name;
+            document.getElementById('agent-token-value').textContent = data.token;
+            document.getElementById('agent-token-panel').style.display = 'block';
+            loadAgents();
+        } else {
+            var err = await resp.json().catch(function() { return {}; });
+            result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status);
+        }
+    }
+
+    async function rotateAgentToken(agentId, name) {
+        if (!confirm('Rotate token for "' + name + '"? The old token will stop working immediately.')) return;
+        var resp = await fetch('/admin/agents/' + agentId + '/token/rotate', {
+            method: 'POST', credentials: 'same-origin'
+        });
+        if (resp.ok) {
+            var data = await resp.json();
+            document.getElementById('agent-token-name').textContent = name;
+            document.getElementById('agent-token-value').textContent = data.token;
+            document.getElementById('agent-token-panel').style.display = 'block';
+        } else {
+            alert('Token rotation failed: ' + resp.status);
+        }
+    }
+
+    async function deactivateAgent(agentId) {
+        if (!confirm('Deactivate this agent? It will no longer accept requests.')) return;
+        var resp = await fetch('/admin/agents/' + agentId, {
+            method: 'DELETE', credentials: 'same-origin'
+        });
+        if (resp.ok) { loadAgents(); }
+        else { alert('Deactivation failed: ' + resp.status); }
     }
 
     // Accounts
@@ -353,14 +489,18 @@
                 var statusBadge = acc.disabled ? 'badge-red' : 'badge-green';
                 var statusText = acc.disabled ? 'Disabled' : 'Active';
                 var pwBadge = acc.force_password_change ? 'badge-yellow' : 'badge-green';
-                var pwText = acc.force_password_change ? 'Required' : 'OK';
+                var pwText = acc.force_password_change ? 'Change required' : 'OK';
                 var totpBadge = acc.force_totp_provision ? 'badge-yellow' : 'badge-green';
-                var totpText = acc.force_totp_provision ? 'Not set' : 'Configured';
-                html += '<tr><td><strong>' + acc.username + '</strong></td><td><span class="badge ' + statusBadge + '">' + statusText + '</span></td><td><span class="badge ' + pwBadge + '">' + pwText + '</span></td><td><span class="badge ' + totpBadge + '">' + totpText + '</span></td></tr>';
+                var totpText = acc.force_totp_provision ? 'Not provisioned' : 'Active';
+                var toggleBtn = acc.disabled
+                    ? '<button onclick="toggleAccount(\'admin\',\'' + acc.username + '\',\'enable\')" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Enable</button>'
+                    : '<button onclick="toggleAccount(\'admin\',\'' + acc.username + '\',\'disable\')" style="padding:2px 8px;background:#f59e0b;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Disable</button>';
+                var deleteBtn = '<button onclick="deleteAccount(\'admin\',\'' + acc.username + '\')" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Delete</button>';
+                html += '<tr><td><strong>' + acc.username + '</strong></td><td><span class="badge ' + statusBadge + '">' + statusText + '</span></td><td><span class="badge ' + pwBadge + '">' + pwText + '</span></td><td><span class="badge ' + totpBadge + '">' + totpText + '</span></td><td>' + toggleBtn + deleteBtn + '</td></tr>';
             }
             tbody.innerHTML = html;
         } else {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty">No admin accounts found</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">No admin accounts found</td></tr>';
         }
 
         // User accounts
@@ -373,13 +513,18 @@
                 var sb = u.disabled ? 'badge-red' : 'badge-green';
                 var st = u.disabled ? 'Disabled' : 'Active';
                 var pb = u.force_password_change ? 'badge-yellow' : 'badge-green';
-                var pt = u.force_password_change ? 'Required' : 'OK';
-                var created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '-';
-                html += '<tr><td><strong>' + u.username + '</strong></td><td><span class="badge ' + sb + '">' + st + '</span></td><td><span class="badge ' + pb + '">' + pt + '</span></td><td style="font-size:0.8rem">' + created + '</td></tr>';
+                var pt = u.force_password_change ? 'Change required' : 'OK';
+                var tb = u.force_totp_provision ? 'badge-yellow' : 'badge-green';
+                var tt = u.force_totp_provision ? 'Not provisioned' : 'Active';
+                var toggleBtn = u.disabled
+                    ? '<button onclick="toggleAccount(\'user\',\'' + u.username + '\',\'enable\')" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Enable</button>'
+                    : '<button onclick="toggleAccount(\'user\',\'' + u.username + '\',\'disable\')" style="padding:2px 8px;background:#f59e0b;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Disable</button>';
+                var deleteBtn = '<button onclick="deleteAccount(\'user\',\'' + u.username + '\')" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Delete</button>';
+                html += '<tr><td><strong>' + u.username + '</strong></td><td><span class="badge ' + sb + '">' + st + '</span></td><td><span class="badge ' + pb + '">' + pt + '</span></td><td><span class="badge ' + tb + '">' + tt + '</span></td><td>' + toggleBtn + deleteBtn + '</td></tr>';
             }
             utbody.innerHTML = html;
         } else {
-            utbody.innerHTML = '<tr><td colspan="4" class="empty">No user accounts — click + Add User to create one</td></tr>';
+            utbody.innerHTML = '<tr><td colspan="5" class="empty">No user accounts — click + Add User to create one</td></tr>';
         }
     }
 
@@ -388,29 +533,36 @@
         el.style.display = el.style.display === 'none' ? 'block' : 'none';
     }
 
+    function showCredentials(username, password, totpSecret, totpUri) {
+        document.getElementById('cred-username').textContent = username;
+        document.getElementById('cred-password').textContent = password;
+        document.getElementById('cred-totp').textContent = totpSecret || 'Provisioned at first login';
+        document.getElementById('cred-totp-uri').textContent = totpUri || 'Generated at first login';
+        document.getElementById('credentials-panel').style.display = 'block';
+    }
+
     function generatePassword() {
-        var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+';
         var pwd = '';
-        for (var i = 0; i < 40; i++) pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+        for (var i = 0; i < 36; i++) pwd += chars.charAt(Math.floor(Math.random() * chars.length));
         return pwd;
     }
 
     async function createAdmin() {
         var email = document.getElementById('new-admin-email').value.trim();
-        var password = document.getElementById('new-admin-password').value.trim();
         var result = document.getElementById('create-admin-result');
         if (!email) { result.textContent = 'Email is required.'; return; }
-        if (!password) password = generatePassword();
-        if (password.length < 36) { result.textContent = 'Password must be at least 36 characters.'; return; }
+        result.innerHTML = '<span class="loading">Creating...</span>';
         var resp = await fetch('/admin/accounts', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: email, password: password })
+            body: JSON.stringify({ username: email })
         });
         if (resp.ok) {
-            result.innerHTML = '<span class="badge badge-green">Created</span> Password: <code>' + password + '</code>';
+            var data = await resp.json();
+            result.innerHTML = '<span class="badge badge-green">Created</span>';
             document.getElementById('new-admin-email').value = '';
-            document.getElementById('new-admin-password').value = '';
+            showCredentials(email, data.temporary_password, data.totp_secret, data.totp_uri);
             loadAccounts();
         } else {
             var err = await resp.json().catch(function() { return {}; });
@@ -420,24 +572,50 @@
 
     async function createUser() {
         var username = document.getElementById('new-user-name').value.trim();
-        var password = document.getElementById('new-user-password').value.trim();
         var result = document.getElementById('create-user-result');
         if (!username) { result.textContent = 'Username is required.'; return; }
-        if (!password) password = generatePassword();
-        if (password.length < 36) { result.textContent = 'Password must be at least 36 characters.'; return; }
+        result.innerHTML = '<span class="loading">Creating...</span>';
         var resp = await fetch('/admin/users', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: username, password: password })
+            body: JSON.stringify({ username: username })
         });
         if (resp.ok) {
-            result.innerHTML = '<span class="badge badge-green">Created</span> Password: <code>' + password + '</code>';
+            var data = await resp.json();
+            result.innerHTML = '<span class="badge badge-green">Created</span>';
             document.getElementById('new-user-name').value = '';
-            document.getElementById('new-user-password').value = '';
+            showCredentials(username, data.temporary_password, data.totp_secret, data.totp_uri);
             loadAccounts();
         } else {
             var err = await resp.json().catch(function() { return {}; });
             result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
+        }
+    }
+
+    async function toggleAccount(type, username, action) {
+        var path = type === 'admin' ? '/admin/accounts/' : '/admin/users/';
+        var resp = await fetch(path + encodeURIComponent(username) + '/' + action, {
+            method: 'POST', credentials: 'same-origin'
+        });
+        if (resp.ok) {
+            loadAccounts();
+        } else {
+            var err = await resp.json().catch(function() { return {}; });
+            alert('Failed: ' + (err.detail ? (err.detail.message || err.detail.error || JSON.stringify(err.detail)) : resp.status));
+        }
+    }
+
+    async function deleteAccount(type, username) {
+        if (!confirm('Delete account "' + username + '"? This cannot be undone.')) return;
+        var path = type === 'admin' ? '/admin/accounts/' : '/admin/users/';
+        var resp = await fetch(path + encodeURIComponent(username), {
+            method: 'DELETE', credentials: 'same-origin'
+        });
+        if (resp.ok) {
+            loadAccounts();
+        } else {
+            var err = await resp.json().catch(function() { return {}; });
+            alert('Failed: ' + (err.detail ? (err.detail.message || err.detail.error || JSON.stringify(err.detail)) : resp.status));
         }
     }
 
@@ -487,6 +665,59 @@
             itbody.innerHTML = '<tr><td colspan="4" class="empty">No individual budgets configured</td></tr>';
             document.getElementById('stat-individual-budgets').textContent = '0';
         }
+    }
+
+    // Budget create functions
+    async function addOrgCap() {
+        var result = document.getElementById('orgcap-result');
+        var resp = await fetch('/admin/budget/org-caps', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                org_id: document.getElementById('orgcap-org').value.trim(),
+                provider: document.getElementById('orgcap-provider').value,
+                token_cap: parseInt(document.getElementById('orgcap-tokens').value),
+                period: document.getElementById('orgcap-period').value
+            })
+        });
+        if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; loadBudgets(); }
+        else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    }
+
+    async function addGroupBudget() {
+        var result = document.getElementById('group-result');
+        var groupId = document.getElementById('group-id').value.trim();
+        if (!groupId) { result.textContent = 'Group ID is required.'; return; }
+        var resp = await fetch('/admin/budget/groups', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                group_id: groupId,
+                provider: document.getElementById('group-provider').value,
+                token_budget: parseInt(document.getElementById('group-tokens').value),
+                period: document.getElementById('group-period').value
+            })
+        });
+        if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; loadBudgets(); }
+        else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    }
+
+    async function addIndBudget() {
+        var result = document.getElementById('ind-result');
+        var indId = document.getElementById('ind-id').value.trim();
+        if (!indId) { result.textContent = 'Identity ID is required.'; return; }
+        var resp = await fetch('/admin/budget/individuals', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                identity_id: indId,
+                provider: document.getElementById('ind-provider').value,
+                token_budget: parseInt(document.getElementById('ind-tokens').value),
+                period: document.getElementById('ind-period').value
+            })
+        });
+        if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; loadBudgets(); }
+        else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
     }
 
     // Models

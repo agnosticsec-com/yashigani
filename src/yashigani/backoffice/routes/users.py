@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
-from yashigani.auth.totp import verify_totp
+from yashigani.auth.totp import verify_totp, generate_provisioning
 
 router = APIRouter()
 
@@ -21,7 +21,6 @@ class FullResetRequest(BaseModel):
 
 class CreateUserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=36)
 
 
 @router.get("")
@@ -33,6 +32,7 @@ async def list_users(session: AdminSession):
             "account_id": r.account_id,
             "disabled": r.disabled,
             "force_password_change": r.force_password_change,
+            "force_totp_provision": r.force_totp_provision,
             "created_at": r.created_at,
         }
         for r in state.auth_service._accounts.values()
@@ -47,12 +47,40 @@ async def list_users(session: AdminSession):
 
 @router.post("")
 async def create_user(body: CreateUserRequest, session: AdminSession):
+    """
+    Create a user account. Server generates a 16-char temporary password
+    and a TOTP secret. Both are returned once — admin shares them
+    out-of-band with the user. User must change password and provision
+    TOTP at first login.
+    """
     state = backoffice_state
-    record = state.auth_service.create_user(body.username, body.password)
+
+    if body.username in state.auth_service._accounts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "username_taken"},
+        )
+
+    from yashigani.auth.password import generate_password
+    temp_password = generate_password(36)
+    record = state.auth_service.create_user(body.username, temp_password)
+
+    # Generate TOTP secret for provisioning
+    totp = generate_provisioning(account_name=body.username, issuer="Yashigani")
+    record.totp_secret = totp.secret_b32
+    record.force_totp_provision = False  # pre-provisioned, user just needs the URI
+
     state.audit_writer.write(_config_event(
         session.account_id, "user_account_created", "", body.username
     ))
-    return {"status": "ok", "account_id": record.account_id}
+    return {
+        "status": "ok",
+        "account_id": record.account_id,
+        "username": body.username,
+        "temporary_password": temp_password,
+        "totp_secret": totp.secret_b32,
+        "totp_uri": totp.provisioning_uri,
+    }
 
 
 @router.delete("/{username}")

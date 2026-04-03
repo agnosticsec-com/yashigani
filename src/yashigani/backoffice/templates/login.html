@@ -118,7 +118,9 @@
                     document.getElementById('page-subtitle').textContent = 'Set a new password to continue';
                     showMsg('info', 'First login — you must change your password before accessing the admin panel.');
                 } else {
-                    window.location.href = '/admin/';
+                    var params = new URLSearchParams(window.location.search);
+                    var next = params.get('next');
+                    window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/admin/';
                 }
             } else {
                 showMsg('error', parseError(data));
