@@ -272,14 +272,42 @@
                 </table>
             </div>
             <div class="panel">
-                <div class="panel-header">Model Aliases</div>
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Model Aliases</span>
+                    <button onclick="toggleForm('add-alias-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add Alias</button>
+                </div>
+                <div id="add-alias-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Alias</label><br><input id="alias-name" type="text" placeholder="fast" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:120px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Provider</label><br><select id="alias-provider" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="ollama">ollama</option><option value="anthropic">anthropic</option><option value="openai">openai</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Model</label><br><input id="alias-model" type="text" placeholder="qwen2.5:3b" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:200px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Force Local</label><br><select id="alias-local" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="true">Yes</option><option value="false">No</option></select></div>
+                        <button onclick="addAlias()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Save</button>
+                    </div>
+                    <div id="alias-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
-                    <thead><tr><th>Alias</th><th>Provider</th><th>Model</th><th>Force Local</th></tr></thead>
-                    <tbody id="aliases-tbody">
-                        <tr><td style="font-family:monospace">fast</td><td>ollama</td><td>qwen2.5:3b</td><td><span class="badge badge-green">Yes</span></td></tr>
-                        <tr><td style="font-family:monospace">smart</td><td>anthropic</td><td>claude-sonnet-4-6</td><td><span class="badge" style="background:#f1f5f9;color:#64748b">No</span></td></tr>
-                        <tr><td style="font-family:monospace">secure</td><td>ollama</td><td>qwen2.5:3b</td><td><span class="badge badge-green">Yes</span></td></tr>
-                    </tbody>
+                    <thead><tr><th>Alias</th><th>Provider</th><th>Model</th><th>Force Local</th><th>Actions</th></tr></thead>
+                    <tbody id="aliases-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Model Allocations (user/group/org)</span>
+                    <button onclick="toggleForm('add-alloc-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Allocate</button>
+                </div>
+                <div id="add-alloc-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Model Alias</label><br><input id="alloc-alias" type="text" placeholder="fast" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:120px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Target Type</label><br><select id="alloc-type" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="user">user</option><option value="group">group</option><option value="org">org</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Target ID</label><br><input id="alloc-target" type="text" placeholder="user@example.com" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:200px"></div>
+                        <button onclick="addAllocation()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Allocate</button>
+                    </div>
+                    <div id="alloc-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
+                <table>
+                    <thead><tr><th>Model Alias</th><th>Target Type</th><th>Target ID</th><th>Actions</th></tr></thead>
+                    <tbody id="allocs-tbody"><tr><td colspan="4" class="empty">No allocations configured</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -302,16 +330,23 @@
                 </div>
             </div>
             <div class="panel">
-                <div class="panel-header">Detection Patterns</div>
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Detection Patterns</span>
+                    <button onclick="toggleForm('add-pattern-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add Pattern</button>
+                </div>
+                <div id="add-pattern-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Classification</label><br><select id="pat-class" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="RESTRICTED">RESTRICTED</option><option value="CONFIDENTIAL">CONFIDENTIAL</option><option value="INTERNAL">INTERNAL</option><option value="PUBLIC">PUBLIC</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Type</label><br><select id="pat-type" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="regex">regex</option><option value="keyword">keyword</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Pattern</label><br><input id="pat-pattern" type="text" placeholder="\bpattern\b" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:250px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Description</label><br><input id="pat-desc" type="text" placeholder="What it detects" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:180px"></div>
+                        <button onclick="addPattern()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Save</button>
+                    </div>
+                    <div id="pattern-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
-                    <thead><tr><th>Classification</th><th>Type</th><th>Pattern</th><th>Description</th></tr></thead>
-                    <tbody id="patterns-tbody">
-                        <tr><td><span class="badge badge-red">RESTRICTED</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b(?:\d[ -]*?){13,19}\b</td><td>Credit/debit card</td></tr>
-                        <tr><td><span class="badge badge-red">RESTRICTED</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b(?:sk-|sk-ant-)[A-Za-z0-9_-]{20,}\b</td><td>API key</td></tr>
-                        <tr><td><span class="badge badge-yellow">CONFIDENTIAL</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b\d{3}-\d{2}-\d{4}\b</td><td>US SSN</td></tr>
-                        <tr><td><span class="badge badge-yellow">CONFIDENTIAL</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b\d{3}[- ]?\d{3}[- ]?\d{4}\b</td><td>US/CA phone</td></tr>
-                        <tr><td><span class="badge badge-blue">INTERNAL</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b</td><td>Email address</td></tr>
-                    </tbody>
+                    <thead><tr><th>Classification</th><th>Type</th><th>Pattern</th><th>Description</th><th>Actions</th></tr></thead>
+                    <tbody id="patterns-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
                 </table>
             </div>
             <div class="panel">
@@ -330,6 +365,44 @@
             <div class="panel">
                 <div class="panel-header">License</div>
                 <div class="panel-body" id="license-info"><span class="loading">Loading...</span></div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Identity Providers</div>
+                <div class="panel-body">
+                    <p style="font-size:0.85rem;color:#334155;margin-bottom:12px;">Configure external identity providers for user authentication. Users authenticate via IdP and are automatically provisioned in Yashigani.</p>
+                    <div class="cards" style="margin-bottom:12px;">
+                        <div class="card">
+                            <div class="card-label">OIDC Provider</div>
+                            <span class="badge badge-yellow" id="oidc-status">Not configured</span>
+                        </div>
+                        <div class="card">
+                            <div class="card-label">SAML v2 Provider</div>
+                            <span class="badge badge-yellow" id="saml-status">Not configured</span>
+                        </div>
+                    </div>
+                    <div style="font-size:0.8rem;color:#64748b;background:#f8fafc;padding:12px;border-radius:6px;">
+                        <p><strong>OIDC Configuration</strong></p>
+                        <div style="display:grid;grid-template-columns:140px 1fr;gap:6px;margin-top:8px;">
+                            <label style="font-size:0.75rem;color:#64748b">Issuer URL</label>
+                            <input id="oidc-issuer" type="text" placeholder="https://idp.example.com/realms/yashigani" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem">
+                            <label style="font-size:0.75rem;color:#64748b">Client ID</label>
+                            <input id="oidc-client-id" type="text" placeholder="yashigani" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem">
+                            <label style="font-size:0.75rem;color:#64748b">Client Secret</label>
+                            <input id="oidc-client-secret" type="password" placeholder="" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem">
+                        </div>
+                        <button onclick="saveIdpConfig('oidc')" style="margin-top:8px;padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">Save OIDC Config</button>
+                        <span id="oidc-save-result" style="margin-left:8px;font-size:0.8rem"></span>
+                        <p style="margin-top:16px;"><strong>SAML v2 Configuration</strong></p>
+                        <div style="display:grid;grid-template-columns:140px 1fr;gap:6px;margin-top:8px;">
+                            <label style="font-size:0.75rem;color:#64748b">Metadata URL</label>
+                            <input id="saml-metadata" type="text" placeholder="https://idp.example.com/saml/metadata" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem">
+                            <label style="font-size:0.75rem;color:#64748b">Entity ID</label>
+                            <input id="saml-entity" type="text" placeholder="https://yashigani.example.com" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.8rem">
+                        </div>
+                        <button onclick="saveIdpConfig('saml')" style="margin-top:8px;padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">Save SAML Config</button>
+                        <span id="saml-save-result" style="margin-left:8px;font-size:0.8rem"></span>
+                    </div>
+                </div>
             </div>
             <div class="panel">
                 <div class="panel-header">System Info</div>
@@ -722,7 +795,8 @@
 
     // Models
     async function loadModels() {
-        var data = await api('/admin/inspection/models');
+        // Available models from Ollama
+        var data = await api('/admin/models/available');
         var tbody = document.getElementById('models-tbody');
         if (data && data.models && data.models.length > 0) {
             var html = '';
@@ -736,17 +810,138 @@
         } else {
             tbody.innerHTML = '<tr><td colspan="3" class="empty">No models available — check Ollama connection</td></tr>';
         }
+
+        // Aliases from API
+        var aliases = await api('/admin/models');
+        var atbody = document.getElementById('aliases-tbody');
+        if (aliases && aliases.aliases && aliases.aliases.length > 0) {
+            var html = '';
+            for (var i = 0; i < aliases.aliases.length; i++) {
+                var a = aliases.aliases[i];
+                var localBadge = a.force_local ? '<span class="badge badge-green">Yes</span>' : '<span class="badge" style="background:#f1f5f9;color:#64748b">No</span>';
+                html += '<tr><td style="font-family:monospace">' + a.alias + '</td><td>' + a.provider + '</td><td>' + a.model + '</td><td>' + localBadge + '</td><td><button onclick="deleteAlias(\'' + a.alias + '\')" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Delete</button></td></tr>';
+            }
+            atbody.innerHTML = html;
+        } else {
+            atbody.innerHTML = '<tr><td colspan="5" class="empty">No aliases configured</td></tr>';
+        }
+
+        // Allocations
+        var allocs = await api('/admin/models/allocations');
+        var altbody = document.getElementById('allocs-tbody');
+        if (allocs && allocs.allocations && allocs.allocations.length > 0) {
+            var html = '';
+            for (var i = 0; i < allocs.allocations.length; i++) {
+                var al = allocs.allocations[i];
+                html += '<tr><td style="font-family:monospace">' + al.model_alias + '</td><td>' + al.target_type + '</td><td>' + al.target_id + '</td><td><button onclick="deleteAllocation(\'' + al.id + '\')" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Remove</button></td></tr>';
+            }
+            altbody.innerHTML = html;
+        } else {
+            altbody.innerHTML = '<tr><td colspan="4" class="empty">No allocations — models available to all by default</td></tr>';
+        }
+    }
+
+    async function addAlias() {
+        var result = document.getElementById('alias-result');
+        var alias = document.getElementById('alias-name').value.trim();
+        if (!alias) { result.textContent = 'Alias name is required.'; return; }
+        var resp = await fetch('/admin/models', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                alias: alias,
+                provider: document.getElementById('alias-provider').value,
+                model: document.getElementById('alias-model').value.trim(),
+                force_local: document.getElementById('alias-local').value === 'true'
+            })
+        });
+        if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; document.getElementById('alias-name').value = ''; document.getElementById('alias-model').value = ''; loadModels(); }
+        else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status); }
+    }
+
+    async function deleteAlias(alias) {
+        if (!confirm('Delete alias "' + alias + '"?')) return;
+        var resp = await fetch('/admin/models/' + encodeURIComponent(alias), { method: 'DELETE', credentials: 'same-origin' });
+        if (resp.ok) loadModels();
+        else alert('Delete failed: ' + resp.status);
+    }
+
+    async function addAllocation() {
+        var result = document.getElementById('alloc-result');
+        var alias = document.getElementById('alloc-alias').value.trim();
+        var target = document.getElementById('alloc-target').value.trim();
+        if (!alias || !target) { result.textContent = 'All fields required.'; return; }
+        var resp = await fetch('/admin/models/allocations', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model_alias: alias,
+                target_type: document.getElementById('alloc-type').value,
+                target_id: target
+            })
+        });
+        if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Allocated</span>'; loadModels(); }
+        else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status); }
+    }
+
+    async function deleteAllocation(id) {
+        var resp = await fetch('/admin/models/allocations/' + id, { method: 'DELETE', credentials: 'same-origin' });
+        if (resp.ok) loadModels();
+        else alert('Remove failed: ' + resp.status);
     }
 
     // Sensitivity
     async function loadSensitivity() {
-        var data = await api('/admin/inspection/status');
+        // Pipeline status
+        var data = await api('/admin/sensitivity/status');
         if (data) {
             document.getElementById('fasttext-status').textContent = data.fasttext_available ? 'Active' : 'Unavailable';
             document.getElementById('fasttext-status').className = 'badge ' + (data.fasttext_available ? 'badge-green' : 'badge-yellow');
-            document.getElementById('ollama-status').textContent = data.ollama_available !== false ? 'Active' : 'Unavailable';
-            document.getElementById('ollama-status').className = 'badge ' + (data.ollama_available !== false ? 'badge-green' : 'badge-yellow');
+            document.getElementById('ollama-status').textContent = data.ollama_available ? 'Active' : 'Unavailable';
+            document.getElementById('ollama-status').className = 'badge ' + (data.ollama_available ? 'badge-green' : 'badge-yellow');
         }
+
+        // Patterns from API
+        var patterns = await api('/admin/sensitivity/patterns');
+        var tbody = document.getElementById('patterns-tbody');
+        if (patterns && patterns.patterns && patterns.patterns.length > 0) {
+            var html = '';
+            var classBadge = { 'RESTRICTED': 'badge-red', 'CONFIDENTIAL': 'badge-yellow', 'INTERNAL': 'badge-blue', 'PUBLIC': 'badge-green' };
+            for (var i = 0; i < patterns.patterns.length; i++) {
+                var p = patterns.patterns[i];
+                var cb = classBadge[p.classification] || 'badge-blue';
+                html += '<tr><td><span class="badge ' + cb + '">' + p.classification + '</span></td><td>' + p.type + '</td><td style="font-family:monospace;font-size:0.75rem">' + p.pattern.replace(/</g,'&lt;') + '</td><td>' + p.description + '</td><td><button onclick="deletePattern(\'' + p.id + '\')" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Delete</button></td></tr>';
+            }
+            tbody.innerHTML = html;
+        } else {
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">No patterns configured</td></tr>';
+        }
+    }
+
+    async function addPattern() {
+        var result = document.getElementById('pattern-result');
+        var pattern = document.getElementById('pat-pattern').value.trim();
+        var desc = document.getElementById('pat-desc').value.trim();
+        if (!pattern || !desc) { result.textContent = 'Pattern and description required.'; return; }
+        var resp = await fetch('/admin/sensitivity/patterns', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                classification: document.getElementById('pat-class').value,
+                type: document.getElementById('pat-type').value,
+                pattern: pattern,
+                description: desc
+            })
+        });
+        if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; document.getElementById('pat-pattern').value = ''; document.getElementById('pat-desc').value = ''; loadSensitivity(); }
+        else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    }
+
+    async function deletePattern(id) {
+        if (!confirm('Delete this pattern?')) return;
+        var resp = await fetch('/admin/sensitivity/patterns/' + id, { method: 'DELETE', credentials: 'same-origin' });
+        if (resp.ok) loadSensitivity();
+        else alert('Delete failed: ' + resp.status);
     }
 
     // Test classifier
@@ -755,7 +950,7 @@
         var result = document.getElementById('classify-result');
         if (!text) { result.textContent = 'Enter text to classify.'; return; }
         result.innerHTML = '<span class="loading">Classifying...</span>';
-        var resp = await fetch('/admin/inspection/classify', {
+        var resp = await fetch('/admin/sensitivity/test', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
@@ -780,6 +975,13 @@
         } else {
             container.innerHTML = '<p style="font-size:0.85rem;color:#64748b;">Could not load license info</p>';
         }
+    }
+
+    // IdP config save (placeholder — full implementation in v2.2 with Caddy OIDC module)
+    async function saveIdpConfig(type) {
+        var result = document.getElementById(type + '-save-result');
+        result.innerHTML = '<span class="badge badge-yellow">Saved locally — requires restart to activate</span>';
+        // In v2.2, this will POST to /admin/idp/{type} and update Caddy config
     }
 
     // Logout

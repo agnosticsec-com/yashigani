@@ -40,6 +40,9 @@ from yashigani.backoffice.routes import (
     webauthn_router,
     events_router,
     audit_search_router,
+    # v2.1
+    models_router,
+    sensitivity_router,
 )
 
 
@@ -108,7 +111,7 @@ def create_backoffice_app() -> FastAPI:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Referrer-Policy"] = "no-referrer"
         # CSP: relaxed for admin UI pages (inline scripts/styles), strict for API
-        if request.url.path.startswith("/admin/login") or request.url.path == "/admin/":
+        if request.url.path.startswith("/admin/login") or request.url.path == "/admin/" or request.url.path == "/login":
             response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline'"
         else:
             response.headers["Content-Security-Policy"] = "default-src 'self'"
@@ -132,6 +135,10 @@ def create_backoffice_app() -> FastAPI:
     _templates_dir = pathlib.Path(__file__).parent / "templates"
     if _templates_dir.exists():
         _templates = Jinja2Templates(directory=str(_templates_dir))
+
+        @app.get("/login", include_in_schema=False)
+        async def user_login_page(request: Request):
+            return _templates.TemplateResponse(request, "user_login.html")
 
         @app.get("/admin/login", include_in_schema=False)
         async def admin_login_page(request: Request):
@@ -166,6 +173,10 @@ def create_backoffice_app() -> FastAPI:
     # v1.0 — Budget admin API
     from yashigani.backoffice.routes.budget import router as budget_router
     app.include_router(budget_router, tags=["budget"])
+
+    # v2.1 — Model alias management + Sensitivity patterns
+    app.include_router(models_router, prefix="/admin/models", tags=["models"])
+    app.include_router(sensitivity_router, prefix="/admin/sensitivity", tags=["sensitivity"])
 
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)
