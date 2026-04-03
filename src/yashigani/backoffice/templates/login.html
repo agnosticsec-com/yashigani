@@ -9,6 +9,7 @@
     <style>
         body { font-family: 'Inter', system-ui, sans-serif; }
         .ysg-gradient { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+        [x-cloak] { display: none !important; }
     </style>
 </head>
 <body class="ysg-gradient min-h-screen flex items-center justify-center">
@@ -53,6 +54,7 @@
             async login() {
                 this.error = '';
                 this.loading = true;
+                console.log('Login attempt:', this.username);
                 try {
                     const resp = await fetch('/auth/login', {
                         method: 'POST',
@@ -63,14 +65,21 @@
                             totp_code: this.totp_code,
                         }),
                     });
+                    console.log('Response status:', resp.status);
                     const data = await resp.json();
+                    console.log('Response data:', JSON.stringify(data));
                     if (resp.ok) {
-                        window.location.href = '/admin/';
+                        if (data.force_password_change) {
+                            this.error = 'Login successful. Password change required (not yet implemented in UI). Use API: POST /auth/password/change';
+                        } else {
+                            window.location.href = '/admin/';
+                        }
                     } else {
-                        this.error = data.detail?.error || 'Authentication failed';
+                        this.error = data.detail?.error || data.detail?.[0]?.msg || JSON.stringify(data.detail) || 'Authentication failed';
                     }
                 } catch (e) {
-                    this.error = 'Connection error';
+                    console.error('Login error:', e);
+                    this.error = 'Connection error: ' + e.message;
                 } finally {
                     this.loading = false;
                 }
