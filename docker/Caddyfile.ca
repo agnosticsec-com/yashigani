@@ -24,6 +24,22 @@
         -Server
     }
 
+    # ── Gateway health check — /healthz ──────────────────────────────────
+    handle /healthz {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Agent routing — /agents/* ──────────────────────────────────────────
+    handle /agents/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
     handle /v1/* {
         reverse_proxy gateway:8080 {
@@ -74,14 +90,6 @@
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
         reverse_proxy prometheus:9090
-    }
-
-    # ── Agent-to-agent routing — /agents/* ─────────────────────────────────
-    handle /agents/* {
-        reverse_proxy gateway:8080 {
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
     }
 
     # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
