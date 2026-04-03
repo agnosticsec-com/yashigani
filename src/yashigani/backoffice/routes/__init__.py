@@ -24,6 +24,9 @@ from yashigani.backoffice.routes.agent_bundles import router as agent_bundles_ro
 from yashigani.backoffice.routes.webauthn import router as webauthn_router
 from yashigani.backoffice.routes.events import router as events_router
 from yashigani.backoffice.routes.audit_search import router as audit_search_router
+# v2.1
+from yashigani.backoffice.routes.models import router as models_router
+from yashigani.backoffice.routes.sensitivity import router as sensitivity_router
 
 __all__ = [
     "auth_router", "accounts_router", "users_router",
@@ -37,4 +40,7 @@ __all__ = [
     "agent_bundles_router",
     # v0.9.0
     "webauthn_router", "events_router", "audit_search_router",
+    # v2.1
+    "models_router",
+    "sensitivity_router",
 ]
