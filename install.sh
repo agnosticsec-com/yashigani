@@ -1652,12 +1652,12 @@ bootstrap_postgres() {
   fi
 
   # Wait for backoffice to be ready before running bootstrap
-  local retries=30
+  local retries=45
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
   resolve_compose_cmd
   log_info "Waiting for backoffice to be ready..."
   for i in $(seq 1 $retries); do
-    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "print('ready')" >/dev/null 2>&1; then
+    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')" >/dev/null 2>&1; then
       break
     fi
     if [[ "$i" -eq "$retries" ]]; then
