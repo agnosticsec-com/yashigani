@@ -131,11 +131,11 @@ def create_backoffice_app() -> FastAPI:
 
         @app.get("/admin/login", include_in_schema=False)
         async def admin_login_page(request: Request):
-            return _templates.TemplateResponse("login.html", {"request": request})
+            return _templates.TemplateResponse(request, "login.html")
 
         @app.get("/admin/", include_in_schema=False)
         async def admin_dashboard_page(request: Request):
-            return _templates.TemplateResponse("dashboard.html", {"request": request})
+            return _templates.TemplateResponse(request, "dashboard.html")
 
     # Routers
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
