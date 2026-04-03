@@ -61,7 +61,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
     client_ip = request.client.host if request.client else "unknown"
     session = state.session_store.create(
         account_id=record.account_id,
-        account_tier="admin",
+        account_tier=record.account_tier,
         client_ip=client_ip,
     )
 
@@ -95,6 +95,40 @@ async def session_status(session: AdminSession):
         "account_tier": session.account_tier,
         "expires_at": session.expires_at,
     }
+
+
+@router.get("/verify")
+async def verify_session(request: Request):
+    """
+    Caddy forward_auth endpoint. Validates the session cookie and returns
+    the authenticated user's identity in response headers.
+    200 + X-Forwarded-User header → Caddy proceeds with the request.
+    401 → Caddy redirects to login.
+    """
+    state = backoffice_state
+    token = request.cookies.get(_SESSION_COOKIE)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    session = state.session_store.get(token)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    # Resolve username from account_id
+    username = None
+    for record in state.auth_service._accounts.values():
+        if record.account_id == session.account_id:
+            username = record.username
+            break
+
+    if username is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    from starlette.responses import Response as StarletteResponse
+    resp = StarletteResponse(status_code=200)
+    resp.headers["X-Forwarded-User"] = username
+    resp.headers["X-Forwarded-Name"] = username
+    return resp
 
 
 @router.post("/password/change")

@@ -83,7 +83,7 @@ def needs_rehash(stored_hash: str) -> bool:
 def generate_password(length: int = 36) -> str:
     """
     Generate a cryptographically random password of the given length.
-    Displayed once to stdout at deployment — never stored in plaintext.
+    Displayed once to the admin at user creation — never stored in plaintext.
     """
     if length < _MIN_PASSWORD_LENGTH:
         raise ValueError(f"Generated password must be at least {_MIN_PASSWORD_LENGTH} chars")

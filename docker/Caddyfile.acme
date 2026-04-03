@@ -103,9 +103,17 @@
         request_header -X-Forwarded-User
         request_header -X-Forwarded-Name
         request_header -X-Forwarded-Groups
-        # Inject default identity — replaced by IdP/SSO header in v2.2+
-        request_header X-Forwarded-User "user@yashigani.local"
-        request_header X-Forwarded-Name "Yashigani User"
+
+        forward_auth backoffice:8443 {
+            uri /auth/verify
+            copy_headers X-Forwarded-User X-Forwarded-Name
+
+            @unauthorized status 401
+            handle_response @unauthorized {
+                redir /admin/login?next={uri} 302
+            }
+        }
+
         reverse_proxy open-webui:8080 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
