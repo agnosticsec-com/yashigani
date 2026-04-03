@@ -340,21 +340,23 @@ resolve_compose_cmd() {
 
   # Prefer Podman (rootless, daemonless, more secure)
   # Check Podman FIRST — matches platform-detect.sh priority
+  # Prefer podman-compose (Python, sequential) over podman compose (plugin, parallel)
+  # because the docker-compose plugin crashes Podman's API socket with EOF on parallel creates.
 
-  # Try podman compose (Podman 4+ built-in subcommand)
+  # Try standalone podman-compose FIRST (pip install podman-compose) — sequential, stable
+  if command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    COMPOSE_CMD=("podman-compose")
+    YSG_PODMAN_RUNTIME=true
+    return 0
+  fi
+
+  # Fall back to podman compose (Podman 4+ built-in, delegates to docker-compose plugin)
   if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
     if podman compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("podman" "compose")
       YSG_PODMAN_RUNTIME=true
       return 0
     fi
-  fi
-
-  # Try standalone podman-compose (pip install podman-compose)
-  if command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-    COMPOSE_CMD=("podman-compose")
-    YSG_PODMAN_RUNTIME=true
-    return 0
   fi
 
   # Fall back to Docker — verify daemon is running (not just CLI installed)
