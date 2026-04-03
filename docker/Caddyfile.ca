@@ -104,7 +104,7 @@
 
             @unauthorized status 401
             handle_response @unauthorized {
-                redir /admin/login?next={uri} 302
+                redir * /admin/login?next={http.request.uri} 302
             }
         }
 
