@@ -299,7 +299,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     headers = {
         "X-Yashigani-Request-Id": request_id,
         "X-Yashigani-Routed-Via": selected_provider,
-        "X-Yashigani-Route-Reason": route_reason,
+        "X-Yashigani-Route-Reason": route_reason.encode("ascii", "replace").decode("ascii"),
         "X-Yashigani-Model": selected_model,
         "X-Yashigani-Sensitivity": sensitivity_level,
         "X-Yashigani-Complexity": complexity_level,

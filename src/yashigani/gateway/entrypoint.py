@@ -287,6 +287,20 @@ def _build_app():
     except Exception as exc:
         logger.warning("Optimization Engine unavailable (%s)", exc)
 
+    # Configure and prepare the /v1 router BEFORE creating the gateway app
+    # (it must be registered before the catch-all proxy route)
+    configure_openai_router(
+        identity_registry=identity_registry,
+        sensitivity_classifier=sensitivity_classifier,
+        complexity_scorer=complexity_scorer,
+        budget_enforcer=budget_enforcer,
+        token_counter=token_counter,
+        optimization_engine=optimization_engine,
+        audit_writer=audit_writer,
+        ollama_url=ollama_url,
+        default_model=model,
+    )
+
     gateway_app = create_gateway_app(
         config=cfg,
         inspection_pipeline=pipeline,
@@ -302,22 +316,9 @@ def _build_app():
         inference_logger=inference_logger,
         anomaly_detector=anomaly_detector,
         response_inspection_pipeline=response_pipeline,
+        extra_routers=[openai_router],
     )
-
-    # ── v1.0: Mount OpenAI-compatible /v1 router ───────────────────────────
-    configure_openai_router(
-        identity_registry=identity_registry,
-        sensitivity_classifier=sensitivity_classifier,
-        complexity_scorer=complexity_scorer,
-        budget_enforcer=budget_enforcer,
-        token_counter=token_counter,
-        optimization_engine=optimization_engine,
-        audit_writer=audit_writer,
-        ollama_url=ollama_url,
-        default_model=model,
-    )
-    gateway_app.include_router(openai_router)
-    logger.info("OpenAI-compatible /v1 router mounted")
+    logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
 
     # Agent auth middleware — must run before Prometheus middleware so agent
     # requests are authenticated before metrics are emitted.

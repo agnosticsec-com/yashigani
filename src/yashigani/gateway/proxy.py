@@ -73,6 +73,7 @@ def create_gateway_app(
     inference_logger=None,
     anomaly_detector=None,
     response_inspection_pipeline=None,  # v0.9.0 — ResponseInspectionPipeline | None
+    extra_routers=None,  # v2.0 — additional routers to mount BEFORE catch-all
 ) -> FastAPI:
     """
     Create the Yashigani gateway FastAPI application.
@@ -147,6 +148,10 @@ def create_gateway_app(
             )
         except ImportError:
             return PlainTextResponse("# prometheus_client not installed\n")
+
+    # Mount extra routers BEFORE the catch-all (e.g. /v1/* OpenAI-compat)
+    for _router in (extra_routers or []):
+        app.include_router(_router)
 
     # Catch-all reverse proxy route
     @app.api_route(
@@ -281,17 +286,21 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
     jwt_claims: dict = {}
     if auth_header.startswith("Bearer ") and state.get("jwt_inspector") is not None:
         token = auth_header[len("Bearer "):]
-        jwt_result = await state["jwt_inspector"].inspect(
-            token=token,
-            tenant_id=request.headers.get("x-yashigani-tenant-id", "00000000-0000-0000-0000-000000000000"),
-        )
-        if not jwt_result.valid:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "JWT_INVALID", "detail": jwt_result.error, "request_id": request_id},
-                headers={"X-Yashigani-Request-Id": request_id},
+        # Skip JWT validation for internal service keys (Open WebUI, etc.)
+        if token in ("yashigani-internal",):
+            jwt_claims = {"sub": "internal", "iss": "yashigani"}
+        else:
+            jwt_result = await state["jwt_inspector"].inspect(
+                token=token,
+                tenant_id=request.headers.get("x-yashigani-tenant-id", "00000000-0000-0000-0000-000000000000"),
             )
-        jwt_claims = jwt_result.claims
+            if not jwt_result.valid:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "JWT_INVALID", "detail": jwt_result.error, "request_id": request_id},
+                    headers={"X-Yashigani-Request-Id": request_id},
+                )
+            jwt_claims = jwt_result.claims
 
     # 1. Read and size-check the request body
     try:
@@ -308,6 +317,10 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
     # Prefer JWT sub over header-provided user_id
     if jwt_claims.get("sub"):
         user_id = jwt_claims["sub"]
+    # Internal service identity (Open WebUI, etc.)
+    if jwt_claims.get("iss") == "yashigani" and jwt_claims.get("sub") == "internal":
+        agent_id = agent_id or "internal"
+        session_id = session_id or "internal"
 
     # 3. Run inspection pipeline (if configured)
     pipeline = state["inspection_pipeline"]
