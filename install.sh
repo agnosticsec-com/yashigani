@@ -1737,7 +1737,7 @@ register_agent_bundles() {
   local reg_output
   reg_output="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T -e AGENTS_JSON="${agents_json}" backoffice \
     python3 -c '
-import json, os, sys, time, hmac, hashlib, struct, base64, urllib.request
+import json, os, sys, time, urllib.request
 
 secrets = "/run/secrets"
 def read_secret(name):
@@ -1753,14 +1753,9 @@ if not all([user, pw, totp_secret]):
     print("ERROR:missing_secrets", file=sys.stderr)
     sys.exit(1)
 
-# Compute TOTP
-padded = totp_secret + "=" * (-len(totp_secret) % 8)
-key = base64.b32decode(padded, casefold=True)
-counter = struct.pack(">Q", int(time.time()) // 30)
-mac = hmac.new(key, counter, hashlib.sha1).digest()
-offset = mac[-1] & 0x0F
-code = struct.unpack(">I", mac[offset:offset+4])[0] & 0x7FFFFFFF
-totp_code = f"{code % 1000000:06d}"
+# Compute TOTP using pyotp (same library as backoffice)
+import pyotp
+totp_code = pyotp.TOTP(totp_secret).now()
 
 # Login
 login_data = json.dumps({"username": user, "password": pw, "totp_code": totp_code}).encode()
