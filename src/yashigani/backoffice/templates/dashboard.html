@@ -143,7 +143,7 @@
     }
 
     async function api(path) {
-        var resp = await fetch(path);
+        var resp = await fetch(path, { credentials: 'same-origin' });
         if (resp.status === 401) { window.location.href = '/admin/login'; return null; }
         if (!resp.ok) return null;
         return await resp.json();
@@ -223,7 +223,7 @@
 
     // Logout
     async function logout() {
-        await fetch('/auth/logout', { method: 'POST' });
+        await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
         window.location.href = '/admin/login';
     }
 
