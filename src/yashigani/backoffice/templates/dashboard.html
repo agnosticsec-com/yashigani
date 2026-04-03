@@ -50,6 +50,9 @@
                 <button class="active" onclick="showPage('dashboard')">Dashboard</button>
                 <button onclick="showPage('agents')">Agents</button>
                 <button onclick="showPage('accounts')">Accounts</button>
+                <button onclick="showPage('budgets')">Budgets</button>
+                <button onclick="showPage('models')">Models</button>
+                <button onclick="showPage('sensitivity')">Sensitivity</button>
                 <button onclick="showPage('alerts')">Alerts</button>
                 <button onclick="showPage('settings')">Settings</button>
             </div>
@@ -89,9 +92,41 @@
         <div class="page" id="page-accounts">
             <h2>Admin Accounts</h2>
             <div class="panel">
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Administrators</span>
+                    <button onclick="toggleForm('create-admin-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add Admin</button>
+                </div>
+                <div id="create-admin-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Email</label><br><input id="new-admin-email" type="email" placeholder="admin@example.com" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:220px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Password (36+ chars)</label><br><input id="new-admin-password" type="text" placeholder="Auto-generated" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:320px"></div>
+                        <button onclick="createAdmin()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Create</button>
+                    </div>
+                    <div id="create-admin-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
                 <table>
                     <thead><tr><th>Username</th><th>Status</th><th>Password Change</th><th>TOTP</th></tr></thead>
                     <tbody id="accounts-tbody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+                </table>
+            </div>
+
+            <h2 style="margin-top:24px">User Accounts</h2>
+            <div class="panel">
+                <div class="panel-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>Users (non-admin)</span>
+                    <button onclick="toggleForm('create-user-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add User</button>
+                </div>
+                <div id="create-user-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <div style="display:flex;gap:8px;align-items:end;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Username</label><br><input id="new-user-name" type="text" placeholder="username" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:220px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Password (36+ chars)</label><br><input id="new-user-password" type="text" placeholder="Auto-generated" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:320px"></div>
+                        <button onclick="createUser()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Create</button>
+                    </div>
+                    <div id="create-user-result" style="margin-top:6px;font-size:0.8rem"></div>
+                </div>
+                <table>
+                    <thead><tr><th>Username</th><th>Status</th><th>Password Change</th><th>Created</th></tr></thead>
+                    <tbody id="users-tbody"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -110,6 +145,109 @@
                         <tr><td><span class="badge" style="background:#f8fafc;color:#94a3b8;">P5</span></td><td>Container replaced, budget warning, routine rotation</td><td>Informational</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Budgets Page -->
+        <div class="page" id="page-budgets">
+            <h2>Budget Management</h2>
+            <div class="cards">
+                <div class="card">
+                    <div class="card-label">Organisation Cloud Caps</div>
+                    <div class="card-value" id="stat-org-caps">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Group Budgets</div>
+                    <div class="card-value" id="stat-group-budgets">-</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Individual Budgets</div>
+                    <div class="card-value" id="stat-individual-budgets">-</div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Organisation Cloud Caps</div>
+                <table>
+                    <thead><tr><th>Provider</th><th>Token Cap</th><th>Period</th></tr></thead>
+                    <tbody id="orgcaps-tbody"><tr><td colspan="3" class="empty">No caps configured — POST /admin/budget/org-caps to add</td></tr></tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Group Budgets</div>
+                <table>
+                    <thead><tr><th>Group</th><th>Provider</th><th>Budget</th><th>Period</th></tr></thead>
+                    <tbody id="groupbudgets-tbody"><tr><td colspan="4" class="empty">No group budgets configured</td></tr></tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Individual Budgets</div>
+                <table>
+                    <thead><tr><th>Identity</th><th>Provider</th><th>Budget</th><th>Period</th></tr></thead>
+                    <tbody id="indbudgets-tbody"><tr><td colspan="4" class="empty">No individual budgets configured</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Models Page -->
+        <div class="page" id="page-models">
+            <h2>Models &amp; Aliases</h2>
+            <div class="panel">
+                <div class="panel-header">Available Models (from Ollama)</div>
+                <table>
+                    <thead><tr><th>Model</th><th>Size</th><th>Modified</th></tr></thead>
+                    <tbody id="models-tbody"><tr><td colspan="3" class="empty">Loading...</td></tr></tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Model Aliases</div>
+                <table>
+                    <thead><tr><th>Alias</th><th>Provider</th><th>Model</th><th>Force Local</th></tr></thead>
+                    <tbody id="aliases-tbody">
+                        <tr><td style="font-family:monospace">fast</td><td>ollama</td><td>qwen2.5:3b</td><td><span class="badge badge-green">Yes</span></td></tr>
+                        <tr><td style="font-family:monospace">smart</td><td>anthropic</td><td>claude-sonnet-4-6</td><td><span class="badge" style="background:#f1f5f9;color:#64748b">No</span></td></tr>
+                        <tr><td style="font-family:monospace">secure</td><td>ollama</td><td>qwen2.5:3b</td><td><span class="badge badge-green">Yes</span></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Sensitivity Page -->
+        <div class="page" id="page-sensitivity">
+            <h2>Sensitivity Classification</h2>
+            <div class="cards">
+                <div class="card">
+                    <div class="card-label">Layer 1: Regex</div>
+                    <span class="badge badge-green">Active (always on)</span>
+                </div>
+                <div class="card">
+                    <div class="card-label">Layer 2: FastText</div>
+                    <span class="badge badge-green" id="fasttext-status">Active</span>
+                </div>
+                <div class="card">
+                    <div class="card-label">Layer 3: Ollama</div>
+                    <span class="badge badge-green" id="ollama-status">Active</span>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Detection Patterns</div>
+                <table>
+                    <thead><tr><th>Classification</th><th>Type</th><th>Pattern</th><th>Description</th></tr></thead>
+                    <tbody id="patterns-tbody">
+                        <tr><td><span class="badge badge-red">RESTRICTED</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b(?:\d[ -]*?){13,19}\b</td><td>Credit/debit card</td></tr>
+                        <tr><td><span class="badge badge-red">RESTRICTED</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b(?:sk-|sk-ant-)[A-Za-z0-9_-]{20,}\b</td><td>API key</td></tr>
+                        <tr><td><span class="badge badge-yellow">CONFIDENTIAL</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b\d{3}-\d{2}-\d{4}\b</td><td>US SSN</td></tr>
+                        <tr><td><span class="badge badge-yellow">CONFIDENTIAL</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b\d{3}[- ]?\d{3}[- ]?\d{4}\b</td><td>US/CA phone</td></tr>
+                        <tr><td><span class="badge badge-blue">INTERNAL</span></td><td>regex</td><td style="font-family:monospace;font-size:0.75rem">\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b</td><td>Email address</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <div class="panel-header">Test Classifier</div>
+                <div class="panel-body">
+                    <textarea id="test-text" rows="3" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical" placeholder="Paste text to classify..."></textarea>
+                    <button onclick="testClassify()" style="margin-top:8px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem">Classify</button>
+                    <div id="classify-result" style="margin-top:8px;font-size:0.85rem"></div>
+                </div>
             </div>
         </div>
 
@@ -140,6 +278,10 @@
         if (name === 'dashboard') loadDashboard();
         if (name === 'agents') loadAgents();
         if (name === 'accounts') loadAccounts();
+        if (name === 'budgets') loadBudgets();
+        if (name === 'models') loadModels();
+        if (name === 'sensitivity') loadSensitivity();
+        if (name === 'settings') loadSettings();
     }
 
     async function api(path) {
@@ -201,6 +343,7 @@
 
     // Accounts
     async function loadAccounts() {
+        // Admin accounts
         var data = await api('/admin/accounts');
         var tbody = document.getElementById('accounts-tbody');
         if (data && data.accounts && data.accounts.length > 0) {
@@ -217,7 +360,194 @@
             }
             tbody.innerHTML = html;
         } else {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty">No accounts found</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="empty">No admin accounts found</td></tr>';
+        }
+
+        // User accounts
+        var users = await api('/admin/users');
+        var utbody = document.getElementById('users-tbody');
+        if (users && users.users && users.users.length > 0) {
+            var html = '';
+            for (var i = 0; i < users.users.length; i++) {
+                var u = users.users[i];
+                var sb = u.disabled ? 'badge-red' : 'badge-green';
+                var st = u.disabled ? 'Disabled' : 'Active';
+                var pb = u.force_password_change ? 'badge-yellow' : 'badge-green';
+                var pt = u.force_password_change ? 'Required' : 'OK';
+                var created = u.created_at ? new Date(u.created_at).toLocaleDateString() : '-';
+                html += '<tr><td><strong>' + u.username + '</strong></td><td><span class="badge ' + sb + '">' + st + '</span></td><td><span class="badge ' + pb + '">' + pt + '</span></td><td style="font-size:0.8rem">' + created + '</td></tr>';
+            }
+            utbody.innerHTML = html;
+        } else {
+            utbody.innerHTML = '<tr><td colspan="4" class="empty">No user accounts — click + Add User to create one</td></tr>';
+        }
+    }
+
+    function toggleForm(id) {
+        var el = document.getElementById(id);
+        el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function generatePassword() {
+        var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        var pwd = '';
+        for (var i = 0; i < 40; i++) pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+        return pwd;
+    }
+
+    async function createAdmin() {
+        var email = document.getElementById('new-admin-email').value.trim();
+        var password = document.getElementById('new-admin-password').value.trim();
+        var result = document.getElementById('create-admin-result');
+        if (!email) { result.textContent = 'Email is required.'; return; }
+        if (!password) password = generatePassword();
+        if (password.length < 36) { result.textContent = 'Password must be at least 36 characters.'; return; }
+        var resp = await fetch('/admin/accounts', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: email, password: password })
+        });
+        if (resp.ok) {
+            result.innerHTML = '<span class="badge badge-green">Created</span> Password: <code>' + password + '</code>';
+            document.getElementById('new-admin-email').value = '';
+            document.getElementById('new-admin-password').value = '';
+            loadAccounts();
+        } else {
+            var err = await resp.json().catch(function() { return {}; });
+            result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
+        }
+    }
+
+    async function createUser() {
+        var username = document.getElementById('new-user-name').value.trim();
+        var password = document.getElementById('new-user-password').value.trim();
+        var result = document.getElementById('create-user-result');
+        if (!username) { result.textContent = 'Username is required.'; return; }
+        if (!password) password = generatePassword();
+        if (password.length < 36) { result.textContent = 'Password must be at least 36 characters.'; return; }
+        var resp = await fetch('/admin/users', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: username, password: password })
+        });
+        if (resp.ok) {
+            result.innerHTML = '<span class="badge badge-green">Created</span> Password: <code>' + password + '</code>';
+            document.getElementById('new-user-name').value = '';
+            document.getElementById('new-user-password').value = '';
+            loadAccounts();
+        } else {
+            var err = await resp.json().catch(function() { return {}; });
+            result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
+        }
+    }
+
+    // Budgets
+    async function loadBudgets() {
+        var caps = await api('/admin/budget/org-caps');
+        var tbody = document.getElementById('orgcaps-tbody');
+        if (caps && caps.org_caps && caps.org_caps.length > 0) {
+            var html = '';
+            for (var i = 0; i < caps.org_caps.length; i++) {
+                var c = caps.org_caps[i];
+                html += '<tr><td>' + (c.provider || '*') + '</td><td>' + (c.token_cap || 0).toLocaleString() + '</td><td>' + (c.period || 'monthly') + '</td></tr>';
+            }
+            tbody.innerHTML = html;
+            document.getElementById('stat-org-caps').textContent = caps.org_caps.length;
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="empty">No caps configured</td></tr>';
+            document.getElementById('stat-org-caps').textContent = '0';
+        }
+
+        var groups = await api('/admin/budget/groups');
+        var gtbody = document.getElementById('groupbudgets-tbody');
+        if (groups && groups.group_budgets && groups.group_budgets.length > 0) {
+            var html = '';
+            for (var i = 0; i < groups.group_budgets.length; i++) {
+                var g = groups.group_budgets[i];
+                html += '<tr><td>' + g.group_id + '</td><td>' + (g.provider || '*') + '</td><td>' + (g.token_budget || 0).toLocaleString() + '</td><td>' + (g.period || 'monthly') + '</td></tr>';
+            }
+            gtbody.innerHTML = html;
+            document.getElementById('stat-group-budgets').textContent = groups.group_budgets.length;
+        } else {
+            gtbody.innerHTML = '<tr><td colspan="4" class="empty">No group budgets configured</td></tr>';
+            document.getElementById('stat-group-budgets').textContent = '0';
+        }
+
+        var indiv = await api('/admin/budget/individuals');
+        var itbody = document.getElementById('indbudgets-tbody');
+        if (indiv && indiv.individual_budgets && indiv.individual_budgets.length > 0) {
+            var html = '';
+            for (var i = 0; i < indiv.individual_budgets.length; i++) {
+                var ind = indiv.individual_budgets[i];
+                html += '<tr><td>' + ind.identity_id + '</td><td>' + (ind.provider || '*') + '</td><td>' + (ind.token_budget || 0).toLocaleString() + '</td><td>' + (ind.period || 'monthly') + '</td></tr>';
+            }
+            itbody.innerHTML = html;
+            document.getElementById('stat-individual-budgets').textContent = indiv.individual_budgets.length;
+        } else {
+            itbody.innerHTML = '<tr><td colspan="4" class="empty">No individual budgets configured</td></tr>';
+            document.getElementById('stat-individual-budgets').textContent = '0';
+        }
+    }
+
+    // Models
+    async function loadModels() {
+        var data = await api('/admin/inspection/models');
+        var tbody = document.getElementById('models-tbody');
+        if (data && data.models && data.models.length > 0) {
+            var html = '';
+            for (var i = 0; i < data.models.length; i++) {
+                var m = data.models[i];
+                var size = m.size ? (m.size / (1024*1024*1024)).toFixed(1) + ' GB' : '-';
+                var modified = m.modified_at ? new Date(m.modified_at).toLocaleDateString() : '-';
+                html += '<tr><td style="font-family:monospace">' + m.name + '</td><td>' + size + '</td><td>' + modified + '</td></tr>';
+            }
+            tbody.innerHTML = html;
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="empty">No models available — check Ollama connection</td></tr>';
+        }
+    }
+
+    // Sensitivity
+    async function loadSensitivity() {
+        var data = await api('/admin/inspection/status');
+        if (data) {
+            document.getElementById('fasttext-status').textContent = data.fasttext_available ? 'Active' : 'Unavailable';
+            document.getElementById('fasttext-status').className = 'badge ' + (data.fasttext_available ? 'badge-green' : 'badge-yellow');
+            document.getElementById('ollama-status').textContent = data.ollama_available !== false ? 'Active' : 'Unavailable';
+            document.getElementById('ollama-status').className = 'badge ' + (data.ollama_available !== false ? 'badge-green' : 'badge-yellow');
+        }
+    }
+
+    // Test classifier
+    async function testClassify() {
+        var text = document.getElementById('test-text').value.trim();
+        var result = document.getElementById('classify-result');
+        if (!text) { result.textContent = 'Enter text to classify.'; return; }
+        result.innerHTML = '<span class="loading">Classifying...</span>';
+        var resp = await fetch('/admin/inspection/classify', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text })
+        });
+        if (resp.status === 401) { window.location.href = '/admin/login'; return; }
+        if (!resp.ok) { result.textContent = 'Error: ' + resp.status; return; }
+        var data = await resp.json();
+        var badge = data.is_injection ? 'badge-red' : 'badge-green';
+        var label = data.is_injection ? 'INJECTION DETECTED' : 'CLEAN';
+        result.innerHTML = '<span class="badge ' + badge + '">' + label + '</span> — confidence: ' + ((data.confidence || 0) * 100).toFixed(1) + '%';
+    }
+
+    // Settings
+    async function loadSettings() {
+        var data = await api('/admin/license');
+        var container = document.getElementById('license-info');
+        if (data) {
+            container.innerHTML = '<p style="font-size:0.85rem;color:#334155;"><strong>Tier:</strong> ' + (data.tier || 'community') +
+                ' | <strong>Max Agents:</strong> ' + (data.max_agents === -1 ? 'Unlimited' : (data.max_agents || '-')) +
+                ' | <strong>Expires:</strong> ' + (data.expires_at || 'Never') + '</p>';
+        } else {
+            container.innerHTML = '<p style="font-size:0.85rem;color:#64748b;">Could not load license info</p>';
         }
     }
 
