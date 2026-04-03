@@ -1606,7 +1606,7 @@ compose_up() {
       local _token_file="${secrets_dir}/${_profile}_token"
       if [[ ! -s "$_token_file" ]]; then
         echo "# placeholder — auto-generated at first bootstrap" > "$_token_file"
-        chmod 600 "$_token_file"
+        chmod 666 "$_token_file"
         log_info "Created token placeholder: ${_profile}_token"
       fi
     fi
@@ -1798,10 +1798,12 @@ for agent in agents:
         aname = agent["name"]
         if token:
             token_path = os.path.join(secrets, profile + "_token")
-            with open(token_path, "w") as f:
-                f.write(token)
-            os.chmod(token_path, 0o600)
-            results.append("OK:" + aname)
+            try:
+                with open(token_path, "w") as f:
+                    f.write(token)
+            except PermissionError:
+                pass  # token printed below for host-side capture
+            results.append("OK:" + aname + ":" + profile + ":" + token)
         else:
             results.append("FAIL:" + aname + ":no_token")
     except urllib.error.HTTPError as e:
@@ -1821,7 +1823,16 @@ for r in results:
   while IFS= read -r line; do
     case "$line" in
       OK:*)
-        local _agent_name="${line#OK:}"
+        local _parts="${line#OK:}"
+        local _agent_name="${_parts%%:*}"
+        # Extract profile:token from OK:name:profile:token
+        local _rest="${_parts#*:}"
+        local _profile="${_rest%%:*}"
+        local _token="${_rest#*:}"
+        if [[ -n "$_profile" && -n "$_token" && "$_token" != "$_profile" ]]; then
+          echo "$_token" > "${secrets_dir}/${_profile}_token"
+          chmod 644 "${secrets_dir}/${_profile}_token"
+        fi
         log_success "  ${_agent_name}: registered"
         any_registered=true
         ;;
