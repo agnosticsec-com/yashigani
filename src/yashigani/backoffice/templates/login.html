@@ -11,10 +11,10 @@
         h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; text-align: center; }
         .subtitle { color: #94a3b8; font-size: 0.85rem; text-align: center; margin-top: 4px; margin-bottom: 1.5rem; }
         label { display: block; font-size: 0.85rem; font-weight: 500; color: #475569; margin-bottom: 4px; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; outline: none; margin-bottom: 1rem; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; outline: none; }
         input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
         .totp-input { text-align: center; font-size: 1.3rem; letter-spacing: 0.3em; }
-        button { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; margin-top: 0.5rem; }
+        button { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; }
         button:hover { background: #1d4ed8; }
         button:disabled { background: #93c5fd; cursor: not-allowed; }
         .msg { padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
@@ -25,17 +25,17 @@
         .footer { text-align: center; color: #94a3b8; font-size: 0.75rem; margin-top: 1.5rem; }
         .field { margin-bottom: 1rem; }
         .hidden { display: none; }
-        .pw-hint { font-size: 0.75rem; color: #94a3b8; margin-top: -0.5rem; margin-bottom: 1rem; }
+        .hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Yashigani</h1>
-        <p class="subtitle">Admin Control Plane</p>
+        <p class="subtitle" id="page-subtitle">Admin Control Plane</p>
 
         <div id="msg-box" class="msg"></div>
 
-        <!-- Login Form -->
+        <!-- Step 1: Login -->
         <form id="login-form">
             <div class="field">
                 <label for="username">Username</label>
@@ -52,25 +52,16 @@
             <button type="submit" id="login-btn">Sign In</button>
         </form>
 
-        <!-- Password Change Form (shown after login if force_password_change) -->
-        <form id="password-form" class="hidden">
-            <div id="pw-info" class="msg info visible">First login — please set a new password (minimum 36 characters).</div>
-            <div class="field">
-                <label for="current_password">Current Password</label>
-                <input type="password" id="current_password" name="current_password" required>
-            </div>
+        <!-- Step 2: Password Change (hidden until needed) -->
+        <form id="pw-form" class="hidden">
             <div class="field">
                 <label for="new_password">New Password</label>
                 <input type="password" id="new_password" name="new_password" required minlength="36">
-                <p class="pw-hint">Minimum 36 characters. Use a password manager.</p>
+                <p class="hint">Minimum 36 characters. Use a password manager to generate one.</p>
             </div>
             <div class="field">
                 <label for="confirm_password">Confirm New Password</label>
                 <input type="password" id="confirm_password" name="confirm_password" required minlength="36">
-            </div>
-            <div class="field">
-                <label for="pw_totp">TOTP Code</label>
-                <input type="text" id="pw_totp" name="pw_totp" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" class="totp-input" placeholder="000000">
             </div>
             <button type="submit" id="pw-btn">Change Password</button>
         </form>
@@ -79,21 +70,27 @@
     </div>
 
     <script>
-    var loginCredentials = {};
+    var savedPassword = '';
 
     function showMsg(type, text) {
-        var box = document.getElementById('msg-box');
-        box.className = 'msg ' + type + ' visible';
-        box.textContent = text;
+        var b = document.getElementById('msg-box');
+        b.className = 'msg ' + type + ' visible';
+        b.textContent = text;
     }
-
     function clearMsg() {
-        var box = document.getElementById('msg-box');
-        box.className = 'msg';
-        box.textContent = '';
+        var b = document.getElementById('msg-box');
+        b.className = 'msg';
+        b.textContent = '';
+    }
+    function parseError(data) {
+        if (!data.detail) return 'Request failed';
+        if (typeof data.detail === 'string') return data.detail;
+        if (data.detail.error) return data.detail.error;
+        if (Array.isArray(data.detail)) return data.detail.map(function(d){ return d.msg; }).join(', ');
+        return JSON.stringify(data.detail);
     }
 
-    // Login handler
+    // Step 1: Login
     document.getElementById('login-form').addEventListener('submit', async function(e) {
         e.preventDefault();
         clearMsg();
@@ -101,37 +98,29 @@
         btn.disabled = true;
         btn.textContent = 'Authenticating...';
 
-        var username = document.getElementById('username').value;
-        var password = document.getElementById('password').value;
-        var totp_code = document.getElementById('totp_code').value;
-
         try {
             var resp = await fetch('/auth/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: username, password: password, totp_code: totp_code })
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    username: document.getElementById('username').value,
+                    password: document.getElementById('password').value,
+                    totp_code: document.getElementById('totp_code').value
+                })
             });
             var data = await resp.json();
-
             if (resp.ok) {
                 if (data.force_password_change) {
-                    // Show password change form
-                    loginCredentials = { username: username, password: password };
+                    savedPassword = document.getElementById('password').value;
                     document.getElementById('login-form').className = 'hidden';
-                    document.getElementById('password-form').className = '';
-                    document.getElementById('current_password').value = password;
+                    document.getElementById('pw-form').className = '';
+                    document.getElementById('page-subtitle').textContent = 'Set a new password to continue';
+                    showMsg('info', 'First login — you must change your password before accessing the admin panel.');
                 } else {
                     window.location.href = '/admin/';
                 }
             } else {
-                var msg = 'Authentication failed';
-                if (data.detail) {
-                    if (typeof data.detail === 'string') msg = data.detail;
-                    else if (data.detail.error) msg = data.detail.error;
-                    else if (Array.isArray(data.detail)) msg = data.detail.map(function(d) { return d.msg; }).join(', ');
-                    else msg = JSON.stringify(data.detail);
-                }
-                showMsg('error', msg);
+                showMsg('error', parseError(data));
             }
         } catch (err) {
             showMsg('error', 'Connection error: ' + err.message);
@@ -141,24 +130,15 @@
         }
     });
 
-    // Password change handler
-    document.getElementById('password-form').addEventListener('submit', async function(e) {
+    // Step 2: Password Change
+    document.getElementById('pw-form').addEventListener('submit', async function(e) {
         e.preventDefault();
         clearMsg();
-
         var newPw = document.getElementById('new_password').value;
         var confirmPw = document.getElementById('confirm_password').value;
-        var totp = document.getElementById('pw_totp').value;
-        var currentPw = document.getElementById('current_password').value;
 
-        if (newPw !== confirmPw) {
-            showMsg('error', 'Passwords do not match');
-            return;
-        }
-        if (newPw.length < 36) {
-            showMsg('error', 'Password must be at least 36 characters');
-            return;
-        }
+        if (newPw.length < 36) { showMsg('error', 'Password must be at least 36 characters.'); return; }
+        if (newPw !== confirmPw) { showMsg('error', 'Passwords do not match.'); return; }
 
         var btn = document.getElementById('pw-btn');
         btn.disabled = true;
@@ -167,27 +147,23 @@
         try {
             var resp = await fetch('/auth/password/change', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
-                    current_password: currentPw,
-                    new_password: newPw,
-                    totp_code: totp
+                    current_password: savedPassword,
+                    new_password: newPw
                 })
             });
             var data = await resp.json();
-
             if (resp.ok) {
-                showMsg('success', 'Password changed successfully. Redirecting to dashboard...');
-                setTimeout(function() { window.location.href = '/admin/'; }, 2000);
+                document.getElementById('pw-form').className = 'hidden';
+                showMsg('success', 'Password changed. Please sign in with your new password.');
+                document.getElementById('page-subtitle').textContent = 'Admin Control Plane';
+                document.getElementById('login-form').className = '';
+                document.getElementById('password').value = '';
+                document.getElementById('totp_code').value = '';
+                document.getElementById('username').focus();
             } else {
-                var msg = 'Password change failed';
-                if (data.detail) {
-                    if (typeof data.detail === 'string') msg = data.detail;
-                    else if (data.detail.error) msg = data.detail.error;
-                    else if (Array.isArray(data.detail)) msg = data.detail.map(function(d) { return d.msg; }).join(', ');
-                    else msg = JSON.stringify(data.detail);
-                }
-                showMsg('error', msg);
+                showMsg('error', parseError(data));
             }
         } catch (err) {
             showMsg('error', 'Connection error: ' + err.message);
