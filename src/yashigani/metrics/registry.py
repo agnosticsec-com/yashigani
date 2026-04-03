@@ -502,6 +502,101 @@ audit_partition_missing = _G(
 )
 
 
+# ---------------------------------------------------------------------------
+# v2.0 — Routing, budget, sensitivity, pool metrics (P1-P5 alert targets)
+# ---------------------------------------------------------------------------
+
+# OPA routing safety net
+yashigani_opa_safety_blocks_total = Counter(
+    "yashigani_opa_safety_blocks_total",
+    "OPA routing safety net blocks — sensitive data heading to cloud",
+)
+
+# Sensitivity classification
+yashigani_sensitivity_detections_total = Counter(
+    "yashigani_sensitivity_detections_total",
+    "Sensitivity detections by classification level",
+    ["level"],
+)
+
+yashigani_sensitivity_conflicts_total = Counter(
+    "yashigani_sensitivity_conflicts_total",
+    "Sensitivity classification conflicts between scanner layers",
+)
+
+yashigani_sensitivity_ceiling_breaches_total = Counter(
+    "yashigani_sensitivity_ceiling_breaches_total",
+    "Identity accessed data above their sensitivity ceiling",
+)
+
+# Routing decisions
+yashigani_routing_decisions_total = Counter(
+    "yashigani_routing_decisions_total",
+    "Optimization Engine routing decisions by rule and route",
+    ["rule", "route"],
+)
+
+yashigani_oe_decision_duration_seconds = Histogram(
+    "yashigani_oe_decision_duration_seconds",
+    "Optimization Engine decision latency",
+    buckets=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1],
+)
+
+# Budget
+yashigani_budget_tokens_total = Counter(
+    "yashigani_budget_tokens_total",
+    "Cloud tokens consumed by provider and identity kind",
+    ["provider", "kind", "route"],
+)
+
+yashigani_budget_exhausted_total = Counter(
+    "yashigani_budget_exhausted_total",
+    "Budget exhaustion events — identity auto-switched to local",
+)
+
+yashigani_budget_utilisation_pct = Gauge(
+    "yashigani_budget_utilisation_pct",
+    "Budget utilisation percentage by identity",
+    ["identity_id"],
+)
+
+# Pool Manager
+yashigani_pool_containers_active = Gauge(
+    "yashigani_pool_containers_active",
+    "Currently active managed containers",
+)
+
+yashigani_pool_containers_created_total = Counter(
+    "yashigani_pool_containers_created_total",
+    "Containers created by Pool Manager",
+)
+
+yashigani_pool_containers_replaced_total = Counter(
+    "yashigani_pool_containers_replaced_total",
+    "Containers replaced due to health failures",
+)
+
+yashigani_pool_containers_idle_teardown_total = Counter(
+    "yashigani_pool_containers_idle_teardown_total",
+    "Containers torn down due to idle timeout",
+)
+
+yashigani_pool_scale_failures_total = Counter(
+    "yashigani_pool_scale_failures_total",
+    "Failed scaling attempts — resources exhausted",
+)
+
+yashigani_pool_postmortems_total = Counter(
+    "yashigani_pool_postmortems_total",
+    "Postmortem forensic reports collected",
+)
+
+yashigani_pool_limit_exceeded_total = Counter(
+    "yashigani_pool_limit_exceeded_total",
+    "Container creation blocked by license tier limit",
+)
+
+
 def get_metrics() -> dict:
     """Return a flat dict of all metric objects — useful for testing."""
     return {k: v for k, v in globals().items() if not k.startswith("_") and k not in (

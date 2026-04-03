@@ -344,6 +344,17 @@ def _bootstrap():
     except Exception as exc:
         logger.warning("EventBus unavailable (%s) — SSE feed will return 503", exc)
 
+    # v2.1 — Break glass emergency access
+    try:
+        from yashigani.auth.break_glass import init_break_glass
+        import redis as _redis
+        redis_bg = _redis.from_url(f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/0", decode_responses=True)
+        redis_bg.ping()
+        backoffice_state.break_glass_manager = init_break_glass(redis_bg, audit_writer)
+        logger.info("Break glass manager initialized")
+    except Exception as exc:
+        logger.warning("Break glass unavailable (%s)", exc)
+
 
 _bootstrap()
 app = create_backoffice_app()
