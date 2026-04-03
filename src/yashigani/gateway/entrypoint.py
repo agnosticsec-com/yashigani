@@ -299,6 +299,7 @@ def _build_app():
         audit_writer=audit_writer,
         ollama_url=ollama_url,
         default_model=model,
+        agent_registry=agent_registry,
     )
 
     gateway_app = create_gateway_app(
