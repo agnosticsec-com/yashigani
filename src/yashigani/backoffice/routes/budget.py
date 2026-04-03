@@ -111,14 +111,16 @@ class BudgetAdminState:
     def __init__(self):
         self.budget_enforcer = None
         self.identity_registry = None
+        self.budget_store = None
 
 
 _state = BudgetAdminState()
 
 
-def configure(budget_enforcer=None, identity_registry=None):
+def configure(budget_enforcer=None, identity_registry=None, budget_store=None):
     _state.budget_enforcer = budget_enforcer
     _state.identity_registry = identity_registry
+    _state.budget_store = budget_store
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────
@@ -127,14 +129,20 @@ def configure(budget_enforcer=None, identity_registry=None):
 @router.get("/org-caps")
 async def list_org_caps():
     """List all organisation cloud caps."""
-    # In v1.0, org caps are stored in the budget enforcer's Redis
-    # Full Postgres CRUD will be wired in integration
-    return {"org_caps": [], "message": "Org caps — configure via POST"}
+    if _state.budget_store:
+        caps = await _state.budget_store.get_org_caps("00000000-0000-0000-0000-000000000000")
+        return {"org_caps": caps}
+    return {"org_caps": []}
 
 
 @router.post("/org-caps", response_model=OrgCapResponse, status_code=201)
 async def create_org_cap(body: OrgCapRequest):
     """Set an organisation's cloud token cap for a provider."""
+    if _state.budget_store:
+        await _state.budget_store.set_org_cap(
+            "00000000-0000-0000-0000-000000000000",
+            body.org_id, body.provider, body.token_cap, body.period,
+        )
     return OrgCapResponse(
         org_id=body.org_id,
         provider=body.provider,
@@ -146,15 +154,20 @@ async def create_org_cap(body: OrgCapRequest):
 @router.get("/groups")
 async def list_group_budgets():
     """List all group budgets."""
+    if _state.budget_store:
+        budgets = await _state.budget_store.get_group_budgets("00000000-0000-0000-0000-000000000000")
+        return {"group_budgets": budgets}
     return {"group_budgets": []}
 
 
 @router.post("/groups", response_model=GroupBudgetResponse, status_code=201)
 async def create_group_budget(body: GroupBudgetRequest):
-    """
-    Set a group's budget. If distribute_evenly=true, auto-distribute
-    to all members of the group.
-    """
+    """Set a group's budget."""
+    if _state.budget_store:
+        await _state.budget_store.set_group_budget(
+            "00000000-0000-0000-0000-000000000000",
+            body.group_id, body.provider, body.token_budget, body.period,
+        )
     return GroupBudgetResponse(
         group_id=body.group_id,
         provider=body.provider,
@@ -167,17 +180,20 @@ async def create_group_budget(body: GroupBudgetRequest):
 @router.get("/individuals")
 async def list_individual_budgets():
     """List all individual budgets."""
+    if _state.budget_store:
+        budgets = await _state.budget_store.get_individual_budgets("00000000-0000-0000-0000-000000000000")
+        return {"individual_budgets": budgets}
     return {"individual_budgets": []}
 
 
 @router.post("/individuals", response_model=IndividualBudgetResponse, status_code=201)
 async def create_individual_budget(body: IndividualBudgetRequest):
-    """
-    Set an individual identity's budget.
-
-    Validates that the sum of all individuals in the identity's groups
-    does not exceed the group budget.
-    """
+    """Set an individual identity's budget."""
+    if _state.budget_store:
+        await _state.budget_store.set_individual_budget(
+            "00000000-0000-0000-0000-000000000000",
+            body.identity_id, body.provider, body.token_budget, body.period,
+        )
     return IndividualBudgetResponse(
         identity_id=body.identity_id,
         provider=body.provider,

@@ -343,6 +343,30 @@ def _build_app():
     )
     collector.start()
 
+    # ── v2.1: Pool Manager health monitor (background daemon) ─────────────
+    try:
+        from yashigani.pool.manager import PoolManager
+        from yashigani.pool.health import PoolHealthMonitor
+
+        # Try to connect to Docker/Podman SDK
+        docker_client = None
+        try:
+            import docker
+            docker_client = docker.from_env()
+            docker_client.ping()
+        except Exception:
+            logger.info("Pool Manager: no Docker SDK or daemon — running in stub mode")
+
+        pool_manager = PoolManager(
+            docker_client=docker_client,
+            tier=os.getenv("YASHIGANI_LICENSE_TIER", "community"),
+        )
+        pool_health = PoolHealthMonitor(pool_manager)
+        pool_health.start()
+        logger.info("Pool Manager health monitor started (daemon thread)")
+    except Exception as exc:
+        logger.warning("Pool Manager unavailable (%s) — container isolation disabled", exc)
+
     return gateway_app
 
 
