@@ -7,22 +7,25 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        .card { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); padding: 2rem; width: 100%; max-width: 400px; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); padding: 2rem; width: 100%; max-width: 420px; }
         h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; text-align: center; }
         .subtitle { color: #94a3b8; font-size: 0.85rem; text-align: center; margin-top: 4px; margin-bottom: 1.5rem; }
         label { display: block; font-size: 0.85rem; font-weight: 500; color: #475569; margin-bottom: 4px; }
         input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; outline: none; margin-bottom: 1rem; }
         input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
         .totp-input { text-align: center; font-size: 1.3rem; letter-spacing: 0.3em; }
-        button { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; }
+        button { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; margin-top: 0.5rem; }
         button:hover { background: #1d4ed8; }
         button:disabled { background: #93c5fd; cursor: not-allowed; }
-        .error { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
-        .error.visible { display: block; }
-        .success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #16a34a; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
-        .success.visible { display: block; }
+        .msg { padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
+        .msg.error { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; }
+        .msg.success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #16a34a; }
+        .msg.info { background: #eff6ff; border: 1px solid #bfdbfe; color: #2563eb; }
+        .msg.visible { display: block; }
         .footer { text-align: center; color: #94a3b8; font-size: 0.75rem; margin-top: 1.5rem; }
         .field { margin-bottom: 1rem; }
+        .hidden { display: none; }
+        .pw-hint { font-size: 0.75rem; color: #94a3b8; margin-top: -0.5rem; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
@@ -30,9 +33,9 @@
         <h1>Yashigani</h1>
         <p class="subtitle">Admin Control Plane</p>
 
-        <div id="error-box" class="error"></div>
-        <div id="success-box" class="success"></div>
+        <div id="msg-box" class="msg"></div>
 
+        <!-- Login Form -->
         <form id="login-form">
             <div class="field">
                 <label for="username">Username</label>
@@ -46,24 +49,55 @@
                 <label for="totp_code">TOTP Code</label>
                 <input type="text" id="totp_code" name="totp_code" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" autocomplete="one-time-code" class="totp-input" placeholder="000000">
             </div>
-            <button type="submit" id="submit-btn">Sign In</button>
+            <button type="submit" id="login-btn">Sign In</button>
+        </form>
+
+        <!-- Password Change Form (shown after login if force_password_change) -->
+        <form id="password-form" class="hidden">
+            <div id="pw-info" class="msg info visible">First login — please set a new password (minimum 36 characters).</div>
+            <div class="field">
+                <label for="current_password">Current Password</label>
+                <input type="password" id="current_password" name="current_password" required>
+            </div>
+            <div class="field">
+                <label for="new_password">New Password</label>
+                <input type="password" id="new_password" name="new_password" required minlength="36">
+                <p class="pw-hint">Minimum 36 characters. Use a password manager.</p>
+            </div>
+            <div class="field">
+                <label for="confirm_password">Confirm New Password</label>
+                <input type="password" id="confirm_password" name="confirm_password" required minlength="36">
+            </div>
+            <div class="field">
+                <label for="pw_totp">TOTP Code</label>
+                <input type="text" id="pw_totp" name="pw_totp" required pattern="[0-9]{6}" maxlength="6" inputmode="numeric" class="totp-input" placeholder="000000">
+            </div>
+            <button type="submit" id="pw-btn">Change Password</button>
         </form>
 
         <p class="footer">Yashigani v2.1 &mdash; Agnostic Security</p>
     </div>
 
     <script>
+    var loginCredentials = {};
+
+    function showMsg(type, text) {
+        var box = document.getElementById('msg-box');
+        box.className = 'msg ' + type + ' visible';
+        box.textContent = text;
+    }
+
+    function clearMsg() {
+        var box = document.getElementById('msg-box');
+        box.className = 'msg';
+        box.textContent = '';
+    }
+
+    // Login handler
     document.getElementById('login-form').addEventListener('submit', async function(e) {
         e.preventDefault();
-
-        var errorBox = document.getElementById('error-box');
-        var successBox = document.getElementById('success-box');
-        var btn = document.getElementById('submit-btn');
-
-        errorBox.className = 'error';
-        errorBox.textContent = '';
-        successBox.className = 'success';
-        successBox.textContent = '';
+        clearMsg();
+        var btn = document.getElementById('login-btn');
         btn.disabled = true;
         btn.textContent = 'Authenticating...';
 
@@ -77,13 +111,15 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: username, password: password, totp_code: totp_code })
             });
-
             var data = await resp.json();
 
             if (resp.ok) {
                 if (data.force_password_change) {
-                    successBox.textContent = 'Login successful. Password change required on first login — this feature is coming soon.';
-                    successBox.className = 'success visible';
+                    // Show password change form
+                    loginCredentials = { username: username, password: password };
+                    document.getElementById('login-form').className = 'hidden';
+                    document.getElementById('password-form').className = '';
+                    document.getElementById('current_password').value = password;
                 } else {
                     window.location.href = '/admin/';
                 }
@@ -95,15 +131,69 @@
                     else if (Array.isArray(data.detail)) msg = data.detail.map(function(d) { return d.msg; }).join(', ');
                     else msg = JSON.stringify(data.detail);
                 }
-                errorBox.textContent = msg;
-                errorBox.className = 'error visible';
+                showMsg('error', msg);
             }
         } catch (err) {
-            errorBox.textContent = 'Connection error: ' + err.message;
-            errorBox.className = 'error visible';
+            showMsg('error', 'Connection error: ' + err.message);
         } finally {
             btn.disabled = false;
             btn.textContent = 'Sign In';
+        }
+    });
+
+    // Password change handler
+    document.getElementById('password-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        clearMsg();
+
+        var newPw = document.getElementById('new_password').value;
+        var confirmPw = document.getElementById('confirm_password').value;
+        var totp = document.getElementById('pw_totp').value;
+        var currentPw = document.getElementById('current_password').value;
+
+        if (newPw !== confirmPw) {
+            showMsg('error', 'Passwords do not match');
+            return;
+        }
+        if (newPw.length < 36) {
+            showMsg('error', 'Password must be at least 36 characters');
+            return;
+        }
+
+        var btn = document.getElementById('pw-btn');
+        btn.disabled = true;
+        btn.textContent = 'Changing...';
+
+        try {
+            var resp = await fetch('/auth/password/change', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    current_password: currentPw,
+                    new_password: newPw,
+                    totp_code: totp
+                })
+            });
+            var data = await resp.json();
+
+            if (resp.ok) {
+                showMsg('success', 'Password changed successfully. Redirecting to dashboard...');
+                setTimeout(function() { window.location.href = '/admin/'; }, 2000);
+            } else {
+                var msg = 'Password change failed';
+                if (data.detail) {
+                    if (typeof data.detail === 'string') msg = data.detail;
+                    else if (data.detail.error) msg = data.detail.error;
+                    else if (Array.isArray(data.detail)) msg = data.detail.map(function(d) { return d.msg; }).join(', ');
+                    else msg = JSON.stringify(data.detail);
+                }
+                showMsg('error', msg);
+            }
+        } catch (err) {
+            showMsg('error', 'Connection error: ' + err.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Change Password';
         }
     });
     </script>
