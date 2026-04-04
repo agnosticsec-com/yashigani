@@ -163,7 +163,9 @@ services:
       WEBUI_AUTH: "false"
       WEBUI_AUTH_TRUSTED_EMAIL_HEADER: "X-Forwarded-User"
       WEBUI_AUTH_TRUSTED_NAME_HEADER: "X-Forwarded-Name"
-      ENABLE_SIGNUP: "false"
+      ENABLE_SIGNUP: "true"
+      # Secret key for JWT signing — allows programmatic API access
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:-yashigani-owui-secret}"
       # Point ALL inference at Yashigani gateway — OpenAI-compatible
       OPENAI_API_BASE_URL: http://gateway:8080/v1
       OPENAI_API_KEY: "yashigani-internal"
