@@ -14,7 +14,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession, get_session_store, _SESSION_COOKIE
+from yashigani.backoffice.middleware import AdminSession, AnySession, get_session_store, _SESSION_COOKIE
 from yashigani.backoffice.state import backoffice_state
 from yashigani.auth.totp import verify_totp, generate_provisioning, generate_recovery_code_set
 
@@ -136,7 +136,7 @@ async def verify_session(request: Request):
 @router.post("/password/change")
 async def change_password(
     body: PasswordChangeRequest,
-    session: AdminSession,
+    session: AnySession,
     response: Response,
     store=Depends(get_session_store),
 ):
@@ -169,7 +169,7 @@ async def change_password(
 @router.post("/totp/provision")
 async def provision_totp(
     body: TotpConfirmRequest,
-    session: AdminSession,
+    session: AnySession,
     response: Response,
 ):
     """
