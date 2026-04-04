@@ -33,7 +33,7 @@ services:
   # everything else to gateway.
   # ---------------------------------------------------------------------------
   caddy:
-    image: caddy:2-alpine
+    image: docker.io/library/caddy:2-alpine
     restart: unless-stopped
     ports:
       - "80:80"
@@ -198,7 +198,7 @@ services:
   # Separate from main Redis to prevent counter loss under memory pressure.
   # ---------------------------------------------------------------------------
   budget-redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     restart: unless-stopped
     entrypoint: ["sh", "-c"]
     command:
@@ -226,7 +226,7 @@ services:
   # Policy — OPA (Open Policy Agent) — always local, never cloud-delegated
   # ---------------------------------------------------------------------------
   policy:
-    image: openpolicyagent/opa:1.15.1
+    image: docker.io/openpolicyagent/opa:1.15.1
     restart: unless-stopped
     command:
       - "run"
@@ -252,7 +252,7 @@ services:
   # Redis — session store + TOTP provisioning tokens + rate limiter counters
   # ---------------------------------------------------------------------------
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     restart: unless-stopped
     command: >
       sh -c 'redis-server
@@ -279,7 +279,7 @@ services:
   # Ollama — local LLM inference (never a cloud call for security classification)
   # ---------------------------------------------------------------------------
   ollama:
-    image: ollama/ollama:0.6.2
+    image: docker.io/ollama/ollama:0.6.2
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
@@ -306,7 +306,7 @@ services:
 
   # Model bootstrap — pull classifier model on first start
   ollama-init:
-    image: ollama/ollama:0.6.2
+    image: docker.io/ollama/ollama:0.6.2
     restart: on-failure:3
     entrypoint: ["/bin/bash", "-c"]
     command:
@@ -328,7 +328,7 @@ services:
   # Exposed externally only via Caddy /metrics-federate (basic auth)
   # ---------------------------------------------------------------------------
   prometheus:
-    image: prom/prometheus:v3.2.1
+    image: docker.io/prom/prometheus:v3.2.1
     restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -353,7 +353,7 @@ services:
   # Admin password auto-generated at bootstrap (check backoffice logs)
   # ---------------------------------------------------------------------------
   grafana:
-    image: grafana/grafana:11.5.2
+    image: docker.io/grafana/grafana:11.5.2
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-grafana-admin}
@@ -385,7 +385,7 @@ services:
   # PostgreSQL 16 — primary durable store (tenants, audit, inference, RBAC)
   # ---------------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: yashigani
@@ -413,7 +413,7 @@ services:
   # PgBouncer — transaction-mode connection pooler
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: edoburu/pgbouncer:v1.23.1-p0
+    image: docker.io/edoburu/pgbouncer:v1.23.1-p0
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/yashigani
@@ -442,7 +442,7 @@ services:
   # Alertmanager — alert routing (Slack → Email → PagerDuty)
   # ---------------------------------------------------------------------------
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: docker.io/prom/alertmanager:v0.27.0
     restart: unless-stopped
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
@@ -466,7 +466,7 @@ services:
   # Loki — log aggregation backend
   # ---------------------------------------------------------------------------
   loki:
-    image: grafana/loki:3.0.0
+    image: docker.io/grafana/loki:3.0.0
     restart: unless-stopped
     command: -config.file=/etc/loki/loki.yml
     volumes:
@@ -484,7 +484,7 @@ services:
   # Promtail — ships Docker container logs to Loki
   # ---------------------------------------------------------------------------
   promtail:
-    image: grafana/promtail:3.0.0
+    image: docker.io/grafana/promtail:3.0.0
     restart: unless-stopped
     command: -config.file=/etc/promtail/promtail.yml
     volumes:
@@ -505,7 +505,7 @@ services:
   # OpenTelemetry Collector — OTLP receiver, Jaeger exporter
   # ---------------------------------------------------------------------------
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.100.0
+    image: docker.io/otel/opentelemetry-collector-contrib:0.100.0
     restart: unless-stopped
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
@@ -524,7 +524,7 @@ services:
   # Jaeger — distributed trace UI
   # ---------------------------------------------------------------------------
   jaeger:
-    image: jaegertracing/all-in-one:1.57
+    image: docker.io/jaegertracing/all-in-one:1.57
     restart: unless-stopped
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
@@ -542,7 +542,7 @@ services:
   # WARNING: dev-mode — data NOT persisted. NOT for production.
   # ---------------------------------------------------------------------------
   vault:
-    image: hashicorp/vault:1.16
+    image: docker.io/hashicorp/vault:1.16
     restart: unless-stopped
     cap_add:
       - IPC_LOCK
