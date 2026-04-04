@@ -18,6 +18,7 @@ from yashigani.chs.resource_monitor import ResourceMonitor
 from yashigani.ratelimit.limiter import RateLimiter
 from yashigani.rbac.store import RBACStore
 from yashigani.agents.registry import AgentRegistry
+from yashigani.auth.broker import IdentityBroker
 
 
 @dataclass
@@ -33,6 +34,8 @@ class BackofficeState:
     rate_limiter: Optional[RateLimiter] = None
     rbac_store: Optional[RBACStore] = None
     agent_registry: Optional[AgentRegistry] = None
+    identity_broker: Optional[IdentityBroker] = None    # v2.1 — SSO
+    identity_registry: Optional[Any] = None              # v2.1 — SSO identity resolution
     # BackendRegistry and BackendConfigStore use Optional[Any] to avoid
     # circular imports — inspection/ would create a circular dependency chain
     # through state.py if imported directly.

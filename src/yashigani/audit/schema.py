@@ -101,6 +101,9 @@ class EventType(str, Enum):
     WEBAUTHN_CREDENTIAL_REGISTERED = "WEBAUTHN_CREDENTIAL_REGISTERED"
     WEBAUTHN_CREDENTIAL_USED = "WEBAUTHN_CREDENTIAL_USED"
     WEBAUTHN_CREDENTIAL_DELETED = "WEBAUTHN_CREDENTIAL_DELETED"
+    # v2.1 — SSO / OIDC
+    SSO_LOGIN_SUCCESS = "SSO_LOGIN_SUCCESS"
+    SSO_LOGIN_FAILURE = "SSO_LOGIN_FAILURE"
 
 
 # ---------------------------------------------------------------------------
@@ -740,3 +743,41 @@ class WebAuthnCredentialDeletedEvent(AuditEvent):
     masking_applied: bool = True
     admin_account: str = ""
     credential_uuid: str = ""
+
+
+# ---------------------------------------------------------------------------
+# v2.1 — SSO / OIDC events
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SSOLoginSuccessEvent(AuditEvent):
+    """
+    Written when a user authenticates successfully via an SSO IdP.
+    Email is stored here because it is the observable identity claim;
+    masking_applied=True suppresses it in lower-assurance audit sinks.
+    """
+    event_type: str = EventType.SSO_LOGIN_SUCCESS
+    account_tier: str = AccountTier.USER
+    masking_applied: bool = True
+    idp_id: str = ""
+    idp_name: str = ""
+    identity_id: str = ""          # Yashigani identity_id (resolved or created)
+    email_hash: str = ""           # SHA-256 hex of email — raw email never stored
+    groups: list = field(default_factory=list)
+    client_ip_prefix: str = ""     # Last octet masked
+
+
+@dataclass
+class SSOLoginFailureEvent(AuditEvent):
+    """
+    Written when an SSO callback cannot be completed.
+    Failure reason is stored verbatim (no user-supplied values leak here
+    because the reason comes from internal validation, not the IdP response body).
+    """
+    event_type: str = EventType.SSO_LOGIN_FAILURE
+    account_tier: str = AccountTier.USER
+    masking_applied: bool = True
+    idp_id: str = ""
+    idp_name: str = ""
+    failure_reason: str = ""
+    client_ip_prefix: str = ""

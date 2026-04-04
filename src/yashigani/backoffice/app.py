@@ -43,6 +43,7 @@ from yashigani.backoffice.routes import (
     # v2.1
     models_router,
     sensitivity_router,
+    sso_router,
 )
 
 
@@ -177,6 +178,8 @@ def create_backoffice_app() -> FastAPI:
     # v2.1 — Model alias management + Sensitivity patterns
     app.include_router(models_router, prefix="/admin/models", tags=["models"])
     app.include_router(sensitivity_router, prefix="/admin/sensitivity", tags=["sensitivity"])
+    # v2.1 — SSO / OIDC login flow (no auth required — serves anonymous users)
+    app.include_router(sso_router, prefix="/auth", tags=["sso"])
 
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)
