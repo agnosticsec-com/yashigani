@@ -2,130 +2,87 @@
 """
 Pre-populate Open WebUI with Yashigani agent models.
 
-Run from the backoffice container after agents are registered:
-  python3 /app/scripts/init-openwebui-agents.py
+Run inside the open-webui container:
+  podman exec open-webui python3 /tmp/init-openwebui-agents.py
 
-Creates a system admin account in Open WebUI and registers all active
-agents from the Yashigani agent registry as selectable models.
-Users see these as @AgentName in the Open WebUI model picker.
+Inserts agent models directly into Open WebUI's SQLite DB.
+Idempotent — skips agents that already exist.
 """
 import json
 import os
-import sys
+import sqlite3
 import time
-import urllib.request
-import urllib.error
 
-OWUI_URL = os.getenv("OWUI_URL", "http://open-webui:8080")
-SYSTEM_EMAIL = "yashigani-system@yashigani.local"
-SYSTEM_NAME = "Yashigani System"
-SYSTEM_PASS = os.getenv("OWUI_SYSTEM_PASSWORD", "yashigani-system-auto-2026")
+DB_PATH = os.getenv("OWUI_DB_PATH", "/app/backend/data/webui.db")
 
+# Admin user ID — first user created in Open WebUI (auto-provisioned via trusted header)
+ADMIN_USER_ID = os.getenv("OWUI_ADMIN_USER_ID", "")
 
-def owui_request(path, data=None, token=None, method="GET"):
-    """Make a request to Open WebUI API."""
-    url = OWUI_URL + path
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = "Bearer " + token
-    body = json.dumps(data).encode() if data else None
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        resp = urllib.request.urlopen(req, timeout=10)
-        return json.loads(resp.read()), resp.status
-    except urllib.error.HTTPError as e:
-        return {"error": e.read().decode()[:200]}, e.code
-    except Exception as e:
-        return {"error": str(e)}, 0
-
-
-def get_token():
-    """Get system account JWT via signup or signin."""
-    # Try signup
-    data, code = owui_request("/api/v1/auths/signup", {
-        "email": SYSTEM_EMAIL,
-        "name": SYSTEM_NAME,
-        "password": SYSTEM_PASS,
-        "profile_image_url": "",
-    }, method="POST")
-    if code in (200, 201) and "token" in data:
-        return data["token"]
-
-    # Try signin (password-based)
-    data, code = owui_request("/api/v1/auths/signin", {
-        "email": SYSTEM_EMAIL,
-        "password": SYSTEM_PASS,
-    }, method="POST")
-    if code == 200 and "token" in data:
-        return data["token"]
-
-    return None
-
-
-def get_agents():
-    """Get active agents from Yashigani agent registry via Redis."""
-    try:
-        import redis
-        pwd = open("/run/secrets/redis_password").read().strip()
-        r = redis.from_url("redis://:" + pwd + "@redis:6379/3", decode_responses=False)
-        from yashigani.agents.registry import AgentRegistry
-        reg = AgentRegistry(redis_client=r)
-        return [a for a in reg.list_all() if a.get("status") == "active"]
-    except Exception as e:
-        print("Warning: could not read agent registry:", e, file=sys.stderr)
-        return []
+AGENTS = [
+    {
+        "id": "@LangGraph",
+        "name": "LangGraph Agent",
+        "base_model_id": "qwen2.5:3b",
+        "description": "AI agent framework by LangChain. Multi-step reasoning, tool use, and memory.",
+    },
+    {
+        "id": "@OpenClaw",
+        "name": "OpenClaw Agent",
+        "base_model_id": "qwen2.5:3b",
+        "description": "Open-source AI agent with web search, code execution, and file management.",
+    },
+    {
+        "id": "@Goose",
+        "name": "Goose Agent",
+        "base_model_id": "qwen2.5:3b",
+        "description": "AI developer assistant by Block. Code generation, debugging, and shell commands.",
+    },
+]
 
 
 def main():
-    # Wait for Open WebUI to be ready
-    for i in range(30):
-        try:
-            urllib.request.urlopen(OWUI_URL + "/health", timeout=5)
-            break
-        except Exception:
-            if i == 29:
-                print("ERROR: Open WebUI not ready after 30 attempts")
-                sys.exit(1)
-            time.sleep(2)
+    db = sqlite3.connect(DB_PATH)
 
-    token = get_token()
-    if not token:
-        print("ERROR: Could not get Open WebUI API token")
-        sys.exit(1)
-    print("Auth: OK")
-
-    # Get agents from registry
-    agents = get_agents()
-    if not agents:
-        print("No agents in registry — skipping model creation")
-        return
-
-    # Create each agent as an Open WebUI model
-    for agent in agents:
-        name = agent.get("name", "Unknown")
-        model_id = "@" + name
-        desc = "Yashigani agent: " + name + " @ " + agent.get("upstream_url", "?")
-
-        data, code = owui_request("/api/models/create", {
-            "id": model_id,
-            "name": name + " Agent",
-            "meta": {
-                "description": desc,
-                "profile_image_url": "",
-                "capabilities": {"usage": True},
-            },
-            "base_model_id": "qwen2.5:3b",
-            "params": {},
-        }, token=token, method="POST")
-
-        if code in (200, 201):
-            print("OK: " + name)
-        elif "already exists" in str(data.get("error", "")).lower():
-            print("EXISTS: " + name)
+    # Find the admin user ID if not provided
+    admin_id = ADMIN_USER_ID
+    if not admin_id:
+        row = db.execute(
+            "SELECT id FROM user WHERE role = 'admin' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row:
+            admin_id = row[0]
         else:
-            print("FAIL: " + name + " " + str(code) + " " + str(data.get("error", ""))[:100])
+            # No admin yet — use a placeholder (will be adopted by first admin login)
+            admin_id = "00000000-0000-0000-0000-000000000000"
 
-    print("Agent model setup complete")
+    now = int(time.time())
+
+    for agent in AGENTS:
+        # Check if exists
+        existing = db.execute(
+            "SELECT id FROM model WHERE id = ?", (agent["id"],)
+        ).fetchone()
+        if existing:
+            print("EXISTS: " + agent["name"])
+            continue
+
+        meta = json.dumps({
+            "description": agent["description"],
+            "profile_image_url": "",
+            "capabilities": {"usage": True},
+        })
+
+        db.execute(
+            "INSERT INTO model (id, user_id, base_model_id, name, meta, params, created_at, updated_at, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent["id"], admin_id, agent["base_model_id"], agent["name"],
+             meta, "{}", now, now, True),
+        )
+        print("OK: " + agent["name"])
+
+    db.commit()
+    db.close()
+    print("Done")
 
 
 if __name__ == "__main__":
