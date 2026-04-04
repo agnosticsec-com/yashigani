@@ -1376,12 +1376,47 @@ compose_pull() {
     log_info "Podman images already built — skipping compose build"
   fi
 
-  # Pull all remote images (skip services that are built locally)
-  log_info "Pulling remote container images..."
-  "${COMPOSE_CMD[@]}" -f "$compose_file" pull --ignore-buildable 2>/dev/null || \
-  "${COMPOSE_CMD[@]}" -f "$compose_file" pull --ignore-pull-failures 2>/dev/null || \
-  "${COMPOSE_CMD[@]}" -f "$compose_file" pull 2>/dev/null || true
-  log_success "Container images ready"
+  # Pull all remote images
+  if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
+    # Podman: pull images in parallel for speed (podman-compose pull is sequential)
+    log_info "Pulling remote container images (parallel)..."
+    local _images
+    _images=$(grep '^\s*image:' "$compose_file" | sed 's/.*image:\s*//' | sed 's/\s*$//' \
+      | grep -v 'yashigani/' | grep -v '${' | sort -u)
+    # Add profile images if selected
+    for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
+      [[ -z "$_profile" ]] && continue
+      case "$_profile" in
+        langgraph) _images="$_images
+docker.io/langchain/langgraph-api:0.7.91-py3.12-bookworm" ;;
+        goose) _images="$_images
+ghcr.io/block/goose:latest" ;;
+        openclaw) _images="$_images
+ghcr.io/openclaw/openclaw:latest" ;;
+      esac
+    done
+    # Pull 4 at a time
+    local _count=0
+    local _total
+    _total=$(echo "$_images" | grep -c .)
+    for _img in $_images; do
+      [[ -z "$_img" ]] && continue
+      podman pull "$_img" >/dev/null 2>&1 &
+      _count=$((_count + 1))
+      if [[ $((_count % 4)) -eq 0 ]]; then
+        wait
+        log_info "  pulled $_count/$_total images..."
+      fi
+    done
+    wait
+    log_success "All $_total remote images pulled"
+  else
+    log_info "Pulling remote container images..."
+    "${COMPOSE_CMD[@]}" -f "$compose_file" pull --ignore-buildable 2>/dev/null || \
+    "${COMPOSE_CMD[@]}" -f "$compose_file" pull --ignore-pull-failures 2>/dev/null || \
+    "${COMPOSE_CMD[@]}" -f "$compose_file" pull 2>/dev/null || true
+    log_success "Container images ready"
+  fi
 }
 
 # Ensure Docker daemon is running — prompt user to start it if not
@@ -1851,6 +1886,16 @@ for r in results:
       "${COMPOSE_CMD[@]}" "${compose_files[@]}" --profile "$_profile" restart "$_profile" 2>/dev/null || true
     done
     log_success "Agent bundle registration complete"
+
+    # Pre-populate agents in Open WebUI's database
+    log_info "Syncing agents to Open WebUI..."
+    local init_script="${WORK_DIR}/scripts/init-openwebui-agents.py"
+    if [[ -f "$init_script" ]]; then
+      "${COMPOSE_CMD[@]}" "${compose_files[@]}" cp "$init_script" open-webui:/tmp/init-agents.py 2>/dev/null || \
+        podman cp "$init_script" docker_open-webui_1:/tmp/init-agents.py 2>/dev/null
+      "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T open-webui python3 /tmp/init-agents.py 2>&1 || \
+        podman exec docker_open-webui_1 python3 /tmp/init-agents.py 2>&1 || true
+    fi
   else
     log_warn "No agents were registered — register manually via /admin/agents"
   fi
