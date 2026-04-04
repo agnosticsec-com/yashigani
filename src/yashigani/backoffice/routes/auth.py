@@ -69,7 +69,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
         _make_login_event(body.username, "success", None)
     )
 
-    _set_session_cookie(response, session.token)
+    _set_session_cookie(response, session.token, record.account_tier)
     return {
         "status": "ok",
         "force_password_change": record.force_password_change,
@@ -84,7 +84,8 @@ async def logout(
     store=Depends(get_session_store),
 ):
     store.invalidate(session.token)
-    response.delete_cookie(_SESSION_COOKIE)
+    response.delete_cookie(_SESSION_COOKIE, path="/admin")
+    response.delete_cookie(_USER_SESSION_COOKIE, path="/")
     return {"status": "ok"}
 
 
@@ -104,9 +105,10 @@ async def verify_session(request: Request):
     the authenticated user's identity in response headers.
     200 + X-Forwarded-User header → Caddy proceeds with the request.
     401 → Caddy redirects to login.
+    Checks both user cookie (yashigani_session) and admin cookie (yashigani_admin_session).
     """
     state = backoffice_state
-    token = request.cookies.get(_SESSION_COOKIE)
+    token = request.cookies.get(_USER_SESSION_COOKIE) or request.cookies.get(_SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -209,14 +211,28 @@ async def provision_totp(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _set_session_cookie(response: Response, token: str) -> None:
+_USER_SESSION_COOKIE = "yashigani_session"
+
+
+def _set_session_cookie(response: Response, token: str, account_tier: str = "admin") -> None:
+    if account_tier == "admin":
+        response.set_cookie(
+            key=_SESSION_COOKIE,
+            value=token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=14400,   # 4 hours absolute
+            path="/admin",
+        )
+    # Always set the user-level cookie (used by forward_auth for Open WebUI)
     response.set_cookie(
-        key=_SESSION_COOKIE,
+        key=_USER_SESSION_COOKIE,
         value=token,
         httponly=True,
         secure=True,
         samesite="strict",
-        max_age=14400,   # 4 hours absolute
+        max_age=14400,
         path="/",
     )
 
