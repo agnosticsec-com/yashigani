@@ -510,8 +510,11 @@ services:
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
       - ../config/otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
-    # No healthcheck — scratch image has no shell or HTTP tools.
-    # The health extension runs on :13133 but cannot be probed from inside the container.
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "components"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       - jaeger
     networks:
