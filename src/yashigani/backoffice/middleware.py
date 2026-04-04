@@ -11,6 +11,7 @@ from fastapi import Cookie, Depends, HTTPException, status, Request
 from yashigani.auth.session import SessionStore, Session
 
 _SESSION_COOKIE = "yashigani_admin_session"
+_USER_SESSION_COOKIE = "yashigani_session"
 
 
 def get_session_store() -> SessionStore:
@@ -19,9 +20,13 @@ def get_session_store() -> SessionStore:
     return backoffice_state.session_store
 
 
+def _resolve_token(request: Request) -> Optional[str]:
+    """Read session token from either admin or user cookie."""
+    return request.cookies.get(_SESSION_COOKIE) or request.cookies.get(_USER_SESSION_COOKIE)
+
+
 def require_admin_session(
     request: Request,
-    yashigani_admin_session: Annotated[Optional[str], Cookie()] = None,
     store: SessionStore = Depends(get_session_store),
 ) -> Session:
     """
@@ -29,13 +34,14 @@ def require_admin_session(
     Returns the Session on success, raises HTTP 401 otherwise.
     Verifies account_tier == "admin" to prevent cross-tier access.
     """
-    if not yashigani_admin_session:
+    token = _resolve_token(request)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "authentication_required"},
         )
 
-    session = store.get(yashigani_admin_session)
+    session = store.get(token)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -43,7 +49,6 @@ def require_admin_session(
         )
 
     if session.account_tier != "admin":
-        # Cross-tier attempt — return 403
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": "insufficient_tier"},
@@ -52,4 +57,30 @@ def require_admin_session(
     return session
 
 
+def require_any_session(
+    request: Request,
+    store: SessionStore = Depends(get_session_store),
+) -> Session:
+    """
+    FastAPI dependency that accepts any valid session (admin or user).
+    Used for endpoints accessible to both tiers (password change, TOTP provision).
+    """
+    token = _resolve_token(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "authentication_required"},
+        )
+
+    session = store.get(token)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "session_expired_or_invalid"},
+        )
+
+    return session
+
+
 AdminSession = Annotated[Session, Depends(require_admin_session)]
+AnySession = Annotated[Session, Depends(require_any_session)]
