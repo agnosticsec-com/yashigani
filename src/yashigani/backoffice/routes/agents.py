@@ -158,6 +158,61 @@ def _build_quick_start(agent_id: str, token: str) -> dict:
     }
 
 
+def _push_openwebui_model(agent_name: str, upstream_url: str) -> None:
+    """
+    Insert agent as a selectable model in Open WebUI's SQLite DB.
+    Non-fatal: logs on failure. Idempotent — skips if already exists.
+
+    Requires the openwebui_data volume to be mounted at /data/openwebui
+    in the backoffice container (see docker-compose.yml).
+    """
+    try:
+        import sqlite3
+        import json
+        import time
+        import os
+
+        db_path = os.getenv("OWUI_DB_PATH", "/data/openwebui/webui.db")
+        if not os.path.exists(db_path):
+            logger.warning("Open WebUI DB not found at %s — agent model not synced", db_path)
+            return
+
+        model_id = "@" + agent_name
+        db = sqlite3.connect(db_path)
+
+        # Check if exists
+        existing = db.execute("SELECT id FROM model WHERE id = ?", (model_id,)).fetchone()
+        if existing:
+            logger.info("Open WebUI: model %s already exists", model_id)
+            db.close()
+            return
+
+        # Find admin user ID
+        admin_row = db.execute(
+            "SELECT id FROM user WHERE role = 'admin' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        admin_id = admin_row[0] if admin_row else "00000000-0000-0000-0000-000000000000"
+
+        now = int(time.time())
+        meta = json.dumps({
+            "description": "Yashigani agent: " + agent_name + " @ " + upstream_url,
+            "profile_image_url": "",
+            "capabilities": {"usage": True},
+        })
+
+        db.execute(
+            "INSERT INTO model (id, user_id, base_model_id, name, meta, params, created_at, updated_at, is_active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (model_id, admin_id, os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+             agent_name + " Agent", meta, "{}", now, now, True),
+        )
+        db.commit()
+        db.close()
+        logger.info("Open WebUI: registered model %s", model_id)
+    except Exception as exc:
+        logger.warning("_push_openwebui_model failed: %s", exc)
+
+
 def _push_opa() -> None:
     """
     Push the combined RBAC + agent data to OPA after a registry mutation.
@@ -226,6 +281,7 @@ async def register_agent(
             logger.error("Failed to write AgentRegisteredEvent: %s", exc)
 
     _push_opa()
+    _push_openwebui_model(body.name, body.upstream_url)
 
     return AgentRegisterResponse(
         agent_id=agent_id,
