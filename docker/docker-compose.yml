@@ -132,10 +132,12 @@ services:
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,gemini,fail_closed}
       YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
+      OWUI_DB_PATH: /data/openwebui/webui.db
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets
+      - openwebui_data:/data/openwebui
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""]
       interval: 15s
