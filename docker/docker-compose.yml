@@ -538,6 +538,43 @@ services:
       - internal
 
   # ---------------------------------------------------------------------------
+  # Keycloak — upstream test IdP for OIDC/SAML federation validation
+  # WARNING: dev-mode (start-dev) — NOT for production. Internal network only.
+  # Usage: docker compose --profile test-idp --env-file docker/.env.test-idp up -d
+  # Realm is imported on first boot from docker/keycloak/yashigani-test-realm.json.
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command:
+      - "start-dev"
+      - "--import-realm"
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "false"
+      # H2 is fine for dev-mode; no external DB dependency
+      KC_DB: dev-file
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "bash -c '</dev/tcp/localhost/9000' 2>/dev/null"
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+    profiles:
+      - test-idp
+
+  # ---------------------------------------------------------------------------
   # Vault — HashiCorp Vault dev-mode KMS (opt-in: --profile vault)
   # WARNING: dev-mode — data NOT persisted. NOT for production.
   # ---------------------------------------------------------------------------
@@ -741,6 +778,9 @@ volumes:
   alertmanager_data:
     driver: local
   loki_data:
+    driver: local
+  # Test IdP volume
+  keycloak_data:
     driver: local
   # Agent bundle volumes
   openclaw_data:

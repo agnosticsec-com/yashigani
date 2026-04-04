@@ -344,6 +344,58 @@ def _bootstrap():
     except Exception as exc:
         logger.warning("EventBus unavailable (%s) — SSE feed will return 503", exc)
 
+    # v2.1 — Identity broker (OIDC/SAML SSO)
+    try:
+        from yashigani.auth.broker import IdentityBroker, IdPConfig
+        tier_name = license_state.tier.value if license_state else "community"
+        identity_broker = IdentityBroker(tier=tier_name)
+
+        # Read IdP configurations from environment
+        # Format: YASHIGANI_IDP_<N>_ID, _NAME, _PROTOCOL, _DISCOVERY_URL, _CLIENT_ID, _CLIENT_SECRET, _EMAIL_DOMAINS
+        idp_index = 1
+        while True:
+            prefix = f"YASHIGANI_IDP_{idp_index}_"
+            idp_id = os.getenv(f"{prefix}ID", "")
+            if not idp_id:
+                break
+            idp_config = IdPConfig(
+                id=idp_id,
+                name=os.getenv(f"{prefix}NAME", idp_id),
+                protocol=os.getenv(f"{prefix}PROTOCOL", "oidc"),
+                metadata_url=os.getenv(f"{prefix}DISCOVERY_URL", ""),
+                client_id=os.getenv(f"{prefix}CLIENT_ID", ""),
+                client_secret=os.getenv(f"{prefix}CLIENT_SECRET", ""),
+                email_domains=[
+                    d.strip() for d in os.getenv(f"{prefix}EMAIL_DOMAINS", "").split(",") if d.strip()
+                ],
+            )
+            redirect_uri = os.getenv(
+                f"{prefix}REDIRECT_URI",
+                f"https://{os.getenv('YASHIGANI_TLS_DOMAIN', 'localhost')}/auth/sso/oidc/{idp_id}/callback",
+            )
+            try:
+                identity_broker.add_idp(idp_config, redirect_uri=redirect_uri)
+                logger.info("IdP registered: %s (%s, %s)", idp_id, idp_config.name, idp_config.protocol)
+            except ValueError as exc:
+                logger.warning("IdP %s rejected: %s", idp_id, exc)
+            idp_index += 1
+
+        backoffice_state.identity_broker = identity_broker
+        logger.info("Identity broker initialised: tier=%s, %d IdP(s)", tier_name, len(identity_broker.list_idps()))
+    except Exception as exc:
+        logger.warning("Identity broker init failed (%s) — SSO routes will return 503", exc)
+
+    # v2.1 — Identity registry (Redis db/3, shared with RBAC)
+    try:
+        from yashigani.identity.registry import IdentityRegistry
+        import redis as _redis
+        redis_identity_url = f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/3"
+        redis_identity_client = _redis.from_url(redis_identity_url, decode_responses=False)
+        backoffice_state.identity_registry = IdentityRegistry(redis_client=redis_identity_client)
+        logger.info("Identity registry initialised")
+    except Exception as exc:
+        logger.warning("Identity registry init failed (%s) — SSO identity resolution disabled", exc)
+
     # v2.1 — Break glass emergency access
     try:
         from yashigani.auth.break_glass import init_break_glass

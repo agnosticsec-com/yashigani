@@ -29,6 +29,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+from yashigani.sso.oidc import OIDCConfig, OIDCProvider, OIDCUserInfo
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,23 +83,43 @@ class IdentityBroker:
 
     def __init__(self, tier: str = "community") -> None:
         self._idps: dict[str, IdPConfig] = {}
+        self._oidc_providers: dict[str, OIDCProvider] = {}
         self._tier = tier
         self._limit = _TIER_IDP_LIMITS.get(tier, 0)
         logger.info("IdentityBroker: tier=%s, idp_limit=%d", tier, self._limit)
 
-    def add_idp(self, config: IdPConfig) -> None:
-        """Register an IdP. Raises if tier limit exceeded."""
+    def add_idp(self, config: IdPConfig, redirect_uri: str = "") -> None:
+        """
+        Register an IdP. Raises if tier limit exceeded.
+
+        For OIDC IdPs, an OIDCProvider is created immediately so that
+        get_oidc_auth_url() and handle_oidc_callback() can delegate to it.
+        ``redirect_uri`` is required for OIDC; if omitted the provider is
+        constructed without one (callers must pass it at exchange time).
+        """
         if len(self._idps) >= self._limit:
             raise ValueError(
                 f"IdP limit reached for tier '{self._tier}' "
                 f"({self._limit} max, {len(self._idps)} configured)"
             )
         self._idps[config.id] = config
+
+        if config.protocol == "oidc":
+            oidc_cfg = OIDCConfig(
+                client_id=config.client_id,
+                client_secret=config.client_secret,
+                discovery_url=config.metadata_url,
+                redirect_uri=redirect_uri,
+                scopes=["openid", "email", "profile", "groups"],
+            )
+            self._oidc_providers[config.id] = OIDCProvider(oidc_cfg)
+
         logger.info("IdentityBroker: added IdP %s (%s, %s)", config.id, config.name, config.protocol)
 
     def remove_idp(self, idp_id: str) -> None:
         """Remove an IdP configuration."""
         self._idps.pop(idp_id, None)
+        self._oidc_providers.pop(idp_id, None)
 
     def list_idps(self) -> list[IdPConfig]:
         """List all configured IdPs."""
@@ -115,56 +137,92 @@ class IdentityBroker:
                 return idp
         return None
 
-    def get_oidc_auth_url(self, idp_id: str, redirect_uri: str, state: str) -> Optional[str]:
+    def get_oidc_auth_url(self, idp_id: str, redirect_uri: str, state: str, nonce: str = "") -> Optional[str]:
         """
         Generate OIDC authorization URL for a specific IdP.
 
-        Returns the URL to redirect the user to, or None if IdP not found.
+        Delegates to OIDCProvider.get_authorization_url() which performs a
+        real OIDC discovery fetch and uses authlib to build the URL.
+        Returns the redirect URL, or None if IdP not found/disabled.
         """
         idp = self._idps.get(idp_id)
         if not idp or idp.protocol != "oidc" or not idp.enabled:
             return None
 
-        # In production, this would use authlib to construct the URL
-        # from the IdP's .well-known/openid-configuration
-        auth_endpoint = f"{idp.metadata_url.rstrip('/')}/authorize"
-        params = (
-            f"?client_id={idp.client_id}"
-            f"&redirect_uri={redirect_uri}"
-            f"&response_type=code"
-            f"&scope=openid+email+profile+groups"
-            f"&state={state}"
-        )
-        return auth_endpoint + params
+        provider = self._oidc_providers.get(idp_id)
+        if provider is None:
+            # Lazily create provider if it was somehow missing (e.g., added
+            # before redirect_uri was known).  The caller must supply it here.
+            oidc_cfg = OIDCConfig(
+                client_id=idp.client_id,
+                client_secret=idp.client_secret,
+                discovery_url=idp.metadata_url,
+                redirect_uri=redirect_uri,
+                scopes=["openid", "email", "profile", "groups"],
+            )
+            provider = OIDCProvider(oidc_cfg)
+            self._oidc_providers[idp_id] = provider
+        else:
+            # Stamp the redirect_uri onto the provider config — it may differ
+            # per-request when the host/scheme changes across environments.
+            provider._config.redirect_uri = redirect_uri
+
+        return provider.get_authorization_url(state=state, nonce=nonce or state)
 
     def handle_oidc_callback(
         self,
         idp_id: str,
         code: str,
         redirect_uri: str,
+        state: str = "",
     ) -> SSOResult:
         """
         Handle OIDC authorization code callback.
 
-        In production, this exchanges the code for tokens, validates the
-        ID token, and extracts the user's email, name, and groups.
+        Delegates to OIDCProvider.exchange_code(), validates the ID token,
+        maps IdP groups, and returns a populated SSOResult.
         """
         idp = self._idps.get(idp_id)
         if not idp:
             return SSOResult(success=False, error="IdP not found")
 
-        # Placeholder — authlib integration in full implementation
-        # This would:
-        # 1. Exchange code for tokens at IdP's token endpoint
-        # 2. Validate ID token JWT (signature, expiry, audience)
-        # 3. Extract claims (email, name, groups)
-        # 4. Map IdP groups to Yashigani groups
-        # 5. Create/update identity in registry
+        provider = self._oidc_providers.get(idp_id)
+        if provider is None:
+            return SSOResult(success=False, error=f"No OIDC provider configured for IdP '{idp_id}'")
 
-        logger.info("OIDC callback for IdP %s — code exchange pending implementation", idp.name)
+        # Keep redirect_uri in sync — same value used during authorization.
+        provider._config.redirect_uri = redirect_uri
+
+        try:
+            user_info: OIDCUserInfo = provider.exchange_code(code=code, state=state)
+        except ValueError as exc:
+            logger.warning("OIDC code exchange failed for IdP %s: %s", idp.name, exc)
+            return SSOResult(success=False, error=str(exc))
+        except Exception as exc:
+            logger.error("OIDC provider error for IdP %s: %s", idp.name, exc)
+            return SSOResult(success=False, error="OIDC token exchange failed")
+
+        # Extract raw groups claim from ID token (Entra: groups, Okta: groups, etc.)
+        raw_groups: list[str] = []
+        for claim_name in ("groups", "roles", "cognito:groups"):
+            val = user_info.raw_claims.get(claim_name)
+            if isinstance(val, list):
+                raw_groups = [str(g) for g in val]
+                break
+
+        mapped_groups = self.map_groups(idp_id, raw_groups)
+
+        logger.info(
+            "OIDC callback success: idp=%s sub=%s email=%s groups=%s",
+            idp.name, user_info.subject, user_info.email, mapped_groups,
+        )
         return SSOResult(
-            success=False,
-            error="OIDC code exchange not yet implemented — use API keys for v1.0 beta",
+            success=True,
+            identity_id=user_info.subject,
+            email=user_info.email or "",
+            name=user_info.name or "",
+            groups=mapped_groups,
+            idp_name=idp.name,
         )
 
     def handle_saml_response(
