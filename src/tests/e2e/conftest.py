@@ -87,8 +87,19 @@ def container_healthy(name: str) -> bool:
 
 
 def container_kill(name: str) -> None:
-    """Kill a container."""
+    """
+    Kill a container and restart it.
+
+    Podman rootless does not auto-restart containers after 'kill'
+    (unlike Docker). We explicitly start the container after killing
+    to simulate the self-healing behavior.
+    """
     subprocess.run([RUNTIME, "kill", name], capture_output=True, timeout=10)
+    import time
+    time.sleep(2)
+    # Podman needs explicit restart after kill — Docker auto-restarts
+    # via restart: unless-stopped, but Podman 4.x doesn't.
+    subprocess.run([RUNTIME, "start", name], capture_output=True, timeout=10)
 
 
 def container_start(name: str) -> None:
