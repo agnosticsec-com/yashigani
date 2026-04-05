@@ -1814,9 +1814,9 @@ if not all([user, pw, totp_secret]):
     print("ERROR:missing_secrets", file=sys.stderr)
     sys.exit(1)
 
-# Compute TOTP using pyotp (same library as backoffice)
-import pyotp
-totp_code = pyotp.TOTP(totp_secret).now()
+# Compute TOTP using pyotp with SHA-256 (same as backoffice)
+import pyotp, hashlib
+totp_code = pyotp.TOTP(totp_secret, digest=hashlib.sha256).now()
 
 # Login
 login_data = json.dumps({"username": user, "password": pw, "totp_code": totp_code}).encode()
