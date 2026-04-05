@@ -1,8 +1,8 @@
 # Yashigani Security Gateway
 ## Product Features and Objectives
 
-**Current Version:** v2.0
-**Document Date:** 2026-04-01
+**Current Version:** v2.20.0
+**Document Date:** 2026-04-05
 **Classification:** Public — Product Overview
 
 ---
@@ -683,6 +683,38 @@ The progression from v0.1.0 through v2.0 reflects a deliberate security maturity
 - **21 core services + dynamic containers** — 21 core services (up from 15) plus dynamically managed per-identity containers via the Container Pool Manager; 3 optional agent bundles remain available via Compose profiles
 - **New modules** — `identity/` (unified identity lifecycle), `billing/` (budget enforcement), `optimization/` (routing engine), `pool/` (container pool management)
 - **363 tests** — comprehensive test suite covering all new and existing modules
+
+### v2.1 Delivered
+
+- **Admin Dashboard UI** — login page + 9-section admin panel (identities, budgets, routing, policies, alerts, audit, models, agents, system health); served behind Caddy authentication
+- **12 Alertmanager rules** — P1-P5 severity for routing and budget conditions
+- **Budget Postgres persistence** — counters written to PostgreSQL in addition to budget-redis; state survives restarts; async write to avoid request-path latency
+- **Pool Manager background health monitor** — daemon thread; unhealthy containers replaced without waiting for a failed request
+- **OIDC identity broker (end-to-end)** — full JWT validation, JWKS discovery, group extraction (Entra ID, Okta, Cognito, Keycloak); CSRF protection via Redis-backed state/nonce tokens; ASVS V3.5.3 compliant
+- **Mandatory 2FA after SSO** — TOTP required after successful IdP authentication; configurable via `YASHIGANI_SSO_2FA_REQUIRED`
+- **SSO audit trail** — SHA-256 email hashing; raw email never stored
+- **Keycloak test IdP** — `test-idp` compose profile; pre-configured OIDC/SAML clients, three test users, group mappers
+- **Podman rootless parity** — correct user namespace configuration; e2e suite auto-detects runtime
+- **OPA v1_routing.rego verified operational** — SAFE/WARNING/BLOCK verdicts confirmed end-to-end
+- 413 tests (388 unit + 25 e2e)
+
+### v2.20 Delivered
+
+- **License anti-tampering** — v4 counter-signature + self-integrity check; process halts on detected patching
+- **PII detection module** — `pii/` module; 3 modes (detect / redact / block), 10 entity types, bidirectional, cloud model bypass
+- **Response-path inspection on /v1 routes** — `ResponseInspectionPipeline` wired to all `/v1/*` routes
+- **Container hardening** — seccomp at `docker/seccomp/yashigani.json`; AppArmor opt-in (`docker-compose.apparmor.yml`); read-only root filesystem; explicit `cap_drop`
+- **WAF and DDoS protection** — Caddy hardened timeouts + body limits; per-IP `DDoSProtector` (Redis-backed, 429 + `Retry-After`); `Caddyfile.waf` Coraza reference config
+- **FastText model baked into Docker image** — full inspection on container start; no outbound pull dependency
+- **Model aliases Redis persistence** — write-through on every mutation; Redis as read path, Postgres as source of truth
+- **SBOM + cosign image signing** — CycloneDX 1.5 SBOM + CryptoBoM (12 algorithms); cosign keyless signing via GitHub Actions OIDC; SBOMs published as release artifacts
+- **Helm chart fixes + network policies** — passes `helm lint`; Helm test hooks added; network policies cover all post-v2.0 services
+- **Streaming chunk-level inspection** — `StreamingInspector`; configurable buffer threshold; budget headers as trailing headers
+- **HMAC-SHA256 per-tenant email hashing** — KMS-keyed per tenant; closes cross-tenant correlation risk
+- **Ollama model digest pinning** — SHA-256 digest recorded at pull; validated on start; mismatch raises alert
+- **Open WebUI branding** — "Powered by Open WebUI" attribution
+- **Compliance documentation** — 9-framework mapping; 2 STRIDE threat models (product: 17 threats, solution: 38 threats)
+- 548 tests (523 unit + 25 e2e)
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (Apache 2.0). Non-profit and educational institutions qualify for the Academic / Non-Profit tier (verified, free — see agnosticsec.com/academic). Teams with an SSO mandate but limited scale should consider the Starter tier. Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments. Enterprise provides unlimited scale with a dedicated Technical Account Manager. See agnosticsec.com/pricing for current tier details. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 

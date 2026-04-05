@@ -1,8 +1,8 @@
 # Yashigani Security Gateway -- OWASP Compliance Mapping
 
-**Document Version:** 2.0
-**Date:** 2026-04-01
-**Codebase version:** v2.0
+**Document Version:** 2.20
+**Date:** 2026-04-05
+**Codebase version:** v2.20.0
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
@@ -879,6 +879,41 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Anti-lockout: 2 admin accounts at install | ASVS V4.3.3 | Prevents admin lockout scenarios |
 | bcrypt for Prometheus basic auth | ASVS V6.4.1 | Monitoring endpoint credential protection |
 
+#### v2.20 Changes
+
+| Change | OWASP Relevance | Effect |
+|---|---|---|
+| License anti-tampering (v4 counter-sig + self-integrity) | ASVS V10.2, V14.1 | Detects and halts on verifier patching; eliminates license bypass via binary modification |
+| PII detection module (3 modes, 10 types, bidirectional, cloud bypass) | ASVS V8.3, LLM02, LLM06 | Structured PII detection in prompt and response path; cloud model bypass enforces local routing on PII classification |
+| Response-path inspection wired to /v1 routes | ASVS V5.2, LLM01 | All OpenAI-compatible responses inspected before delivery; closes indirect injection vector on /v1 path |
+| Container hardening (seccomp, AppArmor opt-in, read-only FS) | ASVS V14.2 | Defence-in-depth at container boundary; read-only root filesystem limits post-exploitation persistence |
+| WAF/DDoS (Caddy limits, per-IP DDoSProtector, Coraza ref config) | ASVS V13.1, API4, API6 | Rate limiting at HTTP layer; per-IP DDoS threshold enforcement; Coraza path for full WAF |
+| FastText model baked into Docker image | ASVS V14.2 | Eliminates outbound model-pull dependency at startup; air-gapped deployments reach full inspection immediately |
+| Model aliases Redis persistence (write-through) | ASVS V7.1 | Alias availability survives Postgres maintenance; read latency eliminated |
+| SBOM + cosign keyless image signing (CycloneDX 1.5 + CryptoBoM) | ASVS V14.2, V6.1 | Full software supply-chain provenance; cryptographic verification of image identity before pull |
+| Helm chart fixes + network policies for all v2.x services | ASVS V14.2 | All services added since v2.0 now covered by Kubernetes network policies; chart passes lint |
+| Streaming chunk-level inspection (StreamingInspector) | LLM01, ASVS V5.2 | Injection detection in streaming responses; buffer threshold prevents inspection bypass via chunk fragmentation |
+| HMAC-SHA256 per-tenant email hashing | ASVS V7.3, V8.3 | Per-tenant KMS-keyed hash prevents cross-tenant email correlation in audit events |
+| Ollama model digest pinning | ASVS V14.2 | Supply-chain control for local inference models; poisoned registry substitution detected and rejected |
+| 9 compliance framework mappings published | ASVS V1.6.1, V14.1 | Formal mapping against SOC 2, ISO 27001, HIPAA, PCI DSS v4, GDPR, NIST CSF, NIST 800-53, CIS Controls v8, OWASP ASVS v5 |
+| 2 STRIDE threat models (product: 17 threats, solution: 38 threats) | ASVS V1.1 | Formal threat modelling artefacts for procurement and security review |
+| 548 tests (523 unit + 25 e2e) | ASVS V1.6.1, V14.1 | Expanded test coverage including PII module, streaming inspector, container hardening, and supply-chain controls |
+
+#### v2.1 Changes
+
+| Change | OWASP Relevance | Effect |
+|---|---|---|
+| Admin Dashboard UI (login page + 9-section admin panel) | ASVS V1.1, V4.1 | Self-service management without raw API access; reduces misconfiguration risk |
+| 12 Alertmanager rules (P1-P5) | ASVS V7.2 | Automated alerting on security-relevant routing and budget events |
+| Budget Postgres persistence | ASVS V7.1 | Budget state survives restarts; eliminates budget counter loss on Redis eviction |
+| Pool Manager background health monitor | ASVS V14.2 | Continuous container health surveillance; reduces window between failure and replacement |
+| OIDC identity broker (end-to-end: JWT validation, JWKS, group extraction) | ASVS V3.3, V3.5.3 | Fully operational federated identity; CSRF protection on OAuth callback |
+| Mandatory 2FA after SSO | ASVS V2.8 | Prevents session hijack replay via stolen SSO session cookie |
+| SSO audit trail with SHA-256 email hashing | ASVS V7.3, V8.3 | Raw email never stored; audit events contain only hashed identifier |
+| Podman rootless parity | ASVS V14.2 | Correct user namespace mapping; eliminates volume permission failures in rootless runtimes |
+| OPA v1_routing.rego verified operational end-to-end | ASVS V4.1 | Routing safety net confirmed functional; SAFE/WARNING/BLOCK verdicts validated |
+| 413 tests (388 unit + 25 e2e) | ASVS V1.6.1, V14.1 | Expanded coverage for dashboard, SSO, budget persistence, and Pool Manager |
+
 #### v2.0 Changes
 
 | Change | OWASP Relevance | Effect |
@@ -948,4 +983,4 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 ---
 
-*This document assesses Yashigani v2.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
+*This document assesses Yashigani v2.20.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
