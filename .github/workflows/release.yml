@@ -1,0 +1,206 @@
+name: Release — SBOM, Sign & Publish
+
+# Triggered on version tags (e.g. v2.2.0).
+# Assumes build-push.yml has already built and pushed the images.
+# This workflow:
+#   1. Generates CycloneDX 1.5 SBOM + CryptoBoM (Python script)
+#   2. Signs images with cosign (keyless — Fulcio + Rekor)
+#   3. Attaches SBOM as a cosign attestation
+#   4. Uploads SBOM + CryptoBoM as GitHub release artifacts
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # create release + upload assets
+  packages: write       # push attestations to GHCR
+  id-token: write       # OIDC token for cosign keyless signing
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  release-sbom-sign:
+    name: SBOM, Sign & Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Resolve version from tag (strip leading 'v')
+      # -----------------------------------------------------------------------
+      - name: Resolve version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. v2.2.0
+          VERSION="${TAG#v}"                # e.g. 2.2.0
+          echo "tag=${TAG}"       >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VERSION}"
+
+      # -----------------------------------------------------------------------
+      # 3. Set up Python for SBOM generation
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install SBOM dependencies
+        run: |
+          pip install --upgrade pip
+          pip install "cyclonedx-bom>=4.0"
+
+      # -----------------------------------------------------------------------
+      # 4. Generate SBOM + CryptoBoM
+      # -----------------------------------------------------------------------
+      - name: Generate SBOM and CryptoBoM
+        run: |
+          python scripts/generate_sbom.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --output-dir dist
+
+      - name: List generated artifacts
+        run: ls -lh dist/
+
+      # -----------------------------------------------------------------------
+      # 5. Install cosign
+      # -----------------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # -----------------------------------------------------------------------
+      # 6. Log in to GHCR (needed for cosign to push signatures/attestations)
+      # -----------------------------------------------------------------------
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # 7. Sign gateway image (keyless — uses OIDC token from id-token permission)
+      # -----------------------------------------------------------------------
+      - name: Sign gateway image
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-gateway:${{ steps.version.outputs.version }}"
+          cosign sign --yes "${IMAGE}"
+
+      # -----------------------------------------------------------------------
+      # 8. Sign backoffice image
+      # -----------------------------------------------------------------------
+      - name: Sign backoffice image
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-backoffice:${{ steps.version.outputs.version }}"
+          cosign sign --yes "${IMAGE}"
+
+      # -----------------------------------------------------------------------
+      # 9. Attach SBOM attestation — gateway
+      # -----------------------------------------------------------------------
+      - name: Attach SBOM attestation (gateway)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-gateway:${{ steps.version.outputs.version }}"
+          SBOM="dist/sbom-yashigani-${{ steps.version.outputs.version }}.cdx.json"
+          cosign attest --yes \
+            --predicate "${SBOM}" \
+            --type cyclonedx \
+            "${IMAGE}"
+
+      # -----------------------------------------------------------------------
+      # 10. Attach SBOM attestation — backoffice
+      # -----------------------------------------------------------------------
+      - name: Attach SBOM attestation (backoffice)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-backoffice:${{ steps.version.outputs.version }}"
+          SBOM="dist/sbom-yashigani-${{ steps.version.outputs.version }}.cdx.json"
+          cosign attest --yes \
+            --predicate "${SBOM}" \
+            --type cyclonedx \
+            "${IMAGE}"
+
+      # -----------------------------------------------------------------------
+      # 11. Create GitHub release (if not already created by build-push.yml)
+      #     Uses --notes-from-tag to pull from CHANGELOG / annotated tag.
+      # -----------------------------------------------------------------------
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          # gh release create is idempotent when the release already exists;
+          # use --notes-from-tag so changelog text is pulled from the annotated tag.
+          gh release create "${TAG}" \
+            --title "Yashigani ${TAG}" \
+            --notes-from-tag \
+            --verify-tag \
+          || echo "[INFO] Release already exists; uploading assets only."
+
+      # -----------------------------------------------------------------------
+      # 12. Upload SBOM and CryptoBoM as release assets
+      # -----------------------------------------------------------------------
+      - name: Upload SBOM to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          SBOM="dist/sbom-yashigani-${{ steps.version.outputs.version }}.cdx.json"
+          gh release upload "${TAG}" "${SBOM}" --clobber
+
+      - name: Upload CryptoBoM to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          CBOM="dist/cryptobom-yashigani-${{ steps.version.outputs.version }}.json"
+          gh release upload "${TAG}" "${CBOM}" --clobber
+
+      # -----------------------------------------------------------------------
+      # 13. Print verification commands for the release notes / audit trail
+      # -----------------------------------------------------------------------
+      - name: Print verification commands
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OWNER="${{ env.OWNER }}"
+          REGISTRY="${{ env.REGISTRY }}"
+          cat <<EOF
+          ================================================================
+          Verification commands
+          ================================================================
+
+          # Verify gateway image signature
+          cosign verify \\
+            --certificate-identity-regexp='https://github.com/${OWNER}/.*' \\
+            --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \\
+            ${REGISTRY}/${OWNER}/yashigani-gateway:${VERSION}
+
+          # Extract SBOM from gateway attestation
+          cosign verify-attestation \\
+            --type cyclonedx \\
+            --certificate-identity-regexp='https://github.com/${OWNER}/.*' \\
+            --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \\
+            ${REGISTRY}/${OWNER}/yashigani-gateway:${VERSION} \\
+            | jq '.[0].payload | @base64d | fromjson'
+
+          ================================================================
+          EOF

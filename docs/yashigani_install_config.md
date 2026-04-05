@@ -36,6 +36,7 @@
 25. [Multi-IdP Identity Broker (v2.0)](#25-multi-idp-identity-broker-v20)
 26. [WAF and DDoS Protection (v2.2)](#26-waf-and-ddos-protection-v22)
 26. [Container Hardening (v2.2)](#26-container-hardening-v22)
+27. [SBOM and Image Verification (v2.2)](#27-sbom-and-image-verification-v22)
 
 ---
 
@@ -2196,6 +2197,168 @@ Persistent data (audit logs, bootstrap state) is written through named volume mo
 | Read-only root FS | Yes | Yes | `read_only: true` in compose |
 | tmpfs `/tmp` (100 MB) | Yes | Yes | `tmpfs` in compose |
 | tmpfs `/var/log/yashigani` (50 MB) | Yes | Yes | `tmpfs` in compose |
+
+---
+
+## 27. SBOM and Image Verification (v2.2)
+
+Every Yashigani release ships two supply-chain artifacts and signed container images. This section explains how to generate, verify, and use them.
+
+### 27.1 Artifact Overview
+
+| Artifact | Format | Location |
+|---|---|---|
+| Software Bill of Materials | CycloneDX 1.5 JSON | GitHub release assets + cosign attestation |
+| Cryptographic Algorithm Inventory | Yashigani CryptoBoM JSON | GitHub release assets |
+| Image signatures | cosign / Sigstore | OCI registry (alongside image) |
+
+### 27.2 Generating SBOM Locally
+
+Install the `sbom` extra, then run the generator script:
+
+```bash
+pip install "yashigani[sbom]"
+python scripts/generate_sbom.py
+```
+
+This produces two files in `dist/`:
+
+```
+dist/sbom-yashigani-<version>.cdx.json
+dist/cryptobom-yashigani-<version>.json
+```
+
+Options:
+
+```bash
+python scripts/generate_sbom.py --help
+
+# Override version (useful for pre-release builds)
+python scripts/generate_sbom.py --version 2.2.1-rc1
+
+# Write to a custom directory
+python scripts/generate_sbom.py --output-dir /tmp/sbom-output
+
+# Skip cyclonedx-bom library (use built-in assembler)
+python scripts/generate_sbom.py --no-library
+```
+
+The script falls back to a built-in CycloneDX assembler if `cyclonedx-bom` is not installed; the fallback produces valid CycloneDX 1.5 but omits component hashes.
+
+### 27.3 Verifying Container Image Signatures
+
+Images are signed with cosign using keyless signing (Sigstore Fulcio CA + Rekor transparency log) during the release CI workflow.
+
+**Verify gateway image:**
+
+```bash
+cosign verify \
+  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+  ghcr.io/agnosticsec/yashigani-gateway:2.2
+```
+
+**Verify backoffice image:**
+
+```bash
+cosign verify \
+  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+  ghcr.io/agnosticsec/yashigani-backoffice:2.2
+```
+
+A successful verification prints:
+
+```
+Verification for ghcr.io/agnosticsec/yashigani-gateway:2.2 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate claims were validated
+```
+
+### 27.4 Extracting the SBOM from a Signed Image
+
+The SBOM is attached as a cosign attestation with predicate type `cyclonedx`. Retrieve it with:
+
+```bash
+cosign verify-attestation \
+  --type cyclonedx \
+  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  | jq '.[0].payload | @base64d | fromjson'
+```
+
+To extract just the component list:
+
+```bash
+cosign verify-attestation \
+  --type cyclonedx \
+  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  | jq '.[0].payload | @base64d | fromjson | .predicate.components[] | {name,version,purl}'
+```
+
+### 27.5 Downloading SBOM Artifacts from GitHub Releases
+
+The SBOM and CryptoBoM are also attached directly to each GitHub release:
+
+```bash
+# Download SBOM for v2.2.0
+gh release download v2.2.0 \
+  --repo agnosticsec/yashigani \
+  --pattern 'sbom-yashigani-*.cdx.json' \
+  --dir ./dist
+
+# Download CryptoBoM for v2.2.0
+gh release download v2.2.0 \
+  --repo agnosticsec/yashigani \
+  --pattern 'cryptobom-yashigani-*.json' \
+  --dir ./dist
+```
+
+Or download from the GitHub releases page at:
+`https://github.com/agnosticsec/yashigani/releases`
+
+### 27.6 CryptoBoM — Cryptographic Algorithm Inventory
+
+The CryptoBoM (`cryptobom-yashigani-<version>.json`) lists every cryptographic algorithm in use across the product. The `pq_status` field indicates post-quantum resistance:
+
+| Value | Meaning |
+|---|---|
+| `resistant` | Algorithm is considered quantum-resistant (symmetric, large-key hash) |
+| `not_resistant` | Broken by Shor's algorithm (RSA, ECDSA, ECDH) — plan migration |
+| `partially_resistant` | Protocol-level resistance; underlying primitives may not be PQ-safe |
+
+To query which algorithms are not post-quantum resistant:
+
+```bash
+cat dist/cryptobom-yashigani-2.2.0.json \
+  | jq '.algorithms[] | select(.pq_status == "not_resistant") | {id, name, usage}'
+```
+
+### 27.7 Signing Images Manually
+
+For offline or air-gapped environments where CI keyless signing is unavailable:
+
+```bash
+# Generate key pair (one-time setup; store cosign.key securely — never commit)
+cosign generate-key-pair
+
+# Sign with local key
+COSIGN_PASSWORD=<passphrase> bash scripts/sign_image.sh \
+  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  ghcr.io/agnosticsec/yashigani-backoffice:2.2
+
+# Verify with public key
+cosign verify --key cosign.pub ghcr.io/agnosticsec/yashigani-gateway:2.2
+```
+
+The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVATE_KEY` is set or `cosign.key` is present it uses local-key mode; otherwise it falls back to keyless.
+
+> **Security note:** `cosign.key` and `cosign.pub` must not be committed to the repository. `cosign.key` (private key) is already covered by the `*.pem` rule in `.gitignore`; add `cosign.key` explicitly if you rename it.
 
 ---
 
