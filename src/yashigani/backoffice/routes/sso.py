@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -50,6 +51,9 @@ _STATE_KEY_PREFIX = "sso:state:"
 # Session max-age mirrors the existing admin/user session constant (4 hours).
 _SESSION_MAX_AGE = 14400
 _USER_SESSION_COOKIE = "yashigani_session"
+_PENDING_2FA_COOKIE = "yashigani_sso_pending"
+_PENDING_2FA_TTL = 300  # 5 minutes to complete 2FA after SSO
+_PENDING_2FA_PREFIX = "sso:pending_2fa:"
 
 # Slug sanitiser: only lowercase alphanumeric + hyphens.
 _SLUG_RE = re.compile(r"[^a-z0-9\-]")
@@ -442,7 +446,42 @@ async def oidc_callback(
             detail={"error": "identity_resolution_failed"},
         )
 
-    # Issue session
+    # Check if 2FA is required after SSO
+    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "false").lower() == "true"
+
+    if sso_2fa_required:
+        # Create a pending-2FA token instead of a full session.
+        # The user must complete Yashigani TOTP before getting access.
+        pending_token = secrets.token_urlsafe(32)
+        pending_data = json.dumps({
+            "identity_id": identity_id,
+            "email": sso_result.email,
+            "name": sso_result.name,
+            "groups": sso_result.groups,
+            "idp_id": idp_id,
+            "idp_name": sso_result.idp_name,
+            "client_ip": client_ip,
+            "created_at": time.time(),
+        })
+        r.setex(f"{_PENDING_2FA_PREFIX}{pending_token}", _PENDING_2FA_TTL, pending_data)
+
+        response = RedirectResponse(
+            url="/auth/sso/2fa",
+            status_code=status.HTTP_302_FOUND,
+        )
+        response.set_cookie(
+            key=_PENDING_2FA_COOKIE,
+            value=pending_token,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            max_age=_PENDING_2FA_TTL,
+            path="/auth",
+        )
+        logger.info("SSO 2FA pending for identity %s (IdP: %s)", identity_id, idp_id)
+        return response
+
+    # 2FA not required — issue full session immediately
     session = backoffice_state.session_store.create(
         account_id=identity_id,
         account_tier="user",
@@ -468,6 +507,161 @@ async def oidc_callback(
         max_age=_SESSION_MAX_AGE,
         path="/",
     )
+    return response
+
+
+@router.get("/sso/2fa")
+async def sso_2fa_page(request: Request):
+    """
+    Serve the 2FA verification prompt after SSO.
+    The user must submit their Yashigani TOTP code to complete login.
+    """
+    pending_token = request.cookies.get(_PENDING_2FA_COOKIE)
+    if not pending_token:
+        return RedirectResponse(url="/login?error=no_pending_sso", status_code=302)
+
+    r = _redis()
+    if r is None or r.get(f"{_PENDING_2FA_PREFIX}{pending_token}") is None:
+        return RedirectResponse(url="/login?error=sso_2fa_expired", status_code=302)
+
+    return JSONResponse(content={
+        "status": "pending_2fa",
+        "message": "SSO authentication successful. Enter your Yashigani TOTP code to complete login.",
+        "endpoint": "/auth/sso/2fa/verify",
+        "method": "POST",
+        "fields": ["totp_code"],
+    })
+
+
+@router.post("/sso/2fa/verify")
+async def sso_2fa_verify(request: Request):
+    """
+    Verify the Yashigani TOTP code after SSO authentication.
+    On success, upgrade the pending session to a full session.
+    """
+    pending_token = request.cookies.get(_PENDING_2FA_COOKIE)
+    if not pending_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "no_pending_sso_session"},
+        )
+
+    r = _redis()
+    if r is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "session_store_unavailable"},
+        )
+
+    # Atomically consume the pending token
+    raw = r.get(f"{_PENDING_2FA_PREFIX}{pending_token}")
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "sso_2fa_expired_or_invalid"},
+        )
+
+    try:
+        pending = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_pending_session"},
+        )
+
+    # Parse TOTP code from request body
+    try:
+        body = await request.json()
+        totp_code = body.get("totp_code", "")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_request_body"},
+        )
+
+    if not totp_code or len(totp_code) != 6 or not totp_code.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_totp_code_format"},
+        )
+
+    # Look up the identity's TOTP secret
+    identity_id = pending.get("identity_id", "")
+    registry = getattr(backoffice_state, "identity_registry", None)
+    if registry is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "identity_registry_unavailable"},
+        )
+
+    # Verify TOTP — the identity must have a provisioned TOTP secret
+    from yashigani.auth.totp import verify_totp
+
+    identity = registry.get(identity_id)
+    if identity is None:
+        r.delete(f"{_PENDING_2FA_PREFIX}{pending_token}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "identity_not_found"},
+        )
+
+    totp_secret = identity.get("totp_secret", "")
+    if not totp_secret:
+        # Identity hasn't provisioned TOTP yet — they need to do that first
+        r.delete(f"{_PENDING_2FA_PREFIX}{pending_token}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "totp_not_provisioned",
+                "message": "You must provision a TOTP authenticator before using SSO. Contact your administrator.",
+            },
+        )
+
+    used_codes: set = set()  # Recovery codes not applicable here
+    if not verify_totp(totp_secret, totp_code, used_codes):
+        # Don't consume the pending token on TOTP failure — let them retry
+        _write_sso_failure_audit(
+            pending.get("idp_id", ""),
+            pending.get("idp_name", ""),
+            "totp_verification_failed",
+            pending.get("client_ip", "unknown"),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "invalid_totp_code"},
+        )
+
+    # TOTP verified — consume the pending token and issue a full session
+    r.delete(f"{_PENDING_2FA_PREFIX}{pending_token}")
+
+    client_ip = pending.get("client_ip", "unknown")
+    session = backoffice_state.session_store.create(
+        account_id=identity_id,
+        account_tier="user",
+        client_ip=client_ip,
+    )
+
+    _write_sso_success_audit(
+        idp_id=pending.get("idp_id", ""),
+        idp_name=pending.get("idp_name", ""),
+        identity_id=identity_id,
+        email=pending.get("email", ""),
+        groups=pending.get("groups", []),
+        client_ip=client_ip,
+    )
+
+    response = RedirectResponse(url="/chat", status_code=status.HTTP_302_FOUND)
+    response.set_cookie(
+        key=_USER_SESSION_COOKIE,
+        value=session.token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=_SESSION_MAX_AGE,
+        path="/",
+    )
+    # Clear the pending cookie
+    response.delete_cookie(_PENDING_2FA_COOKIE, path="/auth")
     return response
 
 
