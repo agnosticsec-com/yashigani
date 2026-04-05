@@ -71,11 +71,13 @@ services:
     security_opt:
       - label=disable
     userns_mode: keep-id
-    # Override volumes to replace Docker-specific paths with Podman equivalents
-    volumes:
-      - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
-      - /var/log:/var/log:ro
-      # Podman container logs are in /var/log, not /var/lib/docker/containers
+    # Promtail cannot access container logs in Podman rootless mode —
+    # /var/lib/docker/containers does not exist and Podman stores logs
+    # in the user's home directory which is not bind-mountable from
+    # within a rootless container. Disable promtail; use journald or
+    # Loki's Podman log driver instead.
+    profiles:
+      - promtail-disabled
 
   otel-collector:
     security_opt:
