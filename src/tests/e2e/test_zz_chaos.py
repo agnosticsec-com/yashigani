@@ -47,8 +47,9 @@ class TestChaosOllama:
         container_kill("docker-ollama-1")
         time.sleep(5)
 
-        recovered = _wait_for_healthy("docker-ollama-1", timeout=120)
-        assert recovered, "Ollama did not recover within 120 seconds"
+        # Ollama needs extra time on ARM/CPU-only systems — model reload is slow
+        recovered = _wait_for_healthy("docker-ollama-1", timeout=300)
+        assert recovered, "Ollama did not recover within 300 seconds"
 
     def test_gateway_stays_healthy_during_ollama_restart(self):
         """Gateway should remain healthy even if Ollama is temporarily down."""
