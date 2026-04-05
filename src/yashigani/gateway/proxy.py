@@ -75,6 +75,7 @@ def create_gateway_app(
     response_inspection_pipeline=None,  # v0.9.0 — ResponseInspectionPipeline | None
     extra_routers=None,  # v2.0 — additional routers to mount BEFORE catch-all
     ddos_protector=None,  # v2.2 — DDoSProtector | None
+    pii_detector=None,   # v2.2 — PiiDetector | None
 ) -> FastAPI:
     """
     Create the Yashigani gateway FastAPI application.
@@ -98,6 +99,7 @@ def create_gateway_app(
         "inference_logger": inference_logger,
         "anomaly_detector": anomaly_detector,
         "ddos_protector": ddos_protector,  # v2.2
+        "pii_detector": pii_detector,      # v2.2
         "http_client": None,
     }
 
@@ -387,6 +389,59 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
             if result.action == "SANITIZED" and result.clean_query is not None:
                 forwarded_body = result.clean_query.encode("utf-8", errors="replace")
 
+    # 3b. PII detection on request body
+    # The catch-all proxy forwards to a configured upstream (MCP server or similar).
+    # We always apply the configured PII mode on both request and response bodies.
+    # Since traffic destination is determined by GatewayConfig.upstream_base_url (an
+    # admin-configured value), we cannot classify it as local/cloud at runtime here.
+    # We apply the full mode (LOG/REDACT/BLOCK) as configured.
+    pii_detected_on_request = False
+    pii_detector = state.get("pii_detector")
+    if pii_detector is not None and forwarded_body:
+        _req_body_text = _decode_body_safe(forwarded_body)
+        if _req_body_text:
+            _req_pii_text, _req_pii_result = pii_detector.process(_req_body_text)
+            if _req_pii_result.detected:
+                pii_detected_on_request = True
+                pii_types = [f.pii_type.value for f in _req_pii_result.findings]
+                logger.info(
+                    "PII detected on proxy request path=%s request_id=%s types=%s action=%s",
+                    path, request_id, pii_types, _req_pii_result.action_taken,
+                )
+                if audit_writer is not None:
+                    try:
+                        audit_writer(
+                            "PII_DETECTED",
+                            {
+                                "request_id": request_id,
+                                "direction": "request",
+                                "pii_types": pii_types,
+                                "action_taken": _req_pii_result.action_taken,
+                                "destination": "upstream",
+                                "finding_count": len(_req_pii_result.findings),
+                            },
+                        )
+                    except Exception as _exc:
+                        logger.warning("PII audit write failed (request_id=%s): %s", request_id, _exc)
+
+                if _req_pii_result.action_taken == "blocked":
+                    _audit_request(audit_writer, request_id, "BLOCKED", "pii_detected", request, path)
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "pii_detected",
+                            "detail": (
+                                "Request blocked: PII detected and PII mode is BLOCK. "
+                                "Configure PII mode via the admin panel."
+                            ),
+                            "pii_types": pii_types,
+                            "request_id": request_id,
+                        },
+                        headers={"X-Yashigani-Request-Id": request_id},
+                    )
+                if _req_pii_result.action_taken == "redacted":
+                    forwarded_body = _req_pii_text.encode("utf-8", errors="replace")
+
     # 4. OPA policy check
     opa_allowed = await _opa_check(cfg, request, path, session_id, agent_id, user_id)
     if not opa_allowed:
@@ -459,6 +514,40 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
                     },
                 )
 
+    # 5b_pii. PII detection on response body
+    pii_detected_on_response = False
+    _upstream_content = upstream_response.content
+    if pii_detector is not None and _upstream_content:
+        _resp_body_text = _decode_body_safe(_upstream_content)
+        if _resp_body_text:
+            _resp_pii_text, _resp_pii_result = pii_detector.process(_resp_body_text)
+            if _resp_pii_result.detected:
+                pii_detected_on_response = True
+                pii_resp_types = [f.pii_type.value for f in _resp_pii_result.findings]
+                logger.info(
+                    "PII detected in proxy response path=%s request_id=%s types=%s action=%s",
+                    path, request_id, pii_resp_types, _resp_pii_result.action_taken,
+                )
+                if audit_writer is not None:
+                    try:
+                        audit_writer(
+                            "PII_DETECTED",
+                            {
+                                "request_id": request_id,
+                                "direction": "response",
+                                "pii_types": pii_resp_types,
+                                "action_taken": _resp_pii_result.action_taken,
+                                "destination": "upstream",
+                                "finding_count": len(_resp_pii_result.findings),
+                            },
+                        )
+                    except Exception as _exc:
+                        logger.warning("PII audit write failed (request_id=%s): %s", request_id, _exc)
+
+                if _resp_pii_result.action_taken == "redacted":
+                    _upstream_content = _resp_pii_text.encode("utf-8", errors="replace")
+                # BLOCK: add header warning, do not suppress — response already generated
+
     elapsed_ms = int((time.monotonic() - start) * 1000)
     _audit_request(
         audit_writer, request_id, "FORWARDED", "clean", request, path,
@@ -508,7 +597,8 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
         )
 
     # 5d. Attach trace ID to response (Phase 9)
-    response = _build_response(upstream_response, request_id)
+    # Use _upstream_content which may have been redacted by PII filtering above.
+    response = _build_response(upstream_response, request_id, content_override=_upstream_content)
     try:
         trace_id = current_trace_id()
         if trace_id:
@@ -519,6 +609,10 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
     # 5e. Attach response inspection verdict header when present (v0.9.0)
     if response_verdict is not None:
         response.headers["X-Yashigani-Response-Verdict"] = response_verdict
+
+    # 5f. PII detection header (v2.2)
+    _pii_any = pii_detected_on_request or pii_detected_on_response
+    response.headers["X-Yashigani-PII-Detected"] = "true" if _pii_any else "false"
 
     return response
 
@@ -607,7 +701,11 @@ async def _forward(
     )
 
 
-def _build_response(upstream: httpx.Response, request_id: str) -> Response:
+def _build_response(
+    upstream: httpx.Response,
+    request_id: str,
+    content_override: Optional[bytes] = None,
+) -> Response:
     headers = {
         k: v for k, v in upstream.headers.items()
         if k.lower() not in _HOP_BY_HOP_HEADERS
@@ -615,7 +713,7 @@ def _build_response(upstream: httpx.Response, request_id: str) -> Response:
     headers["X-Yashigani-Request-Id"] = request_id
 
     return Response(
-        content=upstream.content,
+        content=content_override if content_override is not None else upstream.content,
         status_code=upstream.status_code,
         headers=headers,
         media_type=upstream.headers.get("content-type"),

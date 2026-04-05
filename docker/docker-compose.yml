@@ -88,6 +88,11 @@ services:
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
+      # v2.2 — PII detection (ON by default for all traffic)
+      # Modes: log | redact | block  (default: log)
+      YASHIGANI_PII_MODE: ${YASHIGANI_PII_MODE:-log}
+      # Cloud bypass OFF by default — admin must explicitly enable to allow PII to cloud LLMs
+      YASHIGANI_PII_CLOUD_BYPASS: ${YASHIGANI_PII_CLOUD_BYPASS:-false}
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
@@ -140,7 +145,10 @@ services:
       YASHIGANI_ADMIN_SOFT_TARGET: "3"
       YASHIGANI_SECRETS_DIR: /run/secrets
       YASHIGANI_INSPECTION_DEFAULT_BACKEND: ${YASHIGANI_INSPECTION_DEFAULT_BACKEND:-ollama}
-      YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,gemini,fail_closed}
+      # v2.2: gemini removed from default fallback to prevent unredacted content reaching
+      # cloud providers before PII filtering. Admins who explicitly want cloud fallback
+      # can set this var; ensure YASHIGANI_PII_MODE=redact or block first.
+      YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,fail_closed}
       YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_DB_PATH: /data/openwebui/webui.db
