@@ -228,7 +228,7 @@ services:
       ENABLE_OLLAMA_API: "false"
       # UI settings
       DEFAULT_MODELS: "qwen2.5:3b"
-      WEBUI_NAME: "Yashigani AI"
+      WEBUI_NAME: "Yashigani AI — Powered by Open WebUI"
     volumes:
       - openwebui_data:/app/backend/data
     healthcheck:
