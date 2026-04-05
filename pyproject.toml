@@ -28,6 +28,7 @@ dependencies = [
     "apscheduler>=3.10",
     # SSO
     "authlib>=1.3",
+    "requests>=2.31",
     "python3-saml>=1.16",
     # Audit export
     "pydantic>=2.7",
