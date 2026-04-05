@@ -200,7 +200,7 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 | Version | Theme | Key Additions |
 |---|---|---|
 | **v2.1** | **Admin Dashboard + Alerting + SSO + Persistence** | **Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), OPA v1_routing.rego verified operational, OIDC identity broker wired end-to-end (JWT validation, JWKS discovery, group extraction), mandatory 2FA after SSO (anti-replay), Keycloak test IdP, SSO audit trail (SHA-256 email hashing), Podman rootless parity (volume permissions fix, e2e runtime auto-detection), 413 tests (388 unit + 25 e2e)** |
-| **v2.0** | **First production-grade release** | **Unified Identity Model (kind field, no separate user/agent stores), Optimization Engine (4D routing: sensitivity + complexity + budget + cost, P1-P9 priority matrix), three-tier Budget System (org cap → group → individual, budget-redis noeviction), Open WebUI integration (/chat/*, internal only), Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling), Multi-IdP Identity Broker (OIDC + SAML v2), sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 21 core services + dynamic per-identity containers, 363 tests (252 + 111 new), 12 Grafana dashboards** |
+| **v2.0** | **First production-grade release** | **Unified Identity Model (kind field, no separate user/agent stores), Optimization Engine (4D routing: sensitivity + complexity + budget + cost, P1-P9 priority matrix), three-tier Budget System (org cap → group → individual, budget-redis noeviction), Open WebUI integration (/chat/*, internal only), Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling), Multi-IdP Identity Broker (OIDC + SAML v2), sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 17 core services + 3 optional agent bundles + dynamic per-identity containers, 363 tests (252 + 111 new), 12 Grafana dashboards** |
 | v1.09.5 | Agent bundles GA + Podman | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with PSK auto-registration, first-class Podman support (runtime detection, compose command, auto-apply podman override), DNS fix for Ollama external network access, admin accounts with fun codenames (animal/nature themed), PgBouncer password from .env, Alembic migrations in backoffice image, 18-service full stack verified from clean slate |
 | v0.9.4 | Final hardening | Classifier regex fix (security: nested braces in inspection response no longer misclassified as CLEAN), FastAPI lifespan migration, localhost defaults replaced with Docker service names, CI version consistency gate |
 | v0.9.3 | Bugfix and hardening (45-issue audit) | Rate limiter bypass fix, OllamaPool stack overflow fix, Vault KMS provider fix, response inspection pipeline activation, ECDSA P-256 license key embedded, all Docker images pinned, WebAuthn migration, integration test suite, 18 bare-exception handlers replaced with logging, CI license key gate, Redis scan_iter, IPv6-safe IP masking |
@@ -266,7 +266,7 @@ v2.0 is Yashigani's first production-grade release, adding five major subsystems
 **P1-P5 Alert Severity with SIEM Integration** -- Routing decisions are audit events written through the existing audit pipeline to all SIEM sinks. A P1-P5 severity scale triggers on specific conditions: sensitivity breach (P1), OPA override (P1), classification conflict (P2), spending anomaly (P2), budget auto-switch (P3), and others.
 
 **Additional v2.0 changes:**
-- 21 core services + dynamic per-identity containers (up from 18 services in v1.09.5)
+- 17 core services + 3 optional agent bundles + dynamic per-identity containers (up from 18 services in v1.09.5)
 - 363 tests passing (252 original + 111 new)
 - 12 Grafana dashboards (9 existing + 3 new: budget, Optimization Engine, Pool Manager)
 - Model alias table: DB-driven via admin API, Postgres + Redis cache, CRUD at `/admin/models/aliases`
@@ -512,7 +512,7 @@ The initial release established the core security envelope. Yashigani began as a
 - **Open WebUI integration (v2.0)** — chat interface at `/chat/*`, internal Docker network only (no external port), all LLM calls through gateway, Caddy forwards trusted headers
 - **Container Pool Manager (v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
 - **Dynamic per-identity containers (v2.0)** — managed by Pool Manager; license tier gates container limits
-- **21 core services (v2.0)** — up from 18 in v1.09.5; plus dynamic per-identity containers
+- **17 core services + 3 optional agent bundles (v2.0)** — up from 18 in v1.09.5; plus dynamic per-identity containers
 - **413 tests passing (v2.1)** — 388 unit + 25 e2e
 
 ### 5.10 Licensing and Tiers
@@ -636,10 +636,10 @@ The initial release established the core security envelope. Yashigani began as a
 
 ### 7.1 Docker Compose — Single Node
 
-The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with all services pre-configured: gateway, backoffice, Open WebUI, Postgres with PgBouncer, Redis, budget-redis, Ollama with init container, Vault, Prometheus, Grafana, Loki, Promtail, Alertmanager, Jaeger, Caddy, and optional agent bundles. The full stack with all agent bundles enabled comprises 21 core services plus dynamic per-identity containers managed by the Pool Manager.
+The simplest production-capable deployment. The universal installer generates a `docker-compose.yml` with all services pre-configured: gateway, backoffice, Open WebUI, Postgres with PgBouncer, Redis, budget-redis, Ollama with init container, Vault, Prometheus, Grafana, Loki, Promtail, Alertmanager, Jaeger, Caddy, and optional agent bundles. The full stack with all agent bundles enabled comprises 17 core services + 3 optional agent bundles plus dynamic per-identity containers managed by the Pool Manager.
 
 ```
-docker-compose.yml — 21 core services (v2.0):
+docker-compose.yml — 17 core services + 3 optional agent bundles (v2.0):
 ├── yashigani-gateway       # Core proxy + Optimization Engine, port 8443 (TLS)
 ├── yashigani-backoffice    # Admin API/UI + identity broker, port 8080 (includes Alembic migrations)
 ├── open-webui              # Chat interface, port 3000 (internal network only, v2.0)
@@ -745,7 +745,7 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 Yashigani v2.1 is the current production release. v2.1 adds the Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), and OPA v1_routing.rego verified operational. The admin panel is the management layer that makes the product fully self-service — no curl or API knowledge needed. v2.1 brings the test count to 388 (363 + 25 e2e).
 
-v2.0 introduced five major subsystems: the Unified Identity Model (every entity is an identity with a `kind` field, no separate stores), the Optimization Engine (four-dimensional routing with P1-P9 priority matrix), the three-tier Budget System (org cap → group → individual, enforced by dedicated budget-redis), Open WebUI integration at `/chat/*` (internal only, all LLM calls through gateway), and the Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling). Additional v2.0 additions include the Multi-IdP Identity Broker (OIDC + SAML v2), the three-layer sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 21 core services plus dynamic per-identity containers, and 12 Grafana dashboards.
+v2.0 introduced five major subsystems: the Unified Identity Model (every entity is an identity with a `kind` field, no separate stores), the Optimization Engine (four-dimensional routing with P1-P9 priority matrix), the three-tier Budget System (org cap → group → individual, enforced by dedicated budget-redis), Open WebUI integration at `/chat/*` (internal only, all LLM calls through gateway), and the Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling). Additional v2.0 additions include the Multi-IdP Identity Broker (OIDC + SAML v2), the three-layer sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 17 core services + 3 optional agent bundles plus dynamic per-identity containers, and 12 Grafana dashboards.
 
 **Two release lines are maintained:**
 - **v2.x** (branch: `main`) — Full stack: gateway + Open WebUI + Optimization Engine + Budget System + Container Pool Manager
@@ -913,7 +913,7 @@ v2.0 is Yashigani's first production-grade release. It adds five major subsystem
 - All routing decisions written as audit events to SIEM sinks
 
 **Additional v2.0 changes:**
-- 21 core services + dynamic per-identity containers
+- 17 core services + 3 optional agent bundles + dynamic per-identity containers
 - 363 tests passing (252 original + 111 new)
 - 12 Grafana dashboards (9 existing + 3 new: budget, Optimization Engine, Pool Manager)
 - Model alias table: DB-driven, Postgres + Redis cache, CRUD at `/admin/models/aliases`
