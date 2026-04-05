@@ -98,7 +98,8 @@ services:
       - /var/log/yashigani:size=50M
     security_opt:
       - no-new-privileges:true
-      - seccomp=../docker/seccomp/yashigani.json
+      # Seccomp (opt-in — uncomment after verifying host/runtime support):
+      # - seccomp=docker/seccomp/yashigani.json
       # AppArmor (optional — requires host setup):
       # Load profile first: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
       # - apparmor=yashigani-gateway
@@ -176,7 +177,8 @@ services:
       - /var/log/yashigani:size=50M
     security_opt:
       - no-new-privileges:true
-      - seccomp=../docker/seccomp/yashigani.json
+      # Seccomp (opt-in — uncomment after verifying host/runtime support):
+      # - seccomp=docker/seccomp/yashigani.json
       # AppArmor (optional — requires host setup):
       # Load profile first: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
       # - apparmor=yashigani-gateway
