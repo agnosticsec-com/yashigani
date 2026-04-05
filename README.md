@@ -15,16 +15,12 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v2.1.0
+**Latest Stable Versions:** v2.20.0 (main) and v1.20.0 (release/1.x)
 
 ---
-**Release Lines:** 
+**Release Lines:** v2.x (full stack with Open WebUI, branch: `main`) | v1.x (gateway-only + admin UI, branch: `release/1.x`)
 ---
-v2.x (full stack with Open WebUI, branch: `main`) 
----
-v1.x (gateway-only, branch: `release/1.x`)
----
-**Document Date:** 2026-04-01
+**Document Date:** 2026-04-05
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -131,9 +127,12 @@ AI Agent / Human (via Open WebUI or API)
 [ RBAC / Authorization ]    <-- OPA policy engine, role resolution
         |
         v
+[ PII Detection ]           <-- 10 PII types, LOG/REDACT/BLOCK (v2.20)
+        |                       Bidirectional, cloud bypass opt-in
+        v
 [ Sensitivity Pipeline ]    <-- Three layers (all ON by default):
         |                       1. Regex pattern matching
-        |                       2. FastText ML classifier (<5ms)
+        |                       2. FastText ML classifier (<5ms, v2.20: baked into image)
         |                       3. Ollama LLM classification
         |                       + CHS credential detection
         |                       + Payload masking before AI send
@@ -157,7 +156,8 @@ AI Agent / Human (via Open WebUI or API)
 [ Upstream LLM / MCP ]      <-- Cloud API / Ollama / MCP tool server
         |
         v
-[ Response Inspection ]     <-- Masking, sanitization, cache check
+[ Response Inspection ]     <-- Sensitivity + PII scan on response (v2.20)
+        |                       Streaming: chunk-level inspection (v2.20)
         |
         v
 [ Audit Write ]             <-- File + PostgreSQL + SIEM (async)
@@ -203,6 +203,7 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 
 | Version | Theme | Key Additions |
 |---|---|---|
+| **v2.20** | **Security Hardening, PII Detection, and Compliance** | **License anti-tampering (v4 counter-sig + self-integrity check), PII detection module (3 modes, 10 entity types, bidirectional inspection, cloud-model bypass), response-path inspection wired to /v1 routes, container hardening (seccomp, AppArmor opt-in, read-only FS in compose), WAF/DDoS protection (Caddy timeouts + body limits, per-IP DDoSProtector), FastText model baked into Docker image, model aliases Redis persistence, SBOM (CycloneDX 1.5 + CryptoBoM 12 algorithms) + cosign keyless image signing, Helm K8s chart fixes + network policies, streaming chunk-level inspection (StreamingInspector), HMAC-SHA256 per-tenant email hashing, Ollama model digest pinning, Open WebUI "Powered by Open WebUI" branding, 548 tests (523 unit + 25 e2e), 9 compliance framework mappings, 2 STRIDE threat models** |
 | **v2.1** | **Admin Dashboard + Alerting + SSO + Persistence** | **Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), OPA v1_routing.rego verified operational, OIDC identity broker wired end-to-end (JWT validation, JWKS discovery, group extraction), mandatory 2FA after SSO (anti-replay), Keycloak test IdP, SSO audit trail (SHA-256 email hashing), Podman rootless parity (volume permissions fix, e2e runtime auto-detection), 413 tests (388 unit + 25 e2e)** |
 | **v2.0** | **First production-grade release** | **Unified Identity Model (kind field, no separate user/agent stores), Optimization Engine (4D routing: sensitivity + complexity + budget + cost, P1-P9 priority matrix), three-tier Budget System (org cap → group → individual, budget-redis noeviction), Open WebUI integration (/chat/*, internal only), Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling), Multi-IdP Identity Broker (OIDC + SAML v2), sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 17 core services + 3 optional agent bundles + dynamic per-identity containers, 363 tests (252 + 111 new), 12 Grafana dashboards** |
 | v1.09.5 | Agent bundles GA + Podman | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with PSK auto-registration, first-class Podman support (runtime detection, compose command, auto-apply podman override), DNS fix for Ollama external network access, admin accounts with fun codenames (animal/nature themed), PgBouncer password from .env, Alembic migrations in backoffice image, 18-service full stack verified from clean slate |
@@ -224,6 +225,43 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 | v0.2.0 | TLS and identity hardening | ACME/CA/self-signed TLS, Prometheus metrics, bcrypt, multi-admin with lockout protection |
 | v0.1.0 | Core gateway | MCP proxy, prompt injection (Ollama), CHS, OPA, session/API key auth, audit log, Redis rate limiting, TOTP/2FA, Argon2 |
 
+### v2.20 — Security Hardening, PII Detection, and Compliance
+
+v2.20 is a focused security hardening release that closes multiple OWASP ASVS Level 3 gaps identified in the v2.1 compliance audit, ships production-grade PII detection, and adds the supply-chain assurance controls (SBOM, image signing) required for enterprise procurement.
+
+**License Anti-Tampering** -- The license verifier now uses a v4 payload schema with a counter-signature that detects binary patching of the verifier itself. A self-integrity check runs at startup; any detected modification halts the process rather than silently degrading to an incorrect tier. This closes the license bypass vector that existed when the verifier was the only trust anchor.
+
+**PII Detection Module** -- A new `pii/` module provides structured detection of personally identifiable information in both prompt and response payloads. Three operating modes are supported: `detect` (flag and log), `redact` (replace with typed placeholders before forwarding), and `block` (reject the request). Ten entity types are covered: name, email, phone, national ID, passport, date of birth, credit card, bank account, IP address, and physical address. Detection runs bidirectionally — on inbound prompts and on upstream responses. Cloud model bypass: when a prompt is classified as containing PII and the routing target is a cloud API, the PII module intercepts the routing decision and forces local inference, independently of the Optimization Engine's sensitivity classification. This provides defence-in-depth for the most common data exfiltration vector.
+
+**Response-Path Inspection Wired to /v1 Routes** -- The `ResponseInspectionPipeline` introduced in v0.9.0 and activated in v0.9.3 is now wired to all `/v1/*` routes in addition to MCP routes. Every OpenAI-compatible response passing through the gateway is inspected before delivery.
+
+**Container Hardening** -- `docker-compose.yml` now carries explicit `security_opt`, `cap_drop`, and `read_only` directives for all core services. The seccomp profile is embedded in the repository at `docker/seccomp/yashigani.json`. AppArmor profile loading is opt-in and documented as Ubuntu/Debian-only; a compose override (`docker-compose.apparmor.yml`) is provided for operators on supported hosts. Read-only root filesystem is enabled for all services that do not require writable state; tmpfs mounts cover the remaining write paths.
+
+**WAF and DDoS Protection** -- Caddy request timeouts and body size limits are now set as hardened defaults in the Caddyfile. A `DDoSProtector` component tracks per-IP request rates in Redis and returns 429 with `Retry-After` when a configurable threshold is exceeded. For operators requiring a full Web Application Firewall, a `Caddyfile.waf` reference configuration using the Coraza WAF plugin is documented in `docs/`.
+
+**FastText Model Baked Into Docker Image** -- The FastText classifier model is now included in the gateway Docker image at build time. The `ollama-init` model-pull step is no longer a blocking dependency for the inspection pipeline to reach operational status. Deployments with no outbound internet access reach full inspection capability immediately on container start.
+
+**Model Aliases Redis Persistence** -- Model alias entries are now written through to Redis on every create, update, and delete operation, in addition to Postgres. Alias resolution uses Redis as the read path with Postgres as source of truth. This eliminates the alias lookup latency that affected high-throughput deployments and ensures alias availability survives Postgres maintenance windows.
+
+**SBOM and Image Signing** -- Every Docker image built by the release pipeline now produces a CycloneDX 1.5 Software Bill of Materials (SBOM) and a CryptoBoM covering the 12 cryptographic algorithms in use. Images are signed using cosign keyless signing (Sigstore), tied to the GitHub Actions OIDC identity of the release workflow. Consumers can verify image provenance with `cosign verify` before pulling. The `release.yml` workflow publishes SBOMs as release artifacts.
+
+**Helm Chart Fixes and Network Policies** -- The Helm chart passed `helm lint` for the first time in v2.20. Several `values.yaml` keys introduced in v2.0 (`budgetRedis`, `poolManager`, `openWebUI`) lacked corresponding template references; these were wired. Helm test hooks were added for gateway health, auth, and audit sinks. Kubernetes network policies now cover all services added in v2.0 and v2.1 that were missing policy coverage.
+
+**Streaming Chunk-Level Inspection** -- The `StreamingInspector` provides chunk-level content inspection for streaming responses. Chunks are buffered up to a configurable token threshold; the inspection pipeline runs against the accumulated buffer at each threshold boundary. A `budget_header_limitation` note is documented: `X-Yashigani-Budget-*` headers cannot be emitted mid-stream and are appended as trailing headers where the client supports it. Environment variables `YASHIGANI_STREAMING_CHUNK_THRESHOLD` and `YASHIGANI_STREAMING_MAX_BUFFER` control buffering behaviour.
+
+**HMAC-SHA256 Per-Tenant Email Hashing** -- SSO audit events previously used SHA-256 email hashing with a global salt. v2.20 replaces this with HMAC-SHA256 keyed with a per-tenant secret stored in the KMS. This ensures that email hashes from one tenant cannot be correlated with hashes from another, closing a cross-tenant correlation risk in multi-org deployments.
+
+**Ollama Model Digest Pinning** -- The `ollama-init` model-pull step now records the SHA-256 digest of each pulled model and validates it on subsequent starts. A model that does not match the pinned digest is rejected and an alert is raised. This closes the supply-chain risk where a poisoned Ollama registry could silently replace a trusted model.
+
+**Open WebUI Branding** -- The Open WebUI deployment now displays "Powered by Open WebUI" in the interface footer, meeting the Open WebUI project's attribution requirement for commercial deployments.
+
+**Compliance Documentation** -- A 9-framework compliance mapping document (`Development & QA/Development/COMPLIANCE_MAPPINGS_v2.2.md`) maps Yashigani controls against SOC 2 Type II, ISO 27001:2022, HIPAA, PCI DSS v4, GDPR, NIST CSF 2.0, NIST SP 800-53, CIS Controls v8, and OWASP ASVS v5 Level 3. Two STRIDE threat models are published: one for the product boundary (17 threats) and one for the solution deployment (38 threats).
+
+**Additional v2.20 changes:**
+- 548 tests passing (523 unit + 25 e2e)
+- 9 compliance framework mappings documented
+- 2 STRIDE threat models (product: 17 threats; solution: 38 threats)
+
 ### v2.1 — Admin Dashboard, Alerting, and Persistence
 
 v2.1 adds the management layer that makes Yashigani self-service. The Admin Dashboard provides a login page and a 9-section admin panel covering identities, budgets, routing, policies, alerts, audit, models, agents, and system health. Operators no longer need curl or API knowledge to manage the platform.
@@ -242,12 +280,12 @@ v2.1 adds the management layer that makes Yashigani self-service. The Admin Dash
 
 **Keycloak Test IdP** -- A Docker Compose `test-idp` profile provides a pre-configured Keycloak instance with OIDC and SAML clients, three test users (alice, bob, carol), and group mappers for ID token claims. Start with `docker compose --profile test-idp up -d keycloak`.
 
-**Podman Rootless Parity** -- Full Podman rootless support with correct user namespace configuration. Root-running services (Ollama, Postgres, Redis, Caddy) no longer use `keep-id` which caused volume permission failures. E2E test suite auto-detects runtime (Podman or Docker) via `YASHIGANI_RUNTIME` env var or container probing. Chaos tests handle Podman's restart behavior (explicit restart after kill). 413 tests pass on both Docker and Podman deployments.
+**Podman Rootless Parity** -- Full Podman rootless support with correct user namespace configuration. Root-running services (Ollama, Postgres, Redis, Caddy) no longer use `keep-id` which caused volume permission failures. E2E test suite auto-detects runtime (Podman or Docker) via `YASHIGANI_RUNTIME` env var or container probing. Chaos tests handle Podman's restart behavior (explicit restart after kill). 413 tests passed on both Docker and Podman deployments at the time of v2.1 release (548 tests as of v2.20).
 
 **OPA v1_routing.rego Verified Operational** -- The OPA routing safety net policy (v1_routing.rego) has been verified end-to-end in the production configuration. Policy evaluation, LLM validation of policy changes, and SAFE/WARNING/BLOCK verdicts are all confirmed operational.
 
 **Additional v2.1 changes:**
-- 413 tests passing (388 unit + 25 e2e)
+- 413 tests passing (388 unit + 25 e2e) — superseded by 548 tests (523 unit + 25 e2e) in v2.20
 
 ### v2.0 — First Production-Grade Release
 
@@ -274,7 +312,7 @@ v2.0 is Yashigani's first production-grade release, adding five major subsystems
 - 363 tests passing (252 original + 111 new)
 - 12 Grafana dashboards (9 existing + 3 new: budget, Optimization Engine, Pool Manager)
 - Model alias table: DB-driven via admin API, Postgres + Redis cache, CRUD at `/admin/models/aliases`
-- Streaming: buffered mode (full response before delivery) for v2.0; response inspection completes before user sees anything; chunk-level streaming deferred to v2.1
+- Streaming: buffered mode (full response before delivery) for v2.0; response inspection completes before user sees anything; chunk-level streaming shipped in v2.20
 - User API keys: 256-bit hex, bcrypt cost 12, max lifetime 1 year, default rotation 90 days, 7-day grace period
 
 ### v1.09.5 — Agent Bundles GA and Podman Support
@@ -517,7 +555,7 @@ The initial release established the core security envelope. Yashigani began as a
 - **Container Pool Manager (v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
 - **Dynamic per-identity containers (v2.0)** — managed by Pool Manager; license tier gates container limits
 - **17 core services + 3 optional agent bundles (v2.0)** — up from 18 in v1.09.5; plus dynamic per-identity containers
-- **413 tests passing (v2.1)** — 388 unit + 25 e2e
+- **548 tests passing (v2.20)** — 523 unit + 25 e2e
 
 ### 5.10 Licensing and Tiers
 
@@ -747,7 +785,9 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v2.1 is the current production release. v2.1 adds the Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), and OPA v1_routing.rego verified operational. The admin panel is the management layer that makes the product fully self-service — no curl or API knowledge needed. v2.1 brings the test count to 388 (363 + 25 e2e).
+Yashigani v2.20 is the current production release. v2.20 is a focused security hardening release that closes multiple OWASP ASVS Level 3 gaps, ships production-grade PII detection (3 modes, 10 entity types, bidirectional, cloud bypass), adds container hardening (seccomp, AppArmor, read-only filesystem), WAF/DDoS protection, streaming chunk-level inspection, SBOM + cosign image signing, and two STRIDE threat models covering 17 product threats and 38 solution threats. The test suite grows from 413 to 548 (523 unit + 25 e2e). Nine compliance framework mappings are published.
+
+v2.1 added the Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), and OPA v1_routing.rego verified operational. The admin panel is the management layer that makes the product fully self-service — no curl or API knowledge needed.
 
 v2.0 introduced five major subsystems: the Unified Identity Model (every entity is an identity with a `kind` field, no separate stores), the Optimization Engine (four-dimensional routing with P1-P9 priority matrix), the three-tier Budget System (org cap → group → individual, enforced by dedicated budget-redis), Open WebUI integration at `/chat/*` (internal only, all LLM calls through gateway), and the Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling). Additional v2.0 additions include the Multi-IdP Identity Broker (OIDC + SAML v2), the three-layer sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 17 core services + 3 optional agent bundles plus dynamic per-identity containers, and 12 Grafana dashboards.
 
@@ -755,7 +795,7 @@ v2.0 introduced five major subsystems: the Unified Identity Model (every entity 
 - **v2.x** (branch: `main`) — Full stack: gateway + Open WebUI + Optimization Engine + Budget System + Container Pool Manager
 - **v1.x** (branch: `release/1.x`) — Gateway-only: security enforcement proxy without Open WebUI or full-stack subsystems
 
-The progression from v0.1.0 through v2.1 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade AI operations platform with intelligent routing, budget governance, unified identity management, and an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget exhaustion — results in an insecure pass-through or silent rejection. Every failure mode has been designed to be fail-closed or gracefully degraded.
+The progression from v0.1.0 through v2.20 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade AI operations platform with intelligent routing, budget governance, unified identity management, supply-chain assurance, and an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget exhaustion — results in an insecure pass-through or silent rejection. Every failure mode has been designed to be fail-closed or gracefully degraded.
 
 ### v0.8.0 Delivered
 
@@ -844,6 +884,42 @@ Full non-interactive install command:
 bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langgraph,goose,openclaw
 ```
 
+### v2.1 Delivered
+
+v2.1 adds the management layer that makes Yashigani self-service. Key deliverables:
+
+- **Admin Dashboard UI** — login page + 9-section admin panel (identities, budgets, routing, policies, alerts, audit, models, agents, system health); served behind Caddy authentication
+- **12 Alertmanager rules** — P1-P5 severity for routing and budget conditions; fires on sensitivity breaches, OPA overrides, classification conflicts, spending anomalies, budget exhaustion, and budget auto-switch events
+- **Budget Postgres persistence** — budget counters written to PostgreSQL in addition to budget-redis; state survives container restarts and Redis eviction; async write path to avoid request-path latency
+- **Pool Manager background health monitor** — daemon thread continuously monitors container health; unhealthy containers detected and replaced without waiting for a failed request
+- **OIDC identity broker (end-to-end)** — `handle_oidc_callback()` delegates to `OIDCProvider.exchange_code()` with real JWT validation, JWKS discovery, and group extraction supporting Entra ID, Okta, Cognito, and Keycloak; CSRF protection via Redis-backed state/nonce tokens (10-minute TTL, ASVS V3.5.3)
+- **Mandatory 2FA after SSO** — TOTP verification required even after successful IdP authentication; controlled by `YASHIGANI_SSO_2FA_REQUIRED`
+- **SSO audit trail** — SHA-256 email hashing on all SSO events; raw email never stored
+- **Keycloak test IdP** — Docker Compose `test-idp` profile with pre-configured OIDC and SAML clients, three test users, and group mappers
+- **Podman rootless parity** — correct user namespace configuration; root-running services no longer use `keep-id`; e2e test suite auto-detects runtime
+- **OPA v1_routing.rego verified operational** — policy evaluation, LLM validation, and SAFE/WARNING/BLOCK verdicts confirmed end-to-end
+- 413 tests (388 unit + 25 e2e)
+
+### v2.20 Delivered
+
+v2.20 is a security hardening release closing ASVS Level 3 gaps identified post-v2.1, shipping production-grade PII detection, and adding supply-chain assurance controls. Key deliverables:
+
+- **License anti-tampering** — v4 counter-signature detects binary patching of the verifier; self-integrity check halts the process on modification rather than silently degrading
+- **PII detection module** — `pii/` module; 3 modes (detect / redact / block), 10 entity types, bidirectional (prompt + response), cloud model bypass forces local routing when PII is detected
+- **Response-path inspection on /v1 routes** — `ResponseInspectionPipeline` now wired to all `/v1/*` routes; every OpenAI-compatible response inspected before delivery
+- **Container hardening** — seccomp profile at `docker/seccomp/yashigani.json`; AppArmor opt-in via `docker-compose.apparmor.yml` (Ubuntu/Debian); read-only root filesystem for all core services; explicit `cap_drop` in compose
+- **WAF and DDoS protection** — Caddy hardened timeouts and body size limits; per-IP `DDoSProtector` in Redis (429 + `Retry-After`); `Caddyfile.waf` reference config for Coraza WAF plugin
+- **FastText model baked into Docker image** — no outbound pull required at startup; full inspection capability on container start in air-gapped environments
+- **Model aliases Redis persistence** — write-through to Redis on every alias mutation; Redis is the read path, Postgres is the source of truth
+- **SBOM + cosign image signing** — CycloneDX 1.5 SBOM + CryptoBoM (12 algorithms) per image; cosign keyless signing tied to GitHub Actions OIDC; `release.yml` publishes SBOMs as release artifacts; consumers verify with `cosign verify`
+- **Helm chart fixes + network policies** — chart passes `helm lint`; v2.0/v2.1 values wired to templates; Helm test hooks added; network policies cover all services added since v2.0
+- **Streaming chunk-level inspection** — `StreamingInspector` buffers chunks to configurable threshold and inspects at each boundary; budget headers delivered as trailing headers; env vars `YASHIGANI_STREAMING_CHUNK_THRESHOLD` and `YASHIGANI_STREAMING_MAX_BUFFER`
+- **HMAC-SHA256 per-tenant email hashing** — SSO audit email hashes keyed with per-tenant KMS secret; closes cross-tenant correlation risk in multi-org deployments
+- **Ollama model digest pinning** — `ollama-init` records pulled model SHA-256 digest; validates on subsequent starts; mismatched digest raises alert and rejects the model
+- **Open WebUI branding** — "Powered by Open WebUI" attribution in interface footer
+- **Compliance documentation** — 9-framework mapping doc; 2 STRIDE threat models (product: 17 threats, solution: 38 threats)
+- 548 tests (523 unit + 25 e2e)
+
 ### v2.0 Delivered
 
 v2.0 is Yashigani's first production-grade release. It adds five major subsystems and transforms the platform from a security enforcement proxy into a complete AI operations platform.
@@ -921,7 +997,7 @@ v2.0 is Yashigani's first production-grade release. It adds five major subsystem
 - 363 tests passing (252 original + 111 new)
 - 12 Grafana dashboards (9 existing + 3 new: budget, Optimization Engine, Pool Manager)
 - Model alias table: DB-driven, Postgres + Redis cache, CRUD at `/admin/models/aliases`
-- Streaming: buffered mode for v2.0 (full response before delivery; chunk-level streaming deferred to v2.1)
+- Streaming: buffered mode for v2.0 (full response before delivery; chunk-level streaming shipped in v2.20)
 - User API keys: 256-bit hex, bcrypt cost 12, max lifetime 1 year, default rotation 90 days, 7-day grace period
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (5 agents, 10 end users, Apache 2.0). Teams with an SSO mandate but limited scale should consider the Starter tier (OIDC, 100 agents, 250 end users). Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments needing up to 10,000 end users and 5 orgs. Enterprise provides unlimited scale with named support engineers and 24/7 SLA. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.

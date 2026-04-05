@@ -1,7 +1,7 @@
 # Yashigani v2.0 — Installation and Configuration Guide
 
 **Version:** 2.2
-**Last updated:** 2026-04-04
+**Last updated:** 2026-04-05
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -2383,4 +2383,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.2 — Installation and Configuration Guide — 2026-04-04*
+*Yashigani v2.2 — Installation and Configuration Guide — 2026-04-05*
