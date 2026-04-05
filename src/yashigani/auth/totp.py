@@ -1,6 +1,7 @@
 """
 Yashigani Auth — TOTP (RFC 6238) + 8-code recovery system.
 OWASP ASVS V2.8: per-account seeds, replay prevention, one-time display.
+Uses HMAC-SHA256 (upgraded from SHA1 for post-quantum resilience).
 """
 from __future__ import annotations
 
@@ -70,7 +71,7 @@ def generate_provisioning(
     """
     pyotp = _import_pyotp()
     secret = existing_secret or generate_totp_secret()
-    totp = pyotp.TOTP(secret, issuer=issuer)
+    totp = pyotp.TOTP(secret, issuer=issuer, digest=hashlib.sha256)
     uri = totp.provisioning_uri(name=account_name, issuer_name=issuer)
 
     qr_b64 = _generate_qr_b64(uri)
@@ -90,7 +91,7 @@ def verify_totp(secret_b32: str, code: str, used_codes_cache: set[str]) -> bool:
     Replay prevention: adds the window key to used_codes_cache on success.
     """
     pyotp = _import_pyotp()
-    totp = pyotp.TOTP(secret_b32)
+    totp = pyotp.TOTP(secret_b32, digest=hashlib.sha256)
     window_key = f"{secret_b32}:{int(time.time()) // 30}"
     if window_key in used_codes_cache:
         return False  # replay

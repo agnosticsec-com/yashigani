@@ -129,7 +129,8 @@ class TestVerifyTotp:
 
         (_, _, _, _, _, generate_totp_secret, _, _, verify_totp, *_) = _import_totp()
         secret = generate_totp_secret()
-        totp = pyotp.TOTP(secret)
+        import hashlib
+        totp = pyotp.TOTP(secret, digest=hashlib.sha256)
         current_code = totp.now()
         assert verify_totp(secret_b32=secret, code=current_code, used_codes_cache=set()) is True
 
