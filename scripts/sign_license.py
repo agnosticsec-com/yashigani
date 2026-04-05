@@ -5,16 +5,25 @@ Yashigani License Signing Infrastructure — License Signer
 YASHIGANI-INTERNAL ONLY — used by the Yashigani team to generate customer license files.
 
 Signs a license payload with the Yashigani ECDSA P-256 private key.
-Output is a .ysg file: {base64url(json)}.{base64url(ecdsa_signature)}
 
-ECDSA P-256 with SHA-256. Signatures are ~72 bytes DER-encoded.
+Output formats:
+  v3 (default, --counter-key omitted):
+      {base64url(json)}.{base64url(primary_signature)}
+
+  v4 (--counter-key provided):
+      {base64url(json)}.{base64url(primary_signature)}.{base64url(counter_signature)}
+
+  Counter-signature message:
+      sha256(payload_bytes + sha256(primary_public_key_pem_bytes))
+
+ECDSA P-256 with SHA-256.  Signatures are ~72 bytes DER-encoded.
 Will migrate to ML-DSA-65 (FIPS 204) when cryptography library ships support.
 
-Payload version: v3 (current)
+Payload version: v3/v4 (current)
   Fields: tier, org_domain, max_agents, max_end_users, max_admin_seats, max_orgs,
           features, issued_at, expires_at, license_id, license_type, key_alg, v
 
-Usage:
+Usage (v3 — no counter-key):
     python scripts/sign_license.py \\
         --private-key keys/yashigani_license_private.pem \\
         --tier professional \\
@@ -27,15 +36,27 @@ Usage:
         --features saml,oidc,scim \\
         --out customer.ysg
 
+Usage (v4 — with counter-key):
+    python scripts/sign_license.py \\
+        --private-key keys/yashigani_license_private.pem \\
+        --public-key keys/yashigani_license_public.pem \\
+        --counter-key keys/yashigani_counter_private.pem \\
+        --tier professional \\
+        --org-domain customer.example.com \\
+        --out customer.ysg
+
     # Or pipe payload JSON directly:
     echo '{"tier":"professional",...}' | python scripts/sign_license.py \\
         --private-key keys/yashigani_license_private.pem \\
+        --public-key keys/yashigani_license_public.pem \\
+        --counter-key keys/yashigani_counter_private.pem \\
         --out customer.ysg
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import sys
 import uuid
@@ -128,6 +149,8 @@ def sign_payload(payload: dict, private_key_pem: bytes) -> str:
     """
     Sign a license payload with the ECDSA P-256 private key (SHA-256).
 
+    Returns a v3 format string: {base64url(json)}.{base64url(signature)}.
+
     Requires cryptography>=42.
     """
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
@@ -146,11 +169,92 @@ def sign_payload(payload: dict, private_key_pem: bytes) -> str:
     return f"{payload_b64}.{sig_b64}"
 
 
+def _compute_counter_sig_message(payload_bytes: bytes, primary_public_key_pem: str) -> bytes:
+    """
+    Compute the message covered by the counter-signature.
+
+    counter_sig_message = sha256(payload_bytes + sha256(primary_public_key_pem_bytes))
+
+    Must stay in sync with verifier._compute_counter_sig_message().
+    """
+    pem_bytes = primary_public_key_pem.encode("utf-8")
+    pem_hash = hashlib.sha256(pem_bytes).digest()
+    combined = payload_bytes + pem_hash
+    return hashlib.sha256(combined).digest()
+
+
+def sign_payload_v4(
+    payload: dict,
+    primary_private_key_pem: bytes,
+    primary_public_key_pem: str,
+    counter_private_key_pem: bytes,
+) -> str:
+    """
+    Sign a license payload with both the primary key and the counter-signing key.
+
+    Returns a v4 format string:
+        {base64url(json)}.{base64url(primary_sig)}.{base64url(counter_sig)}
+
+    The counter-signature covers:
+        sha256(payload_bytes + sha256(primary_public_key_pem_bytes))
+
+    Requires cryptography>=42.
+    """
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
+    from cryptography.hazmat.primitives.hashes import SHA256
+
+    # Primary signature
+    primary_key = load_pem_private_key(primary_private_key_pem, password=None)
+    payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    payload_bytes = payload_json.encode("utf-8")
+    payload_b64 = base64url_encode(payload_bytes)
+
+    primary_sig = primary_key.sign(payload_bytes, ECDSA(SHA256()))
+    primary_sig_b64 = base64url_encode(primary_sig)
+
+    # Counter-signature
+    counter_key = load_pem_private_key(counter_private_key_pem, password=None)
+    message = _compute_counter_sig_message(payload_bytes, primary_public_key_pem)
+    counter_sig = counter_key.sign(message, ECDSA(SHA256()))
+    counter_sig_b64 = base64url_encode(counter_sig)
+
+    return f"{payload_b64}.{primary_sig_b64}.{counter_sig_b64}"
+
+
+def _derive_public_key_pem_from_private(private_key_pem: bytes) -> str:
+    """Derive the public key PEM string from a private key PEM."""
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    private_key = load_pem_private_key(private_key_pem, password=None)
+    pub_pem = private_key.public_key().public_bytes(
+        encoding=Encoding.PEM,
+        format=PublicFormat.SubjectPublicKeyInfo,
+    )
+    return pub_pem.decode("utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Sign a Yashigani v3 license payload (ECDSA P-256)"
+        description="Sign a Yashigani v3/v4 license payload (ECDSA P-256)"
     )
-    parser.add_argument("--private-key", required=True, help="Path to ECDSA P-256 private key PEM")
+    parser.add_argument("--private-key", required=True, help="Path to primary ECDSA P-256 private key PEM")
+    parser.add_argument(
+        "--public-key", default=None,
+        help=(
+            "Path to primary ECDSA P-256 public key PEM (required when --counter-key is used). "
+            "If omitted the public key is derived from --private-key automatically."
+        ),
+    )
+    parser.add_argument(
+        "--counter-key", default=None,
+        help=(
+            "Path to counter-signing ECDSA P-256 private key PEM. "
+            "When provided, produces a v4 license with a counter-signature. "
+            "Omit to produce a v3 license (backwards-compatible)."
+        ),
+    )
     parser.add_argument("--tier", choices=_VALID_TIERS, default="professional",
                         help="License tier")
     parser.add_argument("--license-type", choices=_VALID_LICENSE_TYPES, default="production",
@@ -170,19 +274,48 @@ def main() -> None:
     parser.add_argument("--json", dest="payload_json", help="Raw JSON payload (overrides all other flags except --private-key and --out)")
     args = parser.parse_args()
 
-    private_key_path = Path(args.private_key)
-    if not private_key_path.exists():
-        print(f"ERROR: private key not found: {private_key_path}", file=sys.stderr)
+    primary_key_path = Path(args.private_key)
+    if not primary_key_path.exists():
+        print(f"ERROR: private key not found: {primary_key_path}", file=sys.stderr)
         sys.exit(1)
 
-    private_key_pem = private_key_path.read_bytes()
+    primary_private_key_pem = primary_key_path.read_bytes()
 
     if args.payload_json:
         payload = json.loads(args.payload_json)
     else:
         payload = build_payload(args)
 
-    license_content = sign_payload(payload, private_key_pem)
+    if args.counter_key:
+        # v4 format: primary signature + counter-signature
+        counter_key_path = Path(args.counter_key)
+        if not counter_key_path.exists():
+            print(f"ERROR: counter key not found: {counter_key_path}", file=sys.stderr)
+            sys.exit(1)
+        counter_private_key_pem = counter_key_path.read_bytes()
+
+        # Resolve primary public key PEM
+        if args.public_key:
+            pub_key_path = Path(args.public_key)
+            if not pub_key_path.exists():
+                print(f"ERROR: public key not found: {pub_key_path}", file=sys.stderr)
+                sys.exit(1)
+            primary_public_key_pem = pub_key_path.read_text(encoding="utf-8")
+        else:
+            # Derive from private key — convenient but slightly slower
+            primary_public_key_pem = _derive_public_key_pem_from_private(primary_private_key_pem)
+
+        license_content = sign_payload_v4(
+            payload,
+            primary_private_key_pem,
+            primary_public_key_pem,
+            counter_private_key_pem,
+        )
+        format_version = 4
+    else:
+        # v3 format: primary signature only
+        license_content = sign_payload(payload, primary_private_key_pem)
+        format_version = 3
 
     if args.out == "-":
         print(license_content)
@@ -191,6 +324,7 @@ def main() -> None:
         out_path.write_text(license_content)
         print(f"License written: {out_path}")
 
+    print(f"  format=v{format_version}", file=sys.stderr)
     print(f"  v={payload.get('v', 3)}", file=sys.stderr)
     print(f"  tier={payload['tier']}", file=sys.stderr)
     print(f"  license_type={payload.get('license_type', 'production')}", file=sys.stderr)

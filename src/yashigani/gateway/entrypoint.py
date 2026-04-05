@@ -300,6 +300,7 @@ def _build_app():
         ollama_url=ollama_url,
         default_model=model,
         agent_registry=agent_registry,
+        response_inspection_pipeline=response_pipeline,
     )
 
     gateway_app = create_gateway_app(

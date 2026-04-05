@@ -364,16 +364,16 @@ class ResponseInspectionConfig:
                             "403" is reserved for request-path blocks.
         exempt_content_types
                             Content-Type values that bypass response inspection.
-                            application/json is exempt by default because structured
-                            JSON payloads carry low free-text injection surface area
-                            and the classifier produces too many false positives on them.
-                            Extend this list with care — each addition is a trust assumption.
+                            Empty by default — all content types are inspected.
+                            Add entries only when a content type is provably safe and
+                            false-positive cost outweighs the inspection risk.
+                            Each addition is an explicit trust assumption; document the reason.
     """
     enabled: bool = True
     fasttext_only: bool = False
     blocked_action: str = "502"
     exempt_content_types: list[str] = field(
-        default_factory=lambda: ["application/json"]
+        default_factory=list
     )
 
 
