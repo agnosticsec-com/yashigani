@@ -97,6 +97,7 @@ class OpenAIRouterState:
         self.default_model: str = "qwen2.5:3b"
         self.available_models: list[dict] = []
         self.agent_registry = None
+        self.response_inspection_pipeline = None
 
 
 _state = OpenAIRouterState()
@@ -114,6 +115,7 @@ def configure(
     default_model: str = "qwen2.5:3b",
     available_models: list[dict] | None = None,
     agent_registry=None,
+    response_inspection_pipeline=None,
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
     _state.identity_registry = identity_registry
@@ -127,7 +129,12 @@ def configure(
     _state.default_model = default_model
     _state.available_models = available_models or []
     _state.agent_registry = agent_registry
-    logger.info("OpenAI router configured (default_model=%s)", default_model)
+    _state.response_inspection_pipeline = response_inspection_pipeline
+    logger.info(
+        "OpenAI router configured (default_model=%s, response_inspection=%s)",
+        default_model,
+        "enabled" if response_inspection_pipeline is not None else "disabled",
+    )
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────
@@ -303,6 +310,50 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             detail="Backend communication error",
         )
 
+    # ── 7b. Response inspection ───────────────────────────────────────
+    # Inspect assistant_content as plain text — we care about what the model
+    # *said*, not the JSON envelope wrapping it. Using "text/plain" ensures
+    # the exempt_content_types list cannot inadvertently skip this check.
+    response_verdict = "clean"
+    if _state.response_inspection_pipeline is not None and assistant_content:
+        try:
+            # session_id and agent_id are best-effort from identity; fall back
+            # to request_id so the audit event is always correlated.
+            resp_session_id = identity.get("identity_id", request_id) if identity else request_id
+            resp_agent_id = identity.get("slug", "openai-router") if identity else "openai-router"
+
+            resp_result = _state.response_inspection_pipeline.inspect(
+                response_body=assistant_content,
+                content_type="text/plain",
+                request_id=request_id,
+                session_id=resp_session_id,
+                agent_id=resp_agent_id,
+            )
+            if not resp_result.skipped:
+                response_verdict = resp_result.verdict.lower()
+
+            if resp_result.verdict == "BLOCKED":
+                logger.warning(
+                    "Response inspection BLOCKED for request_id=%s confidence=%.2f",
+                    request_id,
+                    resp_result.confidence,
+                )
+                # Write audit event for the block
+                if _state.audit_writer:
+                    try:
+                        _state.audit_writer(
+                            "RESPONSE_INJECTION_DETECTED",
+                            resp_result.audit_fields,
+                        )
+                    except Exception as _exc:
+                        logger.warning("Audit write failed for response block: %s", _exc)
+                # Do NOT suppress the response — the content is already generated
+                # and withholding it creates a confusing UX (empty assistant turn).
+                # The BLOCKED verdict is surfaced via header so downstream
+                # systems (e.g. Open WebUI plugins) can act on it.
+        except Exception as exc:
+            logger.warning("Response inspection raised unexpectedly: %s", exc)
+
     # ── 8. Token counting + budget recording ─────────────────────────
     input_tokens = backend_body.get("prompt_eval_count", token_estimate)
     output_tokens = backend_body.get("eval_count", len(assistant_content) // 4)
@@ -347,6 +398,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         "X-Yashigani-Sensitivity": sensitivity_level,
         "X-Yashigani-Complexity": complexity_level,
         "X-Yashigani-Elapsed-Ms": str(elapsed_ms),
+        "X-Yashigani-Response-Verdict": response_verdict,
     }
     if budget_total > 0:
         headers["X-Yashigani-Budget-Used"] = str(budget_used)
