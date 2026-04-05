@@ -4,6 +4,9 @@ Yashigani v0.7.0 — DB partition maintenance CronJob (P1-B)
 Runs scripts/partition_maintenance.py on the 1st of every month at 02:00 UTC
 to pre-create the next 3 months of audit_events and inference_events partitions.
 Safe to run at any time; CREATE TABLE IF NOT EXISTS prevents double-creation.
+
+Image: reuses the gateway image because partition_maintenance.py lives in the
+same Python package. The job only needs DATABASE_URL — no network exposure.
 */ -}}
 apiVersion: batch/v1
 kind: CronJob
@@ -11,7 +14,10 @@ metadata:
   name: {{ include "yashigani.fullname" . }}-partition-maintenance
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/name: {{ include "yashigani.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    helm.sh/chart: {{ include "yashigani.chart" . }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/component: db-maintenance
   annotations:
     yashigani.io/version: {{ .Chart.AppVersion | quote }}
@@ -26,7 +32,8 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "yashigani.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/name: {{ include "yashigani.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
             app.kubernetes.io/component: db-maintenance
         spec:
           serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
@@ -35,10 +42,14 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: partition-maintenance
-              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-              imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+              # Reuse the gateway image — partition_maintenance.py is part of the
+              # same Python package. Override the entrypoint to run the script directly.
+              image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.gateway.image.pullPolicy | default "IfNotPresent" }}
               command:
                 - python
                 - scripts/partition_maintenance.py

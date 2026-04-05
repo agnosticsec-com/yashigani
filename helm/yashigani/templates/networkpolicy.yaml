@@ -1,5 +1,10 @@
 # NetworkPolicy — default-deny with explicit allow rules per service.
 # Enforces the principle of least privilege for intra-cluster traffic.
+#
+# NOTE: Pod selectors use app.kubernetes.io/name labels, which match the
+# labels emitted by every Deployment and StatefulSet in this chart.
+# The legacy "app: yashigani-<service>" labels have been corrected to
+# app.kubernetes.io/name: <service> throughout.
 
 ---
 # Default deny-all ingress for the namespace
@@ -8,60 +13,215 @@ kind: NetworkPolicy
 metadata:
   name: default-deny-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes:
     - Ingress
 
 ---
-# Gateway — accept ingress from caddy and from /agents/* callers (labeled external-caller)
+# Default deny-all egress for the namespace (allow-list per service below)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+---
+# Allow DNS resolution for all pods (required for service discovery)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# Gateway — accept ingress from caddy (if enabled) and nginx-ingress controller
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-gateway-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-gateway
+      app.kubernetes.io/name: yashigani-gateway
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-caddy
+              app.kubernetes.io/name: yashigani-caddy
+        # nginx-ingress controller pods (namespace may differ per cluster)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
         - podSelector:
             matchLabels:
-              app: yashigani-ingress
+              app.kubernetes.io/name: open-webui
       ports:
         - protocol: TCP
           port: 8080
 
 ---
-# Backoffice — accept ingress from caddy only
+# Gateway egress — allow outbound to policy, redis, budget-redis, ollama, postgres (via pgbouncer), OTEL
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-policy
+      ports:
+        - protocol: TCP
+          port: 8181
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-budget-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-ollama
+      ports:
+        - protocol: TCP
+          port: 11434
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-pgbouncer
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+
+---
+# Backoffice — accept ingress from caddy / nginx-ingress only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-backoffice-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-backoffice
+      app.kubernetes.io/name: yashigani-backoffice
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-caddy
-        - podSelector:
+              app.kubernetes.io/name: yashigani-caddy
+        - namespaceSelector:
             matchLabels:
-              app: yashigani-ingress
+              kubernetes.io/metadata.name: ingress-nginx
       ports:
         - protocol: TCP
           port: 8443
+
+---
+# Backoffice egress — policy, redis, budget-redis, ollama, pgbouncer
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backoffice-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-backoffice
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-policy
+      ports:
+        - protocol: TCP
+          port: 8181
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-budget-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-ollama
+      ports:
+        - protocol: TCP
+          port: 11434
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-pgbouncer
+      ports:
+        - protocol: TCP
+          port: 5432
 
 ---
 # Policy (OPA) — accept ingress from gateway and backoffice only
@@ -70,45 +230,81 @@ kind: NetworkPolicy
 metadata:
   name: allow-policy-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-policy
+      app.kubernetes.io/name: yashigani-policy
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-gateway
+              app.kubernetes.io/name: yashigani-gateway
         - podSelector:
             matchLabels:
-              app: yashigani-backoffice
+              app.kubernetes.io/name: yashigani-backoffice
       ports:
         - protocol: TCP
           port: 8181
 
 ---
-# Redis — accept ingress from gateway and backoffice only
+# Redis — accept ingress from gateway, backoffice, and agent bundles
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-redis-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-redis
+      app.kubernetes.io/name: yashigani-redis
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-gateway
+              app.kubernetes.io/name: yashigani-gateway
         - podSelector:
             matchLabels:
-              app: yashigani-backoffice
+              app.kubernetes.io/name: yashigani-backoffice
+        # langgraph agent uses redis for task queue (DB 5)
+        - podSelector:
+            matchLabels:
+              yashigani.io/bundle: langgraph
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Budget Redis — accept ingress from gateway and backoffice only
+# Separate Redis instance; noeviction policy protects budget counters.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-budget-redis-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-budget-redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
       ports:
         - protocol: TCP
           port: 6379
@@ -120,51 +316,242 @@ kind: NetworkPolicy
 metadata:
   name: allow-ollama-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-ollama
+      app.kubernetes.io/name: yashigani-ollama
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-gateway
+              app.kubernetes.io/name: yashigani-gateway
         - podSelector:
             matchLabels:
-              app: yashigani-backoffice
+              app.kubernetes.io/name: yashigani-backoffice
       ports:
         - protocol: TCP
           port: 11434
 
 ---
-# Prometheus — accept ingress from grafana and from backoffice (scrape target)
+# Ollama egress — allow outbound to pull models from registry.ollama.ai
+# SECURITY NOTE: Ollama requires external internet access for model pulls.
+# Restrict to the ollama registry CIDR in production if possible, or use
+# an OCI mirror to avoid this egress rule entirely.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-prometheus-ingress
+  name: allow-ollama-egress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-prometheus
+      app.kubernetes.io/name: yashigani-ollama
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+
+---
+# PostgreSQL — accept ingress from pgbouncer only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-postgres
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-grafana
+              app.kubernetes.io/name: yashigani-pgbouncer
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# PgBouncer — accept ingress from gateway, backoffice, and langgraph agent
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pgbouncer-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-pgbouncer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
         - podSelector:
             matchLabels:
-              app: yashigani-caddy
+              app.kubernetes.io/name: yashigani-gateway
         - podSelector:
             matchLabels:
-              app: yashigani-ingress
+              app.kubernetes.io/name: yashigani-backoffice
+        - podSelector:
+            matchLabels:
+              yashigani.io/bundle: langgraph
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: db-maintenance
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# PgBouncer egress — only to postgres
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pgbouncer-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-pgbouncer
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# Open WebUI — accept ingress from caddy / nginx-ingress only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-open-webui-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: open-webui
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-caddy
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Open WebUI egress — only to gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-open-webui-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: open-webui
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Prometheus — accept ingress from grafana and from caddy / nginx-ingress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-prometheus
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-grafana
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-caddy
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
       ports:
         - protocol: TCP
           port: 9090
+
+---
+# Prometheus egress — scrape targets within namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-prometheus
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 9093
+        - protocol: TCP
+          port: 3100
 
 ---
 # Grafana — accept ingress from caddy / nginx-ingress only
@@ -173,20 +560,148 @@ kind: NetworkPolicy
 metadata:
   name: allow-grafana-ingress
   namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app: yashigani-grafana
+      app.kubernetes.io/name: yashigani-grafana
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app: yashigani-caddy
-        - podSelector:
+              app.kubernetes.io/name: yashigani-caddy
+        - namespaceSelector:
             matchLabels:
-              app: yashigani-ingress
+              kubernetes.io/metadata.name: ingress-nginx
       ports:
         - protocol: TCP
           port: 3000
+
+---
+# Grafana egress — prometheus and loki only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-grafana
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-loki
+      ports:
+        - protocol: TCP
+          port: 3100
+
+---
+# Agent bundles — accept ingress from gateway only
+# Applies to all enabled agent bundle Deployments via the bundle label.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-bundle-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent-bundle
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 8000    # langgraph
+        - protocol: TCP
+          port: 3284    # goose
+        - protocol: TCP
+          port: 18789   # openclaw
+
+---
+# Agent bundles — egress to gateway only (all LLM calls route through gateway)
+# openclaw also needs external internet for messaging webhooks — its egress is
+# handled by a separate rule below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-bundle-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent-bundle
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-pgbouncer
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# OpenClaw — additional external egress for messaging channel webhooks.
+# SECURITY NOTE: This rule allows all outbound HTTPS from openclaw pods.
+# Tighten to known webhook IPs in production if your network permits.
+{{- if .Values.agentBundles.openclaw.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-openclaw-external-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      yashigani.io/bundle: openclaw
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+{{- end }}
