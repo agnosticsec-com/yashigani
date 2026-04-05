@@ -181,6 +181,10 @@ def create_backoffice_app() -> FastAPI:
     # v2.1 — SSO / OIDC login flow (no auth required — serves anonymous users)
     app.include_router(sso_router, prefix="/auth", tags=["sso"])
 
+    # v2.2 — PII detection admin API
+    from yashigani.backoffice.routes.pii import router as pii_router
+    app.include_router(pii_router, prefix="/admin/pii", tags=["pii"])
+
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)
     app.include_router(webauthn_router, tags=["webauthn"])

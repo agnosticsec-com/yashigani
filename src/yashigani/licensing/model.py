@@ -16,9 +16,12 @@ class LicenseTier(str, Enum):
 
 
 class LicenseFeature(str, Enum):
-    OIDC = "oidc"
-    SAML = "saml"
-    SCIM = "scim"
+    OIDC       = "oidc"
+    SAML       = "saml"
+    SCIM       = "scim"
+    # v2.2 — PII detection (Professional Plus+)
+    PII_LOG    = "pii_log"      # LOG mode: detect and record findings only
+    PII_REDACT = "pii_redact"   # REDACT and BLOCK modes: mutate or block payloads
 
 
 @dataclass(frozen=True)
