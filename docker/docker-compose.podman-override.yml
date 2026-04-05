@@ -11,16 +11,18 @@
 #   - All services: label=disable to prevent SELinux/AppArmor blocking volume access.
 
 services:
-  # --- Non-root services (UID 1001) — need keep-id ---
+  # --- Non-root services (UID 1001) ---
+  # Do NOT use keep-id: it maps host UID 1000 to container UID 1000,
+  # but these images run as UID 1001 (yashigani user). Without keep-id,
+  # Podman rootless maps host UID 1000 to container root, and the
+  # container's internal USER directive switches to UID 1001 normally.
   gateway:
     security_opt:
       - label=disable
-    userns_mode: keep-id
 
   backoffice:
     security_opt:
       - label=disable
-    userns_mode: keep-id
 
   # --- Root-running services — NO keep-id ---
   policy:
