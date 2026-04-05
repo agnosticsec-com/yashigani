@@ -908,7 +908,27 @@ curl -sk https://<your-domain>/auth/sso/select
 
 ### 8.2 SAML v2
 
-SAML v2 support is wired but not yet fully operational. The SAML ACS endpoint (`/auth/sso/saml/<idp-id>/acs`) currently returns HTTP 501. Full SAML assertion validation will be available in a future release. Use OIDC for SSO in the current release.
+SAML v2 requires Professional tier or higher. The SAML ACS endpoint (`/auth/sso/saml/<idp-id>/acs`) validates assertions using python3-saml (OneLogin) with RSA-SHA256 signatures.
+
+**Step 1.** Configure your IdP with the following ACS URL:
+
+```
+https://<your-domain>/auth/sso/saml/<idp-id>/acs
+```
+
+**Step 2.** Add the IdP to `docker/.env` with protocol `saml`:
+
+```bash
+YASHIGANI_IDP_2_ID=entra-saml
+YASHIGANI_IDP_2_NAME=Entra ID (SAML)
+YASHIGANI_IDP_2_PROTOCOL=saml
+YASHIGANI_IDP_2_DISCOVERY_URL=https://login.microsoftonline.com/<tenant>/federationmetadata/2007-06/federationmetadata.xml
+YASHIGANI_IDP_2_EMAIL_DOMAINS=example.com
+```
+
+**Step 3.** Configure SAML SP certificates via KMS or Docker secrets. The SP certificate and private key must be available for assertion signing.
+
+**Step 4.** Test by navigating to your IdP's SSO URL — the SAML assertion will POST to the ACS endpoint.
 
 ### 8.3 Mandatory 2FA After SSO
 
