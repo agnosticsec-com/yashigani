@@ -34,7 +34,7 @@ FROM python:3.12-slim AS trainer
 WORKDIR /train
 
 RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
-    pip install --no-cache-dir "fasttext-wheel>=0.9.2"
+    pip install --no-cache-dir "numpy<2.0" "fasttext-wheel>=0.9.2"
 
 # Copy training corpus and training script
 COPY data/fasttext/ ./data/fasttext/
