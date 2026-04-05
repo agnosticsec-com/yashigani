@@ -18,7 +18,11 @@
 **Latest Stable Version:** v2.1.0
 
 ---
-**Release Lines:** v2.x (full stack with Open WebUI, branch: `main`) | v1.x (gateway-only, branch: `release/1.x`)
+**Release Lines:** 
+---
+v2.x (full stack with Open WebUI, branch: `main`) 
+---
+v1.x (gateway-only, branch: `release/1.x`)
 ---
 **Document Date:** 2026-04-01
 ---
