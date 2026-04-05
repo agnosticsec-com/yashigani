@@ -18,7 +18,8 @@ htmlcov/
 
 # Yashigani runtime data
 docker/secrets/
-data/
+data/*
+!data/fasttext
 docker/data/
 *.log
 
@@ -32,6 +33,9 @@ keys/
 *.pem
 scripts/keygen.py
 scripts/sign_license.py
+
+# cosign key pair — private key must never be committed
+cosign.key
 
 # Customer license files — do not commit
 *.ysg

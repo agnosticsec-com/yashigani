@@ -1,10 +1,14 @@
 # Yashigani Gateway — multi-stage build
 # Python 3.12, non-root UID 1001, minimal attack surface
 #
-# v0.5.0: adds FastText model bundle (~100 MB), OTEL, asyncpg, JWT, Vault deps.
-# FastText model: place trained binary at models/fasttext_classifier.bin before
-# building. Generate with: python scripts/generate_training_data.py | fasttext supervised
-# If absent the gateway degrades gracefully (UNCERTAIN → LLM second-pass).
+# v2.2.0: FastText model trained inside Docker at image build time.
+#         No pre-built binary needed in the repo. The model is baked into
+#         the image from training data committed under data/fasttext/.
+#
+# Build stages:
+#   builder  — compiles the yashigani wheel
+#   trainer  — installs fasttext-wheel, trains the classifier model
+#   runtime  — minimal image with wheel + baked model
 
 # ── Stage 1: wheel builder ───────────────────────────────────────────────────
 # Base image: python:3.12-slim (tag-pinned, no digest — digests rotate upstream)
@@ -21,7 +25,32 @@ COPY src/ ./src/
 RUN python -m build --wheel --outdir /dist
 
 
-# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+# ── Stage 2: model trainer ───────────────────────────────────────────────────
+# Trains the FastText binary classifier (CLEAN vs INJECTION) from the
+# committed training corpus. Model is baked into the runtime image.
+# fasttext-wheel ships pre-built wheels — no C compiler required.
+FROM python:3.12-slim AS trainer
+
+WORKDIR /train
+
+RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+    pip install --no-cache-dir "fasttext-wheel>=0.9.2"
+
+# Copy training corpus and training script
+COPY data/fasttext/ ./data/fasttext/
+COPY scripts/train_fasttext.py ./scripts/train_fasttext.py
+
+RUN mkdir -p models && \
+    python scripts/train_fasttext.py \
+        --data    data/fasttext/training_data.txt \
+        --output  models/fasttext_classifier.bin \
+        --epoch   25 \
+        --lr      0.5 \
+        --word-ngrams 2 \
+        --dim     50
+
+
+# ── Stage 3: runtime ─────────────────────────────────────────────────────────
 # Base image: python:3.12-slim (tag-pinned, no digest — digests rotate upstream)
 FROM python:3.12-slim AS runtime
 
@@ -44,10 +73,10 @@ RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)[fasttext]" && \
     rm /tmp/*.whl
 
-# FastText classifier model (~100 MB) — bundled at build time.
-# File is optional: gateway degrades to LLM-only inspection if absent.
+# FastText classifier model — trained in the trainer stage, baked into image.
+# No runtime download, no host-side pre-build required.
 RUN mkdir -p /app/models
-COPY models/ /app/models/
+COPY --from=trainer /train/models/fasttext_classifier.bin /app/models/fasttext_classifier.bin
 
 # Audit log directory (mounted as volume at runtime)
 RUN mkdir -p /data/audit /data/bootstrap /var/log/yashigani && \
