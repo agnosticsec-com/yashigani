@@ -9,17 +9,17 @@ Requires: running Yashigani stack with Ollama healthy.
 """
 from __future__ import annotations
 
-import subprocess
 import json
+import time
 import pytest
 
+from tests.e2e.conftest import runtime_exec, runtime_run, container_running, RUNTIME
 
-def _ollama_query(prompt: str) -> dict:
+
+def _ollama_query(prompt: str) -> str:
     """Send a prompt to Ollama directly (bypassing gateway auth) for testing."""
-    result = subprocess.run(
-        ["docker", "exec", "docker-gateway-1", "python3", "-c", f"""
+    result = runtime_run("docker-gateway-1", f"""
 import urllib.request, json
-# Call Ollama directly for e2e testing — /v1 endpoint requires auth
 data = json.dumps({{"model": "qwen2.5:3b", "messages": [{{"role": "user", "content": {repr(prompt)}}}], "stream": False}}).encode()
 req = urllib.request.Request("http://ollama:11434/api/chat", data=data, headers={{"Content-Type": "application/json"}})
 try:
@@ -28,28 +28,23 @@ try:
     print(body)
 except Exception as e:
     print(f"ERROR:{{e}}")
-"""],
-        capture_output=True, text=True, timeout=90,
-    )
-    return result.stdout
+""", timeout=90)
+    return result
 
 
 def _classify_via_gateway(text: str) -> dict:
     """Classify text using the sensitivity classifier inside the gateway."""
-    result = subprocess.run(
-        ["docker", "exec", "docker-gateway-1", "python3", "-c", f"""
+    output = runtime_run("docker-gateway-1", f"""
 from yashigani.optimization.sensitivity_classifier import SensitivityClassifier
 c = SensitivityClassifier(enable_fasttext=False, enable_ollama=False)
 r = c.classify({repr(text)})
 import json
 print(json.dumps({{"level": r.level.value, "triggers": r.triggers}}))
-"""],
-        capture_output=True, text=True, timeout=15,
-    )
+""")
     try:
-        return json.loads(result.stdout.strip())
+        return json.loads(output)
     except (json.JSONDecodeError, ValueError):
-        return {"level": "ERROR", "raw": result.stdout, "stderr": result.stderr}
+        return {"level": "ERROR", "raw": output}
 
 
 class TestOllamaSensitivity:
@@ -91,34 +86,24 @@ class TestOllamaLive:
     """Test actual Ollama inference via the gateway."""
 
     def test_gateway_healthz(self):
-        result = subprocess.run(
-            ["docker", "exec", "docker-gateway-1", "python3", "-c",
-             "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/healthz').read().decode())"],
-            capture_output=True, text=True, timeout=10,
-        )
-        assert "ok" in result.stdout
+        result = runtime_run("docker-gateway-1",
+            "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/healthz').read().decode())",
+            timeout=10)
+        assert "ok" in result
 
     def test_ollama_model_loaded(self):
         """Verify qwen2.5:3b is loaded in Ollama."""
-        # Wait for Ollama to be running (may have been killed by chaos tests)
-        import time
         for _ in range(12):
-            result = subprocess.run(
-                ["docker", "exec", "docker-ollama-1", "ollama", "list"],
-                capture_output=True, text=True, timeout=10,
-            )
+            result = runtime_exec("docker-ollama-1", "ollama", "list", timeout=10)
             if "qwen2.5" in result.stdout:
                 break
             time.sleep(10)
         assert "qwen2.5" in result.stdout, f"Ollama model not loaded: {result.stderr}"
 
-    @pytest.mark.skipif(
-        subprocess.run(["docker", "exec", "docker-ollama-1", "bash", "-c", "</dev/tcp/localhost/11434"],
-                       capture_output=True, timeout=5).returncode != 0,
-        reason="Ollama not ready (may need stack restart after chaos tests)"
-    )
     def test_simple_prompt_gets_response(self):
         """Send a simple prompt directly to Ollama and verify response."""
+        if not container_running("docker-ollama-1"):
+            pytest.skip("Ollama not running")
         output = _ollama_query("Say hello in exactly 3 words.")
         assert "ERROR" not in output, f"Ollama query failed: {output}"
         assert "message" in output or "content" in output or "response" in output

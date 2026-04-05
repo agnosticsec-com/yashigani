@@ -8,31 +8,19 @@ Requires: running Yashigani stack with budget-redis healthy.
 """
 from __future__ import annotations
 
-import subprocess
-import json
 import pytest
 
-
-def _exec_in_gateway(python_code: str) -> str:
-    """Execute Python code inside the gateway container."""
-    result = subprocess.run(
-        ["docker", "exec", "docker-gateway-1", "python3", "-c", python_code],
-        capture_output=True, text=True, timeout=15,
-    )
-    return result.stdout.strip()
+from tests.e2e.conftest import runtime_exec, runtime_run
 
 
 def _exec_in_budget_redis(cmd: str) -> str:
     """Execute a Redis command in budget-redis."""
-    # Read password from secrets
-    pw_result = subprocess.run(
-        ["docker", "exec", "docker-budget-redis-1", "cat", "/run/secrets/redis_password"],
-        capture_output=True, text=True, timeout=5,
+    pw_result = runtime_exec(
+        "docker-budget-redis-1", "cat", "/run/secrets/redis_password", timeout=5,
     )
     pw = pw_result.stdout.strip()
-    result = subprocess.run(
-        ["docker", "exec", "docker-budget-redis-1", "redis-cli", "-a", pw, *cmd.split()],
-        capture_output=True, text=True, timeout=5,
+    result = runtime_exec(
+        "docker-budget-redis-1", "redis-cli", "-a", pw, *cmd.split(), timeout=5,
     )
     return result.stdout.strip()
 
@@ -55,7 +43,7 @@ class TestBudgetEnforcement:
 
     def test_record_and_check_budget(self):
         """Record usage and verify budget state changes."""
-        output = _exec_in_gateway("""
+        output = runtime_run("docker-gateway-1", """
 import redis, os, json
 from urllib.parse import quote
 
@@ -102,7 +90,7 @@ print("cleanup:done")
 
     def test_three_tier_recording(self):
         """Verify usage recorded at identity, group, and org levels."""
-        output = _exec_in_gateway("""
+        output = runtime_run("docker-gateway-1", """
 import redis, os
 from urllib.parse import quote
 
