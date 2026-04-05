@@ -124,64 +124,7 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         reverse_proxy prometheus:9090
     }
 
-    # ── Open WebUI /auth — auto-signin via trusted headers ───────────────
-    # When WEBUI_AUTH=false, Open WebUI's /auth page expects a POST to
-    # /api/v1/auths/signin with the trusted email header. We handle this
-    # by proxying through with the identity headers already set.
-    handle /auth {
-        request_header -X-Forwarded-User
-        request_header -X-Forwarded-Name
-
-        forward_auth backoffice:8443 {
-            uri /auth/verify
-            copy_headers X-Forwarded-User X-Forwarded-Name
-
-            @unauthorized status 401
-            handle_response @unauthorized {
-                redir * /login?next=/ 302
-            }
-        }
-
-        reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # ── Open WebUI Socket.IO — WebSocket connections bypass forward_auth ────
-    # Open WebUI uses Socket.IO for real-time updates. WebSocket upgrade
-    # requests cannot go through forward_auth (HTTP-only). The session
-    # cookie is still validated by Open WebUI's trusted header mechanism.
-    handle /socket.io/* {
-        reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # ── Open WebUI internal API — needs forward_auth for identity ──────────
-    handle /api/* {
-        request_header -X-Forwarded-User
-        request_header -X-Forwarded-Name
-        request_header -X-Forwarded-Groups
-
-        forward_auth backoffice:8443 {
-            uri /auth/verify
-            copy_headers X-Forwarded-User X-Forwarded-Name
-
-            @unauthorized status 401
-            handle_response @unauthorized {
-                redir * /login?next={http.request.uri} 302
-            }
-        }
-
-        reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # ── Open WebUI — catch-all (pages, assets, static files) ──────────────
+    # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
     handle {
         # Strip any externally-supplied identity headers (anti-spoofing)
         request_header -X-Forwarded-User

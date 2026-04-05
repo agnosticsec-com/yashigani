@@ -123,37 +123,7 @@
         reverse_proxy prometheus:9090
     }
 
-    # ── Open WebUI Socket.IO — WebSocket bypass forward_auth ─────────────
-    handle /socket.io/* {
-        reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # ── Open WebUI API — needs forward_auth for identity ──────────────────
-    handle /api/* {
-        request_header -X-Forwarded-User
-        request_header -X-Forwarded-Name
-        request_header -X-Forwarded-Groups
-
-        forward_auth backoffice:8443 {
-            uri /auth/verify
-            copy_headers X-Forwarded-User X-Forwarded-Name
-
-            @unauthorized status 401
-            handle_response @unauthorized {
-                redir * /login?next={http.request.uri} 302
-            }
-        }
-
-        reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # ── Open WebUI — catch-all (pages, assets) ────────────────────────────
+    # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
     handle {
         request_header -X-Forwarded-User
         request_header -X-Forwarded-Name
