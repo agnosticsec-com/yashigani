@@ -1,0 +1,53 @@
+{{- /*
+Helm test: verify the backoffice /healthz endpoint returns HTTP 200.
+Run with: helm test <release-name> -n <namespace>
+*/ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "yashigani.fullname" . }}-test-backoffice-health"
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test-backoffice-health
+      image: "curlimages/curl:8.7.1"
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "Testing backoffice /healthz..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 10 \
+            http://yashigani-backoffice:{{ .Values.backoffice.service.port }}/healthz)
+          echo "Backoffice /healthz returned HTTP ${STATUS}"
+          if [ "${STATUS}" != "200" ]; then
+            echo "FAIL: expected 200, got ${STATUS}"
+            exit 1
+          fi
+          echo "PASS"
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "100m"
+          memory: "64Mi"

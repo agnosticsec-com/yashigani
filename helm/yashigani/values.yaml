@@ -106,7 +106,7 @@ policy:
   enabled: true
   image:
     repository: openpolicyagent/opa
-    tag: "latest-rootless"
+    tag: "1.15.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:
@@ -164,7 +164,7 @@ ollama:
   enabled: true
   image:
     repository: ollama/ollama
-    tag: "latest"
+    tag: "0.6.2"
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:
@@ -196,7 +196,7 @@ prometheus:
   enabled: true
   image:
     repository: prom/prometheus
-    tag: "latest"
+    tag: "v3.2.1"
     pullPolicy: IfNotPresent
   replicaCount: 1
   resources:
@@ -222,7 +222,7 @@ grafana:
   enabled: true
   image:
     repository: grafana/grafana
-    tag: "latest"
+    tag: "11.5.2"
     pullPolicy: IfNotPresent
   replicaCount: 1
   resources:
@@ -379,7 +379,15 @@ agentBundles:
       pullPolicy: IfNotPresent
     replicaCount: 1
     env:
-      GOOSE_YASHIGANI_URL: "http://yashigani-gateway:8080"
+      GOOSE_PROVIDER: "openai"
+      GOOSE_MODEL: "qwen2.5:3b"
+      OPENAI_API_KEY: "yashigani"
+      OPENAI_HOST: "http://yashigani-gateway:8080/v1"
+      GOOSE_TELEMETRY_ENABLED: "false"
+      DO_NOT_TRACK: "true"
+    service:
+      port: 3284
+      type: ClusterIP
     resources:
       requests:
         cpu: "100m"
@@ -390,24 +398,7 @@ agentBundles:
     tokenSecretName: "yashigani-goose-token"
     tokenSecretKey: "token"
 
-  crewai:
-    enabled: false
-    image:
-      repository: crewai/crewai
-      tag: "latest"
-      pullPolicy: IfNotPresent
-    replicaCount: 1
-    env:
-      CREWAI_YASHIGANI_URL: "http://yashigani-gateway:8080"
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
-    tokenSecretName: "yashigani-crewai-token"
-    tokenSecretKey: "token"
+  # crewai: REMOVED — enterprise-only as of v2.1. Contact sales@agnosticsec.com.
 
   openclaw:
     # NOTE: Node.js 24 image — approximately 800 MB (larger than Python agent images).
@@ -440,3 +431,188 @@ agentBundles:
         memory: "1Gi"
     tokenSecretName: "yashigani-openclaw-token"
     tokenSecretKey: "token"
+
+# ---------------------------------------------------------------------------
+# Open WebUI — user-facing chat interface (v2.1)
+# Internal only. All inference routes through gateway.
+# ---------------------------------------------------------------------------
+openWebui:
+  enabled: true
+  image:
+    repository: ghcr.io/open-webui/open-webui
+    tag: "main"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    port: 8080
+    type: ClusterIP
+  env:
+    webuiAuth: "false"
+    webuiAuthTrustedEmailHeader: "X-Forwarded-User"
+    webuiAuthTrustedNameHeader: "X-Forwarded-Name"
+    enableSignup: "true"
+    webuiSecretKeySecretName: "yashigani-open-webui-secrets"
+    webuiSecretKeySecretKey: "secret_key"
+    openaiApiBaseUrl: "http://yashigani-gateway:8080/v1"
+    openaiApiKey: "yashigani-internal"
+    ollamaBaseUrl: ""
+    enableOllamaApi: "false"
+    defaultModels: "qwen2.5:3b"
+    webuiName: "Yashigani AI"
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# Budget Redis — dedicated Redis for token budget counters (v1.0)
+# Separate from main Redis; maxmemory-policy noeviction required.
+# ---------------------------------------------------------------------------
+budgetRedis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "384Mi"
+  service:
+    port: 6379
+    type: ClusterIP
+  existingSecretName: yashigani-redis-secrets
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# PostgreSQL 16 — primary durable store
+# ---------------------------------------------------------------------------
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+  service:
+    port: 5432
+    type: ClusterIP
+  existingSecretName: yashigani-postgres-secrets
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# PgBouncer — connection pooler
+# ---------------------------------------------------------------------------
+pgbouncer:
+  enabled: true
+  image:
+    repository: edoburu/pgbouncer
+    tag: "v1.23.1-p0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "128Mi"
+  service:
+    port: 5432
+    type: ClusterIP
+  env:
+    poolMode: transaction
+    maxClientConn: "100"
+    defaultPoolSize: "20"
+
+# ---------------------------------------------------------------------------
+# v2.2 Feature Flags
+# ---------------------------------------------------------------------------
+
+# PII Detection — controls detection mode for request/response payloads.
+# Modes: log (detect + record only), redact (inline replacement), block (drop payload).
+# Requires license tier: pii_log (Community+), pii_redact (Pro+).
+pii:
+  enabled: false
+  mode: "log"          # log | redact | block
+  enabledTypes:        # PII categories to scan — leave empty to scan all
+    - SSN
+    - CREDIT_CARD
+    - EMAIL
+    - PHONE
+    - IBAN
+    - PASSPORT
+    - NHS_NUMBER
+    - DRIVERS_LICENCE
+    - IP_ADDRESS
+    - DATE_OF_BIRTH
+  scanRequests: true
+  scanResponses: true
+
+# DDoS Protection — application-layer per-IP connection counting (v2.2).
+# Backed by Redis (main redis DB 0, key namespace ddos:).
+# fail-open: if Redis is unreachable, requests are allowed through.
+ddosProtection:
+  enabled: true
+  maxConnectionsPerIp: 50
+  windowSeconds: 60
+
+# Response Inspection — run Ollama classifier over LLM responses (v0.9.0).
+responseInspection:
+  enabled: false
+
+# SSO / Identity Provider configuration (v2.1).
+# Mirrors the YASHIGANI_IDP_<N>_* env vars used by docker-compose.
+# Up to 10 IdPs may be configured. Secrets (clientSecret) must be stored in
+# a Kubernetes Secret and referenced via existingSecretName.
+sso:
+  twoFactorRequired: false
+  # existingSecretName: yashigani-sso-secrets
+  # The secret must contain keys idp_<n>_client_secret for each IdP index.
+  idps: []
+  # Example:
+  # - id: "keycloak-dev"
+  #   name: "Keycloak Dev"
+  #   protocol: "oidc"
+  #   discoveryUrl: "https://keycloak.example.com/realms/yashigani/.well-known/openid-configuration"
+  #   clientId: "yashigani"
+  #   clientSecretKey: "idp_1_client_secret"   # key inside existingSecretName
+  #   emailDomains: "example.com"
+  #   redirectUri: "https://yashigani.example.com/admin/sso/callback"
+
+# Model Aliases — Redis-backed alias-to-model routing (v2.3 backoffice feature).
+# Aliases are managed at runtime via the backoffice UI/API.
+# Seed defaults may be provided here; they are applied on backoffice startup.
+modelAliases:
+  seedDefaults: true
+  # defaults are defined in the DB migration (0005_identity_budget_routing.py)
+  # Override or add custom aliases:
+  # extra:
+  #   - alias: "fast"
+  #     provider: "local"
+  #     modelName: "qwen2.5:3b"
+  #     forceLocal: true

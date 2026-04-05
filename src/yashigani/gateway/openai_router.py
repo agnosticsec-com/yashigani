@@ -8,17 +8,34 @@ scoring, budget enforcement, OE routing, and audit.
 
 v1.0: Buffered responses only (Decision 13). Full response collected
 before delivery to enable response inspection and token counting.
+
+v2.2: Streaming support added. When ``body.stream == True`` and
+``YASHIGANI_STREAMING_ENABLED=true`` (default), requests are forwarded
+to Ollama with ``stream=true`` and responses are yielded as SSE chunks
+via FastAPI ``StreamingResponse``.
+
+Streaming limitations
+---------------------
+- Budget headers (``X-Yashigani-Budget-*``) are NOT sent on streaming
+  responses. HTTP headers must be committed before the body starts; token
+  counts are only available from the final Ollama chunk. Budget accounting
+  is still recorded internally — clients that need budget state should poll
+  the budget API or use a non-streaming request.
+- Agent routing (``@agent`` model prefix) always uses the buffered path
+  regardless of the ``stream`` flag, because agent upstreams may not
+  support SSE.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -99,6 +116,9 @@ class OpenAIRouterState:
         self.agent_registry = None
         self.response_inspection_pipeline = None
         self.ddos_protector = None  # v2.2 — DDoSProtector | None
+        # v2.2 — streaming
+        self.streaming_enabled: bool = True
+        self.streaming_inspect_interval: int = 200
 
 
 _state = OpenAIRouterState()
@@ -133,10 +153,21 @@ def configure(
     _state.agent_registry = agent_registry
     _state.response_inspection_pipeline = response_inspection_pipeline
     _state.ddos_protector = ddos_protector
+
+    # v2.2 — streaming config from environment
+    _state.streaming_enabled = (
+        os.getenv("YASHIGANI_STREAMING_ENABLED", "true").lower() == "true"
+    )
+    _state.streaming_inspect_interval = int(
+        os.getenv("YASHIGANI_STREAMING_INSPECT_INTERVAL", "200")
+    )
+
     logger.info(
-        "OpenAI router configured (default_model=%s, response_inspection=%s)",
+        "OpenAI router configured (default_model=%s, response_inspection=%s, streaming=%s, inspect_interval=%d)",
         default_model,
         "enabled" if response_inspection_pipeline is not None else "disabled",
+        "enabled" if _state.streaming_enabled else "disabled",
+        _state.streaming_inspect_interval,
     )
 
 
@@ -154,11 +185,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     3. Complexity scoring
     4. Budget check
     5. Route to backend (local Ollama or cloud)
-    6. Buffer full response
-    7. Response inspection
+    6a. [streaming] Forward with stream=true; inspect chunks via StreamingInspector;
+        return StreamingResponse. Budget headers skipped (see module docstring).
+    6b. [buffered]  Buffer full response (legacy path, v1.0 Decision 13).
+    7. Response inspection (buffered path only — streaming uses StreamingInspector)
     8. Token counting + budget recording
     9. Audit event
-    10. Return response with budget headers
+    10. Return response with budget headers (buffered path only)
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     start_time = time.time()
@@ -265,10 +298,133 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         if sensitivity_level in ("CONFIDENTIAL", "RESTRICTED"):
             route_reason = "sensitivity_local"
 
-    # ── 7. Forward to backend (buffered) ──────────────────────────────
+    # ── 7. Forward to backend ─────────────────────────────────────────
+    #
+    # Streaming path: body.stream == True AND streaming enabled AND not an
+    # agent call (agents may not support SSE and always use the buffered path).
+    #
+    # Budget headers (X-Yashigani-Budget-*) cannot be sent on streaming
+    # responses — headers are committed before the body begins and token
+    # counts are only available from the final upstream chunk. Budget
+    # accounting is still recorded after stream end via the usage_callback.
+    use_streaming = (
+        body.stream
+        and _state.streaming_enabled
+        and not is_agent_call
+    )
+
     try:
         import httpx
 
+        if use_streaming:
+            # ── 7a. Streaming path ─────────────────────────────────────
+            from yashigani.gateway.streaming import StreamingInspector, stream_response
+
+            ollama_body = {
+                "model": selected_model,
+                "messages": [{"role": m.role, "content": m.content} for m in body.messages],
+                "stream": True,
+            }
+            if body.temperature is not None:
+                ollama_body["temperature"] = body.temperature
+
+            # Resolve session/agent IDs for the inspector's audit events
+            stream_session_id = (
+                identity.get("identity_id", request_id) if identity else request_id
+            )
+            stream_agent_id = (
+                identity.get("slug", "openai-router") if identity else "openai-router"
+            )
+
+            inspector = StreamingInspector(
+                sensitivity_classifier=_state.sensitivity_classifier,
+                inspect_interval=_state.streaming_inspect_interval,
+                request_id=request_id,
+                session_id=stream_session_id,
+                agent_id=stream_agent_id,
+                on_audit=_state.audit_writer if _state.audit_writer else None,
+            )
+
+            # Token accounting — called once after stream end
+            _stream_prompt_tokens = [0]
+            _stream_completion_tokens = [0]
+
+            def _usage_callback(pt: int, ct: int) -> None:
+                _stream_prompt_tokens[0] = pt
+                _stream_completion_tokens[0] = ct
+                _total = pt + ct
+                if _state.budget_enforcer and selected_provider != "ollama" and identity:
+                    try:
+                        _state.budget_enforcer.record(
+                            identity_id=identity_id,
+                            provider=selected_provider,
+                            tokens=_total,
+                        )
+                    except Exception as _exc:
+                        logger.warning("Streaming budget recording failed: %s", _exc)
+
+            # Open a persistent streaming connection to Ollama.  The client must
+            # stay alive for the duration of the generator, so we wrap the
+            # response in a local async generator that owns the client lifetime.
+            async def _sse_generator():
+                async with httpx.AsyncClient(timeout=120.0) as _client:
+                    try:
+                        async with _client.stream(
+                            "POST",
+                            f"{_state.ollama_url}/api/chat",
+                            json=ollama_body,
+                        ) as _upstream:
+                            if _upstream.status_code != 200:
+                                err_text = await _upstream.aread()
+                                logger.error(
+                                    "Streaming upstream error %d request_id=%s: %s",
+                                    _upstream.status_code, request_id,
+                                    err_text[:200],
+                                )
+                                # Emit a JSON error chunk so the client gets something
+                                import json as _json
+                                yield (
+                                    f"data: {_json.dumps({'error': 'upstream_error', 'request_id': request_id})}\n\n"
+                                )
+                                yield "data: [DONE]\n\n"
+                                return
+
+                            async for chunk in stream_response(
+                                _upstream,
+                                inspector,
+                                request_id,
+                                selected_model,
+                                usage_callback=_usage_callback,
+                            ):
+                                yield chunk
+                    except httpx.ConnectError:
+                        logger.error(
+                            "Streaming connect error request_id=%s", request_id
+                        )
+                        yield (
+                            "data: "
+                            '{"error":"upstream_unavailable",'
+                            f'"request_id":"{request_id}"}}\n\n'
+                        )
+                        yield "data: [DONE]\n\n"
+
+            return StreamingResponse(
+                _sse_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "X-Yashigani-Request-Id": request_id,
+                    "X-Yashigani-Routed-Via": selected_provider,
+                    "X-Yashigani-Route-Reason": route_reason.encode("ascii", "replace").decode("ascii"),
+                    "X-Yashigani-Model": selected_model,
+                    "X-Yashigani-Sensitivity": sensitivity_level,
+                    "X-Yashigani-Complexity": complexity_level,
+                    # Budget headers intentionally omitted — see module docstring.
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",  # disable Nginx/Caddy buffering
+                },
+            )
+
+        # ── 7b. Buffered path (agent calls + stream=False + streaming disabled) ──
         if is_agent_call and agent_upstream:
             # Route to agent's upstream URL (OpenAI-compatible /v1/chat/completions)
             agent_body = {
@@ -297,7 +453,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 route_reason = f"agent:{selected_model[1:]}"
 
         if not is_agent_call or agent_upstream is None:
-            # Standard Ollama routing
+            # Standard Ollama routing (buffered)
             ollama_body = {
                 "model": selected_model if not is_agent_call else _state.default_model,
                 "messages": [{"role": m.role, "content": m.content} for m in body.messages],

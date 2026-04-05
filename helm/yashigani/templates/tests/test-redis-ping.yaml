@@ -1,0 +1,80 @@
+{{- /*
+Helm test: verify both Redis instances respond to PING.
+Run with: helm test <release-name> -n <namespace>
+
+Tests:
+  1. Main Redis (session/rate-limit store) on port 6379
+  2. Budget Redis (token budget counters) on port 6379
+*/ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "yashigani.fullname" . }}-test-redis-ping"
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test-redis-ping
+      image: "redis:7-alpine"
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+
+          # Test main Redis — password required
+          echo "Testing main Redis PING..."
+          REDIS_HOST=yashigani-redis
+          REDIS_PORT={{ .Values.redis.service.port }}
+
+          # Attempt unauthenticated PING first (will fail gracefully if auth required)
+          RESULT=$(redis-cli -h "${REDIS_HOST}" -p "${REDIS_PORT}" PING 2>&1 || true)
+          if echo "${RESULT}" | grep -q "PONG"; then
+            echo "Main Redis PING: PONG (no auth)"
+          elif echo "${RESULT}" | grep -q "NOAUTH\|WRONGPASS\|ERR"; then
+            echo "Main Redis PING: auth required (expected in production) — PASS"
+          else
+            echo "FAIL: Main Redis did not respond. Got: ${RESULT}"
+            exit 1
+          fi
+
+          # Test budget Redis
+          echo "Testing budget Redis PING..."
+          BUDGET_HOST=yashigani-budget-redis
+          BUDGET_PORT={{ .Values.budgetRedis.service.port }}
+
+          RESULT=$(redis-cli -h "${BUDGET_HOST}" -p "${BUDGET_PORT}" PING 2>&1 || true)
+          if echo "${RESULT}" | grep -q "PONG"; then
+            echo "Budget Redis PING: PONG (no auth)"
+          elif echo "${RESULT}" | grep -q "NOAUTH\|WRONGPASS\|ERR"; then
+            echo "Budget Redis PING: auth required (expected in production) — PASS"
+          else
+            echo "FAIL: Budget Redis did not respond. Got: ${RESULT}"
+            exit 1
+          fi
+
+          echo "PASS: Both Redis instances are reachable"
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
