@@ -134,6 +134,8 @@ services:
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_DB_PATH: /data/openwebui/webui.db
       YASHIGANI_TLS_DOMAIN: ${YASHIGANI_TLS_DOMAIN:-localhost}
+      # SSO 2FA — require Yashigani TOTP after IdP authentication
+      YASHIGANI_SSO_2FA_REQUIRED: ${YASHIGANI_SSO_2FA_REQUIRED:-false}
       # SSO IdP configuration — up to 10 IdPs via env vars
       # Format: YASHIGANI_IDP_<N>_ID, _NAME, _PROTOCOL, _DISCOVERY_URL,
       #         _CLIENT_ID, _CLIENT_SECRET, _EMAIL_DOMAINS, _REDIRECT_URI

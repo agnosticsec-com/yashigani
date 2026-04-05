@@ -1055,6 +1055,32 @@ sys.exit(1)
     _env_set "YASHIGANI_ENV" "production"
   fi
 
+  # --- SSO IdP configuration ---
+  # Add documented SSO section if not already present.
+  # Operators configure IdPs by setting YASHIGANI_IDP_<N>_* vars.
+  if ! grep -q "YASHIGANI_IDP_1_ID" "$env_file" 2>/dev/null; then
+    cat >> "$env_file" << 'SSO_EOF'
+
+# ---------------------------------------------------------------------------
+# SSO Identity Provider Configuration (Starter tier and above)
+# ---------------------------------------------------------------------------
+# Configure up to 2 IdPs (Professional tier supports OIDC + SAML).
+# Enterprise tier supports unlimited IdPs — add YASHIGANI_IDP_3_*, etc.
+#
+# YASHIGANI_IDP_1_ID=my-entra-id
+# YASHIGANI_IDP_1_NAME=Entra ID
+# YASHIGANI_IDP_1_PROTOCOL=oidc
+# YASHIGANI_IDP_1_DISCOVERY_URL=https://login.microsoftonline.com/<tenant>/.well-known/openid-configuration
+# YASHIGANI_IDP_1_CLIENT_ID=<client-id>
+# YASHIGANI_IDP_1_CLIENT_SECRET=<client-secret>
+# YASHIGANI_IDP_1_EMAIL_DOMAINS=example.com,example.org
+# YASHIGANI_IDP_1_REDIRECT_URI=https://<domain>/auth/sso/oidc/my-entra-id/callback
+#
+# Require Yashigani TOTP after SSO (defense against session hijack/replay):
+# YASHIGANI_SSO_2FA_REQUIRED=false
+SSO_EOF
+  fi
+
   log_info "Environment written to ${env_file}"
 }
 
