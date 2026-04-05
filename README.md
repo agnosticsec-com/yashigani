@@ -243,7 +243,7 @@ v2.1 adds the management layer that makes Yashigani self-service. The Admin Dash
 **OPA v1_routing.rego Verified Operational** -- The OPA routing safety net policy (v1_routing.rego) has been verified end-to-end in the production configuration. Policy evaluation, LLM validation of policy changes, and SAFE/WARNING/BLOCK verdicts are all confirmed operational.
 
 **Additional v2.1 changes:**
-- 388 tests passing (363 + 25 new e2e tests)
+- 413 tests passing (388 unit + 25 e2e)
 
 ### v2.0 — First Production-Grade Release
 
@@ -513,7 +513,7 @@ The initial release established the core security envelope. Yashigani began as a
 - **Container Pool Manager (v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
 - **Dynamic per-identity containers (v2.0)** — managed by Pool Manager; license tier gates container limits
 - **21 core services (v2.0)** — up from 18 in v1.09.5; plus dynamic per-identity containers
-- **388 tests passing (v2.1)** — 363 + 25 e2e
+- **413 tests passing (v2.1)** — 388 unit + 25 e2e
 
 ### 5.10 Licensing and Tiers
 
