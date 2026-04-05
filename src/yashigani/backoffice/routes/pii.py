@@ -6,10 +6,18 @@ License gating:
   pii_redact — required for REDACT and BLOCK modes.
 
 Routes:
-  GET  /admin/pii/config  — current PII config (mode, enabled types)
-  PUT  /admin/pii/config  — update mode and enabled types
-  POST /admin/pii/test    — test PII detection against sample text
-                            (findings returned; nothing written to audit)
+  GET  /admin/pii/config          — current PII config (mode, enabled types)
+  PUT  /admin/pii/config          — update mode and enabled types
+  POST /admin/pii/test            — test PII detection against sample text
+                                    (findings returned; nothing written to audit)
+  GET  /admin/pii/cloud-bypass    — current cloud bypass setting
+  PUT  /admin/pii/cloud-bypass    — toggle cloud bypass (requires admin session)
+
+Cloud bypass (OFF by default):
+  When enabled, PII filtering is skipped for cloud-routed requests only.
+  Local (Ollama) traffic is ALWAYS filtered regardless of this setting.
+  This is an explicit admin opt-in to allow PII to reach cloud LLMs.
+  Enabling this requires pii_redact license tier.
 """
 from __future__ import annotations
 
@@ -38,6 +46,9 @@ _DEFAULT_CONFIG: dict = {
     "enabled_types": [t.value for t in PiiType],
 }
 
+# Cloud bypass is a separate flag — stored independently from mode/types config.
+_DEFAULT_CLOUD_BYPASS: bool = False
+
 
 def _get_config() -> dict:
     return getattr(backoffice_state, "pii_config", _DEFAULT_CONFIG.copy())
@@ -45,6 +56,14 @@ def _get_config() -> dict:
 
 def _set_config(cfg: dict) -> None:
     backoffice_state.pii_config = cfg  # type: ignore[attr-defined]
+
+
+def _get_cloud_bypass() -> bool:
+    return getattr(backoffice_state, "pii_cloud_bypass", _DEFAULT_CLOUD_BYPASS)
+
+
+def _set_cloud_bypass(enabled: bool) -> None:
+    backoffice_state.pii_cloud_bypass = enabled  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +97,16 @@ class PiiTestRequest(BaseModel):
         description="Override mode for this test call (log | redact | block). "
                     "Defaults to the currently configured mode.",
         pattern=r"^(log|redact|block)$",
+    )
+
+
+class PiiCloudBypassRequest(BaseModel):
+    enabled: bool = Field(
+        description=(
+            "When true, PII filtering is skipped for cloud-routed requests. "
+            "Local (Ollama) traffic is ALWAYS filtered regardless of this flag. "
+            "Enabling this is an explicit opt-in to allow PII to reach cloud LLMs."
+        )
     )
 
 
@@ -197,4 +226,71 @@ async def test_pii_detection(
         "findings": findings_out,
         # Return redacted text only in REDACT mode so admins can preview output.
         "output_text": output_text if test_mode == PiiMode.REDACT else None,
+    }
+
+
+@router.get("/cloud-bypass")
+async def get_pii_cloud_bypass(session: AdminSession):
+    """Return the current PII cloud bypass setting.
+
+    When cloud bypass is enabled, PII filtering is skipped for cloud-routed
+    requests. Local (Ollama) traffic is always filtered.
+    """
+    _require_pii_feature("log")
+    return {
+        "cloud_bypass_enabled": _get_cloud_bypass(),
+        "warning": (
+            "When enabled, PII may reach cloud LLM providers. "
+            "Local (Ollama) traffic is always filtered regardless of this setting."
+        ),
+    }
+
+
+@router.put("/cloud-bypass")
+async def update_pii_cloud_bypass(
+    body: PiiCloudBypassRequest,
+    session: AdminSession,
+):
+    """Toggle the PII cloud bypass setting.
+
+    Requires pii_redact license tier (same as REDACT/BLOCK modes) because
+    enabling bypass has equivalent data exposure implications.
+
+    Local (Ollama) traffic is NEVER affected — it is always filtered.
+    This setting only controls whether PII filtering runs for requests
+    that the optimization engine routes to cloud providers.
+    """
+    # Enabling cloud bypass has the same data-exposure risk as BLOCK mode —
+    # require pii_redact so community-tier users cannot accidentally expose PII.
+    _require_pii_feature("redact" if body.enabled else "log")
+
+    previous = _get_cloud_bypass()
+    _set_cloud_bypass(body.enabled)
+
+    logger.info(
+        "PII cloud bypass changed: %s -> %s (admin=%s)",
+        previous,
+        body.enabled,
+        session.account_id,
+    )
+
+    from yashigani.audit.schema import ConfigChangedEvent
+    if backoffice_state.audit_writer is not None:
+        try:
+            backoffice_state.audit_writer.write(ConfigChangedEvent(
+                admin_account=session.account_id,
+                setting="pii_cloud_bypass",
+                previous_value=str(previous),
+                new_value=str(body.enabled),
+            ))
+        except Exception as exc:
+            logger.error("Failed to write ConfigChangedEvent for pii_cloud_bypass: %s", exc)
+
+    return {
+        "status": "ok",
+        "cloud_bypass_enabled": body.enabled,
+        "warning": (
+            "PII may now reach cloud LLM providers. "
+            "Local (Ollama) traffic remains filtered at all times."
+        ) if body.enabled else None,
     }

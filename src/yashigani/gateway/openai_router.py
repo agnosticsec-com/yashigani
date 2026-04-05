@@ -4,7 +4,7 @@ Yashigani Gateway — OpenAI-compatible API router (/v1/*).
 Provides /v1/chat/completions and /v1/models endpoints that Open WebUI
 and other OpenAI-compatible clients can use. All requests go through the
 full Yashigani pipeline: identity resolution, sensitivity scan, complexity
-scoring, budget enforcement, OE routing, and audit.
+scoring, budget enforcement, OE routing, PII filtering, and audit.
 
 v1.0: Buffered responses only (Decision 13). Full response collected
 before delivery to enable response inspection and token counting.
@@ -13,6 +13,11 @@ v2.2: Streaming support added. When ``body.stream == True`` and
 ``YASHIGANI_STREAMING_ENABLED=true`` (default), requests are forwarded
 to Ollama with ``stream=true`` and responses are yielded as SSE chunks
 via FastAPI ``StreamingResponse``.
+
+v2.2: PII detection wired into both the request path (before forwarding)
+and the response path (before delivery). PII filtering is ON by default
+for all traffic — local and cloud. Cloud bypass is OFF by default; admins
+must explicitly enable it via the admin panel.
 
 Streaming limitations
 ---------------------
@@ -24,6 +29,8 @@ Streaming limitations
 - Agent routing (``@agent`` model prefix) always uses the buffered path
   regardless of the ``stream`` flag, because agent upstreams may not
   support SSE.
+- PII filtering on streaming responses covers the request path only.
+  Response-path PII filtering requires a buffered response (stream=False).
 """
 from __future__ import annotations
 
@@ -119,6 +126,9 @@ class OpenAIRouterState:
         # v2.2 — streaming
         self.streaming_enabled: bool = True
         self.streaming_inspect_interval: int = 200
+        # v2.2 — PII detection
+        self.pii_detector = None          # PiiDetector | None
+        self.pii_cloud_bypass: bool = False  # True = skip PII for cloud-routed requests
 
 
 _state = OpenAIRouterState()
@@ -138,6 +148,8 @@ def configure(
     agent_registry=None,
     response_inspection_pipeline=None,
     ddos_protector=None,  # v2.2 — DDoSProtector | None
+    pii_detector=None,    # v2.2 — PiiDetector | None
+    pii_cloud_bypass: bool = False,  # v2.2 — True = skip PII for cloud-routed requests
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
     _state.identity_registry = identity_registry
@@ -153,6 +165,8 @@ def configure(
     _state.agent_registry = agent_registry
     _state.response_inspection_pipeline = response_inspection_pipeline
     _state.ddos_protector = ddos_protector
+    _state.pii_detector = pii_detector
+    _state.pii_cloud_bypass = pii_cloud_bypass
 
     # v2.2 — streaming config from environment
     _state.streaming_enabled = (
@@ -163,12 +177,39 @@ def configure(
     )
 
     logger.info(
-        "OpenAI router configured (default_model=%s, response_inspection=%s, streaming=%s, inspect_interval=%d)",
+        "OpenAI router configured (default_model=%s, response_inspection=%s, "
+        "streaming=%s, inspect_interval=%d, pii=%s, pii_cloud_bypass=%s)",
         default_model,
         "enabled" if response_inspection_pipeline is not None else "disabled",
         "enabled" if _state.streaming_enabled else "disabled",
         _state.streaming_inspect_interval,
+        "enabled" if pii_detector is not None else "disabled",
+        pii_cloud_bypass,
     )
+
+
+# ── PII helpers ─────────────────────────────────────────────────────────
+
+
+def _pii_audit(request_id: str, direction: str, pii_result, action: str, destination: str) -> None:
+    """Write a PII detection audit event if an audit_writer is configured."""
+    if _state.audit_writer is None:
+        return
+    try:
+        pii_types = [f.pii_type.value for f in pii_result.findings]
+        _state.audit_writer(
+            "PII_DETECTED",
+            {
+                "request_id": request_id,
+                "direction": direction,       # "request" | "response"
+                "pii_types": pii_types,
+                "action_taken": action,
+                "destination": destination,   # "local" | "cloud"
+                "finding_count": len(pii_result.findings),
+            },
+        )
+    except Exception as exc:
+        logger.warning("PII audit write failed (request_id=%s): %s", request_id, exc)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────
@@ -298,6 +339,77 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         if sensitivity_level in ("CONFIDENTIAL", "RESTRICTED"):
             route_reason = "sensitivity_local"
 
+    # ── 6b. PII detection on request ──────────────────────────────────
+    #
+    # Runs AFTER routing so we know the destination (local vs cloud).
+    # Local (Ollama) traffic: LOG only regardless of configured mode — data
+    # stays on-premises so blocking is unnecessary and would degrade UX.
+    # Cloud traffic: respect configured mode (LOG / REDACT / BLOCK).
+    # Cloud bypass flag allows admins to skip PII filtering for cloud-routed
+    # requests (explicit opt-in; default OFF).
+    pii_detected_on_request = False
+    destination = "local" if selected_provider == "ollama" else "cloud"
+
+    if _state.pii_detector is not None and prompt_text:
+        _run_pii = True
+        if destination == "cloud" and _state.pii_cloud_bypass:
+            _run_pii = False
+            logger.debug(
+                "PII filtering skipped for cloud-routed request (bypass enabled) request_id=%s",
+                request_id,
+            )
+
+        if _run_pii:
+            if destination == "local":
+                # Local: detect only — never block, never redact (data is on-premises)
+                _text, _pii_result = _state.pii_detector.process(prompt_text)
+                if _pii_result.detected:
+                    pii_detected_on_request = True
+                    logger.info(
+                        "PII detected on local request request_id=%s types=%s — log only (local)",
+                        request_id,
+                        [f.pii_type.value for f in _pii_result.findings],
+                    )
+                    _pii_audit(request_id, "request", _pii_result, "logged", destination)
+            else:
+                # Cloud: apply configured mode
+                _text, _pii_result = _state.pii_detector.process(prompt_text)
+                if _pii_result.detected:
+                    pii_detected_on_request = True
+                    logger.info(
+                        "PII detected on cloud request request_id=%s types=%s action=%s",
+                        request_id,
+                        [f.pii_type.value for f in _pii_result.findings],
+                        _pii_result.action_taken,
+                    )
+                    _pii_audit(request_id, "request", _pii_result, _pii_result.action_taken, destination)
+
+                    if _pii_result.action_taken == "blocked":
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail={
+                                "error": "pii_detected",
+                                "detail": (
+                                    "Request blocked: PII detected and PII mode is BLOCK "
+                                    "for cloud-routed requests. Configure PII mode to REDACT "
+                                    "or enable cloud bypass via the admin panel."
+                                ),
+                                "pii_types": [f.pii_type.value for f in _pii_result.findings],
+                                "request_id": request_id,
+                            },
+                        )
+
+                    if _pii_result.action_taken == "redacted":
+                        # Redact each message individually so per-message offsets remain
+                        # valid, then update prompt_text for downstream logging.
+                        for _msg in body.messages:
+                            if _msg.content:
+                                _msg_redacted, _ = _state.pii_detector.process(_msg.content)
+                                _msg.content = _msg_redacted
+                        prompt_text = "\n".join(
+                            m.content for m in body.messages if m.content
+                        )
+
     # ── 7. Forward to backend ─────────────────────────────────────────
     #
     # Streaming path: body.stream == True AND streaming enabled AND not an
@@ -419,6 +531,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     "X-Yashigani-Sensitivity": sensitivity_level,
                     "X-Yashigani-Complexity": complexity_level,
                     # Budget headers intentionally omitted — see module docstring.
+                    # PII header reflects request-path scan only (response is streamed).
+                    "X-Yashigani-PII-Detected": "true" if pii_detected_on_request else "false",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",  # disable Nginx/Caddy buffering
                 },
@@ -535,6 +649,56 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         except Exception as exc:
             logger.warning("Response inspection raised unexpectedly: %s", exc)
 
+    # ── 7c. PII detection on response (buffered path only) ────────────
+    #
+    # Runs AFTER response inspection so any injection-flagged content is
+    # already handled. Local vs cloud destination logic mirrors request path:
+    # local traffic is LOG-only; cloud traffic respects configured mode.
+    # BLOCK on response: we cannot suppress content already generated (same
+    # reasoning as response_inspection BLOCKED above). We add a warning header
+    # and audit the event, but the response is still delivered.
+    pii_detected_on_response = False
+
+    if _state.pii_detector is not None and assistant_content:
+        _resp_run_pii = True
+        if destination == "cloud" and _state.pii_cloud_bypass:
+            _resp_run_pii = False
+
+        if _resp_run_pii:
+            if destination == "local":
+                _resp_text, _resp_pii = _state.pii_detector.process(assistant_content)
+                if _resp_pii.detected:
+                    pii_detected_on_response = True
+                    logger.info(
+                        "PII detected in local response request_id=%s types=%s — log only (local)",
+                        request_id,
+                        [f.pii_type.value for f in _resp_pii.findings],
+                    )
+                    _pii_audit(request_id, "response", _resp_pii, "logged", destination)
+            else:
+                _resp_text, _resp_pii = _state.pii_detector.process(assistant_content)
+                if _resp_pii.detected:
+                    pii_detected_on_response = True
+                    logger.info(
+                        "PII detected in cloud response request_id=%s types=%s action=%s",
+                        request_id,
+                        [f.pii_type.value for f in _resp_pii.findings],
+                        _resp_pii.action_taken,
+                    )
+                    _pii_audit(request_id, "response", _resp_pii, _resp_pii.action_taken, destination)
+
+                    if _resp_pii.action_taken == "redacted":
+                        # Update assistant_content; step 9 will build the response
+                        # with the redacted text automatically.
+                        assistant_content = _resp_text
+                    # BLOCK mode: log warning, add header, do not suppress response
+                    elif _resp_pii.action_taken == "blocked":
+                        logger.warning(
+                            "PII detected in response (BLOCK mode) — adding warning header, "
+                            "response not suppressed. request_id=%s",
+                            request_id,
+                        )
+
     # ── 8. Token counting + budget recording ─────────────────────────
     input_tokens = backend_body.get("prompt_eval_count", token_estimate)
     output_tokens = backend_body.get("eval_count", len(assistant_content) // 4)
@@ -570,7 +734,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         ),
     )
 
-    # ── 10. Return with budget headers ────────────────────────────────
+    # ── 10. Return with budget + PII headers ─────────────────────────
+    _pii_detected_any = pii_detected_on_request or pii_detected_on_response
     headers = {
         "X-Yashigani-Request-Id": request_id,
         "X-Yashigani-Routed-Via": selected_provider,
@@ -580,6 +745,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         "X-Yashigani-Complexity": complexity_level,
         "X-Yashigani-Elapsed-Ms": str(elapsed_ms),
         "X-Yashigani-Response-Verdict": response_verdict,
+        "X-Yashigani-PII-Detected": "true" if _pii_detected_any else "false",
     }
     if budget_total > 0:
         headers["X-Yashigani-Budget-Used"] = str(budget_used)

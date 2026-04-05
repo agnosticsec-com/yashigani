@@ -287,6 +287,34 @@ def _build_app():
     except Exception as exc:
         logger.warning("Optimization Engine unavailable (%s)", exc)
 
+    # ── v2.2: PII Detector ────────────────────────────────────────────────
+    # PII filtering is ON by default for ALL traffic (local and cloud).
+    # Mode is configurable via YASHIGANI_PII_MODE (default: log).
+    # Cloud bypass is OFF by default — admin must explicitly enable it.
+    pii_detector = None
+    pii_cloud_bypass = False
+    try:
+        from yashigani.pii.detector import PiiDetector, PiiMode
+        _pii_mode_str = os.getenv("YASHIGANI_PII_MODE", "log").lower()
+        try:
+            _pii_mode = PiiMode(_pii_mode_str)
+        except ValueError:
+            logger.warning(
+                "Invalid YASHIGANI_PII_MODE='%s' — defaulting to 'log'", _pii_mode_str
+            )
+            _pii_mode = PiiMode.LOG
+        pii_detector = PiiDetector(mode=_pii_mode)
+        pii_cloud_bypass = (
+            os.getenv("YASHIGANI_PII_CLOUD_BYPASS", "false").lower() == "true"
+        )
+        logger.info(
+            "PII detector ready (mode=%s, cloud_bypass=%s)",
+            _pii_mode.value,
+            pii_cloud_bypass,
+        )
+    except Exception as exc:
+        logger.warning("PII detector unavailable (%s) — PII filtering disabled", exc)
+
     # Configure and prepare the /v1 router BEFORE creating the gateway app
     # (it must be registered before the catch-all proxy route)
     configure_openai_router(
@@ -301,6 +329,8 @@ def _build_app():
         default_model=model,
         agent_registry=agent_registry,
         response_inspection_pipeline=response_pipeline,
+        pii_detector=pii_detector,
+        pii_cloud_bypass=pii_cloud_bypass,
     )
 
     gateway_app = create_gateway_app(
@@ -319,6 +349,7 @@ def _build_app():
         anomaly_detector=anomaly_detector,
         response_inspection_pipeline=response_pipeline,
         extra_routers=[openai_router],
+        pii_detector=pii_detector,
     )
     logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
 
