@@ -1929,6 +1929,27 @@ YASHIGANI_POOL_HEALTH_INTERVAL=30            # Health check interval in seconds
 
 When a container fails, the pool manager captures logs, resource usage, and the triggering event into a postmortem record stored in PostgreSQL. Postmortems are viewable in the backoffice: Admin -> Pool -> Postmortems.
 
+### 24.4 Security: Container Runtime Considerations
+
+The Pool Manager requires access to the container runtime API to create, monitor, and replace per-identity containers. This has different security implications depending on your runtime:
+
+| Runtime | Socket | Privilege Level | Risk |
+|---------|--------|-----------------|------|
+| **Podman rootless** (recommended) | `$XDG_RUNTIME_DIR/podman/podman.sock` | User-level only — no host root | **Low** |
+| **Docker** | `/var/run/docker.sock` | Effective root on the host | **Medium** |
+
+**Why Podman is recommended:** Podman runs in rootless mode by default. The Podman socket grants access only to the current user's containers — not the host kernel. A compromised gateway container with Podman socket access cannot escalate to host root.
+
+**Docker risk:** The Docker socket (`/var/run/docker.sock`) grants unrestricted access to the Docker daemon, which runs as root. Any container with Docker socket access has effective root on the host. This is an inherent design limitation of Docker, not a Yashigani issue — it affects all container management tools that use the Docker socket.
+
+**Mitigations for Docker deployments:**
+1. Use Podman instead (recommended — Yashigani's installer prefers Podman when available)
+2. Restrict Docker socket access to the gateway container only (already the default in docker-compose)
+3. Use Docker's `--userns-remap` to run containers in a user namespace
+4. On Kubernetes, the Pool Manager uses the Kubernetes API (no Docker socket needed)
+
+**Recommendation:** For production deployments where container isolation is critical (regulated industries, multi-tenant), use Podman rootless or Kubernetes. Docker Compose deployments are suitable for single-tenant environments where the host is trusted.
+
 ---
 
 ## 25. Multi-IdP Identity Broker (v2.0)
