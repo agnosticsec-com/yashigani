@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from yashigani.sso.oidc import OIDCConfig, OIDCProvider, OIDCUserInfo
+from yashigani.sso.saml import SAMLConfig, SAMLProvider, SAMLUserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ class IdentityBroker:
     def __init__(self, tier: str = "community") -> None:
         self._idps: dict[str, IdPConfig] = {}
         self._oidc_providers: dict[str, OIDCProvider] = {}
+        self._saml_providers: dict[str, SAMLProvider] = {}
         self._tier = tier
         self._limit = _TIER_IDP_LIMITS.get(tier, 0)
         logger.info("IdentityBroker: tier=%s, idp_limit=%d", tier, self._limit)
@@ -229,21 +231,64 @@ class IdentityBroker:
         self,
         idp_id: str,
         saml_response: str,
+        request_data: dict | None = None,
     ) -> SSOResult:
         """
         Handle SAML v2 assertion response.
 
-        In production, this validates the SAML assertion and extracts
-        the user's attributes.
+        Delegates to SAMLProvider.process_response() to validate the
+        assertion and extract user attributes. Maps groups and returns
+        a populated SSOResult.
         """
         idp = self._idps.get(idp_id)
         if not idp:
             return SSOResult(success=False, error="IdP not found")
 
-        logger.info("SAML response for IdP %s — assertion validation pending implementation", idp.name)
+        provider = self._saml_providers.get(idp_id)
+        if provider is None:
+            return SSOResult(
+                success=False,
+                error=f"No SAML provider configured for IdP '{idp_id}'. "
+                      "Configure SAML SP certificate and IdP metadata.",
+            )
+
+        if request_data is None:
+            request_data = {"post_data": {"SAMLResponse": saml_response}}
+
+        try:
+            user_info: SAMLUserInfo = provider.process_response(request_data)
+        except ValueError as exc:
+            logger.warning("SAML assertion failed for IdP %s: %s", idp.name, exc)
+            return SSOResult(success=False, error=str(exc))
+        except Exception as exc:
+            logger.error("SAML provider error for IdP %s: %s", idp.name, exc)
+            return SSOResult(success=False, error="SAML assertion validation failed")
+
+        # Extract groups from attributes
+        raw_groups: list[str] = []
+        attrs = user_info.attributes
+        for attr_name in ("groups", "memberOf", "http://schemas.xmlsoap.org/claims/Group"):
+            val = attrs.get(attr_name)
+            if isinstance(val, list):
+                raw_groups = [str(g) for g in val]
+                break
+            elif isinstance(val, str):
+                raw_groups = [val]
+                break
+
+        mapped_groups = self.map_groups(idp_id, raw_groups)
+
+        logger.info(
+            "SAML callback success: idp=%s subject=%s email=%s groups=%s",
+            idp.name, user_info.subject, user_info.email, mapped_groups,
+        )
         return SSOResult(
-            success=False,
-            error="SAML assertion validation not yet implemented — use API keys for v1.0 beta",
+            success=True,
+            identity_id=user_info.subject,
+            email=user_info.email or user_info.subject,
+            name=attrs.get("firstName", attrs.get("displayName", "")),
+            groups=mapped_groups,
+            idp_name=idp.name,
         )
 
     def map_groups(self, idp_id: str, idp_groups: list[str]) -> list[str]:

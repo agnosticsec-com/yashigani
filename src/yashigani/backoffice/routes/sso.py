@@ -666,15 +666,131 @@ async def sso_2fa_verify(request: Request):
 
 
 @router.post("/sso/saml/{idp_id}/acs")
-async def saml_acs(idp_id: str):
+async def saml_acs(idp_id: str, request: Request):
     """
     SAML v2 Assertion Consumer Service endpoint.
-    Not yet implemented — returns 501 to signal planned capability.
+    Receives the IdP POST with SAMLResponse, validates the assertion,
+    resolves/creates the identity, and issues a session.
     """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail={
-            "error": "saml_not_implemented",
-            "message": "SAML v2 ACS will be available in a future release.",
-        },
+    client_ip = request.client.host if request.client else "unknown"
+
+    try:
+        require_feature("saml")
+    except LicenseFeatureGated as exc:
+        return JSONResponse(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            content=license_feature_gated_response(exc),
+        )
+
+    broker = backoffice_state.identity_broker
+    if broker is None:
+        _write_sso_failure_audit(idp_id, idp_id, "broker_unavailable", client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "identity_broker_unavailable"},
+        )
+
+    idp = broker.get_idp(idp_id)
+    if idp is None or not idp.enabled or idp.protocol != "saml":
+        _write_sso_failure_audit(idp_id, idp_id, "idp_not_found_or_not_saml", client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "idp_not_found"},
+        )
+
+    # Build request_data for python3-saml
+    form_data = await request.form()
+    saml_response = form_data.get("SAMLResponse", "")
+    relay_state = form_data.get("RelayState", "")
+
+    if not saml_response:
+        _write_sso_failure_audit(idp_id, idp.name, "missing_saml_response", client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "missing_saml_response"},
+        )
+
+    # Construct request_data dict expected by python3-saml
+    url = str(request.url)
+    request_data = {
+        "https": "on" if request.url.scheme == "https" else "off",
+        "http_host": request.url.hostname or "localhost",
+        "server_port": request.url.port or (443 if request.url.scheme == "https" else 80),
+        "script_name": request.url.path,
+        "post_data": {"SAMLResponse": saml_response, "RelayState": relay_state},
+    }
+
+    # Process the SAML response using the broker's SAML handler
+    sso_result = broker.handle_saml_response(idp_id=idp_id, saml_response=saml_response)
+
+    if not sso_result.success:
+        _write_sso_failure_audit(idp_id, idp.name, sso_result.error, client_ip)
+        return RedirectResponse(
+            url=f"/login?error=sso_failed&idp={idp_id}",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    # Resolve or create the identity
+    try:
+        identity_id = _resolve_or_create_identity(
+            email=sso_result.email,
+            name=sso_result.name,
+            groups=sso_result.groups,
+            idp_name=sso_result.idp_name,
+            org_id=idp.org_id,
+            default_sensitivity=idp.default_sensitivity,
+        )
+    except RuntimeError as exc:
+        logger.error("SAML identity resolution failed: %s", exc)
+        _write_sso_failure_audit(idp_id, idp.name, "identity_registry_unavailable", client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "identity_registry_unavailable"},
+        )
+
+    # Check 2FA requirement
+    r = _redis()
+    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "false").lower() == "true"
+
+    if sso_2fa_required and r is not None:
+        pending_token = secrets.token_urlsafe(32)
+        pending_data = json.dumps({
+            "identity_id": identity_id,
+            "email": sso_result.email,
+            "name": sso_result.name,
+            "groups": sso_result.groups,
+            "idp_id": idp_id,
+            "idp_name": idp.name,
+            "client_ip": client_ip,
+            "created_at": time.time(),
+        })
+        r.setex(f"{_PENDING_2FA_PREFIX}{pending_token}", _PENDING_2FA_TTL, pending_data)
+
+        response = RedirectResponse(url="/auth/sso/2fa", status_code=status.HTTP_302_FOUND)
+        response.set_cookie(
+            key=_PENDING_2FA_COOKIE, value=pending_token,
+            httponly=True, secure=True, samesite="strict",
+            max_age=_PENDING_2FA_TTL, path="/auth",
+        )
+        return response
+
+    # Issue full session
+    session = backoffice_state.session_store.create(
+        account_id=identity_id,
+        account_tier="user",
+        client_ip=client_ip,
     )
+
+    _write_sso_success_audit(
+        idp_id=idp_id, idp_name=idp.name,
+        identity_id=identity_id, email=sso_result.email,
+        groups=sso_result.groups, client_ip=client_ip,
+    )
+
+    response = RedirectResponse(url="/chat", status_code=status.HTTP_302_FOUND)
+    response.set_cookie(
+        key=_USER_SESSION_COOKIE, value=session.token,
+        httponly=True, secure=True, samesite="strict",
+        max_age=_SESSION_MAX_AGE, path="/",
+    )
+    return response
