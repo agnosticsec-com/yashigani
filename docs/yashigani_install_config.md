@@ -862,53 +862,67 @@ YASHIGANI_INJECT_THRESHOLD=0.85
 
 ## 8. SSO Configuration (Starter / Professional / Enterprise)
 
-SSO requires a Professional or Enterprise license. Ensure your license is activated before proceeding.
+SSO requires a Starter license or higher. OIDC is available from Starter tier. SAML v2 requires Professional or higher. Ensure your license is activated before proceeding.
 
-### 8.1 SAML v2
+Yashigani IS the identity broker — it federates directly with external IdPs. No separate Keycloak or other broker is required.
 
-**Step 1.** Retrieve Yashigani's SP metadata from your running instance:
+### 8.1 OpenID Connect (OIDC)
+
+**Step 1.** Register Yashigani as an OIDC client (confidential) with your IdP. Use the following redirect URI:
+
+```
+https://<your-domain>/auth/sso/oidc/<idp-id>/callback
+```
+
+Where `<idp-id>` is a short identifier you choose (e.g., `entra-id`, `okta`, `google`). Note the `client_id` and `client_secret` assigned by your IdP.
+
+**Step 2.** Add the IdP configuration to `docker/.env`:
 
 ```bash
-curl -k https://your-domain/admin/sso/saml/metadata -o yashigani-sp-metadata.xml
+YASHIGANI_IDP_1_ID=entra-id
+YASHIGANI_IDP_1_NAME=Entra ID
+YASHIGANI_IDP_1_PROTOCOL=oidc
+YASHIGANI_IDP_1_DISCOVERY_URL=https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration
+YASHIGANI_IDP_1_CLIENT_ID=<client-id>
+YASHIGANI_IDP_1_CLIENT_SECRET=<client-secret>
+YASHIGANI_IDP_1_EMAIL_DOMAINS=example.com,example.org
 ```
 
-**Step 2.** Import `yashigani-sp-metadata.xml` into your identity provider (Okta, Azure AD, Google Workspace, Ping, etc.) as a new SAML application.
+**Step 3.** Restart the backoffice container:
 
-**Step 3.** Configure the following attribute mappings in your IdP:
-
-| SAML Attribute | Yashigani Mapping |
-|---|---|
-| `email` or `NameID` | User email |
-| `firstName` | First name |
-| `lastName` | Last name |
-| `groups` | RBAC group membership |
-
-**Step 4.** Download the IdP metadata XML from your IdP.
-
-**Step 5.** Upload the IdP metadata in Yashigani: Admin → SSO → SAML → Upload IdP Metadata.
-
-**Step 6.** Test the SAML flow: Admin → SSO → SAML → Test Configuration. This opens a new browser tab and attempts a SAML authentication round-trip. A green checkmark confirms success.
-
-### 8.2 OpenID Connect
-
-**Step 1.** Register Yashigani as an OIDC client with your IdP. Use the following redirect URI:
-
-```
-https://your-domain/admin/oidc/callback
+```bash
+docker compose up -d backoffice
 ```
 
-Note the `client_id` and `client_secret` assigned by your IdP.
+**Step 4.** Verify the IdP appears in the SSO endpoint:
 
-**Step 2.** Store the client secret in KMS via admin panel: Admin → KMS → Add Secret → Name: `oidc_client_secret`.
+```bash
+curl -sk https://<your-domain>/auth/sso/select
+```
 
-**Step 3.** Configure OIDC in the admin panel: Admin → SSO → OIDC.
+**Step 5.** Test the OIDC flow by navigating to `https://<your-domain>/auth/sso/oidc/<idp-id>` — you should be redirected to your IdP's login page.
 
-Enter:
-- **Issuer URL:** e.g., `https://accounts.google.com` or `https://login.microsoftonline.com/tenant-id/v2.0`
-- **Client ID:** from Step 1
-- **Scopes:** `openid email profile` (add `groups` if your IdP supports group claims)
+**Scopes:** Yashigani requests `openid email profile groups` by default. Ensure your IdP includes group claims in the ID token for RBAC mapping.
 
-**Step 4.** Click Save and then Test Configuration to verify.
+**Group mapping:** Groups from the IdP are mapped to Yashigani groups. Configure group mappings via the `group_mapping` field in the IdP configuration, or let groups pass through directly.
+
+### 8.2 SAML v2
+
+SAML v2 support is wired but not yet fully operational. The SAML ACS endpoint (`/auth/sso/saml/<idp-id>/acs`) currently returns HTTP 501. Full SAML assertion validation will be available in a future release. Use OIDC for SSO in the current release.
+
+### 8.3 Mandatory 2FA After SSO
+
+Yashigani enforces its own 2FA after SSO authentication, regardless of what MFA the IdP provides. This prevents session hijack and replay attacks.
+
+To enable (recommended for production):
+
+```bash
+YASHIGANI_SSO_2FA_REQUIRED=true
+```
+
+When enabled, after IdP authentication users are redirected to a TOTP verification step. They must enter their Yashigani TOTP code within 5 minutes to complete login. Users must have TOTP provisioned before their first SSO login.
+
+Default: `false` (for initial setup and testing).
 
 ### 8.3 SCIM Provisioning
 
