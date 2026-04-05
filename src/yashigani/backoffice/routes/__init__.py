@@ -28,6 +28,8 @@ from yashigani.backoffice.routes.audit_search import router as audit_search_rout
 from yashigani.backoffice.routes.models import router as models_router
 from yashigani.backoffice.routes.sensitivity import router as sensitivity_router
 from yashigani.backoffice.routes.sso import router as sso_router
+# v2.2
+from yashigani.backoffice.routes.pii import router as pii_router
 
 __all__ = [
     "auth_router", "accounts_router", "users_router",
@@ -45,4 +47,6 @@ __all__ = [
     "models_router",
     "sensitivity_router",
     "sso_router",
+    # v2.2
+    "pii_router",
 ]

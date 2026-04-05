@@ -111,9 +111,11 @@ def check_org_limit(current_count: int) -> None:
 
 # Which tier unlocks each feature — used in upgrade messages
 _FEATURE_UPGRADE_TIER: dict[str, str] = {
-    "oidc": "Starter",
-    "saml": "Professional",
-    "scim": "Professional",
+    "oidc":       "Starter",
+    "saml":       "Professional",
+    "scim":       "Professional",
+    "pii_log":    "Professional Plus",
+    "pii_redact": "Professional Plus",
 }
 
 
