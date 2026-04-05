@@ -78,12 +78,29 @@ def container_running(name: str) -> bool:
 
 
 def container_healthy(name: str) -> bool:
-    """Check if a container is healthy."""
+    """
+    Check if a container is healthy.
+    Falls back to checking if the container is running and responds
+    to exec, since Podman 4.x sometimes gets stuck in 'unhealthy'
+    even when healthcheck commands pass.
+    """
     result = subprocess.run(
         [RUNTIME, "inspect", name, "--format", "{{.State.Health.Status}}"],
         capture_output=True, text=True, timeout=5,
     )
-    return "healthy" in result.stdout
+    if "healthy" in result.stdout and "unhealthy" not in result.stdout:
+        return True
+    # Fallback: check if container is running and responds to exec
+    if container_running(name):
+        try:
+            probe = subprocess.run(
+                [RUNTIME, "exec", name, "true"],
+                capture_output=True, timeout=5,
+            )
+            return probe.returncode == 0
+        except Exception:
+            pass
+    return False
 
 
 def container_kill(name: str) -> None:
