@@ -74,6 +74,7 @@ def create_gateway_app(
     anomaly_detector=None,
     response_inspection_pipeline=None,  # v0.9.0 — ResponseInspectionPipeline | None
     extra_routers=None,  # v2.0 — additional routers to mount BEFORE catch-all
+    ddos_protector=None,  # v2.2 — DDoSProtector | None
 ) -> FastAPI:
     """
     Create the Yashigani gateway FastAPI application.
@@ -96,6 +97,7 @@ def create_gateway_app(
         "fasttext_backend": fasttext_backend,
         "inference_logger": inference_logger,
         "anomaly_detector": anomaly_detector,
+        "ddos_protector": ddos_protector,  # v2.2
         "http_client": None,
     }
 
@@ -192,7 +194,40 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
         from yashigani.gateway.agent_router import route_agent_call
         return await route_agent_call(request, norm_path, state)
 
-    # 0. Rate limiting — before any expensive processing
+    # 0. DDoS protection — per-IP connection counting (v2.2)
+    # record() is called before check() so the counter is always incremented
+    # (preventing evasion via check-without-record).  /healthz and metrics
+    # paths are exempt (see DDoSProtector._EXEMPT_PATHS).
+    ddos_protector = state.get("ddos_protector")
+    if ddos_protector is not None:
+        _ddos_ip = _get_client_ip(request)
+        ddos_protector.record(_ddos_ip, norm_path)
+        if not ddos_protector.check(_ddos_ip, norm_path):
+            try:
+                from yashigani.metrics.registry import ratelimit_violations_total
+                ratelimit_violations_total.labels(dimension="ddos_per_ip").inc()
+            except Exception:
+                logger.debug("proxy: metric increment failed for ddos_per_ip", exc_info=True)
+            logger.warning(
+                "DDoS threshold exceeded for ip=%s path=%s request_id=%s",
+                _ddos_ip,
+                norm_path,
+                request_id,
+            )
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "CONNECTION_LIMIT_EXCEEDED",
+                    "detail": "Too many requests from this IP address.",
+                    "request_id": request_id,
+                },
+                headers={
+                    "X-Yashigani-Request-Id": request_id,
+                    "Retry-After": str(ddos_protector.window_seconds),
+                },
+            )
+
+    # 0b. Rate limiting — before any expensive processing
     rate_limiter = state["rate_limiter"]
     if rate_limiter is not None:
         client_ip = _get_client_ip(request)
@@ -255,7 +290,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
                 },
             )
 
-    # 0b. Per-endpoint rate limiting — Phase 5
+    # 0c. Per-endpoint rate limiting — Phase 5
     ep_rl = state.get("endpoint_rate_limiter")
     if ep_rl is not None:
         ep_result = ep_rl.check(norm_path)
@@ -279,7 +314,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
                 },
             )
 
-    # 0c. JWT introspection — Phase 7
+    # 0d. JWT introspection — Phase 7
     # Only validates if a Bearer token is present; requests without one pass through
     # and are governed by OPA policy (which may reject them).
     auth_header = request.headers.get("authorization", "")

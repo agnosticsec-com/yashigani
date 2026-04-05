@@ -98,6 +98,7 @@ class OpenAIRouterState:
         self.available_models: list[dict] = []
         self.agent_registry = None
         self.response_inspection_pipeline = None
+        self.ddos_protector = None  # v2.2 — DDoSProtector | None
 
 
 _state = OpenAIRouterState()
@@ -116,6 +117,7 @@ def configure(
     available_models: list[dict] | None = None,
     agent_registry=None,
     response_inspection_pipeline=None,
+    ddos_protector=None,  # v2.2 — DDoSProtector | None
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
     _state.identity_registry = identity_registry
@@ -130,6 +132,7 @@ def configure(
     _state.available_models = available_models or []
     _state.agent_registry = agent_registry
     _state.response_inspection_pipeline = response_inspection_pipeline
+    _state.ddos_protector = ddos_protector
     logger.info(
         "OpenAI router configured (default_model=%s, response_inspection=%s)",
         default_model,
@@ -159,6 +162,28 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     """
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     start_time = time.time()
+
+    # ── 0. DDoS protection — per-IP connection counting (v2.2) ───────────
+    if _state.ddos_protector is not None:
+        _client_ip = (
+            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown")
+        )
+        _state.ddos_protector.record(_client_ip, "/v1/chat/completions")
+        if not _state.ddos_protector.check(_client_ip, "/v1/chat/completions"):
+            logger.warning(
+                "DDoS threshold exceeded for ip=%s request_id=%s (openai router)",
+                _client_ip,
+                request_id,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "CONNECTION_LIMIT_EXCEEDED",
+                    "detail": "Too many requests from this IP address.",
+                    "request_id": request_id,
+                },
+            )
 
     # ── 1. Identity resolution ────────────────────────────────────────
     identity = _resolve_identity(request)

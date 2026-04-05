@@ -238,6 +238,27 @@ def _bootstrap():
             exc,
         )
 
+    # ── Model alias store (Redis db/1, separate key namespace) ─────────────
+    model_alias_store = None
+    try:
+        import redis as _redis
+        from yashigani.models.alias_store import ModelAliasStore
+        redis_alias_client = _redis.from_url(
+            f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/1",
+            decode_responses=False,
+        )
+        model_alias_store = ModelAliasStore(redis_client=redis_alias_client)
+        model_alias_store.seed_defaults()
+        logger.info(
+            "Model alias store initialised: %d alias(es) in index",
+            len(model_alias_store.list_all()),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Model alias store init failed (%s) — aliases will fall back to in-memory defaults",
+            exc,
+        )
+
     # ── OTEL tracing ───────────────────────────────────────────────────────
     try:
         from yashigani.tracing import setup_tracer
@@ -328,6 +349,7 @@ def _bootstrap():
     backoffice_state.anomaly_detector = anomaly_detector
     backoffice_state.response_cache = response_cache
     backoffice_state.license_state = license_state
+    backoffice_state.model_alias_store = model_alias_store
 
     # v0.9.0 — WebAuthn + EventBus (optional, graceful degradation if unavailable)
     try:
