@@ -18,6 +18,8 @@
 https://{env.YASHIGANI_TLS_DOMAIN}:443 {
     tls internal {
         protocols tls1.2 tls1.3
+        # Hybrid post-quantum key exchange (HNDL protection)
+        curves x25519mlkem768 x25519
     }
 
     header {

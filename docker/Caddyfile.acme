@@ -8,6 +8,7 @@
 #   - YASHIGANI_TLS_DOMAIN must resolve to this server's public IP
 #
 # TLS policy: TLS 1.2 minimum, TLS 1.3 preferred.
+# Key exchange: hybrid post-quantum (X25519+ML-KEM-768) with X25519 fallback.
 # Cipher suites: Caddy defaults (ECDHE + AES-GCM / ChaCha20-Poly1305 only).
 # HSTS: max-age 1 year, includeSubDomains.
 # OCSP stapling: enabled automatically by Caddy.
@@ -16,8 +17,10 @@
     # ── TLS policy ──────────────────────────────────────────────────────────
     tls {
         protocols tls1.2 tls1.3
-        # ACME email for expiry notifications (auto-configured from admin email)
-        # Set CADDY_ACME_EMAIL in .env
+        # Hybrid post-quantum key exchange: X25519+ML-KEM-768 preferred,
+        # X25519 fallback for clients that don't support ML-KEM.
+        # Protects against "Harvest Now, Decrypt Later" (HNDL) attacks.
+        curves x25519mlkem768 x25519
     }
 
     # ── Security headers ────────────────────────────────────────────────────
