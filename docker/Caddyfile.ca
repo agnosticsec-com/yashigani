@@ -8,6 +8,22 @@
 #
 # Caddy will NOT attempt ACME in this mode.
 # Certificate renewal is the operator's responsibility (or use certbot separately).
+#
+# ── DDoS / Connection Protection ────────────────────────────────────────────
+# See Caddyfile.acme header comment for full explanation.
+# Full WAF requires a custom Caddy build — see docker/caddy/Caddyfile.waf.
+
+{
+    # ── Connection timeouts (DoS/slow-loris mitigation) ─────────────────────
+    servers {
+        timeouts {
+            read_body   10s
+            read_header 5s
+            write       30s
+            idle        120s
+        }
+    }
+}
 
 {env.YASHIGANI_TLS_DOMAIN} {
     # ── TLS policy — CA-signed certificate ──────────────────────────────────
@@ -24,6 +40,11 @@
         X-Frame-Options           "DENY"
         Referrer-Policy           "no-referrer"
         -Server
+    }
+
+    # ── Request body size limit (OWASP ASVS 4.1.7) ──────────────────────────
+    request_body {
+        max_size 10MB
     }
 
     # ── Gateway health check — /healthz ──────────────────────────────────

@@ -92,6 +92,16 @@ services:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+      - /var/log/yashigani:size=50M
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=../docker/seccomp/yashigani.json
+      # AppArmor (optional — requires host setup):
+      # Load profile first: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
+      # - apparmor=yashigani-gateway
     depends_on:
       redis:
         condition: service_healthy
@@ -160,6 +170,16 @@ services:
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets
       - openwebui_data:/data/openwebui
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+      - /var/log/yashigani:size=50M
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=../docker/seccomp/yashigani.json
+      # AppArmor (optional — requires host setup):
+      # Load profile first: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
+      # - apparmor=yashigani-gateway
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""]
       interval: 15s

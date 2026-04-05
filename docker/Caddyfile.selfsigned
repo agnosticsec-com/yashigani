@@ -8,10 +8,24 @@
 #
 # Caddy generates a self-signed certificate automatically for localhost
 # and any IP address. No setup required.
+#
+# ── DDoS / Connection Protection ────────────────────────────────────────────
+# See Caddyfile.acme header comment for full explanation.
+# Full WAF requires a custom Caddy build — see docker/caddy/Caddyfile.waf.
 
 {
     # Use Caddy's internal CA for self-signed certs (no ACME)
     local_certs
+
+    # ── Connection timeouts (DoS/slow-loris mitigation) ─────────────────────
+    servers {
+        timeouts {
+            read_body   10s
+            read_header 5s
+            write       30s
+            idle        120s
+        }
+    }
 }
 
 # Serve on HTTPS with self-signed cert
@@ -27,6 +41,11 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         X-Frame-Options        "DENY"
         Referrer-Policy        "no-referrer"
         -Server
+    }
+
+    # ── Request body size limit (OWASP ASVS 4.1.7) ──────────────────────────
+    request_body {
+        max_size 10MB
     }
 
     # ── Gateway health check — /healthz ──────────────────────────────────

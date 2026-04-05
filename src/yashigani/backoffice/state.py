@@ -50,6 +50,7 @@ class BackofficeState:
     webauthn_service: Optional[Any] = None               # WebAuthnService (v0.9.0)
     event_bus: Optional[Any] = None                      # EventBus (v0.9.0)
     response_inspection_pipeline: Optional[Any] = None   # ResponseInspectionPipeline (v1.0)
+    model_alias_store: Optional[Any] = None               # ModelAliasStore (v2.3)
     opa_url: str = "http://policy:8181"
     ollama_url: str = "http://ollama:11434"
     # Admin minimum enforcement

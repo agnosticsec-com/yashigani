@@ -1,7 +1,7 @@
 # Yashigani v2.0 — Installation and Configuration Guide
 
-**Version:** 2.0
-**Last updated:** 2026-04-01
+**Version:** 2.2
+**Last updated:** 2026-04-04
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -34,6 +34,8 @@
 23. [Budget System (v2.0)](#23-budget-system-v20)
 24. [Container Pool Manager (v2.0)](#24-container-pool-manager-v20)
 25. [Multi-IdP Identity Broker (v2.0)](#25-multi-idp-identity-broker-v20)
+26. [WAF and DDoS Protection (v2.2)](#26-waf-and-ddos-protection-v22)
+26. [Container Hardening (v2.2)](#26-container-hardening-v22)
 
 ---
 
@@ -1952,4 +1954,249 @@ Multiple OIDC and SAML v2 identity providers can be configured simultaneously. T
 
 ---
 
-*Yashigani v2.0 — Installation and Configuration Guide — 2026-04-01*
+## 26. WAF and DDoS Protection (v2.2)
+
+Yashigani ships three complementary layers of DDoS and WAF protection.
+Layers 1 and 2 work with the standard Caddy image and require no additional
+build steps.  Layer 3 (full WAF) is optional and requires a custom Caddy build.
+
+### 26.1 Application-layer rate limiting (built-in)
+
+The gateway enforces per-IP, per-session, and per-endpoint rate limits using
+Redis-backed fixed-window counters.  These limits apply to every request before
+any expensive processing (inspection, OPA, upstream forwarding).
+
+Configuration reference: [Section 12 — Rate Limiting Configuration](#12-rate-limiting-configuration).
+
+Relevant env vars:
+
+```
+YASHIGANI_RATELIMIT_GLOBAL_RPS=500
+YASHIGANI_RATELIMIT_PER_IP_RPS=50
+YASHIGANI_RATELIMIT_PER_SESSION_RPS=20
+```
+
+### 26.2 Caddy connection timeouts (built-in)
+
+All three Caddyfiles (`Caddyfile.acme`, `Caddyfile.ca`, `Caddyfile.selfsigned`)
+configure the following connection timeouts in the global options block:
+
+| Timeout | Value | Purpose |
+|---------|-------|---------|
+| `read_body` | 10 s | Prevents slow-body (R.U.D.Y.) attacks |
+| `read_header` | 5 s | Prevents slow-header (Slowloris) attacks |
+| `write` | 30 s | Limits time to deliver response |
+| `idle` | 120 s | Reclaims connections from idle clients |
+
+Additionally, `request_body { max_size 10MB }` is applied at the Caddy layer
+as a belt-and-suspenders complement to the application-layer 4 MB limit
+(`GatewayConfig.max_request_body_bytes`).
+
+No configuration changes are required — these settings are active by default.
+
+### 26.3 Per-IP connection limiting (built-in)
+
+`DDoSProtector` (`src/yashigani/gateway/ddos.py`) tracks how many requests
+each IP address makes within a configurable time window.  When the threshold is
+exceeded, the gateway returns `HTTP 429` with a `Retry-After` header.
+
+The check runs before rate limiting and before any inspection pipeline work,
+so a flooding IP is rejected in O(1) Redis operations.
+
+**Defaults:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_connections_per_ip` | 50 | Max requests per IP within the window |
+| `window_seconds` | 60 | Rolling window duration (seconds) |
+
+**Wiring:**
+
+`DDoSProtector` is injected into the gateway via `create_gateway_app()`:
+
+```python
+from yashigani.gateway.ddos import DDoSProtector
+
+protector = DDoSProtector(
+    redis_client=redis,
+    max_connections_per_ip=50,
+    window_seconds=60,
+)
+app = create_gateway_app(config=cfg, ddos_protector=protector, ...)
+```
+
+And into the OpenAI-compatible router via `openai_router.configure()`:
+
+```python
+from yashigani.gateway import openai_router
+
+openai_router.configure(ddos_protector=protector, ...)
+```
+
+**Redis key namespace:** `ddos:{ip}:{window_bucket}`
+
+Keys are kept in a separate namespace from rate-limit keys (`rl:*`) to allow
+independent monitoring and alerting.
+
+**Health and metrics paths are exempt** (`/healthz`, `/readyz`,
+`/internal/metrics`) — they always receive a response regardless of the
+per-IP counter.
+
+### 26.4 WAF with Coraza/OWASP CRS (optional — requires custom Caddy build)
+
+The standard Caddy image does **not** include a WAF module.  Full OWASP
+Core Rule Set (CRS) enforcement requires building a custom Caddy binary with
+the `coraza-caddy` module.
+
+A reference Caddyfile with Coraza directives and annotated CRS configuration
+is provided at `docker/caddy/Caddyfile.waf`.  That file is documentation only
+and is not used by the default deployment.
+
+**Build a WAF-enabled Caddy image:**
+
+```dockerfile
+FROM caddy:2.11-builder AS builder
+RUN xcaddy build \
+      --with github.com/corazawaf/coraza-caddy/v2
+
+FROM caddy:2.11-alpine
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+```
+
+**Add the OWASP CRS rule set:**
+
+```bash
+git clone --depth 1 \
+  https://github.com/coreruleset/coreruleset.git \
+  /etc/caddy/crs
+```
+
+**Enable WAF in the Caddyfile:**
+
+Copy `docker/caddy/Caddyfile.waf` to your deployment and mount it as
+`/etc/caddy/Caddyfile`.  The default engine mode is `DetectionOnly` (log
+violations without blocking).  After baselining false-positive rates — typically
+one to two weeks — change `SecRuleEngine DetectionOnly` to
+`SecRuleEngine On` and reload Caddy.
+
+**Rollout recommendation:**
+
+1. Deploy with `SecRuleEngine DetectionOnly`.
+2. Review `/var/log/caddy/coraza-audit.log` for false positives.
+3. Add site-specific exclusions to `crs/rules/CUSTOM-exclusions.conf`.
+4. Switch to `SecRuleEngine On`.
+5. Monitor Caddy logs for unexpected 403 blocks.
+
+**Tier availability:**
+
+WAF configuration is a deployment-level concern and is not tier-gated within
+Yashigani.  All tiers can run a WAF-enabled Caddy image.
+
+---
+
+## 26. Container Hardening (v2.2)
+
+Yashigani's gateway and backoffice containers are hardened at three layers: seccomp syscall filtering, AppArmor mandatory access control, and read-only root filesystems. These controls apply to the two Yashigani-owned services. Third-party services (Caddy, Redis, Postgres, Ollama, etc.) use the Docker engine defaults.
+
+### 26.1 Seccomp Profile
+
+**File:** `docker/seccomp/yashigani.json`
+
+The profile starts from Docker's built-in allowlist and adds explicit denials for syscalls that are unnecessary for Python/FastAPI/Redis workloads and are known container-escape or kernel-modification vectors:
+
+| Blocked syscall | Threat blocked |
+|---|---|
+| `kexec_load`, `kexec_file_load` | Kernel replacement / boot-time persistence |
+| `reboot` | Host reboot from within container |
+| `swapon`, `swapoff` | Swap manipulation |
+| `mount`, `umount2`, `pivot_root` | Filesystem re-mounting / container escape |
+| `sethostname`, `setdomainname` | Network namespace escape primitives |
+| `init_module`, `delete_module`, `finit_module` | Kernel module loading |
+| `acct` | Process accounting (rarely needed, can leak info) |
+| `settimeofday`, `clock_settime`, `adjtimex` | System clock manipulation |
+| `personality` | Execution domain changes (used in some exploits) |
+| `ptrace` | Process injection / memory read (covers debugger attach) |
+| `userfaultfd` | Kernel exploit primitive (CVE class) |
+| `bpf` | eBPF program loading (container escape vector) |
+| `keyctl`, `add_key`, `request_key` | Kernel keyring (credential theft vector) |
+
+The profile is applied automatically via `docker-compose.yml`. No manual action is required.
+
+### 26.2 AppArmor Profile
+
+**File:** `docker/apparmor/yashigani-gateway`
+
+AppArmor provides mandatory access control at the LSM layer, independent of DAC permissions. The profile enforces:
+
+- **Filesystem:** read-only access to `/etc`, `/usr`, `/lib`, `/app`; read-write access limited to `/tmp`, `/var/log/yashigani`, `/data/audit`, `/data/bootstrap`; read-only access to `/run/secrets`.
+- **Network:** TCP, UDP, and Unix sockets allowed; raw sockets, packet sockets, Bluetooth, and netlink denied (prevents packet capture and network namespace manipulation).
+- **Capabilities:** `sys_admin`, `sys_module`, `sys_rawio`, `sys_ptrace`, `sys_boot`, `net_admin`, `net_raw`, `mac_admin`, `mac_override`, `setpcap` are denied.
+- **ptrace:** denied for all peers (belt-and-suspenders with the seccomp block above).
+- **Mount:** denied (belt-and-suspenders with `read_only: true` in compose).
+
+**AppArmor is opt-in.** It requires the AppArmor kernel module to be active on the host, which is standard on Ubuntu/Debian but not on RHEL/Fedora (which use SELinux). It is commented out in `docker-compose.yml` by default.
+
+To enable AppArmor enforcement:
+
+**Step 1.** Verify AppArmor is active on the host:
+
+```bash
+cat /sys/module/apparmor/parameters/enabled
+# Expected output: Y
+```
+
+**Step 2.** Load the profile:
+
+```bash
+sudo apparmor_parser -r docker/apparmor/yashigani-gateway
+```
+
+**Step 3.** Verify it loaded:
+
+```bash
+sudo apparmor_status | grep yashigani-gateway
+# Expected: yashigani-gateway (enforce)
+```
+
+**Step 4.** Uncomment in `docker/docker-compose.yml` under both `gateway` and `backoffice`:
+
+```yaml
+security_opt:
+  - no-new-privileges:true
+  - seccomp=../docker/seccomp/yashigani.json
+  - apparmor=yashigani-gateway   # uncomment this line
+```
+
+**Step 5.** Restart the affected services:
+
+```bash
+docker compose up -d gateway backoffice
+```
+
+### 26.3 Read-Only Root Filesystem
+
+Both gateway and backoffice run with `read_only: true`. The container root filesystem is mounted read-only by the Docker engine. Writes are only permitted to explicitly declared tmpfs mounts:
+
+| tmpfs mount | Size | Purpose |
+|---|---|---|
+| `/tmp` | 100 MB | Python temp files, upload staging |
+| `/var/log/yashigani` | 50 MB | In-container log buffer (shipped to Loki by Promtail) |
+
+Persistent data (audit logs, bootstrap state) is written through named volume mounts (`audit_data`, `bootstrap_data`) which are not affected by `read_only`.
+
+**What this blocks:** An attacker who achieves code execution inside the container cannot write to the container filesystem, cannot install tools (`curl`, `wget`, binaries), and cannot modify application code at runtime. Any write attempt outside the declared tmpfs paths returns `EROFS` (read-only filesystem).
+
+### 26.4 Summary: Hardening Layers Applied
+
+| Control | gateway | backoffice | Applied by |
+|---|---|---|---|
+| `no-new-privileges` | Yes | Yes | `security_opt` in compose |
+| Seccomp profile | Yes | Yes | `docker/seccomp/yashigani.json` |
+| AppArmor profile | Optional | Optional | Host setup + compose opt-in |
+| Read-only root FS | Yes | Yes | `read_only: true` in compose |
+| tmpfs `/tmp` (100 MB) | Yes | Yes | `tmpfs` in compose |
+| tmpfs `/var/log/yashigani` (50 MB) | Yes | Yes | `tmpfs` in compose |
+
+---
+
+*Yashigani v2.2 — Installation and Configuration Guide — 2026-04-04*

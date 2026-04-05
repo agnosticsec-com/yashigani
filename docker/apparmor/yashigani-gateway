@@ -1,3 +1,18 @@
+# Yashigani AppArmor profile — gateway and backoffice services
+#
+# To load this profile on the host before starting the stack:
+#   sudo apparmor_parser -r docker/apparmor/yashigani-gateway
+#
+# Verify it loaded:
+#   sudo apparmor_status | grep yashigani-gateway
+#
+# Then enable in docker-compose.yml by uncommenting:
+#   security_opt: ["apparmor=yashigani-gateway"]
+#
+# Note: AppArmor must be enabled on the host kernel. Check:
+#   cat /sys/module/apparmor/parameters/enabled   # should print Y
+# AppArmor is enabled by default on Ubuntu/Debian. RHEL/Fedora use SELinux instead.
+
 #include <tunables/global>
 
 profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
@@ -16,16 +31,20 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   /lib64/ r,
   /lib64/** r,
 
-  # Application code and assets
+  # Application code and assets (read-only)
   /app/ r,
   /app/** r,
   /app/models/** r,
 
-  # Writable directories (tmpfs mounts)
+  # Writable data directories (mounted as named volumes or tmpfs)
   /tmp/ rw,
   /tmp/** rw,
+  /var/log/yashigani/ rw,
+  /var/log/yashigani/** rw,
   /data/audit/ rw,
   /data/audit/** rw,
+  /data/bootstrap/ rw,
+  /data/bootstrap/** rw,
 
   # Python runtime
   /usr/local/lib/python*/** r,
@@ -36,7 +55,7 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   /run/secrets/ r,
   /run/secrets/** r,
 
-  # Proc — allow reads needed for Python runtime
+  # Proc — reads required by Python runtime and health checks
   @{PROC}/sys/kernel/ngroups_max r,
   @{PROC}/sys/kernel/cap_last_cap r,
   @{PROC}/@{pid}/status r,
@@ -45,7 +64,7 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   @{PROC}/@{pid}/task/ r,
   @{PROC}/sys/net/core/somaxconn r,
 
-  # Deny dangerous operations
+  # Deny dangerous kernel/hardware access
   deny @{PROC}/sys/kernel/modules_disabled w,
   deny /proc/sysrq-trigger w,
   deny /sys/firmware/** w,
@@ -54,7 +73,7 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   deny /dev/kmem r,
   deny /dev/port r,
 
-  # Network — TCP/UDP only, no raw sockets
+  # Network — TCP/UDP and Unix sockets only; no raw packet capture
   network tcp,
   network udp,
   network unix,
@@ -63,7 +82,7 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   deny network bluetooth,
   deny network netlink,
 
-  # Capabilities — deny dangerous ones
+  # Capabilities — deny privilege escalation and admin capabilities
   deny capability sys_admin,
   deny capability sys_module,
   deny capability sys_rawio,
@@ -75,7 +94,10 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   deny capability net_raw,
   deny capability setpcap,
 
-  # ptrace — deny all
+  # ptrace — deny all (prevents container escape via process injection)
   deny ptrace,
   deny ptrace peer=**,
+
+  # Mount — deny (enforced by read_only: true in compose; belt-and-suspenders)
+  deny mount,
 }

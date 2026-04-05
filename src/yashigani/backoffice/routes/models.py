@@ -20,19 +20,15 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.models.alias_store import ModelAlias
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-# ── In-memory stores (backed by Redis when available) ──────────────────────
-
-_aliases: dict[str, dict] = {
-    "fast": {"alias": "fast", "provider": "ollama", "model": "qwen2.5:3b", "force_local": True},
-    "smart": {"alias": "smart", "provider": "anthropic", "model": "claude-sonnet-4-6", "force_local": False},
-    "secure": {"alias": "secure", "provider": "ollama", "model": "qwen2.5:3b", "force_local": True},
-}
+# ── In-memory fallback for allocations ────────────────────────────────────
+# Allocations are not yet Redis-backed; that is a separate future task.
 
 _allocations: list[dict] = []
 _alloc_counter = 0
@@ -45,6 +41,7 @@ class AliasRequest(BaseModel):
     provider: str = Field(min_length=1, max_length=64)
     model: str = Field(min_length=1, max_length=128)
     force_local: bool = False
+    sensitivity_ceiling: Optional[str] = None
 
 
 class AllocationRequest(BaseModel):
@@ -53,31 +50,55 @@ class AllocationRequest(BaseModel):
     target_id: str = Field(min_length=1)
 
 
+# ── Internal helper ───────────────────────────────────────────────────────
+
+def _alias_store():
+    """
+    Return the ModelAliasStore from backoffice state.
+
+    Raises HTTP 503 if the store was not initialised (Redis unavailable at
+    boot). This surfaces a clear error rather than silently returning stale
+    in-memory data.
+    """
+    store = backoffice_state.model_alias_store
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "alias_store_unavailable", "detail": "Redis not connected"},
+        )
+    return store
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 @router.get("")
 async def list_aliases(session: AdminSession):
-    return {"aliases": list(_aliases.values())}
+    aliases = _alias_store().list_all()
+    return {"aliases": [v.to_dict() for v in aliases.values()]}
 
 
 @router.post("", status_code=201)
 async def create_alias(body: AliasRequest, session: AdminSession):
-    if body.alias in _aliases:
+    store = _alias_store()
+    if store.get(body.alias) is not None:
         raise HTTPException(status_code=409, detail={"error": "alias_exists"})
-    _aliases[body.alias] = {
-        "alias": body.alias,
-        "provider": body.provider,
-        "model": body.model,
-        "force_local": body.force_local,
-    }
+    config = ModelAlias(
+        alias=body.alias,
+        provider=body.provider,
+        model=body.model,
+        force_local=body.force_local,
+        sensitivity_ceiling=body.sensitivity_ceiling,
+    )
+    store.set(body.alias, config)
     return {"status": "ok", "alias": body.alias}
 
 
 @router.delete("/{alias}")
 async def delete_alias(alias: str, session: AdminSession):
-    if alias not in _aliases:
+    store = _alias_store()
+    deleted = store.delete(alias)
+    if not deleted:
         raise HTTPException(status_code=404, detail={"error": "alias_not_found"})
-    del _aliases[alias]
     return {"status": "ok"}
 
 
@@ -111,7 +132,8 @@ async def list_allocations(session: AdminSession):
 @router.post("/allocations", status_code=201)
 async def create_allocation(body: AllocationRequest, session: AdminSession):
     global _alloc_counter
-    if body.model_alias not in _aliases:
+    store = _alias_store()
+    if store.get(body.model_alias) is None:
         raise HTTPException(status_code=404, detail={"error": "alias_not_found"})
     _alloc_counter += 1
     alloc = {

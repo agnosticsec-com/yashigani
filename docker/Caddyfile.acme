@@ -12,6 +12,35 @@
 # Cipher suites: Caddy defaults (ECDHE + AES-GCM / ChaCha20-Poly1305 only).
 # HSTS: max-age 1 year, includeSubDomains.
 # OCSP stapling: enabled automatically by Caddy.
+#
+# ── DDoS / Connection Protection ────────────────────────────────────────────
+# These protections work with the standard Caddy image (no extra modules needed).
+#
+# Connection timeouts:
+#   Idle connections closed at 120 s; read timeouts prevent slow-body attacks.
+#   Configured in the global options block below.
+#
+# Request body size:
+#   request_body max_size applied globally to every handle block.
+#   The application layer enforces an additional 4 MB limit (GatewayConfig).
+#
+# Full WAF (Coraza/OWASP CRS):
+#   Requires a custom Caddy build with the coraza-caddy module.
+#   See docker/caddy/Caddyfile.waf for instructions and a reference config.
+#   Standard Caddy image does NOT include WAF — this is documented in
+#   docs/yashigani_install_config.md Section 26.
+
+{
+    # ── Connection timeouts (DoS/slow-loris mitigation) ─────────────────────
+    servers {
+        timeouts {
+            read_body   10s
+            read_header 5s
+            write       30s
+            idle        120s
+        }
+    }
+}
 
 {env.YASHIGANI_TLS_DOMAIN} {
     # ── TLS policy ──────────────────────────────────────────────────────────
@@ -30,6 +59,13 @@
         X-Frame-Options           "DENY"
         Referrer-Policy           "no-referrer"
         -Server
+    }
+
+    # ── Request body size limit (OWASP ASVS 4.1.7) ──────────────────────────
+    # Hard ceiling at Caddy layer — prevents large-body DoS before the request
+    # reaches the application.  Application layer enforces a tighter 4 MB limit.
+    request_body {
+        max_size 10MB
     }
 
     # ── Gateway health check — /healthz ──────────────────────────────────

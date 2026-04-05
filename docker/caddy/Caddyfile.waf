@@ -1,0 +1,227 @@
+# Yashigani — WAF-enabled Caddyfile (Coraza + OWASP CRS)
+#
+# ════════════════════════════════════════════════════════════════════════════
+# DOCUMENTATION FILE — NOT USED BY DEFAULT
+#
+# This file requires a custom Caddy build that includes the coraza-caddy
+# module.  The standard Caddy image (caddy:2.x-alpine) does NOT ship with
+# this module and will refuse to start if this Caddyfile is loaded.
+#
+# Use the standard Caddyfiles in docker/ for out-of-the-box deployments.
+# Return here when you need full OWASP CRS WAF enforcement.
+# ════════════════════════════════════════════════════════════════════════════
+#
+# ── How to build a WAF-enabled Caddy image ──────────────────────────────────
+#
+#   Prerequisites:
+#     - Go 1.22+
+#     - xcaddy:  go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+#
+#   Build:
+#     xcaddy build \
+#       --with github.com/corazawaf/coraza-caddy/v2
+#
+#   Or build as a Docker image (recommended for reproducibility):
+#
+#     FROM caddy:2.11-builder AS builder
+#     RUN xcaddy build \
+#           --with github.com/corazawaf/coraza-caddy/v2
+#
+#     FROM caddy:2.11-alpine
+#     COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+#
+#   Then mount this file as /etc/caddy/Caddyfile in the container.
+#
+# ── OWASP CRS rule sets ──────────────────────────────────────────────────────
+#
+#   Download the OWASP Core Rule Set:
+#     git clone https://github.com/coreruleset/coreruleset.git /etc/caddy/crs
+#
+#   Or add to your Docker image:
+#     RUN apk add git && \
+#         git clone --depth 1 https://github.com/coreruleset/coreruleset.git \
+#                   /etc/caddy/crs
+#
+# ── Tuning recommendations ────────────────────────────────────────────────────
+#
+#   Start in DetectionOnly mode (no blocking) to baseline false-positive rates.
+#   Enable blocking (SecRuleEngine On) only after reviewing logs for 1–2 weeks.
+#
+#   Rule exclusions belong in /etc/caddy/crs/rules/CUSTOM-exclusions.conf
+#   Do NOT edit core CRS files — they are overwritten on upgrades.
+#
+# ════════════════════════════════════════════════════════════════════════════
+
+{
+    # ── Connection timeouts (DoS/slow-loris mitigation) ─────────────────────
+    servers {
+        timeouts {
+            read_body   10s
+            read_header 5s
+            write       30s
+            idle        120s
+        }
+    }
+}
+
+{env.YASHIGANI_TLS_DOMAIN} {
+    # ── TLS policy ──────────────────────────────────────────────────────────
+    tls {
+        protocols tls1.2 tls1.3
+        # Hybrid post-quantum key exchange (HNDL protection)
+        curves x25519mlkem768 x25519
+    }
+
+    # ── Security headers ────────────────────────────────────────────────────
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "no-referrer"
+        -Server
+    }
+
+    # ── Request body size limit ──────────────────────────────────────────────
+    request_body {
+        max_size 10MB
+    }
+
+    # ── Coraza WAF — OWASP Core Rule Set ────────────────────────────────────
+    #
+    # coraza_waf is provided by github.com/corazawaf/coraza-caddy/v2.
+    # Remove this block entirely if you are using the standard Caddy image.
+    #
+    coraza_waf {
+        # ── Engine mode ──────────────────────────────────────────────────────
+        # DetectionOnly  — log violations; never block (safe for initial rollout)
+        # On             — log and block (production enforcement)
+        # Off            — disable WAF entirely (emergency escape hatch)
+        #
+        # CHANGEME: switch to "On" after baselining false positives.
+        directives `
+            SecRuleEngine DetectionOnly
+
+            # ── Logging ───────────────────────────────────────────────────────
+            SecAuditEngine RelevantOnly
+            SecAuditLog /var/log/caddy/coraza-audit.log
+            SecAuditLogFormat JSON
+
+            # ── Request limits (belt-and-suspenders with Caddy request_body) ──
+            SecRequestBodyLimit 10485760
+            SecRequestBodyNoFilesLimit 131072
+
+            # ── OWASP CRS bootstrap ───────────────────────────────────────────
+            # crs-setup.conf must be copied from the CRS repo and customised
+            # before enabling blocking mode.
+            Include /etc/caddy/crs/crs-setup.conf
+
+            # Core rule set
+            Include /etc/caddy/crs/rules/*.conf
+
+            # Local exclusions (add site-specific suppressions here)
+            # Include /etc/caddy/crs/rules/CUSTOM-exclusions.conf
+        `
+    }
+
+    # ── Gateway health check — /healthz ─────────────────────────────────────
+    handle /healthz {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Agent routing — /agents/* ────────────────────────────────────────────
+    handle /agents/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Gateway API — /v1/* (OpenAI-compatible) ──────────────────────────────
+    handle /v1/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /mcp/* {
+        reverse_proxy gateway:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Backoffice routes ────────────────────────────────────────────────────
+    handle /admin/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /auth/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /dashboard/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /scim/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    handle /login {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Prometheus federation — admin-authenticated ──────────────────────────
+    handle /metrics-federate* {
+        basic_auth {
+            {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
+        }
+        reverse_proxy prometheus:9090
+    }
+
+    # ── Open WebUI — catch-all ───────────────────────────────────────────────
+    handle {
+        request_header -X-Forwarded-User
+        request_header -X-Forwarded-Name
+        request_header -X-Forwarded-Groups
+
+        forward_auth backoffice:8443 {
+            uri /auth/verify
+            copy_headers X-Forwarded-User X-Forwarded-Name
+
+            @unauthorized status 401
+            handle_response @unauthorized {
+                redir * /login?next={http.request.uri} 302
+            }
+        }
+
+        reverse_proxy open-webui:8080 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+}
+
+# Redirect HTTP → HTTPS
+http://{env.YASHIGANI_TLS_DOMAIN} {
+    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+}
