@@ -71,7 +71,7 @@ jobs:
       - name: Run Bandit
         run: bandit -r src/yashigani/ -c pyproject.toml -f json -o bandit-report.json -ll
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bandit-report
@@ -91,7 +91,7 @@ jobs:
       - name: Run pip-audit
         run: pip-audit --format json --output pip-audit-report.json --fail-on-cvss 7
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: pip-audit-report
@@ -132,7 +132,7 @@ jobs:
           path: .
           format: JSON HTML
           args: --failOnCVSS 7 --enableRetired
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: owasp-dep-check-report
