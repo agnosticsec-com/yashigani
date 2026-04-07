@@ -321,6 +321,18 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 agent_upstream = agent.get("upstream_url")
                 agent_protocol = agent.get("protocol", "openai")
                 break
+        if not agent_upstream:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "message": f"Agent {selected_model} not found or not active",
+                        "type": "agent_error",
+                        "agent": selected_model,
+                        "code": "agent_not_found",
+                    }
+                },
+            )
 
     if _state.optimization_engine and _state.sensitivity_classifier and _state.complexity_scorer and not is_agent_call:
         decision = _state.optimization_engine.route(
@@ -556,10 +568,21 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     backend_body = agent_resp
                     route_reason = f"agent:{selected_model[1:]}:acp"
                 except Exception as exc:
-                    logger.warning("ACP agent %s failed: %s, falling back to Ollama", selected_model, exc)
-                    agent_upstream = None
+                    logger.error("ACP agent %s failed: %s", selected_model, exc)
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": {
+                                "message": f"Agent {selected_model} (ACP) failed: {exc}",
+                                "type": "agent_error",
+                                "agent": selected_model,
+                                "code": "agent_unreachable",
+                            }
+                        },
+                        headers={"X-Yashigani-Agent-Error": "true"},
+                    )
             else:
-                # OpenAI-compatible /v1/chat/completions (LangGraph, OpenClaw, etc.)
+                # OpenAI-compatible /v1/chat/completions
                 agent_body = {
                     "model": _state.default_model,
                     "messages": [{"role": m.role, "content": m.content} for m in body.messages],
@@ -568,15 +591,42 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 if body.temperature is not None:
                     agent_body["temperature"] = body.temperature
 
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(
-                        f"{agent_upstream}/v1/chat/completions",
-                        json=agent_body,
+                try:
+                    async with httpx.AsyncClient(timeout=120.0) as client:
+                        resp = await client.post(
+                            f"{agent_upstream}/v1/chat/completions",
+                            json=agent_body,
+                        )
+                except Exception as exc:
+                    logger.error("Agent %s unreachable: %s", selected_model, exc)
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": {
+                                "message": f"Agent {selected_model} unreachable: {exc}",
+                                "type": "agent_error",
+                                "agent": selected_model,
+                                "code": "agent_unreachable",
+                            }
+                        },
+                        headers={"X-Yashigani-Agent-Error": "true"},
                     )
 
                 if resp.status_code != 200:
-                    logger.warning("Agent %s returned %d, falling back to Ollama", selected_model, resp.status_code)
-                    agent_upstream = None
+                    logger.error("Agent %s returned HTTP %d: %s", selected_model, resp.status_code, resp.text[:200])
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": {
+                                "message": f"Agent {selected_model} returned HTTP {resp.status_code}",
+                                "type": "agent_error",
+                                "agent": selected_model,
+                                "code": "agent_upstream_error",
+                                "upstream_status": resp.status_code,
+                            }
+                        },
+                        headers={"X-Yashigani-Agent-Error": "true"},
+                    )
                 else:
                     agent_resp = resp.json()
                     choices = agent_resp.get("choices", [])
@@ -584,7 +634,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     backend_body = agent_resp
                     route_reason = f"agent:{selected_model[1:]}"
 
-        if not is_agent_call or agent_upstream is None:
+        if not is_agent_call:
             # Standard Ollama routing (buffered)
             ollama_body = {
                 "model": selected_model if not is_agent_call else _state.default_model,
