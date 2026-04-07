@@ -151,7 +151,8 @@ services:
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,fail_closed}
       YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
-      OWUI_DB_PATH: /data/openwebui/webui.db
+      OWUI_API_URL: http://open-webui:8080
+      OWUI_SECRET_KEY: ${OWUI_SECRET_KEY:-yashigani-owui-secret}
       YASHIGANI_TLS_DOMAIN: ${YASHIGANI_TLS_DOMAIN:-localhost}
       # SSO 2FA — require Yashigani TOTP after IdP authentication
       YASHIGANI_SSO_2FA_REQUIRED: ${YASHIGANI_SSO_2FA_REQUIRED:-false}
@@ -178,7 +179,6 @@ services:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets
-      - openwebui_data:/data/openwebui
     read_only: true
     tmpfs:
       - /tmp:size=100M
