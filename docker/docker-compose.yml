@@ -763,28 +763,8 @@ services:
     ports:
       - "18789:18789"
     environment:
-      # Gateway binding — allow access from Docker network
-      OPENCLAW_GATEWAY_BIND: all
+      OPENCLAW_CONFIG_PATH: /etc/openclaw/openclaw.json
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-      # Route ALL LLM calls through Yashigani gateway as OpenAI-compatible provider
-      OPENCLAW_CONFIG_JSON: |
-        {
-          "gateway": {"port": 18789, "bind": "all"},
-          "models": {
-            "providers": {
-              "yashigani": {
-                "baseUrl": "http://gateway:8080/v1",
-                "apiKey": "yashigani",
-                "api": "openai-completions",
-                "models": [
-                  {"id": "qwen2.5:3b", "name": "Qwen 2.5 3B (via Yashigani)", "contextWindow": 32768, "maxTokens": 4096}
-                ]
-              }
-            }
-          },
-          "agents": {"defaults": {"models": ["yashigani/qwen2.5:3b"]}}
-        }
-      # Server mode: disable hardware nodes unsuitable for containers
       OPENCLAW_SERVER_MODE: "true"
       OPENCLAW_DISABLE_AUDIO: "true"
       OPENCLAW_DISABLE_CAMERA: "true"
@@ -793,6 +773,7 @@ services:
     volumes:
       - openclaw_data:/home/node/.openclaw
       - ./secrets:/run/secrets:ro
+      - ./openclaw/openclaw.json:/etc/openclaw/openclaw.json:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:18789/healthz 2>/dev/null || wget -qO- http://localhost:18789/healthz 2>/dev/null || exit 1"]
       interval: 15s

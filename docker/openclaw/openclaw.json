@@ -1,0 +1,30 @@
+{
+  "gateway": {
+    "port": 18789,
+    "bind": "custom",
+    "customBindHost": "0.0.0.0"
+  },
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "yashigani": {
+        "baseUrl": "http://gateway:8080/v1",
+        "apiKey": "yashigani-internal",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen2.5:3b",
+            "name": "Qwen 2.5 3B (via Yashigani)",
+            "contextWindow": 32768,
+            "maxTokens": 4096
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "yashigani/qwen2.5:3b"
+    }
+  }
+}

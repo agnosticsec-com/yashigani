@@ -40,6 +40,7 @@ router = APIRouter()
 class AgentRegisterRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     upstream_url: str = Field(min_length=1, max_length=512)
+    protocol: str = Field(default="openai", description="Agent protocol: openai or acp")
     groups: list[str] = Field(default_factory=list)
     allowed_caller_groups: list[str] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
@@ -286,6 +287,7 @@ async def register_agent(
         allowed_caller_groups=body.allowed_caller_groups,
         allowed_paths=body.allowed_paths,
         allowed_cidrs=body.allowed_cidrs,
+        protocol=body.protocol,
     )
 
     agent = registry.get(agent_id)
