@@ -65,6 +65,10 @@ class FastTextBackend:
             logger.error("FastText model load error: %s", exc)
 
     @property
+    def model_path(self) -> str:
+        return self._model_path
+
+    @property
     def available(self) -> bool:
         return self._available
 
@@ -79,7 +83,19 @@ class FastTextBackend:
             if not clean_text:
                 return FastTextResult(label="CLEAN", confidence=1.0, latency_ms=0.0, needs_llm_pass=False)
 
-            labels, probabilities = self._model.predict(clean_text, k=2)
+            import numpy as np
+            # Workaround for numpy >= 2.0 + fasttext compatibility:
+            # fasttext internally calls np.array(x, copy=False) which numpy 2.0
+            # changed to raise ValueError. Temporarily patch np.array if needed.
+            _orig_array = np.array
+            def _compat_array(*args, **kwargs):
+                kwargs.pop("copy", None)
+                return _orig_array(*args, **kwargs)
+            np.array = _compat_array
+            try:
+                labels, probabilities = self._model.predict(clean_text, k=2)
+            finally:
+                np.array = _orig_array
             latency_ms = (time.monotonic() - start) * 1000
             primary_label_raw = labels[0].replace("__label__", "").upper()
             confidence = float(probabilities[0])
