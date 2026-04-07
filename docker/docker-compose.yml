@@ -681,7 +681,7 @@ services:
   # Requires own Postgres DB + Redis. Uses shared Postgres instance (separate DB)
   # and shared Redis (DB 5). No LangSmith API key needed for local/demo mode.
   langgraph:
-    image: docker.io/langchain/langgraph-api:0.7.91-py3.12-bookworm
+    image: docker.io/langchain/langgraph-api:3.12
     restart: unless-stopped
     environment:
       # LangGraph requires its own Postgres database and Redis for task queue
