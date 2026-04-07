@@ -48,7 +48,7 @@ _BUNDLES: list[dict] = [
         "upstream_url": "https://github.com/langchain-ai/langgraph",
         "license": "Apache-2.0",
         "stack": "Python",
-        "image": "langchain/langgraph-api:0.7.91-py3.12-bookworm",
+        "image": "langchain/langgraph-api:3.12",
         "integration": "MCP → Yashigani Gateway → tools",
         "compose_profile": "langgraph",
         "helm_key": "agentBundles.langgraph.enabled",

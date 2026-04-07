@@ -549,6 +549,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     agent_resp = await acp_chat(
                         base_url=agent_upstream,
                         messages=[{"role": m.role, "content": m.content} for m in body.messages],
+                        timeout=300.0,  # ACP agents have double-hop latency (agent → gateway → LLM)
                     )
                     choices = agent_resp.get("choices", [])
                     assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
