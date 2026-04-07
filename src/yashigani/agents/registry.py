@@ -56,6 +56,7 @@ class AgentRegistry:
         allowed_caller_groups: list,
         allowed_paths: list,
         allowed_cidrs: list | None = None,
+        protocol: str = "openai",
     ) -> tuple[str, str]:
         """
         Register a new agent.
@@ -80,6 +81,7 @@ class AgentRegistry:
         self._r.hset(reg_key, mapping={
             b"name": name.encode("utf-8"),
             b"upstream_url": upstream_url.encode("utf-8"),
+            b"protocol": protocol.encode("utf-8"),
             b"status": b"active",
             b"created_at": now.encode("utf-8"),
             b"last_seen_at": b"",
@@ -241,6 +243,7 @@ class AgentRegistry:
             "agent_id": agent_id,
             "name": _b(b"name"),
             "upstream_url": _b(b"upstream_url"),
+            "protocol": _b(b"protocol") or "openai",
             "status": _b(b"status"),
             "created_at": _b(b"created_at"),
             "last_seen_at": _b(b"last_seen_at"),

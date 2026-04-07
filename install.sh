@@ -1783,13 +1783,13 @@ register_agent_bundles() {
       continue
     fi
     case "$_profile" in
-      langgraph) local _name="LangGraph" _url="http://langgraph:8000" ;;
-      goose)     local _name="Goose"     _url="http://goose:3284" ;;
-      openclaw)  local _name="OpenClaw"  _url="http://openclaw:18789" ;;
+      langgraph) local _name="LangGraph" _url="http://langgraph:8000" _proto="openai" ;;
+      goose)     local _name="Goose"     _url="http://goose:3284"    _proto="acp" ;;
+      openclaw)  local _name="OpenClaw"  _url="http://openclaw:18789" _proto="openai" ;;
       *) continue ;;
     esac
     $first || agents_json+=','
-    agents_json+="{\"profile\":\"${_profile}\",\"name\":\"${_name}\",\"url\":\"${_url}\"}"
+    agents_json+="{\"profile\":\"${_profile}\",\"name\":\"${_name}\",\"url\":\"${_url}\",\"protocol\":\"${_proto}\"}"
     first=false
   done
   agents_json+=']'
@@ -1848,7 +1848,7 @@ if not session:
 agents = json.loads(os.environ.get("AGENTS_JSON", "[]"))
 results = []
 for agent in agents:
-    reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"]}).encode()
+    reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"], "protocol": agent.get("protocol", "openai")}).encode()
     req = urllib.request.Request("http://localhost:8443/admin/agents", data=reg_data,
                                  headers={"Content-Type": "application/json",
                                            "Cookie": f"yashigani_admin_session={session}"})

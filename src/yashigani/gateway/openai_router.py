@@ -313,11 +313,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Agent routing: if model starts with @, forward to the agent's upstream
     is_agent_call = selected_model.startswith("@")
     agent_upstream = None
+    agent_protocol = "openai"
     if is_agent_call and _state.agent_registry:
         agent_name = selected_model[1:]  # strip @
         for agent in _state.agent_registry.list_all():
             if agent.get("name") == agent_name and agent.get("status") == "active":
                 agent_upstream = agent.get("upstream_url")
+                agent_protocol = agent.get("protocol", "openai")
                 break
 
     if _state.optimization_engine and _state.sensitivity_classifier and _state.complexity_scorer and not is_agent_call:
@@ -540,31 +542,46 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
         # ── 7b. Buffered path (agent calls + stream=False + streaming disabled) ──
         if is_agent_call and agent_upstream:
-            # Route to agent's upstream URL (OpenAI-compatible /v1/chat/completions)
-            agent_body = {
-                "model": _state.default_model,
-                "messages": [{"role": m.role, "content": m.content} for m in body.messages],
-                "stream": False,
-            }
-            if body.temperature is not None:
-                agent_body["temperature"] = body.temperature
-
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(
-                    f"{agent_upstream}/v1/chat/completions",
-                    json=agent_body,
-                )
-
-            if resp.status_code != 200:
-                # Fall back to direct Ollama if agent fails
-                logger.warning("Agent %s returned %d, falling back to Ollama", selected_model, resp.status_code)
-                agent_upstream = None  # trigger Ollama fallback below
+            if agent_protocol == "acp":
+                # ACP protocol (Goose-style JSON-RPC over HTTP)
+                from yashigani.gateway.acp_client import acp_chat
+                try:
+                    agent_resp = await acp_chat(
+                        base_url=agent_upstream,
+                        messages=[{"role": m.role, "content": m.content} for m in body.messages],
+                    )
+                    choices = agent_resp.get("choices", [])
+                    assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
+                    backend_body = agent_resp
+                    route_reason = f"agent:{selected_model[1:]}:acp"
+                except Exception as exc:
+                    logger.warning("ACP agent %s failed: %s, falling back to Ollama", selected_model, exc)
+                    agent_upstream = None
             else:
-                agent_resp = resp.json()
-                choices = agent_resp.get("choices", [])
-                assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
-                backend_body = agent_resp
-                route_reason = f"agent:{selected_model[1:]}"
+                # OpenAI-compatible /v1/chat/completions (LangGraph, OpenClaw, etc.)
+                agent_body = {
+                    "model": _state.default_model,
+                    "messages": [{"role": m.role, "content": m.content} for m in body.messages],
+                    "stream": False,
+                }
+                if body.temperature is not None:
+                    agent_body["temperature"] = body.temperature
+
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(
+                        f"{agent_upstream}/v1/chat/completions",
+                        json=agent_body,
+                    )
+
+                if resp.status_code != 200:
+                    logger.warning("Agent %s returned %d, falling back to Ollama", selected_model, resp.status_code)
+                    agent_upstream = None
+                else:
+                    agent_resp = resp.json()
+                    choices = agent_resp.get("choices", [])
+                    assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
+                    backend_body = agent_resp
+                    route_reason = f"agent:{selected_model[1:]}"
 
         if not is_agent_call or agent_upstream is None:
             # Standard Ollama routing (buffered)
