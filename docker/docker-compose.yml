@@ -685,7 +685,7 @@ services:
     restart: unless-stopped
     environment:
       # LangGraph requires its own Postgres database and Redis for task queue
-      DATABASE_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/langgraph
+      DATABASE_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/langgraph
       REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/5
       PORT: "8000"
       # No LangSmith key needed — runs in local/demo mode without observability
@@ -701,7 +701,7 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
-      pgbouncer:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy

@@ -6,9 +6,11 @@ and returns the response as an OpenAI-compatible ChatCompletionResponse.
 
 ACP uses JSON-RPC 2.0 over HTTP with SSE streaming. The session lifecycle:
 1. POST /acp  {method: "initialize", ...}  → capabilities + session ID
-2. POST /acp  {method: "notifications/initialized"}
-3. POST /acp  {method: "session/new"}  → session created
-4. POST /acp  {method: "prompt", params: {messages: [...]}}  → streamed response
+2. POST /acp  {method: "notifications/initialized"}  (fire-and-forget)
+3. POST /acp  {method: "prompt", params: {messages: [...]}}  → streamed response
+
+Goose requires Accept: application/json, text/event-stream on ALL requests
+and returns text/event-stream with SSE `data:` lines for all responses.
 """
 
 import json
@@ -20,6 +22,36 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _ACP_JSONRPC = "2.0"
+
+# Goose rejects requests without this Accept header (HTTP 406)
+_ACP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+}
+
+
+def _parse_sse(text: str) -> list[dict]:
+    """Parse SSE response body into list of JSON objects from data: lines."""
+    results = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            try:
+                results.append(json.loads(line[6:]))
+            except json.JSONDecodeError:
+                continue
+    return results
+
+
+def _parse_response(resp: httpx.Response) -> dict | None:
+    """Parse an ACP response that may be SSE or plain JSON."""
+    ct = resp.headers.get("content-type", "")
+    if "text/event-stream" in ct:
+        chunks = _parse_sse(resp.text)
+        return chunks[0] if chunks else None
+    try:
+        return resp.json()
+    except Exception:
+        return None
 
 
 async def acp_chat(
@@ -40,7 +72,7 @@ async def acp_chat(
     """
     acp_url = f"{base_url}/acp"
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, headers=_ACP_HEADERS) as client:
         # Step 1: Initialize
         init_resp = await client.post(acp_url, json={
             "jsonrpc": _ACP_JSONRPC,
@@ -62,35 +94,21 @@ async def acp_chat(
         # Extract session ID from response header
         session_id = init_resp.headers.get("acp-session-id", "")
         if not session_id:
-            # Try to get from response body
-            try:
-                init_data = init_resp.json()
+            init_data = _parse_response(init_resp)
+            if init_data:
                 session_id = init_data.get("result", {}).get("sessionId", "")
-            except Exception:
-                pass
 
-        headers = {}
+        session_headers = {}
         if session_id:
-            headers["acp-session-id"] = session_id
+            session_headers["acp-session-id"] = session_id
 
-        # Step 2: Notify initialized
+        # Step 2: Notify initialized (fire-and-forget, no response body expected)
         await client.post(acp_url, json={
             "jsonrpc": _ACP_JSONRPC,
             "method": "notifications/initialized",
-        }, headers=headers)
+        }, headers=session_headers)
 
-        # Step 3: Create session
-        session_resp = await client.post(acp_url, json={
-            "jsonrpc": _ACP_JSONRPC,
-            "id": _rid(),
-            "method": "session/new",
-            "params": {},
-        }, headers=headers)
-
-        if session_resp.status_code != 200:
-            logger.warning("ACP session/new returned %d — continuing anyway", session_resp.status_code)
-
-        # Step 4: Send prompt
+        # Step 3: Send prompt
         acp_messages = []
         for m in messages:
             acp_messages.append({
@@ -98,60 +116,42 @@ async def acp_chat(
                 "content": {"type": "text", "text": m.get("content", "")},
             })
 
-        prompt_headers = {**headers, "Accept": "application/json, text/event-stream"}
         prompt_resp = await client.post(acp_url, json={
             "jsonrpc": _ACP_JSONRPC,
             "id": _rid(),
             "method": "prompt",
             "params": {"messages": acp_messages},
-        }, headers=prompt_headers)
+        }, headers=session_headers)
 
         if prompt_resp.status_code != 200:
             return _error_response(f"ACP prompt failed: {prompt_resp.status_code}")
 
-        # Parse response — may be JSON or SSE stream
-        content_type = prompt_resp.headers.get("content-type", "")
+        # Parse all SSE chunks from the prompt response
+        chunks = _parse_sse(prompt_resp.text)
+        text_parts = []
 
-        if "text/event-stream" in content_type:
-            # Collect SSE chunks
-            text_parts = []
-            for line in prompt_resp.text.splitlines():
-                if line.startswith("data: "):
-                    try:
-                        chunk = json.loads(line[6:])
-                        # Extract text from various ACP response shapes
-                        result = chunk.get("result", chunk.get("params", {}))
-                        if isinstance(result, dict):
-                            content = result.get("content", result.get("message", ""))
-                            if isinstance(content, dict):
-                                content = content.get("text", str(content))
-                            if isinstance(content, list):
-                                content = " ".join(
-                                    c.get("text", str(c)) for c in content if isinstance(c, dict)
-                                )
-                            if content:
-                                text_parts.append(str(content))
-                    except json.JSONDecodeError:
-                        continue
-            assistant_text = "\n".join(text_parts) if text_parts else "Agent did not return text content."
-        else:
-            # Plain JSON response
-            try:
-                resp_data = prompt_resp.json()
-                result = resp_data.get("result", {})
-                if isinstance(result, dict):
-                    content = result.get("content", result.get("message", ""))
-                    if isinstance(content, list):
-                        content = " ".join(
-                            c.get("text", str(c)) for c in content if isinstance(c, dict)
-                        )
-                    elif isinstance(content, dict):
-                        content = content.get("text", str(content))
-                    assistant_text = str(content) if content else "Agent returned empty response."
-                else:
-                    assistant_text = str(result)
-            except Exception as exc:
-                assistant_text = f"Failed to parse ACP response: {exc}"
+        for chunk in chunks:
+            result = chunk.get("result", chunk.get("params", {}))
+            if not isinstance(result, dict):
+                continue
+
+            # Extract text from various ACP response content shapes
+            content = result.get("content", result.get("message", ""))
+
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        t = item.get("text", "")
+                        if t:
+                            text_parts.append(str(t))
+            elif isinstance(content, dict):
+                t = content.get("text", "")
+                if t:
+                    text_parts.append(str(t))
+            elif isinstance(content, str) and content:
+                text_parts.append(content)
+
+        assistant_text = "\n".join(text_parts) if text_parts else "Agent did not return text content."
 
     return {
         "id": f"chatcmpl-acp-{uuid.uuid4().hex[:8]}",
