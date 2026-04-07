@@ -95,7 +95,7 @@ OPTIONS
   --license-key    PATH                   Path to .ysg license file
   --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
-  --agent-bundles  BUNDLES               Comma-separated opt-in agents: langgraph,goose,openclaw
+  --agent-bundles  BUNDLES               Comma-separated opt-in agents: langgraph,goose,openclaw (or "all")
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
   --skip-preflight                        Skip preflight checks
@@ -1282,6 +1282,10 @@ select_agent_bundles() {
       for _b in "${_bundles[@]}"; do
         _b="${_b// /}"   # trim spaces
         case "$_b" in
+          all)
+            COMPOSE_PROFILES+=("langgraph" "goose" "openclaw")
+            log_info "Agent bundle enabled (--agent-bundles): langgraph, goose, openclaw"
+            ;;
           langgraph|goose|openclaw)
             COMPOSE_PROFILES+=("$_b")
             log_info "Agent bundle enabled (--agent-bundles): $_b"
@@ -1304,7 +1308,7 @@ select_agent_bundles() {
   printf "    4) All of the above\n"
   printf "    0) None — skip agent bundles\n"
   printf "\n"
-  printf "${C_BOLD}  Enter your choices (comma-separated, e.g. 1,3 or 5 for all) [0]: ${C_RESET}"
+  printf "${C_BOLD}  Enter your choices (comma-separated, e.g. 1,3 or 4 for all) [0]: ${C_RESET}"
 
   local choices
   read -r choices </dev/tty 2>/dev/null || choices="0"
