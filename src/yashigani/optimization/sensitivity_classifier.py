@@ -165,12 +165,11 @@ class SensitivityClassifier:
         """Layer 2: FastText classifier."""
         if not self._fasttext:
             return SensitivityLevel.PUBLIC
-        # FastText returns a label and confidence
-        label, confidence = self._fasttext.predict(text)
-        if confidence > 0.5:
-            level = _label_to_level(label)
+        result = self._fasttext.classify(text)
+        if result.confidence > 0.5:
+            level = _label_to_level(result.label)
             if level != SensitivityLevel.PUBLIC:
-                triggers.append(f"fasttext:{label}({confidence:.2f})")
+                triggers.append(f"fasttext:{result.label}({result.confidence:.2f})")
             return level
         return SensitivityLevel.PUBLIC
 
