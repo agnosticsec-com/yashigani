@@ -462,7 +462,7 @@ services:
       # the installer-generated password file from disk immediately.
       - ./secrets:/run/secrets:ro
       # Init scripts — create additional databases (e.g. langgraph) on first start
-      - ./postgres/init-langgraph-db.sh:/docker-entrypoint-initdb.d/10-langgraph.sh:ro
+      - ./postgres/init-agent-dbs.sh:/docker-entrypoint-initdb.d/10-agent-dbs.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yashigani_app -d yashigani"]
       interval: 10s
@@ -676,24 +676,59 @@ services:
   # Agnostic Security. Direct issues to the upstream project teams.
   # ---------------------------------------------------------------------------
 
-  # LangGraph — Python multi-agent orchestration (Elastic-2.0)
-  # https://github.com/langchain-ai/langgraph
-  # Requires own Postgres DB + Redis. Uses shared Postgres instance (separate DB)
-  # and shared Redis (DB 5). No LangSmith API key needed for local/demo mode.
-  langgraph:
-    image: docker.io/langchain/langgraph-api:3.12
+  # Langflow — Visual multi-agent workflow builder (MIT)
+  # https://github.com/langflow-ai/langflow
+  # Single container, embedded SQLite. OpenAI-compatible API on port 7860.
+  # Users build custom agent workflows visually via the Langflow UI.
+  langflow:
+    image: docker.io/langflowai/langflow:latest
     restart: unless-stopped
     environment:
-      # LangGraph requires its own Postgres database and Redis for task queue
-      DATABASE_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/langgraph
-      REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/5
-      PORT: "8000"
-      # No LangSmith key needed — runs in local/demo mode without observability
-      LANGSMITH_API_KEY: ""
+      # Route all LLM calls through Yashigani gateway (OpenAI-compatible)
+      OPENAI_API_BASE: http://gateway:8080/v1
+      OPENAI_API_KEY: "yashigani-internal"
+      # Default model for new flows
+      LANGFLOW_DEFAULT_MODEL: "qwen2.5:3b"
+      # Disable telemetry
+      DO_NOT_TRACK: "true"
+      LANGFLOW_AUTO_LOGIN: "true"
     volumes:
-      - ./secrets:/run/secrets:ro
+      - langflow_data:/app/langflow
     healthcheck:
-      test: ["CMD-SHELL", "python3 /api/healthcheck.py"]
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:7860/health\", timeout=5)'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    depends_on:
+      gateway:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+    profiles:
+      - langflow
+
+  # Letta (formerly MemGPT) — Stateful agent with persistent memory (Apache 2.0)
+  # https://github.com/letta-ai/letta
+  # Agent with long-term memory, tool use, and conversation persistence.
+  # Exposes REST API on port 8283 with OpenAI-compatible chat endpoint.
+  letta:
+    image: docker.io/letta/letta:latest
+    restart: unless-stopped
+    environment:
+      # Route LLM calls through Yashigani gateway
+      OPENAI_API_BASE: http://gateway:8080/v1
+      OPENAI_API_KEY: "yashigani-internal"
+      LETTA_LLM_MODEL: "qwen2.5:3b"
+      LETTA_EMBEDDING_MODEL: "qwen2.5:3b"
+      # Use shared Postgres for persistence (separate DB)
+      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta
+    volumes:
+      - letta_data:/root/.letta
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8283/v1/health\", timeout=5)'"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -703,14 +738,12 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     networks:
       - internal
     profiles:
-      - langgraph
+      - letta
 
   # Goose — AI developer assistant with ACP server mode (Apache 2.0)
   # https://github.com/block/goose
@@ -831,6 +864,10 @@ volumes:
   openclaw_data:
     driver: local
   goose_data:
+    driver: local
+  langflow_data:
+    driver: local
+  letta_data:
     driver: local
   openwebui_data:
     driver: local
