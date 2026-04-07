@@ -116,6 +116,28 @@ def _bootstrap():
                 logger.info("Bootstrap: TOTP pre-provisioned from installer secret")
         logger.info("Bootstrap: initial admin account created — %s", admin_username)
 
+        # --- Admin 2 (backup — anti-lockout) ---
+        admin2_user_file = os.path.join(secrets_dir, "admin2_username")
+        admin2_pwd_file = os.path.join(secrets_dir, "admin2_password")
+        if os.path.exists(admin2_user_file) and os.path.exists(admin2_pwd_file):
+            admin2_username = open(admin2_user_file).read().strip()
+            admin2_password = open(admin2_pwd_file).read().strip()
+            if admin2_username and admin2_password:
+                _, _ = auth_service.create_admin(
+                    username=admin2_username,
+                    auto_generate=False,
+                    plaintext_password=admin2_password,
+                )
+                totp2_file = os.path.join(secrets_dir, "admin2_totp_secret")
+                if os.path.exists(totp2_file):
+                    totp2_secret = open(totp2_file).read().strip()
+                    record2 = auth_service._accounts.get(admin2_username)
+                    if record2 and totp2_secret:
+                        record2.totp_secret = totp2_secret
+                        record2.force_totp_provision = False
+                        logger.info("Bootstrap: admin2 TOTP pre-provisioned from installer secret")
+                logger.info("Bootstrap: backup admin account created — %s", admin2_username)
+
     # ── Resource monitor ───────────────────────────────────────────────────
     resource_monitor = ResourceMonitor()
 

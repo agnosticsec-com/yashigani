@@ -160,55 +160,83 @@ def _build_quick_start(agent_id: str, token: str) -> dict:
 
 def _push_openwebui_model(agent_name: str, upstream_url: str) -> None:
     """
-    Insert agent as a selectable model in Open WebUI's SQLite DB.
+    Register agent as a selectable model in Open WebUI via its REST API.
     Non-fatal: logs on failure. Idempotent — skips if already exists.
-
-    Requires the openwebui_data volume to be mounted at /data/openwebui
-    in the backoffice container (see docker-compose.yml).
     """
     try:
-        import sqlite3
         import json
-        import time
         import os
+        import urllib.request
+        import urllib.error
 
-        db_path = os.getenv("OWUI_DB_PATH", "/data/openwebui/webui.db")
-        if not os.path.exists(db_path):
-            logger.warning("Open WebUI DB not found at %s — agent model not synced", db_path)
-            return
+        owui_url = os.getenv("OWUI_API_URL", "http://open-webui:8080")
+        owui_secret = os.getenv("OWUI_SECRET_KEY", "yashigani-owui-secret")
+
+        # Generate a JWT for Open WebUI API auth
+        import hashlib
+        import hmac
+        import base64
+        import time as _time
+
+        # Open WebUI uses PyJWT with the WEBUI_SECRET_KEY. We craft a minimal
+        # HS256 JWT with an admin sub claim to authenticate the API call.
+        header = base64.urlsafe_b64encode(json.dumps(
+            {"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
+        payload_data = {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "sub": "admin",
+            "role": "admin",
+            "exp": int(_time.time()) + 300,
+        }
+        payload = base64.urlsafe_b64encode(
+            json.dumps(payload_data).encode()).rstrip(b"=").decode()
+        sig_input = f"{header}.{payload}".encode()
+        sig = base64.urlsafe_b64encode(
+            hmac.new(owui_secret.encode(), sig_input, hashlib.sha256).digest()
+        ).rstrip(b"=").decode()
+        token = f"{header}.{payload}.{sig}"
 
         model_id = "@" + agent_name
-        db = sqlite3.connect(db_path)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
 
-        # Check if exists
-        existing = db.execute("SELECT id FROM model WHERE id = ?", (model_id,)).fetchone()
-        if existing:
+        # Check if model already exists
+        try:
+            req = urllib.request.Request(
+                f"{owui_url}/api/v1/models/{model_id}",
+                headers=headers,
+            )
+            urllib.request.urlopen(req, timeout=5)
             logger.info("Open WebUI: model %s already exists", model_id)
-            db.close()
             return
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                logger.warning("Open WebUI: model check failed (%s)", e.code)
 
-        # Find admin user ID
-        admin_row = db.execute(
-            "SELECT id FROM user WHERE role = 'admin' ORDER BY created_at LIMIT 1"
-        ).fetchone()
-        admin_id = admin_row[0] if admin_row else "00000000-0000-0000-0000-000000000000"
+        # Create model
+        body = json.dumps({
+            "id": model_id,
+            "name": agent_name + " Agent",
+            "base_model_id": os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+            "meta": {
+                "description": f"Yashigani agent: {agent_name} @ {upstream_url}",
+                "profile_image_url": "",
+                "capabilities": {"usage": True},
+            },
+            "params": {},
+            "is_active": True,
+        }).encode()
 
-        now = int(time.time())
-        meta = json.dumps({
-            "description": "Yashigani agent: " + agent_name + " @ " + upstream_url,
-            "profile_image_url": "",
-            "capabilities": {"usage": True},
-        })
-
-        db.execute(
-            "INSERT INTO model (id, user_id, base_model_id, name, meta, params, created_at, updated_at, is_active) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (model_id, admin_id, os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
-             agent_name + " Agent", meta, "{}", now, now, True),
+        req = urllib.request.Request(
+            f"{owui_url}/api/v1/models/create",
+            data=body,
+            headers=headers,
+            method="POST",
         )
-        db.commit()
-        db.close()
-        logger.info("Open WebUI: registered model %s", model_id)
+        urllib.request.urlopen(req, timeout=10)
+        logger.info("Open WebUI: registered model %s via API", model_id)
     except Exception as exc:
         logger.warning("_push_openwebui_model failed: %s", exc)
 
