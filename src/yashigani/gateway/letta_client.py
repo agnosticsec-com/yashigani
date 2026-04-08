@@ -43,7 +43,7 @@ async def _ensure_agent(client: httpx.AsyncClient, base_url: str) -> str:
             {"label": "human", "value": "The user is interacting via the Yashigani AI security gateway."},
             {"label": "persona", "value": "I am a helpful AI assistant with persistent memory. I remember our conversations."},
         ],
-        "model": "openai/qwen2.5:3b",
+        "model": "letta/letta-free",
         "embedding": "letta/letta-free",
     })
 

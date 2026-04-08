@@ -44,9 +44,14 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
     # Step 2: Create or get API key
     resp = await client.get(f"{base_url}/api/v1/api_key/", headers=auth_headers)
     if resp.status_code == 200:
-        keys = resp.json()
-        if keys:
-            _api_key = keys[0].get("api_key", "")
+        keys_data = resp.json()
+        # Response can be a dict with "api_keys" array or a plain list
+        if isinstance(keys_data, dict):
+            key_list = keys_data.get("api_keys", [])
+        else:
+            key_list = keys_data
+        if key_list:
+            _api_key = key_list[0].get("api_key", "")
 
     if not _api_key:
         resp = await client.post(f"{base_url}/api/v1/api_key/", headers=auth_headers)
