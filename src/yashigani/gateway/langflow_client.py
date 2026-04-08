@@ -42,21 +42,10 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
     auth_headers = {"Authorization": f"Bearer {bearer_token}"}
 
     # Step 2: Create or get API key
-    resp = await client.get(f"{base_url}/api/v1/api_key/", headers=auth_headers)
-    if resp.status_code == 200:
-        keys_data = resp.json()
-        # Response can be a dict with "api_keys" array or a plain list
-        if isinstance(keys_data, dict):
-            key_list = keys_data.get("api_keys", [])
-        else:
-            key_list = keys_data
-        if key_list:
-            _api_key = key_list[0].get("api_key", "")
-
-    if not _api_key:
-        resp = await client.post(f"{base_url}/api/v1/api_key/", headers=auth_headers)
-        if resp.status_code in (200, 201):
-            _api_key = resp.json().get("api_key", "")
+    # Always create a fresh API key — existing keys are masked and unusable
+    resp = await client.post(f"{base_url}/api/v1/api_key/", headers=auth_headers)
+    if resp.status_code in (200, 201):
+        _api_key = resp.json().get("api_key", "")
 
     if not _api_key:
         raise RuntimeError("Langflow: could not create API key")
@@ -144,6 +133,23 @@ async def langflow_chat(
             },
             headers={"x-api-key": api_key},
         )
+
+        if resp.status_code == 403:
+            # API key may be stale — reset cache and retry once
+            global _initialized
+            _api_key_cache = None
+            _flow_id_cache = None
+            _initialized = False
+            api_key, flow_id = await _ensure_initialized(client, base_url)
+            resp = await client.post(
+                f"{base_url}/api/v1/run/{flow_id}",
+                json={
+                    "input_value": user_message,
+                    "output_type": "chat",
+                    "input_type": "chat",
+                },
+                headers={"x-api-key": api_key},
+            )
 
         if resp.status_code != 200:
             raise RuntimeError(f"Langflow run failed: {resp.status_code} {resp.text[:200]}")
