@@ -637,23 +637,28 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     )
             else:
                 # OpenAI-compatible /v1/chat/completions
+                # Use the agent's own model name (e.g., "openclaw" for OpenClaw)
+                agent_name_lower = selected_model[1:].lower()
+                agent_model = agent_name_lower if agent_name_lower in ("openclaw",) else _state.default_model
                 agent_body = {
-                    "model": _state.default_model,
+                    "model": agent_model,
                     "messages": agent_messages,
                     "stream": False,
                 }
                 if body.temperature is not None:
                     agent_body["temperature"] = body.temperature
 
-                # Read agent auth token from secrets if available
+                # Read agent auth token from env var or secrets file
                 import os
-                agent_name_lower = selected_model[1:].lower()
-                token_path = f"/run/secrets/{agent_name_lower}_token"
                 agent_headers: dict[str, str] = {"Content-Type": "application/json"}
-                if os.path.exists(token_path):
-                    agent_token = open(token_path).read().strip()
-                    if agent_token:
-                        agent_headers["Authorization"] = f"Bearer {agent_token}"
+                # Check env var first (e.g., OPENCLAW_GATEWAY_TOKEN), then secrets file
+                env_token = os.getenv(f"{agent_name_lower.upper()}_GATEWAY_TOKEN", "")
+                if not env_token:
+                    token_path = f"/run/secrets/{agent_name_lower}_token"
+                    if os.path.exists(token_path):
+                        env_token = open(token_path).read().strip()
+                if env_token:
+                    agent_headers["Authorization"] = f"Bearer {env_token}"
 
                 try:
                     async with httpx.AsyncClient(timeout=120.0) as client:

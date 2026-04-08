@@ -88,6 +88,8 @@ services:
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
+      # Agent auth tokens for upstream calls
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       # v2.2 — PII detection (ON by default for all traffic)
       # Modes: log | redact | block  (default: log)
       YASHIGANI_PII_MODE: ${YASHIGANI_PII_MODE:-log}
