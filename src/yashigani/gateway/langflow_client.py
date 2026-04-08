@@ -68,7 +68,7 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                 break
 
     if not _flow_id:
-        # Find the "Basic Prompting" starter flow to use as template
+        # Find the "Basic Prompting" starter flow and patch it to use OpenAI via gateway
         starter_data = None
         if resp.status_code == 200:
             for flow in flows:
@@ -76,10 +76,34 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                     starter_data = flow.get("data", {})
                     break
 
-        # Create a simple chat flow
+        # Patch the LanguageModel node to use OpenAI provider via Yashigani gateway
+        if starter_data:
+            for node in starter_data.get("nodes", []):
+                node_data = node.get("data", {})
+                if node_data.get("type") == "LanguageModelComponent":
+                    template = node_data.get("node", {}).get("template", {})
+                    # Switch model from Anthropic to OpenAI with our gateway
+                    if "model" in template:
+                        template["model"]["value"] = [{
+                            "name": "qwen2.5:3b",
+                            "provider": "OpenAI",
+                            "category": "OpenAI",
+                            "icon": "OpenAI",
+                            "metadata": {
+                                "api_key_param": "api_key",
+                                "context_length": 32768,
+                                "model_class": "ChatOpenAI",
+                                "model_name_param": "model",
+                                "base_url_param": "openai_api_base",
+                            },
+                        }]
+                    if "api_key" in template:
+                        template["api_key"]["value"] = "yashigani-internal"
+                    break
+
         flow_body = {
             "name": "Yashigani Chat",
-            "description": "Default chat flow for Yashigani gateway",
+            "description": "Default chat flow for Yashigani gateway — uses OpenAI-compat API via gateway",
             "endpoint_name": "yashigani-chat",
         }
         if starter_data:
@@ -92,7 +116,7 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
         )
         if resp.status_code in (200, 201):
             _flow_id = resp.json().get("id", "")
-            logger.info("Langflow: created flow %s", _flow_id)
+            logger.info("Langflow: created flow %s with OpenAI config", _flow_id)
         else:
             raise RuntimeError(f"Langflow flow creation failed: {resp.status_code} {resp.text[:200]}")
 
