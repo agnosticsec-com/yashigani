@@ -2,7 +2,14 @@
   "gateway": {
     "port": 18789,
     "bind": "custom",
-    "customBindHost": "0.0.0.0"
+    "customBindHost": "0.0.0.0",
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
   },
   "models": {
     "mode": "replace",

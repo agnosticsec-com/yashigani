@@ -554,14 +554,16 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
         # ── 7b. Buffered path (agent calls + stream=False + streaming disabled) ──
         if is_agent_call and agent_upstream:
+            agent_messages = [{"role": m.role, "content": m.content} for m in body.messages]
+
             if agent_protocol == "acp":
                 # ACP protocol (Goose-style JSON-RPC over HTTP)
                 from yashigani.gateway.acp_client import acp_chat
                 try:
                     agent_resp = await acp_chat(
                         base_url=agent_upstream,
-                        messages=[{"role": m.role, "content": m.content} for m in body.messages],
-                        timeout=300.0,  # ACP agents have double-hop latency (agent → gateway → LLM)
+                        messages=agent_messages,
+                        timeout=300.0,
                     )
                     choices = agent_resp.get("choices", [])
                     assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
@@ -574,6 +576,58 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                         content={
                             "error": {
                                 "message": f"Agent {selected_model} (ACP) failed: {exc}",
+                                "type": "agent_error",
+                                "agent": selected_model,
+                                "code": "agent_unreachable",
+                            }
+                        },
+                        headers={"X-Yashigani-Agent-Error": "true"},
+                    )
+            elif agent_protocol == "letta":
+                from yashigani.gateway.letta_client import letta_chat
+                try:
+                    agent_resp = await letta_chat(
+                        base_url=agent_upstream,
+                        messages=agent_messages,
+                        timeout=120.0,
+                    )
+                    choices = agent_resp.get("choices", [])
+                    assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
+                    backend_body = agent_resp
+                    route_reason = f"agent:{selected_model[1:]}:letta"
+                except Exception as exc:
+                    logger.error("Letta agent %s failed: %s", selected_model, exc)
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": {
+                                "message": f"Agent {selected_model} (Letta) failed: {exc}",
+                                "type": "agent_error",
+                                "agent": selected_model,
+                                "code": "agent_unreachable",
+                            }
+                        },
+                        headers={"X-Yashigani-Agent-Error": "true"},
+                    )
+            elif agent_protocol == "langflow":
+                from yashigani.gateway.langflow_client import langflow_chat
+                try:
+                    agent_resp = await langflow_chat(
+                        base_url=agent_upstream,
+                        messages=agent_messages,
+                        timeout=120.0,
+                    )
+                    choices = agent_resp.get("choices", [])
+                    assistant_content = choices[0].get("message", {}).get("content", "") if choices else ""
+                    backend_body = agent_resp
+                    route_reason = f"agent:{selected_model[1:]}:langflow"
+                except Exception as exc:
+                    logger.error("Langflow agent %s failed: %s", selected_model, exc)
+                    return JSONResponse(
+                        status_code=502,
+                        content={
+                            "error": {
+                                "message": f"Agent {selected_model} (Langflow) failed: {exc}",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",

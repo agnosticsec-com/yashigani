@@ -1790,8 +1790,8 @@ register_agent_bundles() {
       continue
     fi
     case "$_profile" in
-      langflow)  local _name="Langflow"  _url="http://langflow:7860"   _proto="openai" ;;
-      letta)     local _name="Letta"     _url="http://letta:8283"     _proto="openai" ;;
+      langflow)  local _name="Langflow"  _url="http://langflow:7860"   _proto="langflow" ;;
+      letta)     local _name="Letta"     _url="http://letta:8283"     _proto="letta" ;;
       goose)     local _name="Goose"     _url="http://goose:3284"     _proto="acp" ;;
       openclaw)  local _name="OpenClaw"  _url="http://openclaw:18789" _proto="openai" ;;
       *) continue ;;
