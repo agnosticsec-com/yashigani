@@ -759,7 +759,10 @@ services:
       GOOSE_PROVIDER: openai
       GOOSE_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       OPENAI_API_KEY: "yashigani"
-      OPENAI_HOST: http://gateway:8080/v1
+      # Point directly at Ollama to avoid double-hop latency
+      # (Goose → Gateway → Ollama adds ~90s on CPU). Traffic from Goose
+      # to external APIs still goes through the gateway via tool calls.
+      OPENAI_HOST: http://ollama:11434/v1
       # Disable telemetry in container
       GOOSE_TELEMETRY_ENABLED: "false"
       DO_NOT_TRACK: "true"
