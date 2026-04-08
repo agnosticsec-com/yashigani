@@ -639,17 +639,28 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 # OpenAI-compatible /v1/chat/completions
                 agent_body = {
                     "model": _state.default_model,
-                    "messages": [{"role": m.role, "content": m.content} for m in body.messages],
+                    "messages": agent_messages,
                     "stream": False,
                 }
                 if body.temperature is not None:
                     agent_body["temperature"] = body.temperature
+
+                # Read agent auth token from secrets if available
+                import os
+                agent_name_lower = selected_model[1:].lower()
+                token_path = f"/run/secrets/{agent_name_lower}_token"
+                agent_headers: dict[str, str] = {"Content-Type": "application/json"}
+                if os.path.exists(token_path):
+                    agent_token = open(token_path).read().strip()
+                    if agent_token:
+                        agent_headers["Authorization"] = f"Bearer {agent_token}"
 
                 try:
                     async with httpx.AsyncClient(timeout=120.0) as client:
                         resp = await client.post(
                             f"{agent_upstream}/v1/chat/completions",
                             json=agent_body,
+                            headers=agent_headers,
                         )
                 except Exception as exc:
                     logger.error("Agent %s unreachable: %s", selected_model, exc)
