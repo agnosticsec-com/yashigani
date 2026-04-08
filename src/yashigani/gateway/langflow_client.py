@@ -43,7 +43,11 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
 
     # Step 2: Create or get API key
     # Always create a fresh API key — existing keys are masked and unusable
-    resp = await client.post(f"{base_url}/api/v1/api_key/", headers=auth_headers)
+    resp = await client.post(
+        f"{base_url}/api/v1/api_key/",
+        json={"name": "yashigani-gateway"},
+        headers=auth_headers,
+    )
     if resp.status_code in (200, 201):
         _api_key = resp.json().get("api_key", "")
 
