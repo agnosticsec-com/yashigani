@@ -136,7 +136,7 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         # On 401: redirects to login page.
         forward_auth backoffice:8443 {
             uri /auth/verify
-            copy_headers X-Forwarded-User X-Forwarded-Name
+            copy_headers X-Forwarded-User X-Forwarded-Name X-Forwarded-Email
 
             @unauthorized status 401
             handle_response @unauthorized {
@@ -147,6 +147,10 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         reverse_proxy open-webui:8080 {
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
+            # Explicitly pass the trusted identity headers from forward_auth
+            header_up X-Forwarded-User {http.request.header.X-Forwarded-User}
+            header_up X-Forwarded-Name {http.request.header.X-Forwarded-Name}
+            header_up X-Forwarded-Email {http.request.header.X-Forwarded-Email}
         }
     }
 }

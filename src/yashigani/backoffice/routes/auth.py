@@ -128,8 +128,11 @@ async def verify_session(request: Request):
 
     from starlette.responses import Response as StarletteResponse
     resp = StarletteResponse(status_code=200)
-    resp.headers["X-Forwarded-User"] = username
+    # X-Forwarded-User must be an email for Open WebUI's trusted header auth
+    email = f"{username}@yashigani.local"
+    resp.headers["X-Forwarded-User"] = email
     resp.headers["X-Forwarded-Name"] = username
+    resp.headers["X-Forwarded-Email"] = email
     return resp
 
 
