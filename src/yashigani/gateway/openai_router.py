@@ -131,6 +131,8 @@ class OpenAIRouterState:
         # v2.2 — PII detection
         self.pii_detector = None          # PiiDetector | None
         self.pii_cloud_bypass: bool = False  # True = skip PII for cloud-routed requests
+        # OPA policy enforcement
+        self.opa_url: str = "http://policy:8181"
 
 
 _state = OpenAIRouterState()
@@ -152,6 +154,7 @@ def configure(
     ddos_protector=None,  # v2.2 — DDoSProtector | None
     pii_detector=None,    # v2.2 — PiiDetector | None
     pii_cloud_bypass: bool = False,  # v2.2 — True = skip PII for cloud-routed requests
+    opa_url: str = "http://policy:8181",
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
     _state.identity_registry = identity_registry
@@ -169,6 +172,7 @@ def configure(
     _state.ddos_protector = ddos_protector
     _state.pii_detector = pii_detector
     _state.pii_cloud_bypass = pii_cloud_bypass
+    _state.opa_url = opa_url
 
     # v2.2 — streaming config from environment
     _state.streaming_enabled = (
@@ -355,6 +359,36 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         route_reason = "fallback_local"
         if sensitivity_level in ("CONFIDENTIAL", "RESTRICTED"):
             route_reason = "sensitivity_local"
+
+    # ── 6a. OPA policy check (v2.2 — all /v1 traffic) ─────────────────
+    # Evaluates v1_routing.rego: identity active, model allowed, routing
+    # safety (CONFIDENTIAL never to untrusted cloud), sensitivity ceiling.
+    # Fail-closed: any OPA error → deny.
+    opa_decision = await _opa_v1_check(
+        identity=identity,
+        selected_model=selected_model,
+        selected_provider=selected_provider if not is_agent_call else "agent",
+        sensitivity_level=sensitivity_level,
+        route_reason=route_reason,
+        request_path="/v1/chat/completions",
+    )
+    if not opa_decision.get("allow", False):
+        opa_reason = opa_decision.get("reason", "policy_denied")
+        logger.warning(
+            "OPA DENIED /v1 request: identity=%s model=%s reason=%s",
+            identity_id, selected_model, opa_reason,
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": {
+                    "message": f"Request denied by policy: {opa_reason}",
+                    "type": "policy_denied",
+                    "code": opa_reason,
+                }
+            },
+            headers={"X-Yashigani-OPA-Reason": opa_reason},
+        )
 
     # ── 6b. PII detection on request ──────────────────────────────────
     #
@@ -963,3 +997,70 @@ def _resolve_identity(request: Request) -> Optional[dict]:
             return _state.identity_registry.get_by_api_key(key)
 
     return None
+
+
+async def _opa_v1_check(
+    identity: dict | None,
+    selected_model: str,
+    selected_provider: str,
+    sensitivity_level: str,
+    route_reason: str,
+    request_path: str,
+) -> dict:
+    """
+    Query OPA v1_routing policy for allow/deny + reason.
+
+    Input matches v1_routing.rego schema:
+      input.identity          — identity record
+      input.routing_decision  — provider, model, sensitivity, route, rule
+      input.request           — path, method
+      input.trusted_cloud_providers — list of trusted providers (from config)
+
+    Returns {"allow": bool, "reason": str} or deny on any error (fail-closed).
+    """
+    if not _state.opa_url:
+        return {"allow": True, "reason": "opa_not_configured"}
+
+    identity_doc = {
+        "status": identity.get("status", "active") if identity else "anonymous",
+        "kind": identity.get("kind", "unknown") if identity else "unknown",
+        "groups": identity.get("groups", []) if identity else [],
+        "allowed_models": identity.get("allowed_models", []) if identity else [],
+        "sensitivity_ceiling": identity.get("sensitivity_ceiling", "RESTRICTED") if identity else "PUBLIC",
+    }
+
+    routing_doc = {
+        "provider": selected_provider,
+        "model": selected_model,
+        "sensitivity": sensitivity_level,
+        "route": "cloud" if selected_provider not in ("ollama", "agent") else "local",
+        "rule": route_reason,
+    }
+
+    opa_input = {
+        "identity": identity_doc,
+        "routing_decision": routing_doc,
+        "request": {"path": request_path, "method": "POST"},
+        "trusted_cloud_providers": [],  # TODO: load from config/DB
+    }
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                _state.opa_url.rstrip("/") + "/v1/data/yashigani/v1/decision",
+                json={"input": opa_input},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            result = resp.json().get("result", {})
+            return {
+                "allow": bool(result.get("allow", False)),
+                "model_allowed": bool(result.get("model_allowed", True)),
+                "routing_safe": bool(result.get("routing_safe", True)),
+                "sensitivity_allowed": bool(result.get("sensitivity_allowed", True)),
+                "reason": result.get("reason", "unknown"),
+            }
+    except Exception as exc:
+        logger.error("OPA v1 check failed: %s — denying (fail-closed)", exc)
+        return {"allow": False, "reason": "opa_unreachable"}
