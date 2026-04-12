@@ -31,12 +31,6 @@ AGENTS = [
         "base_model_id": "qwen2.5:3b",
         "description": "Open-source AI agent with web search, code execution, and file management.",
     },
-    {
-        "id": "@Goose",
-        "name": "Goose Agent",
-        "base_model_id": "qwen2.5:3b",
-        "description": "AI developer assistant by Block. Code generation, debugging, and shell commands.",
-    },
 ]
 
 

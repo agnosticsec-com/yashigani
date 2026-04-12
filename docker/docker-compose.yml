@@ -747,45 +747,7 @@ services:
     profiles:
       - letta
 
-  # Goose — AI developer assistant with ACP server mode (Apache 2.0)
-  # https://github.com/block/goose
-  # Runs goose serve (ACP over HTTP/WebSocket) on port 3284.
-  # LLM calls routed through Yashigani gateway via OpenAI-compatible endpoint.
-  goose:
-    image: ghcr.io/block/goose:latest
-    restart: unless-stopped
-    entrypoint: ["goose"]
-    command: ["serve", "--host", "0.0.0.0", "--port", "3284"]
-    environment:
-      # Route all LLM calls through Yashigani gateway (OpenAI-compatible)
-      GOOSE_PROVIDER: openai
-      GOOSE_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
-      OPENAI_API_KEY: "yashigani"
-      # Point directly at Ollama to avoid double-hop latency
-      # (Goose → Gateway → Ollama adds ~90s on CPU). Traffic from Goose
-      # to external APIs still goes through the gateway via tool calls.
-      OPENAI_HOST: http://ollama:11434/v1
-      # Disable telemetry in container
-      GOOSE_TELEMETRY_ENABLED: "false"
-      DO_NOT_TRACK: "true"
-    volumes:
-      - goose_data:/home/goose
-      - ./secrets:/run/secrets:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3284/status 2>/dev/null || curl -sf http://localhost:3284/status 2>/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    depends_on:
-      gateway:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - internal
-    profiles:
-      - goose
+  # Goose — REMOVED (ACP protocol too slow on CPU, ~300s per request)
 
   # CrewAI — removed from community/open-source edition.
   # CrewAI Docker image is now an enterprise-only feature.
@@ -867,8 +829,6 @@ volumes:
     driver: local
   # Agent bundle volumes
   openclaw_data:
-    driver: local
-  goose_data:
     driver: local
   langflow_data:
     driver: local

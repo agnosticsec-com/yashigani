@@ -371,33 +371,7 @@ agentBundles:
     tokenSecretName: "yashigani-langgraph-token"
     tokenSecretKey: "token"
 
-  goose:
-    enabled: false
-    image:
-      repository: ghcr.io/block/goose
-      tag: "latest"
-      pullPolicy: IfNotPresent
-    replicaCount: 1
-    env:
-      GOOSE_PROVIDER: "openai"
-      GOOSE_MODEL: "qwen2.5:3b"
-      OPENAI_API_KEY: "yashigani"
-      OPENAI_HOST: "http://yashigani-gateway:8080/v1"
-      GOOSE_TELEMETRY_ENABLED: "false"
-      DO_NOT_TRACK: "true"
-    service:
-      port: 3284
-      type: ClusterIP
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
-    tokenSecretName: "yashigani-goose-token"
-    tokenSecretKey: "token"
-
+  # goose: REMOVED — ACP protocol too slow on CPU (~300s per request)
   # crewai: REMOVED — enterprise-only as of v2.1. Contact sales@agnosticsec.com.
 
   openclaw:

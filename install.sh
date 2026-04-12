@@ -66,7 +66,7 @@ OFFLINE=false
 NAMESPACE="yashigani"
 TOTAL_STEPS=13
 WORK_DIR=""
-AGENT_BUNDLES=""          # comma-separated: langflow,letta,goose,openclaw
+AGENT_BUNDLES=""          # comma-separated: langflow,letta,openclaw
 COMPOSE_PROFILES=()       # populated by select_agent_bundles()
 
 # If stdin is not a TTY (piped from curl), force non-interactive
@@ -95,7 +95,7 @@ OPTIONS
   --license-key    PATH                   Path to .ysg license file
   --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
-  --agent-bundles  BUNDLES               Comma-separated opt-in agents: langflow,letta,goose,openclaw (or "all")
+  --agent-bundles  BUNDLES               Comma-separated opt-in agents: langflow,letta,openclaw (or "all")
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
   --skip-preflight                        Skip preflight checks
@@ -174,7 +174,7 @@ parse_args() {
       --upgrade)         UPGRADE=true;           shift ;;
       --dry-run)         DRY_RUN=true;           shift ;;
       --agent-bundles)
-        AGENT_BUNDLES="${2:?'--agent-bundles requires a value, e.g. langflow,goose'}"
+        AGENT_BUNDLES="${2:?'--agent-bundles requires a value, e.g. langflow,letta'}"
         shift 2
         ;;
       --help|-h)         usage; exit 0 ;;
@@ -1283,10 +1283,10 @@ select_agent_bundles() {
         _b="${_b// /}"   # trim spaces
         case "$_b" in
           all)
-            COMPOSE_PROFILES+=("langflow" "letta" "goose" "openclaw")
-            log_info "Agent bundle enabled (--agent-bundles): langflow, letta, goose, openclaw"
+            COMPOSE_PROFILES+=("langflow" "letta" "openclaw")
+            log_info "Agent bundle enabled (--agent-bundles): langflow, letta, openclaw"
             ;;
-          langflow|letta|goose|openclaw)
+          langflow|letta|openclaw)
             COMPOSE_PROFILES+=("$_b")
             log_info "Agent bundle enabled (--agent-bundles): $_b"
             ;;
@@ -1304,12 +1304,11 @@ select_agent_bundles() {
   printf "${C_BOLD}Available agent bundles:${C_RESET}\n\n"
   printf "    1) Langflow    — Visual multi-agent workflow builder (MIT)\n"
   printf "    2) Letta       — Stateful agent with persistent memory (Apache 2.0)\n"
-  printf "    3) Goose       — Python MCP-native dev assistant (Apache 2.0)\n"
-  printf "    4) OpenClaw    — Node.js 24 personal AI, 30+ channels (${C_YELLOW}~800 MB${C_RESET}, license TBD)\n"
-  printf "    5) All of the above\n"
+  printf "    3) OpenClaw    — Node.js 24 personal AI, 30+ channels (${C_YELLOW}~800 MB${C_RESET}, license TBD)\n"
+  printf "    4) All of the above\n"
   printf "    0) None — skip agent bundles\n"
   printf "\n"
-  printf "${C_BOLD}  Enter your choices (comma-separated, e.g. 1,3 or 5 for all) [0]: ${C_RESET}"
+  printf "${C_BOLD}  Enter your choices (comma-separated, e.g. 1,2 or 4 for all) [0]: ${C_RESET}"
 
   local choices
   read -r choices </dev/tty 2>/dev/null || choices="0"
@@ -1331,16 +1330,12 @@ select_agent_bundles() {
         log_success "Letta selected"
         ;;
       3)
-        COMPOSE_PROFILES+=("goose")
-        log_success "Goose selected"
-        ;;
-      4)
         COMPOSE_PROFILES+=("openclaw")
         log_warn "OpenClaw uses a Node.js 24 image (~800 MB) — ensure sufficient disk space"
         log_success "OpenClaw selected"
         ;;
-      5)
-        COMPOSE_PROFILES+=("langflow" "letta" "goose" "openclaw")
+      4)
+        COMPOSE_PROFILES+=("langflow" "letta" "openclaw")
         log_warn "OpenClaw uses a Node.js 24 image (~800 MB) — ensure sufficient disk space"
         log_success "All agent bundles selected"
         ;;
@@ -1426,8 +1421,6 @@ compose_pull() {
 docker.io/langflowai/langflow:latest" ;;
         letta) _images="$_images
 docker.io/letta/letta:latest" ;;
-        goose) _images="$_images
-ghcr.io/block/goose:latest" ;;
         openclaw) _images="$_images
 ghcr.io/openclaw/openclaw:latest" ;;
       esac
@@ -1792,7 +1785,6 @@ register_agent_bundles() {
     case "$_profile" in
       langflow)  local _name="Langflow"  _url="http://langflow:7860"   _proto="langflow" ;;
       letta)     local _name="Letta"     _url="http://letta:8283"     _proto="letta" ;;
-      goose)     local _name="Goose"     _url="http://goose:3284"     _proto="acp" ;;
       openclaw)  local _name="OpenClaw"  _url="http://openclaw:18789" _proto="openai" ;;
       *) continue ;;
     esac

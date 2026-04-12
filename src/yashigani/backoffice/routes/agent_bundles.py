@@ -67,19 +67,7 @@ _BUNDLES: list[dict] = [
         "helm_key": "agentBundles.letta.enabled",
         "size_warning": None,
     },
-    {
-        "id": "goose",
-        "name": "Goose",
-        "description": "Python MCP-native developer assistant by Block.",
-        "upstream_url": "https://github.com/block/goose",
-        "license": "Apache-2.0",
-        "stack": "Python",
-        "image": "ghcr.io/block/goose:latest",
-        "integration": "MCP → Yashigani Gateway → tools",
-        "compose_profile": "goose",
-        "helm_key": "agentBundles.goose.enabled",
-        "size_warning": None,
-    },
+    # Goose removed — ACP protocol too slow on CPU (~300s per request).
     # CrewAI removed — enterprise-only feature (no public Docker image available).
     {
         "id": "openclaw",
