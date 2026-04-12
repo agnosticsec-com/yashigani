@@ -99,6 +99,12 @@ services:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets:ro
+      # Container socket for Pool Manager (per-identity isolation)
+      # SECURITY: read-only mount, gateway runs as non-root (UID 1001).
+      # Pool Manager uses only: containers.run(), .get(), .kill(), .remove().
+      # No host filesystem access. Podman rootless provides additional isolation.
+      # To disable: remove this mount — Pool Manager falls back to stub mode.
+      - ${CONTAINER_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/container.sock:ro
     read_only: true
     tmpfs:
       - /tmp:size=100M
