@@ -46,6 +46,8 @@ dependencies = [
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-grpc>=1.24",
     "opentelemetry-propagator-b3>=1.24",
+    # Container backends for Pool Manager (per-identity isolation)
+    "podman>=5.0",  # Podman SDK — primary backend on Podman deployments
 ]
 
 [project.optional-dependencies]

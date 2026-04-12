@@ -43,16 +43,18 @@ def collect_postmortem(
     container_name: str,
     trigger_reason: str,
     postmortem_dir: str = _POSTMORTEM_DIR,
+    backend=None,
 ) -> Optional[PostmortemReport]:
     """
     Collect forensic evidence from a container before killing it.
 
     Args:
-        docker_client: Docker SDK client (docker.from_env())
+        docker_client: Docker SDK client (docker.from_env()) — legacy
         container_id: Container ID
         container_name: Human-readable container name
         trigger_reason: Why the container is being replaced
         postmortem_dir: Directory to save postmortem files
+        backend: ContainerBackend instance (preferred over docker_client)
 
     Returns:
         PostmortemReport or None if collection failed
@@ -63,7 +65,10 @@ def collect_postmortem(
         report_dir = os.path.join(postmortem_dir, f"{safe_name}_{ts}")
         os.makedirs(report_dir, exist_ok=True)
 
-        container = docker_client.containers.get(container_id)
+        if backend:
+            container = backend.get(container_id)
+        else:
+            container = docker_client.containers.get(container_id)
 
         # 1. Logs
         logs = ""

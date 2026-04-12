@@ -380,18 +380,12 @@ def _build_app():
     try:
         from yashigani.pool.manager import PoolManager
         from yashigani.pool.health import PoolHealthMonitor
+        from yashigani.pool.backend import create_backend
 
-        # Try to connect to Docker/Podman SDK
-        docker_client = None
-        try:
-            import docker
-            docker_client = docker.from_env()
-            docker_client.ping()
-        except Exception:
-            logger.info("Pool Manager: no Docker SDK or daemon — running in stub mode")
+        container_backend = create_backend()
 
         pool_manager = PoolManager(
-            docker_client=docker_client,
+            backend=container_backend,
             tier=os.getenv("YASHIGANI_LICENSE_TIER", "community"),
         )
         pool_health = PoolHealthMonitor(pool_manager)
