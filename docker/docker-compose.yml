@@ -103,8 +103,8 @@ services:
       # SECURITY: read-only mount, gateway runs as non-root (UID 1001).
       # Pool Manager uses only: containers.run(), .get(), .kill(), .remove().
       # No host filesystem access. Podman rootless provides additional isolation.
-      # To disable: remove this mount — Pool Manager falls back to stub mode.
-      - ${CONTAINER_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/container.sock:ro
+      # To disable: set CONTAINER_SOCKET_ENABLED=false — Pool Manager falls back to stub mode.
+      # macOS Podman: socket can't be mounted from host — Pool Manager uses stub mode.
     read_only: true
     tmpfs:
       - /tmp:size=100M
