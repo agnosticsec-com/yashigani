@@ -1156,6 +1156,43 @@ run_inline_wizard() {
 }
 
 # =============================================================================
+_backup_existing_data() {
+  local backup_dir="${WORK_DIR}/backups/$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$backup_dir"
+
+  log_info "Backing up existing data to ${backup_dir}..."
+
+  # Backup secrets (passwords, TOTP secrets, tokens)
+  if [[ -d "${WORK_DIR}/docker/secrets" ]]; then
+    cp -r "${WORK_DIR}/docker/secrets" "${backup_dir}/secrets"
+    log_info "  secrets/ backed up"
+  fi
+
+  # Backup .env (contains passwords as env vars)
+  if [[ -f "${WORK_DIR}/docker/.env" ]]; then
+    cp "${WORK_DIR}/docker/.env" "${backup_dir}/.env"
+    log_info "  .env backed up"
+  fi
+
+  # Backup audit logs (if accessible)
+  local audit_volume
+  audit_volume="$(${COMPOSE_CMD[0]} volume ls -q 2>/dev/null | grep audit_data || true)"
+  if [[ -n "$audit_volume" ]]; then
+    log_info "  Audit volume detected: ${audit_volume} (preserved in named volume)"
+  fi
+
+  # Backup Postgres data (dump if possible)
+  local compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  if ${COMPOSE_CMD[0]} compose -f "$compose_file" exec -T postgres pg_dump -U yashigani_app yashigani > "${backup_dir}/postgres_dump.sql" 2>/dev/null; then
+    log_info "  postgres_dump.sql backed up"
+  else
+    log_info "  Postgres dump skipped (not accessible)"
+  fi
+
+  chmod -R 600 "$backup_dir"
+  log_success "Backup saved to ${backup_dir}"
+}
+
 # Idempotency check — detect and handle an existing running installation
 # =============================================================================
 check_existing_installation() {
@@ -1180,7 +1217,8 @@ check_existing_installation() {
   log_warn "Existing Yashigani installation detected (containers are running)"
 
   if [[ "$UPGRADE" == "true" ]]; then
-    log_info "Upgrade mode: latest images will be pulled and a rolling restart performed"
+    log_info "Upgrade mode: backing up data, then pulling latest images"
+    _backup_existing_data
     return 0
   fi
 
@@ -1191,13 +1229,34 @@ check_existing_installation() {
     return 0
   fi
 
-  if prompt_yn "Would you like to upgrade the existing installation?" "y"; then
-    UPGRADE=true
-    log_info "Upgrade mode enabled"
-  else
-    log_info "Exiting — no changes made"
-    exit 0
-  fi
+  printf "\n${C_BOLD}Existing deployment detected. Choose an option:${C_RESET}\n\n"
+  printf "    1) Upgrade — backup data, pull latest images, restart services\n"
+  printf "    2) Fresh install — backup data, wipe everything, reinstall\n"
+  printf "    3) Abort — exit without changes\n"
+  printf "\n${C_BOLD}  Choice [1]: ${C_RESET}"
+
+  local choice
+  read -r choice </dev/tty 2>/dev/null || choice="1"
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1)
+      UPGRADE=true
+      _backup_existing_data
+      log_info "Upgrade mode enabled"
+      ;;
+    2)
+      _backup_existing_data
+      log_info "Fresh install: stopping existing containers..."
+      local compose_file="${WORK_DIR}/docker/docker-compose.yml"
+      "${COMPOSE_CMD[@]}" -f "$compose_file" down -v 2>/dev/null || true
+      log_success "Previous deployment stopped and volumes removed"
+      ;;
+    3|*)
+      log_info "Exiting — no changes made"
+      exit 0
+      ;;
+  esac
 }
 
 # =============================================================================
