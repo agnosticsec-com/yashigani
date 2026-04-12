@@ -1117,7 +1117,7 @@ Leave any field empty to disable that sink. All three can be active simultaneous
 
 ```bash
 curl -X PUT https://your-domain/admin/alerts/config \
-  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE" \
+  -H "Cookie: __Host-yashigani_session=YOUR_SESSION_COOKIE" \
   -H "Content-Type: application/json" \
   -d '{
     "slack_webhook_url": "https://hooks.slack.com/services/T.../B.../...",
@@ -1134,7 +1134,7 @@ curl -X PUT https://your-domain/admin/alerts/config \
 
 ```bash
 curl -X POST https://your-domain/admin/alerts/test/slack \
-  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE"
+  -H "Cookie: __Host-yashigani_session=YOUR_SESSION_COOKIE"
 ```
 
 Replace `slack` with `teams` or `pagerduty` for the other sinks. Returns `{"status": "delivered", "sink": "slack"}` on success.
@@ -1169,7 +1169,7 @@ Replace `slack` with `teams` or `pagerduty` for the other sinks. Returns `{"stat
 
 ```bash
 curl -X POST https://your-domain/admin/agents \
-  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE" \
+  -H "Cookie: __Host-yashigani_session=YOUR_SESSION_COOKIE" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-agent",

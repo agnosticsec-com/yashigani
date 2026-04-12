@@ -51,7 +51,7 @@ _STATE_KEY_PREFIX = "sso:state:"
 
 # Session max-age mirrors the existing admin/user session constant (4 hours).
 _SESSION_MAX_AGE = 14400
-_USER_SESSION_COOKIE = "yashigani_session"
+_USER_SESSION_COOKIE = "__Host-yashigani_session"
 _PENDING_2FA_COOKIE = "yashigani_sso_pending"
 _PENDING_2FA_TTL = 300  # 5 minutes to complete 2FA after SSO
 _PENDING_2FA_PREFIX = "sso:pending_2fa:"

@@ -32,6 +32,8 @@ from yashigani.backoffice.routes.sso import router as sso_router
 from yashigani.backoffice.routes.pii import router as pii_router
 # v2.3 — ASVS 11.1.3 crypto inventory
 from yashigani.backoffice.routes.crypto_inventory import router as crypto_inventory_router
+# ASVS 3.4.7 — CSP report endpoint
+from yashigani.backoffice.routes.csp_report import router as csp_report_router
 
 __all__ = [
     "auth_router", "accounts_router", "users_router",
@@ -53,4 +55,6 @@ __all__ = [
     "pii_router",
     # v2.3
     "crypto_inventory_router",
+    # ASVS 3.4.7
+    "csp_report_router",
 ]
