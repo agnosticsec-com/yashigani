@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Annotated, Optional
 
@@ -255,6 +256,17 @@ async def login(body: LoginRequest, request: Request, response: Response):
     # Success — reset per-IP failure counter (global decays via TTL)
     _reset_ip_auth_failures(client_ip)
 
+    # Check password age against admin-configurable policy (max 13 months)
+    # YASHIGANI_PASSWORD_MAX_AGE_DAYS: 0 = no expiry (default), max 395 (13 months)
+    max_age_days = int(os.getenv("YASHIGANI_PASSWORD_MAX_AGE_DAYS", "0"))
+    if max_age_days > 395:
+        max_age_days = 395  # Hard cap: 13 months
+    if max_age_days > 0 and hasattr(record, "password_changed_at"):
+        age_days = (time.time() - record.password_changed_at) / 86400
+        if age_days > max_age_days:
+            record.force_password_change = True
+            _log.info("Password expired: user=%s age=%d days, max=%d", record.username, int(age_days), max_age_days)
+
     session = state.session_store.create(
         account_id=record.account_id,
         account_tier=record.account_tier,
@@ -406,6 +418,7 @@ async def change_password(
     record.password_hash = hash_password(body.new_password)
     new_hash_tail = record.password_hash[-8:]
     record.force_password_change = False
+    record.password_changed_at = time.time()
 
     # Invalidate ALL sessions including current (ASVS V2.1.4)
     store.invalidate_all_for_account(session.account_id)

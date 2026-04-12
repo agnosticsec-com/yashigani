@@ -56,6 +56,7 @@ class AccountRecord:
     totp_failed_attempts: int = 0
     totp_backoff_until: float = 0.0
     created_at: float = field(default_factory=time.time)
+    password_changed_at: float = field(default_factory=time.time)
 
 
 class LocalAuthService:
