@@ -331,6 +331,7 @@ def _build_app():
         response_inspection_pipeline=response_pipeline,
         pii_detector=pii_detector,
         pii_cloud_bypass=pii_cloud_bypass,
+        opa_url=opa_url,
     )
 
     gateway_app = create_gateway_app(
