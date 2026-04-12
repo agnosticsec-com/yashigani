@@ -1098,7 +1098,7 @@ async def _opa_v1_check(
         "identity": identity_doc,
         "routing_decision": routing_doc,
         "request": {"path": request_path, "method": "POST"},
-        "trusted_cloud_providers": [],  # TODO: load from config/DB
+        "trusted_cloud_providers": [p.strip() for p in os.getenv("YASHIGANI_TRUSTED_CLOUD_PROVIDERS", "").split(",") if p.strip()],
     }
 
     try:
