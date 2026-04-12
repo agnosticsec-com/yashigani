@@ -5,6 +5,8 @@ Delete blocked if last user (USER_MINIMUM_VIOLATION).
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -21,6 +23,11 @@ class FullResetRequest(BaseModel):
 
 class CreateUserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
+    email: Optional[str] = Field(
+        default=None,
+        max_length=254,
+        pattern=r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$",
+    )
 
 
 @router.get("")
@@ -30,6 +37,7 @@ async def list_users(session: AdminSession):
         {
             "username": r.username,
             "account_id": r.account_id,
+            "email": r.email,
             "disabled": r.disabled,
             "force_password_change": r.force_password_change,
             "force_totp_provision": r.force_totp_provision,
@@ -64,6 +72,8 @@ async def create_user(body: CreateUserRequest, session: AdminSession):
     from yashigani.auth.password import generate_password
     temp_password = generate_password(36)
     record = state.auth_service.create_user(body.username, temp_password)
+    if body.email:
+        record.email = body.email
 
     # Generate TOTP secret for provisioning
     totp = generate_provisioning(account_name=body.username, issuer="Yashigani")

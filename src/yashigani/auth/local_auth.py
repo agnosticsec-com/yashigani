@@ -46,6 +46,7 @@ class AccountRecord:
     totp_secret: str
     recovery_codes: Optional[RecoveryCodeSet]
     account_tier: str                       # "admin" | "user"
+    email: Optional[str] = None             # explicit email; falls back to username@yashigani.local
     force_password_change: bool = True
     force_totp_provision: bool = True
     disabled: bool = False
@@ -93,6 +94,7 @@ class LocalAuthService:
             totp_secret="",              # set at first login via provisioning
             recovery_codes=None,
             account_tier="admin",
+            email=username,              # admin usernames are already emails
             force_password_change=True,
             force_totp_provision=True,
         )
