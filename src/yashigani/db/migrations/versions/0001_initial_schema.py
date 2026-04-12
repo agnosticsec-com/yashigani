@@ -269,11 +269,11 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- pg_cron: nightly partition maintenance (optional)
-DO $$ BEGIN
-    PERFORM cron.schedule('partman-maintenance', '0 2 * * *', $$SELECT partman.run_maintenance()$$);
+DO $cron$ BEGIN
+    PERFORM cron.schedule('partman-maintenance', '0 2 * * *', 'SELECT partman.run_maintenance()');
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'pg_cron not available — skipping scheduled maintenance';
-END $$;
+END $cron$;
 """
 
 _DDL_DOWN = """
