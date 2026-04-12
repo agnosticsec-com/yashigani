@@ -1,7 +1,7 @@
-# Yashigani v2.0 — Installation and Configuration Guide
+# Yashigani — Installation and Configuration Guide
 
-**Version:** 2.2
-**Last updated:** 2026-04-05
+**Version:** 2.23
+**Last updated:** 2026-04-12
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -242,9 +242,17 @@ The installer prompts for API keys immediately if you select a cloud backend, an
 
 **Step 13 — HIBP breach check.** Before the stack starts, the installer checks all generated passwords against the Have I Been Pwned API using SHA-1 k-Anonymity prefix lookup. Any password found in a known breach is automatically regenerated and re-checked. If the HIBP API is unreachable, the check is skipped silently — installation is never blocked by an unreachable breach database.
 
-**Step 14 — Launch.** The installer runs `docker compose up -d`, tails `backoffice` logs until the stack is healthy, then prints the one-time credential summary.
+**Step 14 — Optional services.** The installer prompts for optional service add-ons:
 
-**Step 15 — Credential summary.** At the end of install, a formatted credential block is displayed once with a red warning banner:
+- **Open WebUI:** `Enable Open WebUI chat interface? [y/N]` — deploys the Open WebUI container at `/chat/*` with trusted header authentication. Equivalent to `--with-openwebui` flag.
+- **Internal CA:** `Enable Internal CA (Smallstep step-ca)? [y/N]` — deploys an internal Certificate Authority for mTLS between services. Equivalent to `--with-internal-ca` flag.
+- **Wazuh SIEM:** If SIEM mode is `wazuh`, Wazuh is auto-enabled. Can also be enabled with the `--wazuh` flag.
+
+All services are manageable from the admin panel via API after installation. The admin UI is a static SPA calling backend APIs (API-first architecture with strict CSP: external JS/CSS only, zero inline code).
+
+**Step 15 — Launch.** The installer runs `docker compose up -d`, tails `backoffice` logs until the stack is healthy, then prints the one-time credential summary.
+
+**Step 16 — Credential summary.** At the end of install, a formatted credential block is displayed once with a red warning banner:
 
 ```
 ============================================================
@@ -294,8 +302,8 @@ cd yashigani
 **Step 2.** Verify the release tag matches the version you intend to deploy:
 
 ```bash
-git tag --list | grep "v2.0"
-git checkout v2.0.0
+git tag --list | grep "v2."
+git checkout v2.23.0
 ```
 
 **Step 3.** Verify file integrity (if the project provides checksums):
@@ -1211,7 +1219,7 @@ When a request arrives from an IP outside the allowlist, the gateway returns HTT
 
 ### 11.3 Tier Limits
 
-- **Community:** 20 agents · 50 end users · 10 admin seats. Returns HTTP 402 when any limit is reached.
+- **Community:** 5 agents · 10 end users · 2 admin seats. Returns HTTP 402 when any limit is reached.
 - **Starter:** 100 agents · 250 end users · 25 admin seats. OIDC SSO enabled.
 - **Professional:** 500 agents · 1,000 end users · 50 admin seats. Full SSO (SAML + OIDC + SCIM).
 - **Professional Plus:** 2,000 agents · 10,000 end users · 200 admin seats · 5 orgs.
@@ -1541,13 +1549,31 @@ For a specific target version:
 
 > **Note:** Take a Postgres volume snapshot before running any update. See Section 4.5 and the tip at the end of Section 16.2 for the snapshot command.
 
-### 16.1 Via Installer (Legacy Path)
+### 16.1 Via Installer
 
 ```bash
 ./install.sh --upgrade
 ```
 
-The installer pulls the latest images, checks for breaking `.env` changes, backs up your current `.env` to `.env.bak`, and restarts the stack. Alembic migrations run automatically. Prefer `update.sh` for v0.8.4+ installations.
+The `--upgrade` flag backs up your current data, pulls the latest images, checks for breaking `.env` changes, backs up your current `.env` to `.env.bak`, and restarts the stack. Alembic migrations run automatically on startup. Postgres migrations run on startup.
+
+Additional install flags for optional services:
+
+```bash
+# Enable Open WebUI chat interface
+./install.sh --with-openwebui
+
+# Enable Internal CA (Smallstep step-ca)
+./install.sh --with-internal-ca
+
+# Enable Wazuh SIEM
+./install.sh --wazuh
+
+# Combine flags
+./install.sh --upgrade --with-openwebui --with-internal-ca --wazuh
+```
+
+For backup recovery, use `restore.sh` to restore from a previous backup.
 
 ### 16.2 Manual Upgrade
 
@@ -1555,7 +1581,7 @@ The installer pulls the latest images, checks for breaking `.env` changes, backs
 
 ```bash
 git fetch origin
-git checkout v2.0.0   # replace with target version
+git checkout v2.23.0   # replace with target version
 ```
 
 **Step 2.** Pull updated images:
@@ -1601,24 +1627,28 @@ docker compose ps
 
 > **Disclaimer:** These third-party agent containers are provided **AS IS** by Agnostic Security as a courtesy integration. Image digests are pinned to upstream-tagged releases and updated as part of the Yashigani release cycle. **All support, bug reports, and feature requests must go to the upstream maintainers.** Agnostic Security accepts no support obligation for these integrations.
 
-Three agent bundles are available as opt-in installs. They are **not installed by default** but work out of the box with the `--agent-bundles` flag. The installer auto-registers agents via the backoffice API and writes PSK tokens to `docker/secrets/`. In v2.0, agent bundles use the unified identity model with the `kind` field to distinguish human and service identities.
+Three agent bundles are available as opt-in installs. They are **not installed by default** but work out of the box with the `--agent-bundles` flag. The installer auto-registers agents via the backoffice API and writes PSK tokens to `docker/secrets/`. Agent bundles use the unified identity model with the `kind` field to distinguish human and service identities.
 
-| Agent | Stack | License | Integration | Compose Profile |
-|-------|-------|---------|-------------|-----------------|
-| LangGraph | Python | Apache 2.0 | MCP → Yashigani → tools | `langgraph` |
-| Goose | Python | Apache 2.0 | MCP → Yashigani → tools | `goose` |
-| OpenClaw | Node.js 24 | TBD (verify at openclaw.ai) | OpenClaw Gateway (:18789) → Yashigani → LLMs | `openclaw` |
+> **Note:** Goose has been removed (ACP too slow). LangGraph has been replaced by Langflow. The current agent lineup is Lala (Langflow), Julietta (Letta), and Scout (OpenClaw).
+
+| Agent Name | Framework | License | Integration | Compose Profile |
+|------------|-----------|---------|-------------|-----------------|
+| Lala | Langflow | Apache 2.0 | Visual flow orchestration → Yashigani → tools | `langflow` |
+| Julietta | Letta | Apache 2.0 | Memory-augmented agent → Yashigani → tools | `letta` |
+| Scout | OpenClaw (Node.js 24) | TBD (verify at openclaw.ai) | OpenClaw Gateway (:18789) → Yashigani → LLMs | `openclaw` |
+
+**Agent chaining** is supported: `@Scout` -> `@Julietta` -> `@qwen`. Use the `@Help` agent for a chaining guide.
 
 ### 17.1 Docker Compose — Opt-In via Profiles
 
-**Interactive installer (v0.8.4+):** The installer presents a numbered menu:
+**Interactive installer:** The installer presents a numbered menu:
 
 ```
 Available agent bundles:
 
-    1) LangGraph   — Python MCP-native orchestration (Apache 2.0)
-    2) Goose       — Python MCP-native dev assistant (Apache 2.0)
-    3) OpenClaw    — Node.js 24 personal AI, 30+ channels (~800 MB, license TBD)
+    1) Lala (Langflow) — Visual flow-based agent orchestration (Apache 2.0)
+    2) Julietta (Letta) — Memory-augmented conversational agent (Apache 2.0)
+    3) Scout (OpenClaw)  — Node.js 24 personal AI, 30+ channels (~800 MB, license TBD)
     4) All of the above
     0) None — skip agent bundles
 
@@ -1628,18 +1658,18 @@ Available agent bundles:
 **Non-interactive / CLI:** Use `--agent-bundles` with comma-separated names:
 
 ```bash
-./install.sh --agent-bundles langgraph,goose
+./install.sh --agent-bundles langflow,letta
 ```
 
 Or activate manually after install:
 
 ```bash
-docker compose --profile langgraph up -d
-docker compose --profile goose up -d
+docker compose --profile langflow up -d
+docker compose --profile letta up -d
 docker compose --profile openclaw up -d
 ```
 
-> **OpenClaw note:** The Node.js 24 image is approximately 800 MB — significantly larger than the Python agent images (~200 MB). Ensure you have sufficient disk space before enabling OpenClaw. OpenClaw runs its own Gateway on port **18789**, which must be reachable by incoming messaging channel webhooks.
+> **Scout (OpenClaw) note:** The Node.js 24 image is approximately 800 MB — significantly larger than the Python agent images (~300 MB). Ensure you have sufficient disk space before enabling Scout. OpenClaw runs its own Gateway on port **18789**, which must be reachable by incoming messaging channel webhooks.
 
 ### 17.2 Kubernetes (Helm) — Values Toggles
 
@@ -1647,21 +1677,21 @@ Enable per agent via Helm values:
 
 ```bash
 helm upgrade yashigani ./helm/yashigani \
-  --set agentBundles.langgraph.enabled=true \
-  --set agentBundles.goose.enabled=true
+  --set agentBundles.langflow.enabled=true \
+  --set agentBundles.letta.enabled=true
 ```
 
 Or in your values override file:
 
 ```yaml
 agentBundles:
-  langgraph:
+  langflow:
     enabled: true
-  goose:
+  letta:
     enabled: true
   openclaw:
     enabled: true
-    # OpenClaw exposes port 18789 via its own Gateway service
+    # Scout (OpenClaw) exposes port 18789 via its own Gateway service
 ```
 
 ### 17.3 Backoffice API
@@ -2383,4 +2413,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.2 — Installation and Configuration Guide — 2026-04-05*
+*Yashigani v2.23 — Installation and Configuration Guide — 2026-04-12*

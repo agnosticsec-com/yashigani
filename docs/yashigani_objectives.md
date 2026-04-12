@@ -1,8 +1,8 @@
 # Yashigani Security Gateway
 ## Product Features and Objectives
 
-**Current Version:** v2.20.0
-**Document Date:** 2026-04-05
+**Current Version:** v2.23.0
+**Document Date:** 2026-04-12
 **Classification:** Public — Product Overview
 
 ---
@@ -174,6 +174,9 @@ Yashigani supports multi-backend agent routing. Incoming bearer tokens identify 
 | v0.9.2 | Installer env var and bash 3.2 compat fixes | Full `.env` writer sets all required vars before compose pull (fixes `UPSTREAM_MCP_URL` error); `update.sh` process substitution replaced with `find | while read` (bash 3.2 compat) |
 | v1.09.5 | Agent bundles out of the box + Podman first-class | Agent bundles (LangGraph, Goose, OpenClaw) work out of the box with `--agent-bundles`; installer auto-registers agents via backoffice API with PSK tokens; first-class Podman support (runtime detection, `podman compose`, auto-apply override); DNS fix for Ollama external network; `POSTGRES_PASSWORD`/`REDIS_PASSWORD` in `.env` for Compose interpolation; PgBouncer `DATABASE_URL` auth; Alembic migrations in backoffice Docker image; `admin_initial_password` bootstrap detection; TOTP pre-provisioned from installer secrets; `openssl rand -base64 48` password generator; health check auto-detects compose command; Promtail `bash /dev/tcp` healthcheck; 18 services (15 core + 3 agent bundles); Compose profiles: `langgraph`, `goose`, `openclaw` |
 | v2.0 | Open WebUI + Optimization + Budget + Pool | Unified identity model (human + service, `kind` field); Optimization Engine (4-signal routing, P1-P9 priority levels); three-tier budget system (org cap -> group -> individual); Open WebUI at `/chat/*` with trusted headers; Container Pool Manager (per-identity isolation, self-healing, postmortem); multi-IdP identity broker (OIDC + SAML v2, tier-gated); sensitivity pipeline (regex + FastText + Ollama, all on by default); budget-redis (dedicated, noeviction); OPA routing safety net + LLM policy review; `policy/v1_routing.rego`; new modules: `identity/`, `billing/`, `optimization/`, `pool/`; 21 core services + dynamic containers; 363 tests |
+| v2.1 | Admin Dashboard + OIDC broker + Pool Monitor | Admin Dashboard UI (9 sections), 12 Alertmanager rules, Budget Postgres persistence, Pool Manager health monitor, OIDC identity broker (end-to-end), mandatory 2FA after SSO, Keycloak test IdP, Podman rootless parity; 413 tests |
+| v2.20 | Security hardening + supply chain | License anti-tampering, PII detection module, response-path /v1 inspection, container hardening (seccomp/AppArmor), WAF/DDoS, FastText baked in, SBOM + cosign signing, streaming inspection, HMAC email hashing, Ollama digest pinning; 548 tests |
+| v2.23 | Single branch + agent refresh + CIAA | Single branch (no release/1.x); agents: Lala (Langflow), Julietta (Letta), Scout (OpenClaw); Goose/LangGraph removed; OPA on all /v1 traffic; fail2ban, IP allow/blocklist, PKCE, acr/amr, content relay detection, constant-time TOTP, __Host- cookies, strict CSP, crypto inventory, Podman SDK, restore.sh; 398 OWASP checks (97.7% pass); 523 unit + 25 e2e tests |
 
 ### v0.1.0 — Core Security Gateway
 
@@ -495,10 +498,15 @@ docker-compose.yml (21 core services)
 Dynamic containers (managed by Container Pool Manager):
 └── per-identity isolated containers (pre-warmed pool)
 
+Optional services (via installer flags):
+├── open-webui              # --with-openwebui (chat interface at /chat/*)
+├── step-ca                 # --with-internal-ca (Smallstep Internal CA)
+└── wazuh-*                 # --wazuh (Wazuh manager, indexer, dashboard)
+
 Optional agent bundles (3, via Compose profiles):
-├── langgraph               # Profile: langgraph
-├── goose                   # Profile: goose
-└── openclaw                # Profile: openclaw (port 18789)
+├── langflow (Lala)         # Profile: langflow
+├── letta (Julietta)        # Profile: letta
+└── openclaw (Scout)        # Profile: openclaw (port 18789)
 ```
 
 Suitable for: development, staging, small production workloads, air-gapped environments.
@@ -569,9 +577,13 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v2.0 is the current production release. v2.0 introduces the unified identity model (human + service identities with a `kind` field), the Optimization Engine for 4-signal routing with P1-P9 priority levels, a three-tier budget system (org cap, group, individual) backed by a dedicated budget-redis instance, Open WebUI integration at `/chat/*` with trusted header authentication, the Container Pool Manager for per-identity isolation with self-healing and postmortem, the multi-IdP identity broker supporting simultaneous OIDC and SAML v2 providers, and the sensitivity pipeline (regex + FastText + Ollama, all on by default). OPA gains `policy/v1_routing.rego` as a routing safety net with optional LLM policy review. The system now runs 21 core services plus dynamic containers, with 363 tests covering all modules.
+Yashigani v2.23 is the current production release. Development uses a single branch (the `release/1.x` branch has been retired). v2.23 consolidates the agent lineup to three agents — Lala (Langflow), Julietta (Letta), and Scout (OpenClaw) — with agent chaining support (`@Scout` -> `@Julietta` -> `@qwen`). Goose (ACP too slow) and LangGraph (replaced by Langflow) have been removed. Optional services are now managed via installer flags: `--with-openwebui` for Open WebUI, `--with-internal-ca` for Smallstep step-ca, and `--wazuh` for Wazuh SIEM. The admin UI is API-first (static SPA calling backend APIs, strict CSP with zero inline code). OPA enforcement covers ALL `/v1` traffic on both the request and response paths.
 
-The progression from v0.1.0 through v2.0 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents, budget controls, and intelligent routing. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget-redis downtime — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
+Security additions in v2.23 include fail2ban auth throttle (x5 escalation to permanent IP block), IP allowlist + blocklist (IPv4/IPv6/CIDR), PKCE on OIDC clients, acr/amr auth strength validation, content relay detection (agent laundering), constant-time TOTP comparison, `__Host-` cookie prefixes, strict CSP (`object-src none`, `base-uri none`, COOP, `report-uri`), context-specific password word lists, admin-configurable password policy (max 13 months), self-service password reset (TOTP-verified), and a crypto inventory API with admin UI. Infrastructure improvements include Podman SDK (`podman-py`) for container isolation with macOS socket detection, Postgres migrations on startup, `restore.sh` for backup recovery, and the `--upgrade` installer flag with automatic data backup.
+
+The pre-release gate runs 398 OWASP checks (345 ASVS v5 all chapters + 38 API + 10 Agentic AI + 7 Infra) with a 97.7% pass rate. The test suite includes 523 unit tests and 25 e2e tests.
+
+The progression from v0.1.0 through v2.23 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade enforcement platform with an ecosystem of integrated third-party agents, budget controls, and intelligent routing. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget-redis downtime — results in an insecure pass-through state. Every failure mode has been designed to be fail-closed.
 
 ### v0.8.0 Delivered
 
@@ -715,6 +727,33 @@ The progression from v0.1.0 through v2.0 reflects a deliberate security maturity
 - **Open WebUI branding** — "Powered by Open WebUI" attribution
 - **Compliance documentation** — 9-framework mapping; 2 STRIDE threat models (product: 17 threats, solution: 38 threats)
 - 548 tests (523 unit + 25 e2e)
+
+### v2.23 Delivered
+
+- **Single branch** — the `release/1.x` branch has been retired; all development on a single main branch
+- **Agent lineup update** — Goose removed (ACP too slow); LangGraph replaced by Langflow; current agents: Lala (Langflow), Julietta (Letta), Scout (OpenClaw)
+- **Agent chaining** — `@Scout` -> `@Julietta` -> `@qwen`; `@Help` agent with chaining guide
+- **Optional compose profiles** — Open WebUI (`--with-openwebui`), Internal CA (`--with-internal-ca`), Wazuh (`--wazuh`)
+- **API-first admin** — admin UI is a static SPA calling backend APIs; strict CSP (external JS/CSS only, zero inline code)
+- **OPA on ALL /v1 traffic** — request path + response path enforcement; `response_decision` for response-path policy
+- **Fail2ban auth throttle** — x5 escalation leading to permanent IP block
+- **IP allowlist + blocklist** — IPv4/IPv6/CIDR support for both allow and block lists
+- **PKCE on OIDC client** — Proof Key for Code Exchange on all OIDC flows
+- **acr/amr auth strength validation** — authentication context class and method references validated
+- **Content relay detection** — identifies agent laundering (one agent proxying through another to bypass policy)
+- **Constant-time TOTP comparison** — prevents timing-based TOTP guessing
+- **__Host- cookie prefix** — `__Host-yashigani_admin_session` and `__Host-yashigani_session` for admin and user cookies
+- **Strict CSP** — `object-src none`, `base-uri none`, COOP, `report-uri`
+- **Context-specific password word list** — rejects passwords containing domain-specific terms
+- **Password policy** — admin-configurable, maximum 13 months validity
+- **Self-service password reset** — TOTP-verified password reset flow
+- **Crypto inventory API + admin UI** — inventory of all cryptographic algorithms in use
+- **Podman SDK** — `podman-py` for container isolation; macOS Podman socket detection
+- **Postgres migrations on startup** — Alembic migrations run automatically at service start
+- **restore.sh** — backup recovery script for disaster recovery
+- **Installer flags** — `--upgrade` with data backup, `--with-openwebui`, `--with-internal-ca`, `--wazuh`
+- **Pre-release gate** — `python3 scripts/owasp_prerelease_check.py` (398 OWASP checks: 345 ASVS v5 + 38 API + 10 Agentic AI + 7 Infra; 97.7% pass rate)
+- 523 unit tests + 25 e2e tests
 
 Organizations evaluating Yashigani for production deployment should begin with the Community tier (Apache 2.0). Non-profit and educational institutions qualify for the Academic / Non-Profit tier (verified, free — see agnosticsec.com/academic). Teams with an SSO mandate but limited scale should consider the Starter tier. Professional is the primary production tier for single-org deployments requiring full SSO and SCIM. Professional Plus suits large single-company deployments. Enterprise provides unlimited scale with a dedicated Technical Account Manager. See agnosticsec.com/pricing for current tier details. The universal installer supports in-place tier upgrades via license key injection without data migration or service interruption.
 

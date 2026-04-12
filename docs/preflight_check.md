@@ -1,7 +1,7 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v2.0
-**Last updated:** 2026-04-05
+**Version:** v2.23
+**Last updated:** 2026-04-12
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
 ---
@@ -888,41 +888,60 @@ Print this page and tick every item before running the installer.
 [ ] StorageClass confirmed
 ```
 
-### Optional Agent Bundles (if using LangGraph / Goose / OpenClaw)
+### Optional Agent Bundles (Lala / Julietta / Scout)
+
+The current agent lineup is: Lala (Langflow), Julietta (Letta), Scout (OpenClaw). Goose and LangGraph have been removed.
 
 ```
 [ ] Decision made: which bundles to enable (or none)
-[ ] Sufficient disk space confirmed (LangGraph/Goose ~200 MB each; OpenClaw ~800 MB)
-[ ] OpenClaw only: port 18789 open inbound if messaging webhooks are required
-[ ] OpenClaw only: no other service using port 18789 on the host
+[ ] Sufficient disk space confirmed (Langflow ~300 MB; Letta ~200 MB; OpenClaw ~800 MB)
+[ ] Scout (OpenClaw) only: port 18789 open inbound if messaging webhooks are required
+[ ] Scout (OpenClaw) only: no other service using port 18789 on the host
 [ ] Agent bundles work out of the box with --agent-bundles flag
 [ ] Installer auto-registers agents via backoffice API and writes PSK tokens to docker/secrets/
-[ ] (v2.0) Agent bundles registered with unified identity model (kind: service)
+[ ] Agent bundles registered with unified identity model (kind: service)
+[ ] Agent chaining reviewed: @Scout -> @Julietta -> @qwen (@Help agent for chaining guide)
 ```
 
-### v2.0 Systems
+### Optional Services
+
+```
+[ ] Open WebUI: enabled with --with-openwebui flag (optional compose profile)
+[ ] Open WebUI: trusted header authentication confirmed
+[ ] Internal CA: enabled with --with-internal-ca flag (Smallstep step-ca, optional)
+[ ] Internal CA: additional disk/RAM for step-ca service
+[ ] Wazuh SIEM: enabled with --wazuh flag (optional)
+[ ] Wazuh: additional 5 GB disk and 2 GB RAM available for Wazuh indexer
+[ ] All services manageable from admin panel via API (API-first architecture)
+```
+
+### v2.0+ Systems
 
 ```
 [ ] Budget system: org cap, group budgets, and individual budgets planned
 [ ] Budget-redis: port 6380 not exposed externally
 [ ] Optimization Engine: default priority level decided (default P5)
 [ ] Container Pool Manager: min warm containers and max containers planned
-[ ] Open WebUI: trusted header authentication confirmed (YASHIGANI_OPENWEBUI_ENABLED)
 [ ] Sensitivity pipeline: all three stages (regex + FastText + Ollama) enabled by default
 [ ] Identity model: existing agents migrated to unified model with kind field
 [ ] Multi-IdP: additional OIDC/SAML v2 providers identified (if applicable)
-[ ] OPA: policy/v1_routing.rego reviewed for routing safety net rules
+[ ] OPA: policy/v1_routing.rego reviewed (identity, model access, routing safety, sensitivity ceiling)
+[ ] OPA: response_decision enforcement confirmed on all /v1 traffic
 ```
 
 ### Production Go-Live
 
 ```
-[ ] OPA policy reviewed (including v1_routing.rego)
+[ ] OPA policy reviewed (including v1_routing.rego and response_decision)
 [ ] 2+ admin accounts planned
-[ ] Postgres backup strategy confirmed
+[ ] Postgres backup strategy confirmed (restore.sh for backup recovery)
+[ ] Postgres migrations run on startup confirmed
 [ ] Image versions pinned in docker-compose.yml
 [ ] Monitoring/alerting receivers configured
 [ ] Budget tiers configured and tested
+[ ] Pre-release gate passed: python3 scripts/owasp_prerelease_check.py
+[ ] Fail2ban auth throttle verified (x5 escalation -> permanent IP block)
+[ ] IP allowlist + blocklist configured (IPv4/IPv6/CIDR)
 ```
 
 ---

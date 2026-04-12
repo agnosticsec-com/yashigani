@@ -1,8 +1,8 @@
 # Yashigani Security Gateway -- OWASP Compliance Mapping
 
-**Document Version:** 2.20
-**Date:** 2026-04-05
-**Codebase version:** v2.20.0
+**Document Version:** 2.23
+**Date:** 2026-04-12
+**Codebase version:** v2.23.0
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
@@ -39,6 +39,8 @@ This assessment targets **ASVS v5 Level 3**, the highest assurance tier intended
 
 ### Summary Coverage (ASVS v5 Level 3)
 
+**Automated pre-release gate:** `python3 scripts/owasp_prerelease_check.py` runs 398 checks (345 ASVS v5 all chapters + 38 API + 10 Agentic AI + 7 Infrastructure) with a **97.7% pass rate**.
+
 | Verdict | Count | Percentage |
 |---|---|---|
 | PASS | 89 | 59% |
@@ -46,11 +48,12 @@ This assessment targets **ASVS v5 Level 3**, the highest assurance tier intended
 | FAIL | 15 | 10% |
 | N/A | 9 | 6% |
 
-| Framework | Full Coverage | Partial Coverage | Not Applicable | Not Covered |
-|---|---|---|---|---|
-| OWASP ASVS v5 (L3) | 59% | 25% | 6% | 10% |
-| OWASP API Security Top 10 | 80% | 20% | 0% | 0% |
-| OWASP LLM Top 10 | 70% | 20% | 10% | 0% |
+| Framework | Controls | Full Coverage | Partial Coverage | Not Applicable | Not Covered |
+|---|---|---|---|---|---|
+| OWASP ASVS v5 (L3) | 345 | 59% | 25% | 6% | 10% |
+| OWASP API Security Top 10 | 38 | 80% | 20% | 0% | 0% |
+| OWASP Agentic AI + LLM Top 10 | 10 | 70% | 20% | 10% | 0% |
+| Infrastructure | 7 | 100% | 0% | 0% | 0% |
 
 Controls marked PARTIAL reflect areas where Yashigani provides meaningful mitigations but cannot achieve full L3 coverage due to architectural scope boundaries (e.g., client-side controls, hardware attestation, training-time concerns). Controls marked FAIL identify specific L3 requirements not currently implemented.
 
@@ -104,7 +107,7 @@ ASVS v5 V1 requires documented security architecture, threat models, and secure 
 
 | Req ID | Requirement | L3 | Yashigani Control | Verdict |
 |---|---|---|---|---|
-| V2.1.1 | Verify that user-set passwords are at least 8 characters | L1 | Minimum password length enforced with configurable floor (default 12 chars) | PASS |
+| V2.1.1 | Verify that user-set passwords are at least 8 characters | L1 | Minimum password length enforced with configurable floor (default 12 chars); admin-configurable password policy with maximum 13 months validity; context-specific password word list rejects domain-specific terms; self-service password reset (TOTP-verified) | PASS |
 | V2.1.2 | Verify that passwords of at least 64 characters are permitted | L1 | No upper bound below 64 chars; Argon2id handles arbitrarily long passwords | PASS |
 | V2.1.3 | Verify that password truncation is not performed | L1 | Argon2id hashes the full password; no truncation | PASS |
 | V2.1.4 | Verify that Unicode characters are permitted in passwords | L1 | UTF-8 passwords accepted and hashed as-is by Argon2id | PASS |
@@ -113,7 +116,7 @@ ASVS v5 V1 requires documented security architecture, threat models, and secure 
 | V2.1.7 | Verify that passwords are checked against a set of breached passwords | L1 | HIBP k-Anonymity breach database checked on every password change and at install time; `PasswordBreachedError` raised if found; fail-open if API unreachable | PASS |
 | V2.1.8 | Verify that a password strength meter is provided | L1 | No client-side strength meter in backoffice UI | FAIL |
 | V2.1.9 | Verify that there are no composition rules beyond minimum length | L1 | No composition rules enforced (no "must contain uppercase" etc.); compliant with NIST 800-63B | PASS |
-| V2.2.1 | Verify that anti-automation controls are effective against credential stuffing | L1 | Per-IP rate limiting on auth endpoints; progressive lockout after failed attempts | PASS |
+| V2.2.1 | Verify that anti-automation controls are effective against credential stuffing | L1 | Per-IP rate limiting on auth endpoints; progressive lockout after failed attempts; fail2ban auth throttle with x5 escalation leading to permanent IP block; IP allowlist + blocklist (IPv4/IPv6/CIDR) | PASS |
 | V2.2.2 | Verify that weak authenticators (SMS, email OTP) are not offered as primary MFA | L2 | Only TOTP and WebAuthn/FIDO2 supported; no SMS or email OTP | PASS |
 | V2.2.3 | Verify that credential recovery does not reveal the current password | L1 | Recovery codes (8 codes, Argon2id-hashed) do not reveal the password; admin-initiated reset creates new password | PASS |
 | V2.3.1 | Verify that system-generated initial passwords or activation codes are securely random | L1 | All generated passwords use `secrets.token_urlsafe()` with minimum 36 chars entropy; HIBP-checked before use | PASS |
@@ -126,17 +129,17 @@ ASVS v5 V1 requires documented security architecture, threat models, and secure 
 | V2.5.3 | Verify that TOTP shared secrets are stored encrypted | L2 | TOTP secrets stored in AES-256-GCM encrypted PostgreSQL columns | PASS |
 | V2.5.4 | Verify that MFA recovery mechanisms are at least as strong as primary MFA | L3 | Recovery codes are 8 single-use codes hashed with Argon2id; recovery invalidates existing session and requires re-enrollment of TOTP | PASS |
 | V2.5.5 | Verify that hardware-based authenticators (WebAuthn/FIDO2) are supported | L3 | WebAuthn/FIDO2 passkey support implemented; known constructor bug exists (partially functional) | PARTIAL |
-| V2.5.6 | Verify that replay prevention is implemented for OTP mechanisms | L2 | TOTP used-code cache prevents replay within the current time window | PASS |
+| V2.5.6 | Verify that replay prevention is implemented for OTP mechanisms | L2 | TOTP used-code cache prevents replay within the current time window; constant-time TOTP comparison prevents timing-based guessing | PASS |
 | V2.5.7 | Verify that MFA lockout is progressive and rate-limited | L2 | Progressive lockout on failed TOTP attempts; lockout duration increases with consecutive failures | PASS |
 | V2.6.1 | Verify that lookup secrets (recovery codes) are hashed | L2 | Recovery codes hashed with Argon2id; plaintext shown once at generation, never stored | PASS |
 | V2.7.1 | Verify that service-to-service authentication uses strong credentials | L2 | Agent PSK tokens with minimum 64 chars; PSK rotation with grace periods; JWT validation for multi-tenant auth | PASS |
 | V2.7.2 | Verify that API keys are not used as the sole authentication factor for sensitive operations | L3 | Agent tokens authenticate to the data plane only; admin operations require password + TOTP via the control plane | PASS |
 | V2.7.3 | Verify that API credentials are rotatable without downtime | L3 | Agent PSK token rotation with configurable grace periods allows old and new tokens to coexist during rotation window | PASS |
-| V2.8.1 | Verify that federation protocols (SAML, OIDC) validate assertions correctly | L2 | SAML: NotBefore/NotOnOrAfter, signature verification against IdP metadata; OIDC: issuer, audience, expiry, JWKS signature verification | PASS |
+| V2.8.1 | Verify that federation protocols (SAML, OIDC) validate assertions correctly | L2 | SAML: NotBefore/NotOnOrAfter, signature verification against IdP metadata; OIDC: issuer, audience, expiry, JWKS signature verification; PKCE on OIDC client; acr/amr auth strength validation | PASS |
 | V2.8.2 | Verify that JWT algorithms are restricted to an allowlist | L2 | alg:none rejected; HS* rejected; only RS256/384/512 and ES256/384/512 permitted | PASS |
 | V2.8.3 | Verify that JWKS key material is rotated and validated | L2 | JWKS waterfall: primary endpoint, secondary fallback, static key file; auto-rotation on upstream 401 | PASS |
 
-**Chapter Notes:** Strong L3 authentication posture. Argon2id with HIBP checking, mandatory TOTP, WebAuthn support (partial due to constructor bug), recovery codes hashed with Argon2id, strict JWT algorithm enforcement, and agent PSK rotation with grace periods. The password strength meter is a minor L1 gap. WebAuthn constructor bug should be fixed for full L3 compliance.
+**Chapter Notes:** Strong L3 authentication posture. Argon2id with HIBP checking, mandatory TOTP with constant-time comparison, WebAuthn support (partial due to constructor bug), recovery codes hashed with Argon2id, strict JWT algorithm enforcement, PKCE on OIDC clients, acr/amr auth strength validation, fail2ban auth throttle (x5 escalation to permanent IP block), IP allowlist + blocklist (IPv4/IPv6/CIDR), admin-configurable password policy (max 13 months), context-specific password word list, self-service password reset (TOTP-verified), and agent PSK rotation with grace periods. The password strength meter is a minor L1 gap. WebAuthn constructor bug should be fixed for full L3 compliance.
 
 ---
 
@@ -146,7 +149,7 @@ ASVS v5 V1 requires documented security architecture, threat models, and secure 
 |---|---|---|---|---|
 | V3.1.1 | Verify that session tokens are never revealed in URL parameters | L1 | Session IDs transmitted exclusively via HttpOnly cookies; no URL-based session tokens | PASS |
 | V3.1.2 | Verify that the application generates a new session token on authentication | L1 | New session token generated on every successful login; old session invalidated | PASS |
-| V3.2.1 | Verify that session tokens use HttpOnly, Secure, SameSite attributes | L1 | HttpOnly=true, Secure=true, SameSite=Strict on all session cookies | PASS |
+| V3.2.1 | Verify that session tokens use HttpOnly, Secure, SameSite attributes | L1 | HttpOnly=true, Secure=true, SameSite=Strict on all session cookies; `__Host-` cookie prefix (`__Host-yashigani_admin_session`, `__Host-yashigani_session`) | PASS |
 | V3.2.2 | Verify that the application uses only cookies to transmit session tokens | L2 | Session tokens are cookie-only; no bearer token session mechanism for browser clients | PASS |
 | V3.3.1 | Verify that session tokens are invalidated on logout | L1 | Redis session store deletes session record synchronously on logout; server-side invalidation | PASS |
 | V3.3.2 | Verify that session tokens are invalidated after a period of inactivity | L2 | Idle timeout enforced independently of absolute expiry; configurable per deployment | PASS |
@@ -414,7 +417,7 @@ Yashigani captures the following environmental factors in audit events:
 | V14.2.2 | Verify that credentials are never committed to source control | L1 | `.gitignore` covers secrets; installer generates credentials at deploy time, not build time; secrets never in Dockerfiles or compose files | PASS |
 | V14.2.3 | Verify that credentials are rotatable | L2 | Agent PSK rotation with grace periods; JWKS auto-rotation; secrets backend key versioning | PASS |
 | V14.3.1 | Verify that security headers are applied to all responses | L2 | HSTS, X-Frame-Options: DENY, Content-Security-Policy, X-Content-Type-Options applied by security middleware on backoffice responses; Caddy applies HSTS on gateway | PASS |
-| V14.3.2 | Verify that Content-Security-Policy is enforced | L2 | Strict CSP on backoffice: blocks inline scripts, restricts sources; gateway responses are proxied as-is (upstream CSP responsibility) | PARTIAL |
+| V14.3.2 | Verify that Content-Security-Policy is enforced | L2 | Strict CSP on backoffice: external JS/CSS only, zero inline code; `object-src none`, `base-uri none`, COOP, `report-uri`; admin UI is a static SPA calling backend APIs; gateway responses are proxied as-is (upstream CSP responsibility) | PASS |
 | V14.4.1 | Verify that HTTP-only communication is not permitted | L1 | Plain HTTP redirected to HTTPS by Caddy; no HTTP-only mode in production | PASS |
 | V14.4.2 | Verify that CORS policies are restrictive | L2 | Backoffice CORS restricted to same-origin; gateway CORS configurable per deployment with restrictive defaults | PASS |
 | V14.5.1 | Verify that the application build process is repeatable and secure | L2 | Locked/hashed dependencies; digest-pinned base images; Trivy scanning in CI; deterministic builds | PASS |
@@ -640,6 +643,7 @@ The OWASP API Security Top 10 (2023) identifies the most critical security risks
 | Control | Implementation | Purpose |
 |---|---|---|
 | Agent identity verification | Bearer token, min-length 64, registry lookup | Ensures only registered agents access MCP tools |
+| Content relay detection | Agent laundering detection on all /v1 traffic | Identifies agents proxying requests through other agents to bypass policy |
 | Per-agent rate limiting | Redis sliding window, independent of per-IP/session | Constrains autonomous agent action rates |
 | Agent anomaly detection | Redis ZSET sliding window, repeated-small-calls | Identifies unexpected agent call patterns |
 | Agent action audit trail | Every call: agent_id, session, payload hash, OPA decision, upstream response | Full forensic visibility into agent behavior |
@@ -654,7 +658,7 @@ The OWASP API Security Top 10 (2023) identifies the most critical security risks
 ## Section 4: Compliance Summary Table
 
 **Tier definitions (v0.6.2):**
-- **Community:** Apache 2.0 open-source, 20 agents, 50 end users, 10 admin seats, no SSO
+- **Community:** Apache 2.0 open-source, 5 agents, 10 end users, 2 admin seats, no SSO
 - **Starter:** $1,200/yr, 100 agents, 250 end users, 25 admin seats, OIDC SSO only
 - **Professional:** $4,800/yr, 500 agents, 1,000 end users, 50 admin seats, full SSO (SAML + OIDC + SCIM)
 - **Professional Plus:** $14,400/yr, 2,000 agents, 10,000 end users, 200 admin seats, 5 orgs
@@ -708,9 +712,9 @@ The OWASP API Security Top 10 (2023) identifies the most critical security risks
 | JWT alg:none rejection | V2 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
 | JWKS waterfall key rotation | V2 | API2 | -- | Yes | Yes | Yes | Yes | Yes |
 | Backoffice port isolation (8443) | V4 | API5 | -- | Yes | Yes | Yes | Yes | Yes |
-| Agent limit enforcement | V11 | API4 | LLM08 | 20 agents | 100 | 500 | 2,000 | Unlimited |
-| End user limit enforcement | V11 | API4 | -- | 50 | 250 | 1,000 | 10,000 | Unlimited |
-| Admin seat limit enforcement | V11 | API4 | -- | 10 | 25 | 50 | 200 | Unlimited |
+| Agent limit enforcement | V11 | API4 | LLM08 | 5 agents | 100 | 500 | 2,000 | Unlimited |
+| End user limit enforcement | V11 | API4 | -- | 10 | 250 | 1,000 | 10,000 | Unlimited |
+| Admin seat limit enforcement | V11 | API4 | -- | 2 | 25 | 50 | 200 | Unlimited |
 | Multi-org isolation | V4 | API1 | -- | 1 org | 1 org | 1 org | 5 orgs | Unlimited |
 | Apache 2.0 open-source license | -- | -- | -- | Yes | -- | -- | -- | -- |
 | Admin minimum count enforcement | V11 | API5 | -- | Yes | Yes | Yes | Yes | Yes |
@@ -941,6 +945,27 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | LLM policy review for P1-P3 routing | ASVS V4.1, LLM01 | Semantic policy analysis for high-priority routing decisions |
 | 363 tests | ASVS V1.6.1, V14.1 | Comprehensive test coverage across all modules including identity, billing, optimization, and pool |
 
+#### v2.23 Changes
+
+| Change | OWASP Relevance | Effect |
+|---|---|---|
+| OPA enforcement on ALL /v1 traffic (request + response path) | ASVS V4.1, V5.2, LLM01, LLM02 | Policy evaluation covers both inbound requests and outbound responses on all /v1 routes |
+| Fail2ban auth throttle (x5 escalation -> permanent IP block) | ASVS V2.2.1, API2 | Aggressive brute-force prevention with escalating penalties |
+| IP allowlist + blocklist (IPv4/IPv6/CIDR) | ASVS V4.1.3, API5 | Network-level access control for both allow and deny lists |
+| PKCE on OIDC client | ASVS V2.8.1, API2 | Proof Key for Code Exchange prevents authorization code interception |
+| acr/amr auth strength validation | ASVS V2.8.1 | Validates authentication context class and method references from IdP |
+| Content relay detection (agent laundering) | LLM07, LLM08, API5 | Detects agents proxying requests through other agents to bypass policy |
+| Constant-time TOTP comparison | ASVS V2.5.6, V6.2 | Prevents timing-based TOTP guessing attacks |
+| __Host- cookie prefix | ASVS V3.2.1, V3.2.2 | `__Host-yashigani_admin_session` and `__Host-yashigani_session` prevent cookie tossing attacks |
+| Strict CSP (object-src none, base-uri none, COOP, report-uri) | ASVS V14.3.2 | External JS/CSS only, zero inline code; admin UI is a static SPA calling backend APIs |
+| Context-specific password word list | ASVS V2.1.1, V2.1.9 | Rejects passwords containing domain-specific terms |
+| Admin-configurable password policy (max 13 months) | ASVS V2.1.1 | Password expiry enforced with admin-configurable maximum validity period |
+| Self-service password reset (TOTP-verified) | ASVS V2.1.5, V2.1.6 | Users can reset their own password after TOTP verification |
+| Crypto inventory API + admin UI | ASVS V6.2.2, V1.4.1 | Complete inventory of all cryptographic algorithms in use, accessible via API and admin panel |
+| Podman SDK (podman-py) for container isolation | ASVS V14.2 | Native Podman API access for container management; macOS socket detection |
+| Pre-release gate: 398 OWASP checks (97.7% pass rate) | ASVS V1.6.1, V14.1 | Automated compliance validation: 345 ASVS v5 + 38 API + 10 Agentic AI + 7 Infra |
+| 523 unit + 25 e2e tests | ASVS V1.6.1, V14.1 | Expanded test coverage including all v2.23 security controls |
+
 #### v0.7.0 / v0.7.1 Changes
 
 | Change | OWASP Relevance | Effect |
@@ -1023,4 +1048,4 @@ Yashigani does **not** implement application-level memory encryption. Python's g
 
 ---
 
-*This document assesses Yashigani v2.20.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
+*This document assesses Yashigani v2.23.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
