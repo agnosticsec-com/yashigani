@@ -416,6 +416,9 @@ def _import_router_fresh(streaming_enabled: bool):
     mod._state.available_models = []
     mod._state.agent_registry = None
     mod._state.response_inspection_pipeline = None
+    mod._state.pii_detector = None
+    mod._state.pii_cloud_bypass = False
+    mod._state.opa_url = ""  # Disable OPA in unit tests
     return mod
 
 
