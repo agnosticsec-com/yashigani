@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -111,11 +112,24 @@ def create_gateway_app(
             timeout=config.request_timeout_seconds,
             follow_redirects=False,
         )
+        # Create Postgres async pool on the running event loop
+        if os.environ.get("_YASHIGANI_DB_READY") == "1":
+            try:
+                from yashigani.db import create_pool
+                await create_pool()
+                logger.info("Postgres async pool created (lifespan)")
+            except Exception as exc:
+                logger.warning("Postgres pool creation failed in lifespan: %s", exc)
         yield
-        # Shutdown: close the HTTP client
+        # Shutdown: close the HTTP client and DB pool
         client = _state["http_client"]
         if client:
             await client.aclose()
+        try:
+            from yashigani.db import close_pool
+            await close_pool()
+        except Exception:
+            pass
 
     app = FastAPI(
         title="Yashigani Gateway",

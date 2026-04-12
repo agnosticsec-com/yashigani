@@ -202,13 +202,10 @@ def _build_app():
             except OSError:
                 logger.warning("postgres_password secret not found — DB DSN unresolved")
         if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-                nest_asyncio.apply()
             run_migrations()
-            loop.run_until_complete(create_pool())
-            db_pool = True  # sentinel; pool is module-level singleton
+            # Pool creation deferred to _db_startup() — called from lifespan
+            os.environ["_YASHIGANI_DB_READY"] = "1"
+            db_pool = True
 
             inference_logger = InferencePayloadLogger()
 
