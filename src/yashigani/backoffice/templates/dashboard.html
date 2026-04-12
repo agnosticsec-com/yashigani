@@ -170,6 +170,7 @@
         <div class="page" id="page-alerts">
             <h2>Alert Configuration</h2>
             <div class="panel">
+                <div class="panel-header">Priority Matrix</div>
                 <table>
                     <thead><tr><th>Priority</th><th>Trigger</th><th>Response</th></tr></thead>
                     <tbody class="alert-row">
@@ -180,6 +181,43 @@
                         <tr><td><span class="badge" style="background:#f8fafc;color:#94a3b8;">P5</span></td><td>Container replaced, budget warning, routine rotation</td><td>Informational</td></tr>
                     </tbody>
                 </table>
+            </div>
+            <div class="panel" style="margin-top:16px;">
+                <div class="panel-header">Webhook Configuration</div>
+                <div class="panel-body">
+                    <div style="display:flex;flex-direction:column;gap:12px;max-width:600px;">
+                        <div>
+                            <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:4px">Slack Webhook URL</label>
+                            <input id="alert-slack-url" type="url" placeholder="https://hooks.slack.com/services/..." style="padding:8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:100%">
+                        </div>
+                        <div>
+                            <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:4px">Microsoft Teams Webhook URL</label>
+                            <input id="alert-teams-url" type="url" placeholder="https://outlook.office.com/webhook/..." style="padding:8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:100%">
+                        </div>
+                        <div>
+                            <label style="font-size:0.75rem;color:#64748b;display:block;margin-bottom:4px">PagerDuty Integration Key</label>
+                            <input id="alert-pagerduty-key" type="text" placeholder="32-character integration key" style="padding:8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:100%">
+                        </div>
+                        <div style="display:flex;gap:8px;margin-top:8px;">
+                            <button onclick="saveAlertConfig()" style="padding:8px 20px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Save Configuration</button>
+                            <button onclick="testAlertWebhook('slack')" style="padding:8px 16px;background:#f59e0b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Test Slack</button>
+                            <button onclick="testAlertWebhook('teams')" style="padding:8px 16px;background:#f59e0b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Test Teams</button>
+                            <button onclick="testAlertWebhook('pagerduty')" style="padding:8px 16px;background:#f59e0b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Test PagerDuty</button>
+                        </div>
+                        <div id="alert-config-result" style="font-size:0.8rem;margin-top:4px;"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="panel" style="margin-top:16px;">
+                <div class="panel-header">Alert Triggers</div>
+                <div class="panel-body">
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        <label style="font-size:0.85rem"><input type="checkbox" id="alert-trigger-exfil" checked> Alert on credential exfiltration attempt</label>
+                        <label style="font-size:0.85rem"><input type="checkbox" id="alert-trigger-anomaly" checked> Alert on anomaly threshold breach</label>
+                        <label style="font-size:0.85rem"><input type="checkbox" id="alert-trigger-budget"> Alert on budget exhaustion</label>
+                        <label style="font-size:0.85rem"><input type="checkbox" id="alert-trigger-injection" checked> Alert on prompt injection detection</label>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1024,6 +1062,67 @@
         // In v2.2, this will POST to /admin/idp/{type} and update Caddy config
     }
 
+    // Alert configuration
+    async function loadAlertConfig() {
+        try {
+            var r = await fetch('/admin/alerts/config', { credentials: 'same-origin' });
+            if (r.ok) {
+                var data = await r.json();
+                var c = data.config || {};
+                document.getElementById('alert-slack-url').value = c.slack_webhook_url || '';
+                document.getElementById('alert-teams-url').value = c.teams_webhook_url || '';
+                document.getElementById('alert-pagerduty-key').value = c.pagerduty_integration_key || '';
+                document.getElementById('alert-trigger-exfil').checked = c.alert_on_credential_exfil !== false;
+                document.getElementById('alert-trigger-anomaly').checked = c.alert_on_anomaly_threshold !== false;
+                document.getElementById('alert-trigger-budget').checked = c.alert_on_budget_exhaustion === true;
+                document.getElementById('alert-trigger-injection').checked = c.alert_on_prompt_injection !== false;
+            }
+        } catch(e) { /* ignore — alerts config optional */ }
+    }
+
+    async function saveAlertConfig() {
+        var result = document.getElementById('alert-config-result');
+        try {
+            var r = await fetch('/admin/alerts/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    slack_webhook_url: document.getElementById('alert-slack-url').value || null,
+                    teams_webhook_url: document.getElementById('alert-teams-url').value || null,
+                    pagerduty_integration_key: document.getElementById('alert-pagerduty-key').value || null,
+                    alert_on_credential_exfil: document.getElementById('alert-trigger-exfil').checked,
+                    alert_on_anomaly_threshold: document.getElementById('alert-trigger-anomaly').checked,
+                    alert_on_budget_exhaustion: document.getElementById('alert-trigger-budget').checked,
+                    alert_on_prompt_injection: document.getElementById('alert-trigger-injection').checked,
+                })
+            });
+            if (r.ok) {
+                result.innerHTML = '<span class="badge badge-green">Configuration saved</span>';
+            } else {
+                result.innerHTML = '<span class="badge badge-red">Failed: ' + r.status + '</span>';
+            }
+        } catch(e) {
+            result.innerHTML = '<span class="badge badge-red">Error: ' + e.message + '</span>';
+        }
+    }
+
+    async function testAlertWebhook(sink) {
+        var result = document.getElementById('alert-config-result');
+        result.innerHTML = '<span class="badge badge-yellow">Sending test...</span>';
+        try {
+            var r = await fetch('/admin/alerts/test/' + sink, { method: 'POST', credentials: 'same-origin' });
+            if (r.ok) {
+                result.innerHTML = '<span class="badge badge-green">Test alert sent to ' + sink + '</span>';
+            } else {
+                var data = await r.json().catch(function() { return {}; });
+                result.innerHTML = '<span class="badge badge-red">' + sink + ' test failed: ' + (data.detail || r.status) + '</span>';
+            }
+        } catch(e) {
+            result.innerHTML = '<span class="badge badge-red">Error: ' + e.message + '</span>';
+        }
+    }
+
     // Logout
     async function logout() {
         await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
@@ -1032,6 +1131,7 @@
 
     // Load dashboard on page load
     loadDashboard();
+    loadAlertConfig();
     </script>
 </body>
 </html>
