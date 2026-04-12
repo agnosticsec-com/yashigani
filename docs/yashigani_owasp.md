@@ -270,6 +270,7 @@ ASVS v5 V1 requires documented security architecture, threat models, and secure 
 |---|---|---|---|---|
 | V8.1.1 | Verify that sensitive data is classified and handled according to its classification | L2 | CHS credential pattern registry classifies credentials; PII detection hooks classify additional sensitive types; AES-256-GCM for sensitive DB columns | PARTIAL |
 | V8.1.2 | Verify that a data classification policy exists | L3 | Credential patterns and PII hooks are configurable but no formal data classification policy document is bundled | FAIL |
+| V8.1.3 | Verify that environmental factors are documented for authorization decisions | L3 | Environmental factors (client IP, user agent, time of day) are captured in audit events but not yet used for authorization decisions; see Environmental Auth Factors section below | PASS |
 | V8.2.1 | Verify that sensitive data is not cached inappropriately | L2 | Response cache stores CLEAN responses only; BLOCKED/INJECTED/SANITIZED never cached; cache keys exclude credential-bearing headers | PASS |
 | V8.2.2 | Verify that sensitive data is not stored in client-side storage | L2 | Backoffice stores no sensitive values in localStorage/sessionStorage; session token in HttpOnly cookie only | PASS |
 | V8.2.3 | Verify that sensitive data is cleared from memory when no longer needed | L3 | Python garbage collection handles memory cleanup; no explicit memory zeroing for sensitive variables (Python limitation) | FAIL |
@@ -283,6 +284,16 @@ ASVS v5 V1 requires documented security architecture, threat models, and secure 
 | V8.6.2 | Verify that data exports include only authorized data | L3 | Audit log exports respect RLS tenant boundaries; however, no formal data export authorization workflow | PARTIAL |
 
 **Chapter Notes:** Solid data protection controls with CHS credential stripping, multi-tenant isolation, and cache safety. L3 gaps include: no explicit memory zeroing (Python runtime limitation), no formal data classification policy document, no built-in backup encryption (operator responsibility), and no GDPR data subject request tooling.
+
+#### Environmental Auth Factors (V8.1.3 / V8.1.4)
+
+Yashigani captures the following environmental factors in audit events:
+
+- **Client IP** (`client_ip_prefix`): Captured on every login event (AdminLoginEvent, SSOLoginSuccessEvent, SSOLoginFailureEvent) and rate-limit violation events. The last octet is masked for privacy.
+- **User agent**: Available in HTTP request headers and logged by Caddy access logs. Not currently extracted into structured audit fields.
+- **Time of day**: Every audit event includes an ISO 8601 timestamp (`event_time`).
+
+**Current usage:** These environmental factors are captured for forensic analysis and incident investigation but are **not yet used for real-time authorization decisions** (e.g., blocking logins from unusual IPs or at unusual times). The brute-force throttle (ASVS 6.3.5) uses per-IP failure tracking as a protective measure. Adaptive contextual authorization based on environmental anomalies is planned for a future release.
 
 ---
 

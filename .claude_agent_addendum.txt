@@ -1,0 +1,17 @@
+ADDENDUM for agent a1c5014b8ce9c7222:
+
+After the 625-minute delay level, any NEW attempt from that IP must be 
+PERMANENTLY BLOCKED. The IP is added to a blocklist in Redis:
+- Key: auth:blocked:{ip} — no TTL (permanent)
+- Value: timestamp of block + reason
+
+The login endpoint must check the blocklist FIRST, before any other processing.
+If the IP is blocked, return 403 immediately with:
+{"error": "ip_blocked", "message": "This IP has been blocked due to excessive failed authentication attempts. Contact your administrator."}
+
+Admin API endpoints needed:
+- GET /admin/auth/blocked-ips — list all blocked IPs with block time and reason
+- DELETE /admin/auth/blocked-ips/{ip} — unblock a specific IP (requires AdminSession)
+
+Add these to src/yashigani/backoffice/routes/auth.py or a new file.
+Log a CRITICAL event when an IP is permanently blocked.

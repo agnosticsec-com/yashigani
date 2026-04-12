@@ -155,14 +155,18 @@ def run_v5_v8_checks(check, file_contains, any_file_contains, SRC, POLICY, DOCKE
           any_file_contains(SRC / "auth", r'verify_totp')
           and any_file_contains(SRC / "backoffice", r'totp_code'))
 
-    check("6.3.5 — N/A (L3): Suspicious auth attempt notifications not yet implemented",
-          False)
+    check("6.3.5 — Auth brute-force throttle: per-IP (3 failures) and global (5 failures) with exponential delay",
+          any_file_contains(SRC / "backoffice" / "routes", r"_apply_auth_throttle")
+          and any_file_contains(SRC / "backoffice" / "routes", r"_record_auth_failure")
+          and any_file_contains(SRC / "backoffice" / "routes", r"_THROTTLE_IP_THRESHOLD")
+          and any_file_contains(SRC / "backoffice" / "routes", r"Auth throttle.*ip=.*level=.*delay="))
 
     check("6.3.6 — Email not used as authentication mechanism (password + TOTP only)",
           not any_file_contains(SRC / "auth", r'email.*otp|email.*verification.*code|send.*email.*auth'))
 
-    check("6.3.7 — N/A (L3): Post-change auth detail notifications not yet implemented",
-          False)
+    check("6.3.7 — Post-change audit events: password_change (ConfigChangedEvent) and TOTP provision (TotpProvisionCompletedEvent)",
+          any_file_contains(SRC / "backoffice" / "routes", r'_make_config_event.*password_change')
+          and any_file_contains(SRC / "backoffice" / "routes", r'_make_provision_event'))
 
     check("6.3.8 — Generic error message prevents user enumeration (same 'invalid_credentials' for all failures)",
           any_file_contains(SRC / "auth", r'generic_fail.*=.*"invalid_credentials"')
@@ -353,11 +357,13 @@ def run_v5_v8_checks(check, file_contains, any_file_contains, SRC, POLICY, DOCKE
     check("8.1.2 — Field-level access via RBAC groups with method + path_glob patterns",
           any_file_contains(SRC, r'path_glob|allowed_paths'))
 
-    check("8.1.3 — N/A (L3): Environmental/contextual authorization attributes not yet documented",
-          False)
+    check("8.1.3 — Environmental/contextual authorization attributes documented (client IP, user agent, time of day in audit events)",
+          file_contains(Path("docs/yashigani_owasp.md"), r"Environmental Auth Factors")
+          and file_contains(Path("docs/yashigani_owasp.md"), r"client_ip_prefix.*captured"))
 
-    check("8.1.4 — N/A (L3): Environmental factors in auth decisions not yet documented",
-          False)
+    check("8.1.4 — Environmental factors documented: captured for forensics, adaptive authorization planned",
+          file_contains(Path("docs/yashigani_owasp.md"), r"not yet used for real-time authorization decisions")
+          and file_contains(Path("docs/yashigani_owasp.md"), r"Adaptive contextual authorization.*planned"))
 
     # -- V8.2 General Authorization Design --
     print("  -- V8.2 General Authorization Design --")

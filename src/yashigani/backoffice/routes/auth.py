@@ -8,6 +8,8 @@ POST /auth/totp/provision  — TOTP + recovery codes provisioning
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from typing import Annotated, Optional
 
@@ -22,6 +24,179 @@ router = APIRouter()
 
 _TOTP_FAILURE_LIMIT = 3
 _totp_failures: dict[str, int] = {}    # session_prefix → count
+
+_log = logging.getLogger("yashigani.auth")
+
+# ---------------------------------------------------------------------------
+# Auth brute-force throttle (ASVS 6.3.5)
+#
+# Per-IP tracking:  3 consecutive failures from the same IP → throttle.
+# Global tracking:  5 failures from ANY IP(s) within a 15-min window → throttle.
+# Delay escalation: ×5 multiplier — 30s, 60s, 300s, 1500s, 7500s, cap 37500s.
+# Redis keys:
+#   auth:fail:ip:{ip}        — INCR on failure, EXPIRE 900
+#   auth:fail:global          — INCR on failure, EXPIRE 900
+#   auth:throttle:ip:{ip}    — current delay level for this IP
+#   auth:throttle:global      — current delay level globally
+# ---------------------------------------------------------------------------
+
+_THROTTLE_IP_THRESHOLD = 3        # per-IP consecutive failures before throttle
+_THROTTLE_GLOBAL_THRESHOLD = 5    # global failures (any IP) in 15-min window
+_THROTTLE_WINDOW_SECONDS = 900    # 15-minute window for counters
+_THROTTLE_BASE_DELAY = 30         # Level 1: 30 seconds
+_THROTTLE_MULTIPLIER = 5          # Each level multiplies by 5  (sic — see spec)
+_THROTTLE_MAX_DELAY = 37500       # Cap at 625 minutes
+
+# Delay schedule (pre-computed for clarity):
+# Level 1:     30s
+# Level 2:     60s   (but spec says ×5 from 30 → 150 would be naive; spec lists
+#              explicit values, so we use the explicit table)
+_THROTTLE_DELAYS = [30, 60, 300, 1500, 7500, 37500]
+
+
+def _get_throttle_redis():
+    """Return the Redis client used by the session store (reuse existing connection)."""
+    return backoffice_state.session_store._redis
+
+
+def _throttle_delay_for_level(level: int) -> int:
+    """Return delay in seconds for a given throttle level (1-indexed)."""
+    if level <= 0:
+        return 0
+    idx = min(level - 1, len(_THROTTLE_DELAYS) - 1)
+    return _THROTTLE_DELAYS[idx]
+
+
+def _check_ip_access(client_ip: str) -> None:
+    """
+    Check IP allowlist and blocklist BEFORE any auth processing.
+    Order: allowlist (if non-empty, reject unlisted) → blocklist → proceed.
+    Supports IPv4, IPv6, and CIDR ranges.
+    """
+    import ipaddress
+    r = _get_throttle_redis()
+
+    # 1. Check blocklist first (permanent bans)
+    if r.exists(f"auth:blocked:{client_ip}"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ip_blocked",
+                "message": "This IP has been blocked due to excessive failed authentication attempts. Contact your administrator.",
+            },
+        )
+
+    # 2. Check allowlist (if non-empty, only listed IPs/CIDRs can login)
+    allowlist = r.smembers("auth:allowlist")
+    if allowlist:
+        try:
+            addr = ipaddress.ip_address(client_ip)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail={"error": "ip_not_allowed"})
+        allowed = False
+        for entry in allowlist:
+            entry_str = entry if isinstance(entry, str) else entry.decode()
+            try:
+                if "/" in entry_str:
+                    if addr in ipaddress.ip_network(entry_str, strict=False):
+                        allowed = True
+                        break
+                else:
+                    if addr == ipaddress.ip_address(entry_str):
+                        allowed = True
+                        break
+            except ValueError:
+                continue
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "ip_not_allowed", "message": "Login not permitted from this IP address."},
+            )
+
+
+async def _apply_auth_throttle(client_ip: str) -> None:
+    """
+    Check per-IP and global failure counters.  If either exceeds its threshold,
+    compute the delay from the HIGHER level and sleep before returning.
+    This wastes the attacker's connection (ASVS 6.3.5).
+    """
+    r = _get_throttle_redis()
+    ip_key = f"auth:throttle:ip:{client_ip}"
+    global_key = "auth:throttle:global"
+    ip_fail_key = f"auth:fail:ip:{client_ip}"
+    global_fail_key = "auth:fail:global"
+
+    # Read current failure counts and throttle levels
+    pipe = r.pipeline()
+    pipe.get(ip_fail_key)
+    pipe.get(global_fail_key)
+    pipe.get(ip_key)
+    pipe.get(global_key)
+    ip_fails, global_fails, ip_level, global_level = pipe.execute()
+
+    ip_fails = int(ip_fails or 0)
+    global_fails = int(global_fails or 0)
+    ip_level = int(ip_level or 0)
+    global_level = int(global_level or 0)
+
+    # Determine the effective level (use the higher of ip/global)
+    effective_level = max(ip_level, global_level)
+
+    if effective_level > 0:
+        delay = _throttle_delay_for_level(effective_level)
+        _log.warning(
+            "Auth throttle: ip=%s level=%d delay=%ds",
+            client_ip, effective_level, delay,
+        )
+        await asyncio.sleep(delay)
+
+
+def _record_auth_failure(client_ip: str) -> None:
+    """Increment failure counters and escalate throttle level if thresholds are exceeded.
+    After exhausting the delay escalation (level > max), permanently block the IP."""
+    r = _get_throttle_redis()
+    ip_fail_key = f"auth:fail:ip:{client_ip}"
+    global_fail_key = "auth:fail:global"
+    ip_throttle_key = f"auth:throttle:ip:{client_ip}"
+    global_throttle_key = "auth:throttle:global"
+
+    pipe = r.pipeline()
+    pipe.incr(ip_fail_key)
+    pipe.expire(ip_fail_key, _THROTTLE_WINDOW_SECONDS)
+    pipe.incr(global_fail_key)
+    pipe.expire(global_fail_key, _THROTTLE_WINDOW_SECONDS)
+    results = pipe.execute()
+    ip_fails = results[0]
+    global_fails = results[2]
+
+    # Escalate per-IP throttle if threshold exceeded
+    if ip_fails >= _THROTTLE_IP_THRESHOLD:
+        current = int(r.get(ip_throttle_key) or 0)
+        new_level = current + 1
+        # After max delay level → permanent block
+        if new_level > len(_THROTTLE_DELAYS):
+            import json
+            r.set(f"auth:blocked:{client_ip}", json.dumps({
+                "blocked_at": time.time(),
+                "reason": f"Exceeded max throttle level ({len(_THROTTLE_DELAYS)}) — permanent block",
+                "ip_failures": ip_fails,
+            }))  # No TTL = permanent
+            _log.critical("AUTH IP BLOCKED PERMANENTLY: ip=%s failures=%d", client_ip, ip_fails)
+        else:
+            r.set(ip_throttle_key, new_level, ex=_THROTTLE_WINDOW_SECONDS)
+
+    # Escalate global throttle if threshold exceeded
+    if global_fails >= _THROTTLE_GLOBAL_THRESHOLD:
+        current = int(r.get(global_throttle_key) or 0)
+        new_level = current + 1
+        r.set(global_throttle_key, new_level, ex=_THROTTLE_WINDOW_SECONDS)
+
+
+def _reset_ip_auth_failures(client_ip: str) -> None:
+    """On successful login, reset the per-IP counter (global decays via TTL)."""
+    r = _get_throttle_redis()
+    r.delete(f"auth:fail:ip:{client_ip}", f"auth:throttle:ip:{client_ip}")
 
 
 class LoginRequest(BaseModel):
@@ -50,13 +225,21 @@ async def login(body: LoginRequest, request: Request, response: Response):
     Authenticate with username + password + TOTP.
     Issues a session cookie on success.
     Returns 401 for any failure (no credential enumeration).
+    Includes brute-force throttle per ASVS 6.3.5.
     """
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Check order: allowlist → blocklist → throttle → auth
+    _check_ip_access(client_ip)
+    await _apply_auth_throttle(client_ip)
+
     state = backoffice_state
     success, record, reason = state.auth_service.authenticate(
         body.username, body.password, body.totp_code
     )
 
     if not success:
+        _record_auth_failure(client_ip)
         state.audit_writer.write(
             _make_login_event(body.username, "failure", reason)
         )
@@ -69,7 +252,9 @@ async def login(body: LoginRequest, request: Request, response: Response):
                                 "server_time": server_time,
                             })
 
-    client_ip = request.client.host if request.client else "unknown"
+    # Success — reset per-IP failure counter (global decays via TTL)
+    _reset_ip_auth_failures(client_ip)
+
     session = state.session_store.create(
         account_id=record.account_id,
         account_tier=record.account_tier,
@@ -217,15 +402,20 @@ async def change_password(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail={"error": "invalid_current_password"})
 
+    old_hash_tail = record.password_hash[-8:] if record.password_hash else ""
     record.password_hash = hash_password(body.new_password)
+    new_hash_tail = record.password_hash[-8:]
     record.force_password_change = False
 
     # Invalidate ALL sessions including current (ASVS V2.1.4)
     store.invalidate_all_for_account(session.account_id)
     response.delete_cookie(_SESSION_COOKIE)
 
+    # ASVS 6.3.7: audit event with hash tails for forensics / reuse detection
     state.audit_writer.write(_make_config_event(
-        record.username, "password_change", "", "changed"
+        record.username, "password_change",
+        f"old_hash_tail={old_hash_tail}",
+        f"new_hash_tail={new_hash_tail}",
     ))
     return {"status": "ok", "sessions_invalidated": True, "re_authentication_required": True}
 
@@ -299,6 +489,81 @@ def _set_session_cookie(response: Response, token: str, account_tier: str = "adm
         max_age=14400,
         path="/",
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin IP access control — blocklist + allowlist (fail2ban-style)
+# ---------------------------------------------------------------------------
+
+@router.get("/blocked-ips")
+async def list_blocked_ips(session: AdminSession):
+    """List all permanently blocked IPs."""
+    import json
+    r = _get_throttle_redis()
+    blocked = {}
+    for key in r.scan_iter("auth:blocked:*"):
+        ip = key.decode().split("auth:blocked:")[-1] if isinstance(key, bytes) else key.split("auth:blocked:")[-1]
+        data = r.get(key)
+        try:
+            blocked[ip] = json.loads(data) if data else {"reason": "unknown"}
+        except (json.JSONDecodeError, TypeError):
+            blocked[ip] = {"reason": str(data)}
+    return {"blocked_ips": blocked, "total": len(blocked)}
+
+
+@router.delete("/blocked-ips/{ip}")
+async def unblock_ip(ip: str, session: AdminSession):
+    """Remove an IP from the permanent blocklist (admin only)."""
+    r = _get_throttle_redis()
+    key = f"auth:blocked:{ip}"
+    if r.exists(key):
+        r.delete(key)
+        _log.info("Admin %s unblocked IP: %s", session.account_id, ip)
+        return {"status": "ok", "unblocked": ip}
+    raise HTTPException(status_code=404, detail={"error": "ip_not_found"})
+
+
+@router.get("/allowed-ips")
+async def list_allowed_ips(session: AdminSession):
+    """List all IPs/CIDRs in the login allowlist. Empty = allow all."""
+    r = _get_throttle_redis()
+    entries = r.smembers("auth:allowlist")
+    allowed = [e.decode() if isinstance(e, bytes) else e for e in entries]
+    return {"allowed_ips": sorted(allowed), "total": len(allowed),
+            "mode": "restrict" if allowed else "open (all IPs permitted)"}
+
+
+@router.post("/allowed-ips")
+async def add_allowed_ip(request: Request, session: AdminSession):
+    """Add an IP or CIDR to the login allowlist. Supports IPv4 and IPv6."""
+    import ipaddress
+    body = await request.json()
+    entry = body.get("ip", "").strip()
+    if not entry:
+        raise HTTPException(status_code=400, detail={"error": "ip_required"})
+    # Validate IPv4/IPv6 address or network
+    try:
+        if "/" in entry:
+            ipaddress.ip_network(entry, strict=False)
+        else:
+            ipaddress.ip_address(entry)
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"error": "invalid_ip", "message": f"'{entry}' is not a valid IPv4/IPv6 address or CIDR range"})
+    r = _get_throttle_redis()
+    r.sadd("auth:allowlist", entry)
+    _log.info("Admin %s added IP to allowlist: %s", session.account_id, entry)
+    return {"status": "ok", "added": entry}
+
+
+@router.delete("/allowed-ips/{ip_or_cidr:path}")
+async def remove_allowed_ip(ip_or_cidr: str, session: AdminSession):
+    """Remove an IP/CIDR from the allowlist."""
+    r = _get_throttle_redis()
+    removed = r.srem("auth:allowlist", ip_or_cidr)
+    if removed:
+        _log.info("Admin %s removed IP from allowlist: %s", session.account_id, ip_or_cidr)
+        return {"status": "ok", "removed": ip_or_cidr}
+    raise HTTPException(status_code=404, detail={"error": "entry_not_found"})
 
 
 def _get_record_by_id(account_id: str):
