@@ -44,7 +44,13 @@ _BUNDLES: list[dict] = [
     {
         "id": "langflow",
         "name": "Langflow",
-        "description": "Visual multi-agent workflow builder by DataStax. Build custom agent workflows via drag-and-drop UI.",
+        "description": "Visual multi-agent workflow builder by DataStax. Best for: custom AI pipelines, chaining steps, API integrations, reusable automation workflows.",
+        "best_for": ["Multi-step workflows", "API chaining", "Data pipelines", "Automation"],
+        "example_prompts": [
+            "Summarise this document and translate the summary to Portuguese",
+            "Check the weather API, then draft an email based on the forecast",
+            "Extract key points, classify sentiment, create a report",
+        ],
         "upstream_url": "https://github.com/langflow-ai/langflow",
         "license": "MIT",
         "stack": "Python",
@@ -57,7 +63,13 @@ _BUNDLES: list[dict] = [
     {
         "id": "letta",
         "name": "Letta",
-        "description": "Stateful agent with persistent memory and tool use (formerly MemGPT). Retains context across sessions.",
+        "description": "Stateful agent with persistent memory (formerly MemGPT). Best for: long-running projects, personal assistant tasks, research that builds over time.",
+        "best_for": ["Persistent memory", "Long-running projects", "Personal assistant", "Research"],
+        "example_prompts": [
+            "Remember that our Q2 budget is 50K and the deadline is June 30th",
+            "What did we discuss about the security audit last time?",
+            "I prefer bullet points over paragraphs — remember that for all future responses",
+        ],
         "upstream_url": "https://github.com/letta-ai/letta",
         "license": "Apache-2.0",
         "stack": "Python",
@@ -73,10 +85,15 @@ _BUNDLES: list[dict] = [
         "id": "openclaw",
         "name": "OpenClaw",
         "description": (
-            "Personal AI assistant with 30+ messaging channel integrations. "
-            "Runs its own Gateway on port 18789. "
-            "Integration pattern: OpenClaw Gateway → Yashigani → LLM providers."
+            "Connected AI agent with 30+ messaging channel integrations and web access. "
+            "Best for: web search, code execution, file management, Slack/Teams/email integration."
         ),
+        "best_for": ["Web search", "Code execution", "File management", "Messaging channels"],
+        "example_prompts": [
+            "Search the web for the latest OWASP Top 10 changes and summarise them",
+            "Write a Python script that parses a CSV and finds duplicates",
+            "Draft a Slack message announcing the new security policy",
+        ],
         "upstream_url": "https://openclaw.ai",
         "license": "TBD — verify at openclaw.ai before production use",
         "stack": "Node.js 24",
