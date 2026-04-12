@@ -401,10 +401,10 @@ A DNS fix resolved a networking issue where the `ollama` and `ollama-init` conta
 
 Admin account provisioning was enhanced: auto-generated accounts now use fun animal/nature-themed codenames as usernames, with TOTP pre-provisioned at install time. PgBouncer password handling was corrected to read the password from `.env` rather than using a hardcoded or missing value. Alembic database migrations are now included directly in the backoffice Docker image, ensuring schema migrations run automatically on container startup without requiring a separate migration step.
 
-All 18 services have verified health checks from a clean-slate installation using the following command:
+All services have verified health checks from a clean-slate installation using the following command:
 
 ```bash
-bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langflow,letta,openclaw
+bash install.sh --domain yashigani.local --tls-mode selfsigned --with-openwebui --agent-bundles all
 ```
 
 ### v0.9.4 — Final Hardening Before v2.0
@@ -895,17 +895,63 @@ Suitable for: regulated industries with no-cloud or no-container requirements, a
 
 ## 8. Roadmap Context
 
-Yashigani v2.20 is the current production release. v2.20 is a focused security hardening release that closes multiple OWASP ASVS Level 3 gaps, ships production-grade PII detection (3 modes, 10 entity types, bidirectional, cloud bypass), adds container hardening (seccomp, AppArmor, read-only filesystem), WAF/DDoS protection, streaming chunk-level inspection, SBOM + cosign image signing, and two STRIDE threat models covering 17 product threats and 38 solution threats. The test suite grows from 413 to 548 (523 unit + 25 e2e). Nine compliance framework mappings are published.
+Yashigani v2.23 is the current production release. v2.23 consolidates the product to a single branch (`main`). The `release/1.x` branch is retired. Open WebUI, Wazuh, Internal CA, and agent bundles are optional compose profiles controlled by installer flags. The admin UI was refactored to a static SPA (API-first, external JS/CSS, no inline code), enabling strict Content Security Policy (`script-src 'self'; style-src 'self'`, zero `unsafe-inline`). Administrators can enable/disable services from the admin panel. Smallstep step-ca provides service-to-service mTLS. Domain-bound licensing ties keys to deployment domains.
 
-v2.1 added the Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), and OPA v1_routing.rego verified operational. The admin panel is the management layer that makes the product fully self-service — no curl or API knowledge needed.
+v2.22.x delivered OPA enforcement on all /v1 traffic (request + response path), agent personas (Lala, Julietta, Scout) with chaining support, fail2ban-style auth throttling with IP allowlist/blocklist, and 398 OWASP compliance checks at 97.7% pass rate. Content relay detection, PKCE on OIDC, acr/amr validation, constant-time TOTP comparison, crypto inventory API, and __Host- cookie prefix rounded out the security hardening.
 
-v2.0 introduced five major subsystems: the Unified Identity Model (every entity is an identity with a `kind` field, no separate stores), the Optimization Engine (four-dimensional routing with P1-P9 priority matrix), the three-tier Budget System (org cap → group → individual, enforced by dedicated budget-redis), Open WebUI integration at `/chat/*` (internal only, all LLM calls through gateway), and the Container Pool Manager (per-identity isolation, self-healing, postmortem forensics, Ollama horizontal scaling). Additional v2.0 additions include the Multi-IdP Identity Broker (OIDC + SAML v2), the three-layer sensitivity classification pipeline (regex + FastText + Ollama, all ON by default), P1-P5 alert severity with SIEM integration, OPA routing safety net with LLM policy review, 17 core services + 3 optional agent bundles plus dynamic per-identity containers, and 12 Grafana dashboards.
+v2.20 closed OWASP ASVS Level 3 gaps with PII detection (3 modes, 10 entity types, bidirectional, cloud bypass), container hardening (seccomp, AppArmor, read-only filesystem), WAF/DDoS protection, streaming chunk-level inspection, SBOM + cosign image signing, and two STRIDE threat models. v2.1 added the Admin Dashboard. v2.0 introduced the Unified Identity Model, Optimization Engine, Budget System, Open WebUI integration, and Container Pool Manager.
 
-**Two release lines are maintained:**
-- **v2.x** (branch: `main`) — Full stack: gateway + Open WebUI + Optimization Engine + Budget System + Container Pool Manager
-- **v1.x** (branch: `release/1.x`) — Gateway-only: security enforcement proxy without Open WebUI or full-stack subsystems
+**Single branch:** `main` — all features, all tiers. Optional services are compose profiles:
+- `--with-openwebui` — Open WebUI chat interface
+- `--wazuh` — Wazuh SIEM full stack
+- `--with-internal-ca` — Smallstep step-ca for service-to-service mTLS
+- `--agent-bundles lala,julietta,scout` — Agent bundles (or `all`)
 
-The progression from v0.1.0 through v2.20 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade AI operations platform with intelligent routing, budget governance, unified identity management, supply-chain assurance, and an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget exhaustion — results in an insecure pass-through or silent rejection. Every failure mode has been designed to be fail-closed or gracefully degraded.
+The progression from v0.1.0 through v2.23 reflects a deliberate security maturity arc: from a minimal viable security proxy to a full enterprise-grade AI operations platform with intelligent routing, budget governance, unified identity management, supply-chain assurance, strict CSP, 398 OWASP compliance checks, and an ecosystem of integrated third-party agents. Each version maintained backward compatibility while adding layers of defense. The result is a system where no single component failure — inspection backend unavailability, database outage, KMS unreachability, budget exhaustion — results in an insecure pass-through or silent rejection. Every failure mode has been designed to be fail-closed or gracefully degraded.
+
+### v2.23 Delivered
+
+v2.23 consolidates Yashigani to a single branch and delivers the API-first admin refactor with strict CSP.
+
+- **Branch consolidation** — `release/1.x` eliminated; Open WebUI is `--with-openwebui` flag, not a separate branch
+- **API-first admin UI** — static SPA with external JS/CSS; no Jinja2 templates, no inline code; all logic in backend APIs
+- **Strict CSP** — `script-src 'self'; style-src 'self'`, zero `unsafe-inline`; `object-src none`, `base-uri none`, `cross-origin-opener-policy: same-origin`, CSP report endpoint
+- **Optional services via compose profiles** — openwebui, wazuh, internal-ca, langflow, letta, openclaw; controlled by installer flags
+- **Admin service management** — enable/disable any service from admin panel (no SSH required)
+- **Internal CA** — Smallstep step-ca for service-to-service mTLS (`--with-internal-ca`); automatic certificate provisioning and rotation
+- **Domain-bound licensing** — ECDSA P-256 signed; license keys bound to deployment domain
+- **Podman socket detection on macOS** — finds socket path from `podman machine inspect`
+- **Container socket mount read-only** — macOS Podman compatibility
+- **restore.sh** — backup recovery for secrets, `.env`, and Postgres dumps
+- **Admin-configurable password policy** — `YASHIGANI_PASSWORD_MAX_AGE_DAYS` (max 13 months)
+
+### v2.22.x Delivered
+
+v2.22.x is a multi-release series delivering OPA on /v1, agent personas, fail2ban, and 398 OWASP checks.
+
+- **OPA on ALL /v1 traffic** — request path AND response path enforcement on every `/v1/chat/completions` request; fail-closed if OPA unreachable
+- **Agent personas** — Lala (Langflow), Julietta (Letta), Scout (OpenClaw) with descriptions and example prompts
+- **Agent chaining** — `@Scout` -> `@Julietta` -> `@qwen` in one prompt; `@Help` agent provides chaining guide
+- **Fail2ban auth throttle** — per-IP (3 failures) + global (5 failures), x5 escalation (30s -> 1m -> 5m -> 25m -> 2h -> 10h), permanent IP block after max
+- **IP allowlist + blocklist** — IPv4/IPv6/CIDR, admin manageable; blocklist takes precedence
+- **Content relay detection** — agent-to-agent content laundering detection
+- **PKCE on OIDC** — code_verifier/code_challenge on all OIDC flows
+- **acr/amr validation** — authentication strength enforcement on ID tokens
+- **Constant-time comparisons** — `hmac.compare_digest` for TOTP verification
+- **Crypto inventory API** — `/admin/crypto/inventory` + admin UI with JSON export
+- **__Host- cookie prefix** — session cookies enforce Secure, Path=/, no Domain attribute
+- **Context-specific password word list** — blocks "yashigani", "admin", "password" etc.
+- **Self-service password reset** — TOTP-verified, no admin needed
+- **398 OWASP checks** — 345 ASVS v5 (all 17 chapters) + 38 API Security + 10 Agentic AI + 7 Infrastructure; 97.7% pass rate (389/398); 10 remaining = accepted risks
+- **Risk register** — 16 risks with 5x5 matrix and quantitative analysis; pre-release gate
+- **Podman SDK** (podman-py) for container-per-user isolation
+- **Grafana + Prometheus admin access** — `/admin/grafana/` and `/admin/prometheus/` via Caddy forward_auth
+- **Monitoring tab** — Grafana dashboards + Prometheus + Wazuh links in admin UI
+- **Wazuh SIEM full stack** — manager + indexer + dashboard as optional compose profile (`--wazuh`)
+- **Budget allocation wiring** — per-identity from Redis, not hardcoded
+- **Postgres migrations on startup** — pg_partman/pg_cron optional
+- **Dashboard auto-refresh** (15s), full agent registration form, audit log viewer with search/filter/export CSV, session timeout warning (10 min), first-run onboarding checklist, login branding (Agnostic Security footer)
+- Goose agent removed (ACP too slow on CPU)
 
 ### v0.8.0 Delivered
 
@@ -988,10 +1034,10 @@ v1.09.5 makes the agent bundle experience zero-friction and adds first-class Pod
 - **Alembic migrations in backoffice image** — database migrations are bundled in the backoffice Docker image and run automatically on container startup
 - **18-service full stack verified** — all health checks pass from a clean-slate install (15 core + 3 agent bundles)
 
-Full non-interactive install command:
+Full install command:
 
 ```bash
-bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langflow,letta,openclaw
+bash install.sh --domain yashigani.local --tls-mode selfsigned --with-openwebui --agent-bundles all --wazuh
 ```
 
 ### v2.1 Delivered
