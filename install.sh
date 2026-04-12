@@ -1608,7 +1608,17 @@ compose_up() {
 
     # 1. Ensure Podman socket is running
     systemctl --user start podman.socket 2>/dev/null || true
-    export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+    local _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+    export DOCKER_HOST="unix://${_podman_sock}"
+    # Write socket path for gateway container mount (Pool Manager isolation)
+    local env_file="${WORK_DIR}/docker/.env"
+    if grep -q "^CONTAINER_SOCKET=" "$env_file" 2>/dev/null; then
+      local tmp_env; tmp_env="$(mktemp)"
+      sed "s|^CONTAINER_SOCKET=.*|CONTAINER_SOCKET=${_podman_sock}|" "$env_file" > "$tmp_env"
+      mv "$tmp_env" "$env_file"
+    else
+      echo "CONTAINER_SOCKET=${_podman_sock}" >> "$env_file"
+    fi
 
     # 2. Check sysctl for privileged port binding (Caddy needs 80/443)
     local port_start

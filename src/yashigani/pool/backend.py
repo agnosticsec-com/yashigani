@@ -169,11 +169,13 @@ def create_backend() -> Optional[ContainerBackend]:
     except Exception:
         pass
 
-    # Try Podman via explicit socket paths
+    # Try Podman via explicit socket paths (including mounted socket from compose)
     for sock in [
+        "unix:///var/run/container.sock",  # Mounted by docker-compose.yml
         f"unix:///run/user/{_get_uid()}/podman/podman.sock",
         "unix:///run/podman/podman.sock",
         "unix:///var/run/podman/podman.sock",
+        "unix:///var/run/docker.sock",  # Docker socket fallback
     ]:
         try:
             from podman import PodmanClient
