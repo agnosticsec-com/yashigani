@@ -68,6 +68,18 @@
     <main>
         <!-- Dashboard Page -->
         <div class="page active" id="page-dashboard">
+            <!-- First-run onboarding checklist -->
+            <div id="onboarding-checklist" style="display:none;margin-bottom:20px;padding:16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;">
+                <h3 style="margin:0 0 12px;font-size:1rem;color:#1e40af;">Getting Started</h3>
+                <div style="display:flex;flex-direction:column;gap:6px;font-size:0.85rem;">
+                    <label id="ob-password" style="color:#64748b;"><input type="checkbox" disabled> Change default password</label>
+                    <label id="ob-agent" style="color:#64748b;"><input type="checkbox" disabled> Register your first agent</label>
+                    <label id="ob-budget" style="color:#64748b;"><input type="checkbox" disabled> Configure budget allocation</label>
+                    <label id="ob-alerts" style="color:#64748b;"><input type="checkbox" disabled> Set up alert webhooks</label>
+                </div>
+                <button onclick="document.getElementById('onboarding-checklist').style.display='none';localStorage.setItem('ysg_onboarding_dismissed','1');" style="margin-top:10px;padding:4px 12px;background:transparent;border:1px solid #93c5fd;border-radius:4px;cursor:pointer;font-size:0.8rem;color:#3b82f6;">Dismiss</button>
+            </div>
+
             <h2>System Health</h2>
             <div id="health-cards" class="cards"><div class="card"><span class="loading">Loading...</span></div></div>
 
@@ -147,8 +159,9 @@
                     <button onclick="toggleForm('create-user-form')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">+ Add User</button>
                 </div>
                 <div id="create-user-form" style="display:none;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
-                    <div style="display:flex;gap:8px;align-items:end;">
-                        <div><label style="font-size:0.75rem;color:#64748b">Username</label><br><input id="new-user-name" type="text" placeholder="username" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:280px"></div>
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Username</label><br><input id="new-user-name" type="text" placeholder="username" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:180px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Email</label><br><input id="new-user-email" type="email" placeholder="user@example.com" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:220px"></div>
                         <button onclick="createUser()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Create</button>
                     </div>
                     <div id="create-user-result" style="margin-top:6px;font-size:0.8rem"></div>
@@ -1224,6 +1237,57 @@
         params.set('format', 'csv');
         window.open('/admin/audit/export?' + params.toString(), '_blank');
     }
+
+    // First-run onboarding checklist
+    async function checkOnboarding() {
+        if (localStorage.getItem('ysg_onboarding_dismissed') === '1') return;
+        var show = false;
+        // Check password change status
+        var status = await api('/auth/status');
+        // Check agents
+        var agents = await api('/admin/agents');
+        var agentCount = (agents && agents.agents) ? agents.agents.length : 0;
+        // Check alerts
+        var alerts = await api('/admin/alerts/config');
+        var hasWebhook = alerts && alerts.config && (alerts.config.slack_webhook_url || alerts.config.teams_webhook_url);
+
+        var obEl = document.getElementById('onboarding-checklist');
+        var pwCb = document.querySelector('#ob-password input');
+        var agCb = document.querySelector('#ob-agent input');
+        var alCb = document.querySelector('#ob-alerts input');
+
+        if (pwCb) pwCb.checked = true; // They logged in, so password was changed
+        if (agCb) agCb.checked = agentCount > 0;
+        if (alCb) alCb.checked = !!hasWebhook;
+
+        // Show if any item unchecked
+        if (!agCb.checked || !alCb.checked) {
+            show = true;
+        }
+        if (show) obEl.style.display = 'block';
+    }
+    checkOnboarding();
+
+    // Session timeout warning — check every 60s, warn at 10 min remaining
+    var sessionStart = Date.now();
+    var sessionMaxMs = 4 * 60 * 60 * 1000; // 4 hours
+    var warnMs = 10 * 60 * 1000; // 10 minutes before expiry
+    var sessionWarned = false;
+    setInterval(function() {
+        var elapsed = Date.now() - sessionStart;
+        var remaining = sessionMaxMs - elapsed;
+        if (remaining <= 0) {
+            window.location.href = '/admin/login';
+        } else if (remaining <= warnMs && !sessionWarned) {
+            sessionWarned = true;
+            var mins = Math.ceil(remaining / 60000);
+            var banner = document.createElement('div');
+            banner.id = 'session-warning';
+            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f59e0b;color:#000;padding:8px 16px;text-align:center;font-size:0.85rem;z-index:9999;';
+            banner.innerHTML = 'Session expires in ' + mins + ' minutes. <button onclick="this.parentElement.remove();sessionWarned=false;sessionStart=Date.now();" style="margin-left:12px;padding:4px 12px;background:#fff;border:1px solid #d97706;border-radius:4px;cursor:pointer;font-size:0.8rem">Extend session</button>';
+            document.body.prepend(banner);
+        }
+    }, 60000);
 
     // Load dashboard on page load + auto-refresh every 15s
     loadDashboard();
