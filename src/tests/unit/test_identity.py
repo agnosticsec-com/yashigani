@@ -85,16 +85,16 @@ class TestIdentityRegistry:
     def test_register_service(self, registry):
         identity_id, key = registry.register(
             kind=IdentityKind.SERVICE,
-            name="Goose",
-            slug="goose",
-            description="AI developer assistant",
-            upstream_url="http://goose:3284",
-            container_image="ghcr.io/block/goose:latest",
+            name="Langflow",
+            slug="langflow",
+            description="Visual multi-agent workflow builder",
+            upstream_url="http://langflow:7860",
+            container_image="docker.io/langflowai/langflow:latest",
             capabilities=["code_execution"],
         )
         identity = registry.get(identity_id)
         assert identity["kind"] == "service"
-        assert identity["upstream_url"] == "http://goose:3284"
+        assert identity["upstream_url"] == "http://langflow:7860"
         assert "code_execution" in identity["capabilities"]
 
     def test_slug_uniqueness(self, registry):

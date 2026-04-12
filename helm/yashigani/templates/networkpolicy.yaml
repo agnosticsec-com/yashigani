@@ -636,8 +636,6 @@ spec:
         - protocol: TCP
           port: 8000    # langgraph
         - protocol: TCP
-          port: 3284    # goose
-        - protocol: TCP
           port: 18789   # openclaw
 
 ---

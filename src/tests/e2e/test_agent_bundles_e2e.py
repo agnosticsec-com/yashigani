@@ -1,7 +1,7 @@
 """
 E2E: Agent bundle tests — send real prompts through each agent.
 
-Verifies that registered agent bundles (LangGraph, Goose, OpenClaw)
+Verifies that registered agent bundles (Langflow, Letta, OpenClaw)
 can receive and process requests through the gateway.
 
 Requires: running Yashigani stack with agent bundles enabled.
@@ -15,9 +15,6 @@ from tests.e2e.conftest import container_running, runtime_run
 
 class TestAgentBundleHealth:
     """Verify all agent bundle containers are running and healthy."""
-
-    def test_goose_running(self):
-        assert container_running("docker-goose-1")
 
     def test_openclaw_running(self):
         assert container_running("docker-openclaw-1")
@@ -52,17 +49,6 @@ for aid in sorted(agents):
 
 class TestAgentBundleConnectivity:
     """Test connectivity to agent bundles from the gateway network."""
-
-    def test_goose_reachable(self):
-        output = runtime_run("docker-gateway-1", """
-import urllib.request
-try:
-    r = urllib.request.urlopen("http://goose:3284/status", timeout=5)
-    print(f"goose:{r.status}")
-except Exception as e:
-    print(f"goose:error:{e}")
-""")
-        assert "goose:" in output
 
     def test_openclaw_reachable(self):
         output = runtime_run("docker-gateway-1", """
