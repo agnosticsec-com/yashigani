@@ -62,6 +62,7 @@ class SSOResult:
     groups: list[str] = field(default_factory=list)
     idp_name: str = ""
     error: str = ""
+    raw_claims: dict = field(default_factory=dict)  # ID token claims (acr, amr, etc.)
 
 
 # Tier limits for IdP count
@@ -139,17 +140,21 @@ class IdentityBroker:
                 return idp
         return None
 
-    def get_oidc_auth_url(self, idp_id: str, redirect_uri: str, state: str, nonce: str = "") -> Optional[str]:
+    def get_oidc_auth_url(
+        self, idp_id: str, redirect_uri: str, state: str, nonce: str = "",
+    ) -> tuple[Optional[str], str]:
         """
         Generate OIDC authorization URL for a specific IdP.
 
         Delegates to OIDCProvider.get_authorization_url() which performs a
         real OIDC discovery fetch and uses authlib to build the URL.
-        Returns the redirect URL, or None if IdP not found/disabled.
+        Returns (redirect_url, code_verifier) or (None, "") if IdP not found.
+        The caller MUST persist code_verifier in session state for the token
+        exchange (PKCE — ASVS 10.4.6).
         """
         idp = self._idps.get(idp_id)
         if not idp or idp.protocol != "oidc" or not idp.enabled:
-            return None
+            return None, ""
 
         provider = self._oidc_providers.get(idp_id)
         if provider is None:
@@ -169,7 +174,8 @@ class IdentityBroker:
             # per-request when the host/scheme changes across environments.
             provider._config.redirect_uri = redirect_uri
 
-        return provider.get_authorization_url(state=state, nonce=nonce or state)
+        url, code_verifier = provider.get_authorization_url(state=state, nonce=nonce or state)
+        return url, code_verifier
 
     def handle_oidc_callback(
         self,
@@ -177,12 +183,14 @@ class IdentityBroker:
         code: str,
         redirect_uri: str,
         state: str = "",
+        code_verifier: str = "",
     ) -> SSOResult:
         """
         Handle OIDC authorization code callback.
 
         Delegates to OIDCProvider.exchange_code(), validates the ID token,
         maps IdP groups, and returns a populated SSOResult.
+        code_verifier is forwarded to the token endpoint for PKCE (ASVS 10.4.6).
         """
         idp = self._idps.get(idp_id)
         if not idp:
@@ -196,7 +204,9 @@ class IdentityBroker:
         provider._config.redirect_uri = redirect_uri
 
         try:
-            user_info: OIDCUserInfo = provider.exchange_code(code=code, state=state)
+            user_info: OIDCUserInfo = provider.exchange_code(
+                code=code, state=state, code_verifier=code_verifier,
+            )
         except ValueError as exc:
             logger.warning("OIDC code exchange failed for IdP %s: %s", idp.name, exc)
             return SSOResult(success=False, error=str(exc))
@@ -225,6 +235,7 @@ class IdentityBroker:
             name=user_info.name or "",
             groups=mapped_groups,
             idp_name=idp.name,
+            raw_claims=user_info.raw_claims,
         )
 
     def handle_saml_response(

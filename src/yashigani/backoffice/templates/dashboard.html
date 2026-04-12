@@ -544,6 +544,14 @@
                     <p style="font-size:0.85rem;color:#64748b;">Version: 2.1 | Runtime: Podman/Docker | TLS: Self-signed</p>
                 </div>
             </div>
+            <div class="panel">
+                <div class="panel-header">Cryptography</div>
+                <div class="panel-body">
+                    <p style="font-size:0.85rem;color:#334155;margin-bottom:12px;">Cryptographic algorithm inventory (OWASP ASVS v5 V11). Lists all algorithms in use, deprecated ciphers, and post-quantum readiness.</p>
+                    <div id="crypto-inventory"><span class="loading">Loading...</span></div>
+                    <button onclick="exportCryptoJson()" style="margin-top:12px;padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">Export JSON</button>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -1107,6 +1115,8 @@
     }
 
     // Settings
+    var _cryptoInventoryCache = null;
+
     async function loadSettings() {
         var data = await api('/admin/license');
         var container = document.getElementById('license-info');
@@ -1117,6 +1127,38 @@
         } else {
             container.innerHTML = '<p style="font-size:0.85rem;color:#334155;"><strong>Tier:</strong> Community Edition — no license required.<br><span style="color:#64748b;">To use other features please add a license for your preferred tier.</span></p>';
         }
+        // Crypto inventory (ASVS 11.1.3)
+        loadCryptoInventory();
+    }
+
+    async function loadCryptoInventory() {
+        var data = await api('/admin/crypto/inventory');
+        _cryptoInventoryCache = data;
+        var el = document.getElementById('crypto-inventory');
+        if (!data) { el.innerHTML = '<span style="color:#ef4444">Failed to load</span>'; return; }
+        var html = '<table><thead><tr><th>Algorithm</th><th>Usage</th><th>Strength</th></tr></thead><tbody>';
+        (data.algorithms || []).forEach(function(a) {
+            html += '<tr><td>' + a.name + '</td><td>' + a.usage + '</td><td>' + a.strength + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        if (data.deprecated && data.deprecated.length) {
+            html += '<p style="margin-top:8px;color:#ef4444;font-size:0.85rem;"><strong>Deprecated:</strong> ' + data.deprecated.join(', ') + '</p>';
+        } else {
+            html += '<p style="margin-top:8px;color:#22c55e;font-size:0.85rem;">No deprecated algorithms in use.</p>';
+        }
+        if (data.post_quantum && data.post_quantum.length) {
+            html += '<p style="font-size:0.85rem;color:#2563eb;"><strong>Post-Quantum:</strong> ' + data.post_quantum.join(', ') + '</p>';
+        }
+        html += '<p style="font-size:0.75rem;color:#64748b;margin-top:4px;"><strong>Compliance:</strong> ' + (data.compliance || '') + '</p>';
+        el.innerHTML = html;
+    }
+
+    function exportCryptoJson() {
+        if (!_cryptoInventoryCache) { alert('Inventory not loaded yet'); return; }
+        var blob = new Blob([JSON.stringify(_cryptoInventoryCache, null, 2)], {type: 'application/json'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url; a.download = 'yashigani_crypto_inventory.json'; a.click();
+        URL.revokeObjectURL(url);
     }
 
     // IdP config save (placeholder — full implementation in v2.2 with Caddy OIDC module)

@@ -185,6 +185,10 @@ def create_backoffice_app() -> FastAPI:
     from yashigani.backoffice.routes.pii import router as pii_router
     app.include_router(pii_router, prefix="/admin/pii", tags=["pii"])
 
+    # v2.3 — Cryptographic inventory (ASVS 11.1.3)
+    from yashigani.backoffice.routes.crypto_inventory import router as crypto_inventory_router
+    app.include_router(crypto_inventory_router, prefix="/admin", tags=["crypto"])
+
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)
     app.include_router(webauthn_router, tags=["webauthn"])

@@ -2,11 +2,13 @@
 Yashigani Auth — TOTP (RFC 6238) + 8-code recovery system.
 OWASP ASVS V2.8: per-account seeds, replay prevention, one-time display.
 Uses HMAC-SHA256 (upgraded from SHA1 for post-quantum resilience).
+All code comparisons use hmac.compare_digest (ASVS 11.2.4).
 """
 from __future__ import annotations
 
 import base64
 import hashlib
+import hmac as _hmac_mod
 import io
 import secrets
 import time
@@ -85,17 +87,34 @@ def generate_provisioning(
     )
 
 
+def _constant_time_otp_check(expected: str, actual: str) -> bool:
+    """
+    Constant-time comparison of OTP strings (ASVS 11.2.4).
+    Prevents timing side-channel attacks on TOTP verification.
+    """
+    return _hmac_mod.compare_digest(expected.encode("utf-8"), actual.encode("utf-8"))
+
+
 def verify_totp(secret_b32: str, code: str, used_codes_cache: set[str]) -> bool:
     """
     Verify a TOTP code. Returns True on valid, unused code.
     Replay prevention: adds the window key to used_codes_cache on success.
+    Uses constant-time comparison to prevent timing side-channels (ASVS 11.2.4).
     """
     pyotp = _import_pyotp()
     totp = pyotp.TOTP(secret_b32, digest=hashlib.sha256)
     window_key = f"{secret_b32}:{int(time.time()) // 30}"
     if window_key in used_codes_cache:
         return False  # replay
-    valid = totp.verify(code, valid_window=1)
+    # Generate expected codes for the valid window and compare in constant time,
+    # rather than relying on pyotp's internal == comparison.
+    now_ts = int(time.time())
+    valid = False
+    for offset in range(-1, 2):  # valid_window=1 means [-1, 0, +1]
+        expected = totp.at(now_ts + offset * 30)
+        if _constant_time_otp_check(expected, code):
+            valid = True
+            break
     if valid:
         used_codes_cache.add(window_key)
     return valid
