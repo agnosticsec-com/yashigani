@@ -211,10 +211,14 @@ class WebAuthnService:
             raise ValueError("No pending registration challenge for this user.")
 
         try:
+            credential_json = _to_json_str(credential_response)
+            # py-webauthn v2.1+: parse_raw expects bytes; v1.x: expects str
+            try:
+                cred = webauthn.RegistrationCredential.parse_raw(credential_json.encode())
+            except (TypeError, AttributeError):
+                cred = webauthn.RegistrationCredential.parse_raw(credential_json)
             verification = webauthn.verify_registration_response(
-                credential=webauthn.RegistrationCredential.parse_raw(
-                    _to_json_str(credential_response)
-                ),
+                credential=cred,
                 expected_challenge=challenge,
                 expected_rp_id=cfg.rp_id,
                 expected_origin=expected_origin,
@@ -303,10 +307,13 @@ class WebAuthnService:
             raise ValueError("Credential not found or does not belong to this user.")
 
         try:
+            auth_json = _to_json_str(credential_response)
+            try:
+                auth_cred = webauthn.AuthenticationCredential.parse_raw(auth_json.encode())
+            except (TypeError, AttributeError):
+                auth_cred = webauthn.AuthenticationCredential.parse_raw(auth_json)
             verification = webauthn.verify_authentication_response(
-                credential=webauthn.AuthenticationCredential.parse_raw(
-                    _to_json_str(credential_response)
-                ),
+                credential=auth_cred,
                 expected_challenge=challenge,
                 expected_rp_id=cfg.rp_id,
                 expected_origin=expected_origin,

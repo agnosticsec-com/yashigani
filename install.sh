@@ -2796,6 +2796,18 @@ main() {
     # Step 11b: Register agent bundles (after backoffice is healthy)
     register_agent_bundles
 
+    # Step 11c: Auto-configure SIEM sink when Wazuh is installed
+    if [[ "$INSTALL_WAZUH" == "true" ]] || echo "${COMPOSE_PROFILES[*]}" | grep -q "wazuh"; then
+      log_info "Configuring audit SIEM sink for Wazuh..."
+      local _bo_url="http://localhost:8443"
+      local _siem_config='{"backend":"wazuh","wazuh_url":"https://wazuh-manager:55000","wazuh_username":"wazuh-wui","wazuh_password":"'"${GEN_WAZUH_API_PASSWORD:-}"'","enabled":true}'
+      if curl -sf -X PUT "${_bo_url}/admin/alerts/sinks" -H "Content-Type: application/json" -d "$_siem_config" -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" >/dev/null 2>&1; then
+        log_success "Wazuh SIEM sink auto-configured"
+      else
+        log_warn "Wazuh SIEM sink auto-configuration failed — configure manually via admin UI"
+      fi
+    fi
+
     # Step 12: Health check
     run_health_check
 

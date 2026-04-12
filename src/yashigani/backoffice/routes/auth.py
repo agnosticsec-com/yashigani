@@ -39,6 +39,11 @@ class TotpConfirmRequest(BaseModel):
     totp_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
+class SelfServiceResetRequest(BaseModel):
+    username: str = Field(min_length=3)
+    totp_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
 @router.post("/login")
 async def login(body: LoginRequest, request: Request, response: Response):
     """
@@ -101,6 +106,56 @@ async def session_status(session: AdminSession):
         "account_id": session.account_id,
         "account_tier": session.account_tier,
         "expires_at": session.expires_at,
+    }
+
+
+@router.post("/password/self-reset")
+async def self_service_password_reset(body: SelfServiceResetRequest):
+    """
+    Self-service password reset — no session required.
+    User proves identity via username + TOTP code, receives a new temporary password.
+    ASVS V2.1: authenticated password reset without admin intervention.
+    """
+    state = backoffice_state
+    record = state.auth_service._accounts.get(body.username)
+
+    # Same generic error for unknown user or wrong TOTP (prevent enumeration)
+    import datetime
+    server_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    generic_error = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "error": "invalid_credentials",
+            "hint": "If using TOTP, ensure your device clock is synchronised.",
+            "server_time": server_time,
+        },
+    )
+
+    if record is None or record.disabled:
+        raise generic_error
+
+    if not record.totp_secret:
+        raise generic_error
+
+    if not verify_totp(record.totp_secret, body.totp_code, state.auth_service._used_totp_codes):
+        raise generic_error
+
+    # TOTP valid — generate new temporary password
+    from yashigani.auth.password import generate_password, hash_password
+    temp_password = generate_password(36)
+    record.password_hash = hash_password(temp_password)
+    record.force_password_change = True
+
+    # Invalidate all sessions
+    state.session_store.invalidate_all_for_account(record.account_id)
+
+    state.audit_writer.write(_make_login_event(body.username, "self_reset", None))
+
+    return {
+        "status": "ok",
+        "temporary_password": temp_password,
+        "force_password_change": True,
+        "message": "Log in with this temporary password. You will be required to change it.",
     }
 
 
