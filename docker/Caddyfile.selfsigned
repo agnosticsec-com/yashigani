@@ -115,7 +115,7 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
-                redir * /admin/login 302
+                redir * /admin/login?next=/admin/grafana/ 302
             }
         }
         reverse_proxy grafana:3000 {

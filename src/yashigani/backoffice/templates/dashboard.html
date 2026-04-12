@@ -59,7 +59,7 @@
             </div>
         </div>
         <div class="nav-right">
-            <span>v2.1</span>
+            <span>v2.2</span>
             <button onclick="logout()">Logout</button>
         </div>
     </nav>
@@ -1056,7 +1056,7 @@
                 ' | <strong>Max Agents:</strong> ' + (data.max_agents === -1 ? 'Unlimited' : (data.max_agents || '-')) +
                 ' | <strong>Expires:</strong> ' + (data.expires_at || 'Never') + '</p>';
         } else {
-            container.innerHTML = '<p style="font-size:0.85rem;color:#64748b;">Could not load license info</p>';
+            container.innerHTML = '<p style="font-size:0.85rem;color:#334155;"><strong>Tier:</strong> Community Edition — no license required.<br><span style="color:#64748b;">To use other features please add a license for your preferred tier.</span></p>';
         }
     }
 
