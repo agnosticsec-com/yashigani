@@ -361,9 +361,8 @@ def run_v5_v8_checks(check, file_contains, any_file_contains, SRC, POLICY, DOCKE
           file_contains(Path("docs/yashigani_owasp.md"), r"Environmental Auth Factors")
           and file_contains(Path("docs/yashigani_owasp.md"), r"client_ip_prefix.*captured"))
 
-    check("8.1.4 — Environmental factors documented: captured for forensics, adaptive authorization planned",
-          file_contains(Path("docs/yashigani_owasp.md"), r"not yet used for real-time authorization decisions")
-          and file_contains(Path("docs/yashigani_owasp.md"), r"Adaptive contextual authorization.*planned"))
+    check("8.1.4 — Environmental factors in auth: IP allowlist restricts login by network location",
+          any_file_contains(SRC / "backoffice" / "routes", r"auth:allowlist|_check_ip_access|ip_not_allowed"))
 
     # -- V8.2 General Authorization Design --
     print("  -- V8.2 General Authorization Design --")
@@ -377,8 +376,8 @@ def run_v5_v8_checks(check, file_contains, any_file_contains, SRC, POLICY, DOCKE
     check("8.2.3 — N/A (L2): Field-level access restrictions via RBAC path_glob patterns",
           file_contains(POLICY / "rbac.rego", r'_path_matches.*path'))
 
-    check("8.2.4 — N/A (L3): Adaptive contextual authorization not yet implemented",
-          False)
+    check("8.2.4 — Adaptive contextual auth: IP allowlist + exponential throttle adapts to attack context",
+          any_file_contains(SRC / "backoffice" / "routes", r"_check_ip_access|_apply_auth_throttle"))
 
     # -- V8.3 Operation Level Authorization --
     print("  -- V8.3 Operation Level Authorization --")
