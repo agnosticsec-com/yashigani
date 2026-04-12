@@ -31,7 +31,7 @@ We aim to acknowledge all reports within **2 business days** and provide a remed
 
 ## Scope
 
-Only vulnerabilities in Yashigani's own code are in scope. Vulnerabilities in third-party dependencies, optional agent bundle containers (LangGraph, Goose, OpenClaw), or upstream MCP tool servers should be reported directly to the respective project maintainers.
+Only vulnerabilities in Yashigani's own code are in scope. Vulnerabilities in third-party dependencies, optional agent bundle containers (Langflow, Letta, OpenClaw), or upstream MCP tool servers should be reported directly to the respective project maintainers.
 
 ## Disclosure Policy
 
