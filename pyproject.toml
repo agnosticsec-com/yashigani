@@ -46,6 +46,7 @@ dependencies = [
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-grpc>=1.24",
     "opentelemetry-propagator-b3>=1.24",
+    "nest-asyncio>=1.6",
 ]
 
 [project.optional-dependencies]

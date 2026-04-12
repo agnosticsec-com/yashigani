@@ -188,10 +188,9 @@ def _build_app():
     inference_logger = None
     anomaly_detector = None
     try:
-        from yashigani.db import create_pool
+        from yashigani.db import create_pool, run_migrations
         from yashigani.inference import InferencePayloadLogger, AnomalyDetector
 
-        loop = asyncio.get_event_loop()
         db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
         if db_dsn and "${POSTGRES_PASSWORD}" in db_dsn:
             pg_pwd_file = os.path.join(secrets_dir, "postgres_password")
@@ -203,11 +202,15 @@ def _build_app():
             except OSError:
                 logger.warning("postgres_password secret not found — DB DSN unresolved")
         if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import nest_asyncio
+                nest_asyncio.apply()
+            run_migrations()
             loop.run_until_complete(create_pool())
             db_pool = True  # sentinel; pool is module-level singleton
 
             inference_logger = InferencePayloadLogger()
-            asyncio.ensure_future(inference_logger.start())
 
             import redis as _redis
             redis_client_anomaly = _redis.from_url(f"{redis_base}/2", decode_responses=False)
