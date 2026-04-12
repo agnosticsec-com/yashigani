@@ -870,6 +870,38 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         except Exception as exc:
             logger.warning("Budget recording failed: %s", exc)
 
+    # ── 8c. OPA response-path enforcement ──────────────────────────────
+    # Check if the caller is authorised to receive this response based on
+    # the detected sensitivity level. Defence-in-depth: even if routing was
+    # allowed, the RESPONSE content may have a higher sensitivity than expected.
+    if _state.opa_url and identity:
+        resp_opa = await _opa_response_check(
+            identity=identity,
+            response_sensitivity=sensitivity_level,
+            response_verdict=response_verdict,
+            pii_detected=pii_detected_on_response,
+        )
+        if not resp_opa.get("allow", True):
+            resp_opa_reason = resp_opa.get("reason", "response_policy_denied")
+            logger.warning(
+                "OPA BLOCKED response delivery: identity=%s sensitivity=%s reason=%s",
+                identity_id, sensitivity_level, resp_opa_reason,
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "message": f"Response blocked by policy: {resp_opa_reason}",
+                        "type": "response_policy_denied",
+                        "code": resp_opa_reason,
+                    }
+                },
+                headers={
+                    "X-Yashigani-Request-Id": request_id,
+                    "X-Yashigani-OPA-Response-Reason": resp_opa_reason,
+                },
+            )
+
     # ── 9. Build response ─────────────────────────────────────────────
     elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -1069,3 +1101,54 @@ async def _opa_v1_check(
     except Exception as exc:
         logger.error("OPA v1 check failed: %s — denying (fail-closed)", exc)
         return {"allow": False, "reason": "opa_unreachable"}
+
+
+async def _opa_response_check(
+    identity: dict | None,
+    response_sensitivity: str,
+    response_verdict: str,
+    pii_detected: bool,
+) -> dict:
+    """
+    Query OPA v1_routing response_decision for allow/deny on response delivery.
+
+    Checks whether the caller's sensitivity ceiling permits receiving
+    content at the detected sensitivity level.
+
+    Returns {"allow": bool, "reason": str} or allow on any error (fail-open
+    on response path — content is already generated, blocking creates
+    confusing empty turns; the audit trail captures the violation).
+    """
+    if not _state.opa_url:
+        return {"allow": True, "reason": "opa_not_configured"}
+
+    identity_doc = {
+        "status": identity.get("status", "active") if identity else "anonymous",
+        "kind": identity.get("kind", "unknown") if identity else "unknown",
+        "sensitivity_ceiling": identity.get("sensitivity_ceiling", "RESTRICTED") if identity else "PUBLIC",
+    }
+
+    opa_input = {
+        "identity": identity_doc,
+        "response_sensitivity": response_sensitivity,
+        "response_verdict": response_verdict,
+        "pii_detected": pii_detected,
+    }
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                _state.opa_url.rstrip("/") + "/v1/data/yashigani/v1/response_decision",
+                json={"input": opa_input},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            result = resp.json().get("result", {})
+            return {
+                "allow": bool(result.get("allow", True)),
+                "reason": result.get("reason", "ok"),
+            }
+    except Exception as exc:
+        logger.warning("OPA response check failed: %s — allowing (fail-open on response)", exc)
+        return {"allow": True, "reason": "opa_response_check_failed"}

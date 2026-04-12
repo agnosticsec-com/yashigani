@@ -66,6 +66,45 @@ sensitivity_rank(level) := 1 if level == "INTERNAL"
 sensitivity_rank(level) := 2 if level == "CONFIDENTIAL"
 sensitivity_rank(level) := 3 if level == "RESTRICTED"
 
+# ── Response-path enforcement ─────────────────────────────────────────────
+#
+# Evaluates whether a response can be delivered to the caller.
+# Input schema (response path):
+#   input.identity              — caller's identity record
+#   input.response_sensitivity  — detected sensitivity of the response content
+#   input.response_verdict      — inspection verdict (clean/suspicious/blocked)
+#   input.pii_detected          — boolean, PII found in response
+
+default response_allowed := true
+
+# Block response if its sensitivity exceeds the caller's ceiling
+response_allowed := false if {
+    sensitivity_rank(input.response_sensitivity) > sensitivity_rank(input.identity.sensitivity_ceiling)
+}
+
+# Block response if inspection verdict is BLOCKED and identity is not admin
+response_allowed := false if {
+    input.response_verdict == "blocked"
+    input.identity.kind != "admin"
+}
+
+response_decision := {
+    "allow": response_allowed,
+    "reason": response_reason,
+}
+
+response_reason := "ok" if response_allowed
+
+response_reason := "response_sensitivity_exceeds_ceiling" if {
+    not response_allowed
+    sensitivity_rank(input.response_sensitivity) > sensitivity_rank(input.identity.sensitivity_ceiling)
+}
+
+response_reason := "response_blocked_by_inspection" if {
+    not response_allowed
+    input.response_verdict == "blocked"
+}
+
 # ── Combined decision ─────────────────────────────────────────────────────
 
 decision := {
