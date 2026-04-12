@@ -1,6 +1,6 @@
 # Yashigani — Kubernetes Deployment Guide
 
-Version: v0.9.3 | Chart version: 0.9.3
+Version: v2.23 | Chart version: 2.23.0 | Last updated: 2026-04-12
 
 ---
 
@@ -165,27 +165,36 @@ helm test yashigani -n yashigani --logs
 
 ## Agent Bundles
 
-Agent bundles are opt-in and disabled by default. Enable per-bundle at install or upgrade time:
+Agent bundles are opt-in and disabled by default. The current agent lineup is:
+
+- **Lala** (Langflow) — visual flow-based agent orchestration
+- **Julietta** (Letta) — memory-augmented conversational agent
+- **Scout** (OpenClaw) — messaging-capable agent (exposes port 18789 for webhooks)
+
+Agent chaining is supported: `@Scout` -> `@Julietta` -> `@qwen`. Use the `@Help` agent for a chaining guide.
+
+> **Note:** Goose (ACP too slow) and LangGraph (replaced by Langflow) have been removed from the agent lineup.
+
+Enable per-bundle at install or upgrade time:
 
 ```bash
-# Enable Goose (AI developer assistant — ACP server on port 3284)
+# Enable Lala (Langflow — visual flow agent)
 helm upgrade yashigani helm/yashigani/ -n yashigani \
-  --set agentBundles.goose.enabled=true \
-  --set agentBundles.goose.tokenSecretName=yashigani-goose-token
+  --set agentBundles.langflow.enabled=true \
+  --set agentBundles.langflow.tokenSecretName=yashigani-langflow-token
 
-# Enable LangGraph
+# Enable Julietta (Letta — memory-augmented agent)
 helm upgrade yashigani helm/yashigani/ -n yashigani \
-  --set agentBundles.langgraph.enabled=true
+  --set agentBundles.letta.enabled=true \
+  --set agentBundles.letta.tokenSecretName=yashigani-letta-token
 
-# Enable OpenClaw (exposes port 18789 for messaging webhooks)
+# Enable Scout (OpenClaw — exposes port 18789 for messaging webhooks)
 helm upgrade yashigani helm/yashigani/ -n yashigani \
   --set agentBundles.openclaw.enabled=true \
   --set agentBundles.openclaw.tokenSecretName=yashigani-openclaw-token
 ```
 
 Each enabled bundle creates a Deployment and (where applicable) a Service. All agent traffic routes through the Yashigani gateway — direct LLM access is blocked by NetworkPolicy.
-
-**Note:** CrewAI is enterprise-only as of v2.1. Contact sales@agnosticsec.com.
 
 ---
 
@@ -249,6 +258,38 @@ Via Ingress (if `global.tlsDomain` is set):
 
 - Grafana: `https://yashigani.example.com/admin/grafana`
 - Prometheus (federate, basic auth via Caddy): `https://yashigani.example.com/metrics-federate`
+
+---
+
+## Wazuh Integration (Helm)
+
+To deploy Wazuh alongside Yashigani in Kubernetes, enable the Wazuh sub-chart:
+
+```bash
+helm upgrade yashigani helm/yashigani/ -n yashigani \
+  --set wazuh.enabled=true
+```
+
+Wazuh requires additional resources: at least 5 GB disk for the indexer and 2 GB additional RAM. Ensure your cluster nodes can accommodate these before enabling. Wazuh admin credentials are auto-generated and stored in the `yashigani-wazuh-secrets` Kubernetes Secret.
+
+---
+
+## Internal CA (Smallstep step-ca)
+
+For deployments that require an internal Certificate Authority (e.g., mTLS between services), enable the Internal CA sub-chart:
+
+```bash
+helm upgrade yashigani helm/yashigani/ -n yashigani \
+  --set internalCA.enabled=true
+```
+
+This deploys Smallstep step-ca as an internal CA. Certificates are issued automatically for inter-service communication. The CA root certificate is stored in the `yashigani-internal-ca-secrets` Secret.
+
+---
+
+## Kubernetes Deployment Status
+
+> **Important:** Kubernetes deployment has not yet been validated end-to-end for the v2.23 release. This is tracked as risk R-015 in the risk register. Docker Compose (single-node) is the validated deployment path. Use this Helm chart for development and pre-production only until R-015 is resolved.
 
 ---
 

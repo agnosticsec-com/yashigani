@@ -2,17 +2,16 @@
 
 ## Supported Versions
 
-Two release lines are actively supported. Security fixes are backported to both.
+A single release line is actively maintained on the `main` branch. Open WebUI is an optional flag (`--with-openwebui`), not a separate branch.
 
-| Version | Supported | Branch | Notes |
-|---------|-----------|--------|-------|
-| 2.1.x   | ✅ Current | `main` | Full stack — Open WebUI, OE, budget system, Pool Manager, Admin Dashboard |
-| 1.10.x  | ✅ Supported | `release/1.x` | Gateway-only — same security core, no Open WebUI |
-| 2.0.x   | ❌ | — | Superseded by 2.1.x |
-| 1.09.x  | ❌ | — | Superseded by 1.10.x |
-| < 1.09  | ❌ | — | End of life |
-
-**v1.x** is maintained on the `release/1.x` branch for deployments that do not require Open WebUI. It receives security patches and infrastructure improvements. Same security foundation as v2.x.
+| Version | Supported | Notes |
+|---------|-----------|-------|
+| 2.23.x  | ✅ Current | Full stack — OPA on all /v1, Podman isolation, strict CSP, API-first admin, optional services via compose profiles |
+| 2.22.x  | ✅ Patch window | OPA on /v1, Wazuh SIEM, Grafana/Prometheus admin access, agent personas |
+| 2.20.x  | ❌ | Superseded by 2.22.x |
+| 2.1.x   | ❌ | Superseded by 2.20.x |
+| 2.0.x   | ❌ | Superseded by 2.1.x |
+| < 2.0   | ❌ | End of life |
 
 ## Reporting a Vulnerability
 
@@ -31,7 +30,32 @@ We aim to acknowledge all reports within **2 business days** and provide a remed
 
 ## Scope
 
-Only vulnerabilities in Yashigani's own code are in scope. Vulnerabilities in third-party dependencies, optional agent bundle containers (Langflow, Letta, OpenClaw), or upstream MCP tool servers should be reported directly to the respective project maintainers.
+Only vulnerabilities in Yashigani's own code are in scope. This includes the gateway, backoffice, admin UI/API, OPA policies, Optimization Engine, Budget System, Pool Manager, installer, and all bundled configuration (Caddyfile, compose files, Helm charts).
+
+The following are **in scope**:
+
+- Authentication and session management (OIDC, SAML, TOTP, WebAuthn, fail2ban throttle, __Host- cookies)
+- OPA policy enforcement on /v1 traffic (request path and response path)
+- Content inspection pipeline (FastText, LLM backends, PII detection, CHS)
+- Sensitivity classification and routing (Optimization Engine, P1-P9 matrix)
+- Budget enforcement (three-tier hierarchy, budget-redis)
+- IP allowlist/blocklist enforcement (IPv4/IPv6/CIDR)
+- Content relay detection (agent-to-agent laundering)
+- CSP and security headers (strict CSP with no unsafe-inline)
+- Crypto inventory (/admin/crypto/inventory)
+- Internal CA (Smallstep step-ca for service-to-service TLS)
+- Container-per-user isolation (Podman SDK)
+- Admin service management (enable/disable services)
+- Audit pipeline (file, PostgreSQL, Splunk, Elasticsearch, Wazuh)
+- Domain-bound licensing (ECDSA P-256)
+
+The following are **out of scope** — report directly to the respective maintainers:
+
+- Vulnerabilities in third-party dependencies (unless Yashigani misconfigures them)
+- Optional agent bundle containers: Lala (Langflow), Julietta (Letta), Scout (OpenClaw)
+- Upstream MCP tool servers
+- Open WebUI (when enabled via `--with-openwebui`)
+- Wazuh, Grafana, Prometheus (when enabled via compose profiles)
 
 ## Disclosure Policy
 

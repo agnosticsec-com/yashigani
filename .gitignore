@@ -65,3 +65,4 @@ prompt_logs/
 # Internal testing — never commit
 scripts/deploy-vm.sh
 scripts/test-ui.py
+.claude_agent_addendum.txt

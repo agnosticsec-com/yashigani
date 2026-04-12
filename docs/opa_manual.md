@@ -1,7 +1,7 @@
 # Yashigani — OPA Policy Manual
 
-**Version:** v2.0
-**Last updated:** 2026-04-05
+**Version:** v2.23
+**Last updated:** 2026-04-12
 **Policy engine:** Open Policy Agent (OPA) v0.x, rootless container
 **Policy language:** Rego (v1 import keywords)
 
@@ -41,7 +41,7 @@
 
 ## 1. Overview and Architecture
 
-OPA is the **sole authorization arbiter** in Yashigani. Every proxied MCP request is evaluated by OPA before it is forwarded to the upstream server. The gateway never makes its own allow/deny logic — it only enforces what OPA decides.
+OPA is the **sole authorization arbiter** in Yashigani. Every proxied MCP request is evaluated by OPA before it is forwarded to the upstream server. **OPA enforcement applies to ALL `/v1` traffic — both the request path and the response path.** The gateway never makes its own allow/deny logic — it only enforces what OPA decides.
 
 ```
 Agent / User
