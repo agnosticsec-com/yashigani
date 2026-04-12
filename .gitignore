@@ -66,3 +66,11 @@ prompt_logs/
 scripts/deploy-vm.sh
 scripts/test-ui.py
 .claude_agent_addendum.txt
+
+# Compliance suite (product IP — not public)
+scripts/owasp_prerelease_check.py
+scripts/_asvs_*.py
+
+# License signing (NEVER public)
+scripts/sign_license.py
+scripts/generate_license.py
