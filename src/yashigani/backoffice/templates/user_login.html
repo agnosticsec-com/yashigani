@@ -4,32 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Yashigani — Sign In</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        .card { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); padding: 2rem; width: 100%; max-width: 420px; }
-        h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; text-align: center; }
-        .subtitle { color: #94a3b8; font-size: 0.85rem; text-align: center; margin-top: 4px; margin-bottom: 1.5rem; }
-        label { display: block; font-size: 0.85rem; font-weight: 500; color: #475569; margin-bottom: 4px; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; outline: none; }
-        input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
-        .totp-input { text-align: center; font-size: 1.3rem; letter-spacing: 0.3em; }
-        button { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; }
-        button:hover { background: #1d4ed8; }
-        button:disabled { background: #93c5fd; cursor: not-allowed; }
-        .msg { padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
-        .msg.error { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; }
-        .msg.success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #16a34a; }
-        .msg.info { background: #eff6ff; border: 1px solid #bfdbfe; color: #2563eb; }
-        .msg.visible { display: block; }
-        .footer { text-align: center; color: #94a3b8; font-size: 0.75rem; margin-top: 1.5rem; }
-        .field { margin-bottom: 1rem; }
-        .hidden { display: none; }
-        .hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
-        .admin-link { text-align: center; margin-top: 12px; }
-        .admin-link a { color: #64748b; font-size: 0.75rem; text-decoration: none; }
-        .admin-link a:hover { color: #2563eb; }
-    </style>
+    <link rel="stylesheet" href="/static/css/user_login.css">
 </head>
 <body>
     <div class="card">
@@ -73,113 +48,6 @@
         <p class="footer">Yashigani v2.1 &mdash; Agnostic Security</p>
     </div>
 
-    <script>
-    var savedPassword = '';
-
-    function showMsg(type, text) {
-        var b = document.getElementById('msg-box');
-        b.className = 'msg ' + type + ' visible';
-        b.textContent = text;
-    }
-    function clearMsg() {
-        var b = document.getElementById('msg-box');
-        b.className = 'msg';
-        b.textContent = '';
-    }
-    function parseError(data) {
-        if (!data.detail) return 'Request failed';
-        if (typeof data.detail === 'string') return data.detail;
-        if (data.detail.error) return data.detail.error;
-        if (Array.isArray(data.detail)) return data.detail.map(function(d){ return d.msg; }).join(', ');
-        return JSON.stringify(data.detail);
-    }
-
-    // Step 1: Login
-    document.getElementById('login-form').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        clearMsg();
-        var btn = document.getElementById('login-btn');
-        btn.disabled = true;
-        btn.textContent = 'Authenticating...';
-
-        try {
-            var resp = await fetch('/auth/login', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    username: document.getElementById('username').value,
-                    password: document.getElementById('password').value,
-                    totp_code: document.getElementById('totp_code').value
-                })
-            });
-            var data = await resp.json();
-            if (resp.ok) {
-                if (data.force_password_change) {
-                    savedPassword = document.getElementById('password').value;
-                    document.getElementById('login-form').className = 'hidden';
-                    document.getElementById('pw-form').className = '';
-                    document.getElementById('page-subtitle').textContent = 'Set a new password to continue';
-                    showMsg('info', 'First login — you must change your password before continuing.');
-                } else {
-                    var params = new URLSearchParams(window.location.search);
-                    var next = params.get('next');
-                    window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
-                }
-            } else {
-                showMsg('error', parseError(data));
-            }
-        } catch (err) {
-            showMsg('error', 'Connection error: ' + err.message);
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Sign In';
-        }
-    });
-
-    // Step 2: Password Change
-    document.getElementById('pw-form').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        clearMsg();
-        var newPw = document.getElementById('new_password').value;
-        var confirmPw = document.getElementById('confirm_password').value;
-
-        if (newPw.length < 36) { showMsg('error', 'Password must be at least 36 characters.'); return; }
-        if (newPw !== confirmPw) { showMsg('error', 'Passwords do not match.'); return; }
-
-        var btn = document.getElementById('pw-btn');
-        btn.disabled = true;
-        btn.textContent = 'Changing...';
-
-        try {
-            var resp = await fetch('/auth/password/change', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    current_password: savedPassword,
-                    new_password: newPw
-                })
-            });
-            var data = await resp.json();
-            if (resp.ok) {
-                document.getElementById('pw-form').className = 'hidden';
-                showMsg('success', 'Password changed. Please sign in with your new password.');
-                document.getElementById('page-subtitle').textContent = 'Sign in to continue';
-                document.getElementById('login-form').className = '';
-                document.getElementById('password').value = '';
-                document.getElementById('totp_code').value = '';
-                document.getElementById('username').focus();
-            } else {
-                showMsg('error', parseError(data));
-            }
-        } catch (err) {
-            showMsg('error', 'Connection error: ' + err.message);
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Change Password';
-        }
-    });
-    </script>
+    <script src="/static/js/user_login.js"></script>
 </body>
 </html>

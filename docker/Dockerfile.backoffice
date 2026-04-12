@@ -39,8 +39,9 @@ RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)" && \
     rm /tmp/*.whl
 
-# Admin UI templates — copy into installed package
+# Admin UI templates + static assets — copy into installed package
 COPY src/yashigani/backoffice/templates/ /usr/local/lib/python3.12/site-packages/yashigani/backoffice/templates/
+COPY src/yashigani/backoffice/static/ /usr/local/lib/python3.12/site-packages/yashigani/backoffice/static/
 
 # Alembic config — script_location rewritten for installed package path
 COPY alembic.ini /app/alembic.ini

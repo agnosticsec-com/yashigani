@@ -1,0 +1,24 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.card { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); padding: 2rem; width: 100%; max-width: 420px; }
+h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; text-align: center; }
+.subtitle { color: #94a3b8; font-size: 0.85rem; text-align: center; margin-top: 4px; margin-bottom: 1.5rem; }
+label { display: block; font-size: 0.85rem; font-weight: 500; color: #475569; margin-bottom: 4px; }
+input[type="text"], input[type="password"] { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; outline: none; }
+input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.totp-input { text-align: center; font-size: 1.3rem; letter-spacing: 0.3em; }
+button { width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; }
+button:hover { background: #1d4ed8; }
+button:disabled { background: #93c5fd; cursor: not-allowed; }
+.msg { padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
+.msg.error { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; }
+.msg.success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #16a34a; }
+.msg.info { background: #eff6ff; border: 1px solid #bfdbfe; color: #2563eb; }
+.msg.visible { display: block; }
+.footer { text-align: center; color: #94a3b8; font-size: 0.75rem; margin-top: 1.5rem; }
+.field { margin-bottom: 1rem; }
+.hidden { display: none; }
+.hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+.admin-link { text-align: center; margin-top: 12px; }
+.admin-link a { color: #64748b; font-size: 0.75rem; text-decoration: none; }
+.admin-link a:hover { color: #2563eb; }

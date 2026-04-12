@@ -80,7 +80,7 @@ dev     = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"yashigani.backoffice" = ["templates/*.html"]
+"yashigani.backoffice" = ["templates/*.html", "static/css/*.css", "static/js/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]

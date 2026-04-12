@@ -111,13 +111,10 @@ def create_backoffice_app() -> FastAPI:
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Referrer-Policy"] = "no-referrer"
-        # CSP: relaxed for admin UI pages (inline scripts/styles), strict for API
+        # CSP: strict for all pages — no inline scripts or styles allowed
         # ASVS 3.4.3: object-src 'none' + base-uri 'none'; 3.4.7: report-uri
-        _csp_suffix = "; object-src 'none'; base-uri 'none'; report-uri /admin/csp-report; report-to default"
-        if request.url.path.startswith("/admin/login") or request.url.path == "/admin/" or request.url.path == "/login":
-            response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline'" + _csp_suffix
-        else:
-            response.headers["Content-Security-Policy"] = "default-src 'self'" + _csp_suffix
+        _csp = "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; report-uri /admin/csp-report; report-to default"
+        response.headers["Content-Security-Policy"] = _csp
         return response
 
     # Generic error handlers — never leak internal state
@@ -133,8 +130,13 @@ def create_backoffice_app() -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
-    # Admin UI — HTML pages
+    # Static files (CSS/JS for login pages etc.)
     import pathlib
+    _static_dir = pathlib.Path(__file__).parent / "static"
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    # Admin UI — HTML pages
     _templates_dir = pathlib.Path(__file__).parent / "templates"
     if _templates_dir.exists():
         _templates = Jinja2Templates(directory=str(_templates_dir))
