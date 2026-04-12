@@ -54,6 +54,7 @@
                 <button onclick="showPage('models')">Models</button>
                 <button onclick="showPage('sensitivity')">Sensitivity</button>
                 <button onclick="showPage('alerts')">Alerts</button>
+                <button onclick="showPage('audit')">Audit Log</button>
                 <button onclick="showPage('monitoring')">Monitoring</button>
                 <button onclick="showPage('settings')">Settings</button>
             </div>
@@ -90,6 +91,12 @@
                     <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
                         <div><label style="font-size:0.75rem;color:#64748b">Name</label><br><input id="agent-name" type="text" placeholder="my-agent" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:150px"></div>
                         <div><label style="font-size:0.75rem;color:#64748b">Upstream URL</label><br><input id="agent-url" type="text" placeholder="http://agent:8000" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:250px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Protocol</label><br><select id="agent-protocol" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="openai">openai</option><option value="letta">letta</option><option value="langflow">langflow</option></select></div>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:8px;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Groups (comma-separated)</label><br><input id="agent-groups" type="text" placeholder="default,engineering" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:200px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Allowed caller groups</label><br><input id="agent-caller-groups" type="text" placeholder="admins,operators" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:200px"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Allowed CIDRs</label><br><input id="agent-cidrs" type="text" placeholder="10.0.0.0/8" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:160px"></div>
                         <button onclick="registerAgent()" style="padding:6px 16px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Register</button>
                     </div>
                     <div id="register-agent-result" style="margin-top:6px;font-size:0.8rem"></div>
@@ -398,6 +405,32 @@
             </div>
         </div>
 
+        <!-- Audit Log Page -->
+        <div class="page" id="page-audit">
+            <h2>Audit Log</h2>
+            <div class="panel">
+                <div class="panel-header">Search</div>
+                <div class="panel-body">
+                    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+                        <div><label style="font-size:0.75rem;color:#64748b">Event type</label><br><select id="audit-event-type" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"><option value="">All</option><option value="login">Login</option><option value="agent_registered">Agent registered</option><option value="credential_exfil">Credential exfil</option><option value="policy_denied">Policy denied</option><option value="config_change">Config change</option></select></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">From</label><br><input id="audit-from" type="date" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">To</label><br><input id="audit-to" type="date" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem"></div>
+                        <div><label style="font-size:0.75rem;color:#64748b">Free text</label><br><input id="audit-text" type="text" placeholder="search..." style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.85rem;width:180px"></div>
+                        <button onclick="searchAudit()" style="padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Search</button>
+                        <button onclick="exportAudit()" style="padding:6px 16px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">Export CSV</button>
+                    </div>
+                </div>
+            </div>
+            <div class="panel" style="margin-top:12px;">
+                <div class="panel-header" id="audit-count">Events</div>
+                <table>
+                    <thead><tr><th>Timestamp</th><th>Event</th><th>User/Agent</th><th>Verdict</th><th>Detail</th></tr></thead>
+                    <tbody id="audit-tbody"><tr><td colspan="5" class="empty">Use the search form above to query audit events.</td></tr></tbody>
+                </table>
+                <div id="audit-pagination" style="padding:8px 16px;font-size:0.8rem;"></div>
+            </div>
+        </div>
+
         <!-- Monitoring Page -->
         <div class="page" id="page-monitoring">
             <h2>Monitoring</h2>
@@ -586,13 +619,21 @@
     async function registerAgent() {
         var name = document.getElementById('agent-name').value.trim();
         var url = document.getElementById('agent-url').value.trim();
+        var protocol = document.getElementById('agent-protocol').value;
+        var groups = document.getElementById('agent-groups').value.trim().split(',').filter(Boolean);
+        var callerGroups = document.getElementById('agent-caller-groups').value.trim().split(',').filter(Boolean);
+        var cidrs = document.getElementById('agent-cidrs').value.trim().split(',').filter(Boolean);
         var result = document.getElementById('register-agent-result');
         if (!name || !url) { result.textContent = 'Name and URL are required.'; return; }
         result.innerHTML = '<span class="loading">Registering...</span>';
+        var body = { name: name, upstream_url: url, protocol: protocol };
+        if (groups.length) body.groups = groups;
+        if (callerGroups.length) body.allowed_caller_groups = callerGroups;
+        if (cidrs.length) body.allowed_cidrs = cidrs;
         var resp = await fetch('/admin/agents', {
             method: 'POST', credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name, upstream_url: url })
+            body: JSON.stringify(body)
         });
         if (resp.ok) {
             var data = await resp.json();
@@ -1134,9 +1175,66 @@
         window.location.href = '/admin/login';
     }
 
-    // Load dashboard on page load
+    // Audit log search
+    var auditCursor = '';
+    async function searchAudit(cursor) {
+        var params = new URLSearchParams();
+        var et = document.getElementById('audit-event-type').value;
+        var from = document.getElementById('audit-from').value;
+        var to = document.getElementById('audit-to').value;
+        var text = document.getElementById('audit-text').value.trim();
+        if (et) params.set('event_type', et);
+        if (from) params.set('date_from', from);
+        if (to) params.set('date_to', to);
+        if (text) params.set('free_text', text);
+        if (cursor) params.set('cursor', cursor);
+        var data = await api('/admin/audit/search?' + params.toString());
+        var tbody = document.getElementById('audit-tbody');
+        if (!data || !data.events || data.events.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">No events found</td></tr>';
+            document.getElementById('audit-count').textContent = 'Events (0)';
+            document.getElementById('audit-pagination').innerHTML = '';
+            return;
+        }
+        document.getElementById('audit-count').textContent = 'Events (' + data.events.length + (data.has_more ? '+' : '') + ')';
+        tbody.innerHTML = data.events.map(function(e) {
+            return '<tr><td style="font-size:0.75rem">' + (e.timestamp || e.created_at || '') + '</td>' +
+                '<td>' + (e.event_type || '') + '</td>' +
+                '<td>' + (e.user || e.agent_id || '') + '</td>' +
+                '<td><span class="badge ' + (e.verdict === 'BLOCKED' ? 'badge-red' : 'badge-green') + '">' + (e.verdict || '-') + '</span></td>' +
+                '<td style="font-size:0.75rem;max-width:300px;overflow:hidden;text-overflow:ellipsis">' + (e.detail || e.summary || '') + '</td></tr>';
+        }).join('');
+        auditCursor = data.next_cursor || '';
+        var pag = document.getElementById('audit-pagination');
+        if (data.has_more) {
+            pag.innerHTML = '<button onclick="searchAudit(\'' + auditCursor + '\')" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.8rem">Load more</button>';
+        } else {
+            pag.innerHTML = '';
+        }
+    }
+
+    async function exportAudit() {
+        var params = new URLSearchParams();
+        var et = document.getElementById('audit-event-type').value;
+        var from = document.getElementById('audit-from').value;
+        var to = document.getElementById('audit-to').value;
+        if (et) params.set('event_type', et);
+        if (from) params.set('date_from', from);
+        if (to) params.set('date_to', to);
+        params.set('format', 'csv');
+        window.open('/admin/audit/export?' + params.toString(), '_blank');
+    }
+
+    // Load dashboard on page load + auto-refresh every 15s
     loadDashboard();
     loadAlertConfig();
+    setInterval(function() {
+        // Only refresh if dashboard tab is active
+        var dashPage = document.getElementById('page-dashboard');
+        if (dashPage && dashPage.classList.contains('active')) {
+            loadDashboard();
+        }
+    }, 15000);
     </script>
 </body>
 </html>
