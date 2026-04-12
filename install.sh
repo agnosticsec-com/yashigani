@@ -2152,6 +2152,30 @@ generate_secrets() {
       openclaw_token="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
       echo "OPENCLAW_GATEWAY_TOKEN=${openclaw_token}" >> "$env_file"
     fi
+
+    # Generate credentials for NEW services added since last install
+    # This handles upgrades where new components (e.g., Wazuh) need passwords
+    local _new_creds_generated=false
+    for _cred_name in wazuh_indexer_password wazuh_api_password wazuh_dashboard_password; do
+      if [[ ! -s "${secrets_dir}/${_cred_name}" ]] || grep -q "placeholder" "${secrets_dir}/${_cred_name}" 2>/dev/null; then
+        local _new_pw
+        _new_pw="$(_gen_password)"
+        printf "%s" "$_new_pw" > "${secrets_dir}/${_cred_name}"
+        chmod 644 "${secrets_dir}/${_cred_name}"
+        # Map secret file name to env var name
+        local _env_key
+        _env_key="$(echo "$_cred_name" | tr '[:lower:]' '[:upper:]')"
+        if ! grep -q "^${_env_key}=" "$env_file" 2>/dev/null; then
+          echo "${_env_key}=${_new_pw}" >> "$env_file"
+        fi
+        log_info "  New credential generated: ${_cred_name}"
+        _new_creds_generated=true
+      fi
+    done
+    if [[ "$_new_creds_generated" == "true" ]]; then
+      log_success "New service credentials generated (upgrade path)"
+    fi
+
     return 0
   fi
 
