@@ -67,6 +67,7 @@ NAMESPACE="yashigani"
 TOTAL_STEPS=13
 WORK_DIR=""
 AGENT_BUNDLES=""          # comma-separated: langflow,letta,openclaw
+INSTALL_WAZUH=false       # opt-in: --wazuh flag
 COMPOSE_PROFILES=()       # populated by select_agent_bundles()
 
 # If stdin is not a TTY (piped from curl), force non-interactive
@@ -96,6 +97,7 @@ OPTIONS
   --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
   --agent-bundles  BUNDLES               Comma-separated opt-in agents: langflow,letta,openclaw (or "all")
+  --wazuh                                 Install Wazuh SIEM (manager + indexer + dashboard)
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
   --skip-preflight                        Skip preflight checks
@@ -167,6 +169,7 @@ parse_args() {
         DB_AES_KEY="${2:?'--db-aes-key requires a value (64-char hex or 44-char base64)'}"
         shift 2
         ;;
+      --wazuh)           INSTALL_WAZUH=true;     shift ;;
       --offline)         OFFLINE=true;           shift ;;
       --non-interactive) NON_INTERACTIVE=true;  shift ;;
       --skip-preflight)  SKIP_PREFLIGHT=true;   shift ;;
@@ -2664,6 +2667,23 @@ main() {
 
     # Step 8: Optional agent bundle selection
     select_agent_bundles
+
+    # Step 8b: Wazuh SIEM (opt-in)
+    if [[ "$INSTALL_WAZUH" == "true" ]]; then
+      COMPOSE_PROFILES+=("wazuh")
+      log_success "Wazuh SIEM enabled (--wazuh flag)"
+    elif [[ "$NON_INTERACTIVE" != "true" ]]; then
+      printf "\n${C_BOLD}Install Wazuh SIEM? (open-source security monitoring)${C_RESET}\n"
+      printf "    Includes: Wazuh Manager + OpenSearch Indexer + Dashboard\n"
+      printf "    ${C_YELLOW}Requires ~2 GB additional disk space${C_RESET}\n"
+      printf "\n${C_BOLD}  Install Wazuh? [y/N]: ${C_RESET}"
+      local wazuh_choice
+      read -r wazuh_choice </dev/tty 2>/dev/null || wazuh_choice="n"
+      if [[ "${wazuh_choice,,}" == "y" || "${wazuh_choice,,}" == "yes" ]]; then
+        COMPOSE_PROFILES+=("wazuh")
+        log_success "Wazuh SIEM selected"
+      fi
+    fi
 
     # Step 9: docker compose pull
     compose_pull

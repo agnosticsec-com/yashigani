@@ -792,6 +792,95 @@ services:
     profiles:
       - openclaw
 
+  # ---------------------------------------------------------------------------
+  # Wazuh SIEM — Open source security monitoring (opt-in)
+  # Full stack: manager (receives events) + indexer (OpenSearch) + dashboard
+  # All Yashigani audit events are forwarded via the SIEM sink (audit/sinks.py)
+  # ---------------------------------------------------------------------------
+  wazuh-manager:
+    image: docker.io/wazuh/wazuh-manager:4.9.2
+    restart: unless-stopped
+    environment:
+      INDEXER_URL: https://wazuh-indexer:9200
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: SecretPassword
+      FILEBEAT_SSL_VERIFICATION_MODE: none
+      SSL_CERTIFICATE_AUTHORITIES: /etc/ssl/root-ca.pem
+      SSL_CERTIFICATE: /etc/wazuh-indexer/certs/wazuh.manager.pem
+      SSL_KEY: /etc/wazuh-indexer/certs/wazuh.manager-key.pem
+      API_USERNAME: wazuh-wui
+      API_PASSWORD: MyS3cr37P450r.*-
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:55000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - internal
+    profiles:
+      - wazuh
+
+  wazuh-indexer:
+    image: docker.io/wazuh/wazuh-indexer:4.9.2
+    restart: unless-stopped
+    environment:
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - wazuh_indexer_data:/var/lib/wazuh-indexer
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf https://localhost:9200 -k || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - internal
+    profiles:
+      - wazuh
+
+  wazuh-dashboard:
+    image: docker.io/wazuh/wazuh-dashboard:4.9.2
+    restart: unless-stopped
+    environment:
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: SecretPassword
+      WAZUH_API_URL: https://wazuh-manager
+      DASHBOARD_USERNAME: kibanaserver
+      DASHBOARD_PASSWORD: kibanaserver
+      API_USERNAME: wazuh-wui
+      API_PASSWORD: MyS3cr37P450r.*-
+    volumes:
+      - wazuh_dashboard_config:/usr/share/wazuh-dashboard/data/wazuh/config
+      - wazuh_dashboard_custom:/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom
+    depends_on:
+      wazuh-manager:
+        condition: service_healthy
+      wazuh-indexer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - internal
+    profiles:
+      - wazuh
+
 # ---------------------------------------------------------------------------
 # Named volumes
 # ---------------------------------------------------------------------------
@@ -838,6 +927,35 @@ volumes:
   openwebui_data:
     driver: local
   budget_redis_data:
+    driver: local
+  # Wazuh SIEM volumes (opt-in)
+  wazuh_api_configuration:
+    driver: local
+  wazuh_etc:
+    driver: local
+  wazuh_logs:
+    driver: local
+  wazuh_queue:
+    driver: local
+  wazuh_var_multigroups:
+    driver: local
+  wazuh_integrations:
+    driver: local
+  wazuh_active_response:
+    driver: local
+  wazuh_agentless:
+    driver: local
+  wazuh_wodles:
+    driver: local
+  filebeat_etc:
+    driver: local
+  filebeat_var:
+    driver: local
+  wazuh_indexer_data:
+    driver: local
+  wazuh_dashboard_config:
+    driver: local
+  wazuh_dashboard_custom:
     driver: local
 
 # ---------------------------------------------------------------------------
