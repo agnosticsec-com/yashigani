@@ -21,21 +21,46 @@ ADMIN_USER_ID = os.getenv("OWUI_ADMIN_USER_ID", "")
 AGENTS = [
     {
         "id": "@Langflow",
-        "name": "Langflow Agent",
+        "name": "Lala — Workflow Builder",
         "base_model_id": "qwen2.5:3b",
-        "description": "Visual multi-agent workflow builder by DataStax. Drag-and-drop agent workflows.",
+        "description": (
+            "Visual multi-agent workflow builder by DataStax. "
+            "Best for: building custom AI pipelines, chaining multiple steps, "
+            "connecting to external APIs, and creating reusable automation workflows.\n\n"
+            "Try these examples:\n"
+            "• \"Summarise this document and then translate the summary to Portuguese\"\n"
+            "• \"Check the weather API, then draft an email based on the forecast\"\n"
+            "• \"Extract key points from this text, classify their sentiment, and create a report\""
+        ),
     },
     {
         "id": "@Letta",
-        "name": "Letta Agent",
+        "name": "Julietta — Memory Agent",
         "base_model_id": "qwen2.5:3b",
-        "description": "Stateful agent with persistent memory (formerly MemGPT). Retains context across sessions.",
+        "description": (
+            "Stateful agent with persistent memory (formerly MemGPT). "
+            "Best for: long-running projects where context matters across sessions, "
+            "personal assistant tasks, research that builds over time, and remembering "
+            "your preferences and past conversations.\n\n"
+            "Try these examples:\n"
+            "• \"Remember that our Q2 budget is £50K and the deadline is June 30th\"\n"
+            "• \"What did we discuss about the security audit last time?\"\n"
+            "• \"I prefer bullet points over paragraphs — remember that for all future responses\""
+        ),
     },
     {
         "id": "@OpenClaw",
-        "name": "OpenClaw Agent",
+        "name": "Scout — Connected Agent",
         "base_model_id": "qwen2.5:3b",
-        "description": "Open-source AI agent with web search, code execution, and file management.",
+        "description": (
+            "AI agent with 30+ messaging channel integrations. "
+            "Best for: tasks that need web access, code execution, file management, "
+            "and connecting to external services like Slack, Teams, or email.\n\n"
+            "Try these examples:\n"
+            "• \"Search the web for the latest OWASP Top 10 changes and summarise them\"\n"
+            "• \"Write a Python script that parses a CSV file and finds duplicates\"\n"
+            "• \"Draft a Slack message announcing the new security policy\""
+        ),
     },
 ]
 
