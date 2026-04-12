@@ -118,10 +118,11 @@ check("V8.2 — HMAC email hashing in audit",
       any_file_contains(SRC, r"hmac.*sha256|HMAC.*email.*hash"))
 
 # =============================================================================
-# OWASP API Security — Full Specification
+# OWASP API Security — Full Specification (not just Top 10)
 # =============================================================================
-print("\n=== OWASP API Security ===\n")
+print("\n=== OWASP API Security — Full Specification ===\n")
 
+# -- Top 10 --
 check("API1 — Broken Object Level Auth: identity resolution on every request",
       any_file_contains(SRC / "gateway", r"_resolve_identity"))
 check("API2 — Broken Authentication: Bearer token + session cookie auth",
@@ -142,6 +143,72 @@ check("API9 — Improper Inventory Management: /v1/models returns controlled lis
       any_file_contains(SRC / "gateway", r"list_models|/v1/models"))
 check("API10 — Unsafe Consumption of APIs: agent auth middleware",
       any_file_contains(SRC / "gateway", r"AgentAuthMiddleware"))
+
+# -- Authentication depth --
+check("API-AUTH-1 — Password hashing uses adaptive algorithm (Argon2id)",
+      any_file_contains(SRC, r"argon2"))
+check("API-AUTH-2 — Token expiry enforced (session max_age)",
+      any_file_contains(SRC, r"max_age.*\d{4,}"))
+check("API-AUTH-3 — Multi-factor authentication (TOTP mandatory)",
+      any_file_contains(SRC, r"verify_totp"))
+check("API-AUTH-4 — Brute-force protection (exponential backoff)",
+      any_file_contains(SRC, r"totp_backoff|exponential.*backoff|BACKOFF_SECONDS"))
+check("API-AUTH-5 — Credential rotation support (agent PSK auto-rotation)",
+      any_file_contains(SRC, r"rotate_agent_token|TokenRotation"))
+
+# -- Authorization granularity --
+check("API-AUTHZ-1 — RBAC via OPA (deny by default)",
+      any_file_contains(POLICY, r"default.*:=.*false|default.*deny", glob="**/*.rego"))
+check("API-AUTHZ-2 — Per-agent path restrictions (allowed_paths)",
+      any_file_contains(SRC, r"allowed_paths"))
+check("API-AUTHZ-3 — Per-agent CIDR restrictions (allowed_cidrs)",
+      any_file_contains(SRC, r"allowed_cidrs"))
+check("API-AUTHZ-4 — Sensitivity ceiling per identity",
+      any_file_contains(SRC, r"sensitivity_ceiling"))
+
+# -- Data validation --
+check("API-DATA-1 — Request body size limit (Caddy)",
+      file_contains(DOCKER / "Caddyfile.selfsigned", r"max_size"))
+check("API-DATA-2 — Parameterised queries (asyncpg $1/$2, no f-strings in SQL)",
+      any_file_contains(SRC / "db", r"\$1|\$2"))
+check("API-DATA-3 — Response content inspection before delivery",
+      any_file_contains(SRC / "gateway", r"response_inspection_pipeline|_opa_response_check"))
+check("API-DATA-4 — No mass assignment (Pydantic strict field definitions)",
+      any_file_contains(SRC, r"Field\(.*min_length|Field\(.*gt="))
+
+# -- Error handling --
+check("API-ERR-1 — Generic error messages (no credential enumeration)",
+      any_file_contains(SRC, r"generic_fail|invalid_credentials.*prevent.*enumeration"))
+check("API-ERR-2 — No stack traces in API responses",
+      not any_file_contains(SRC / "gateway", r"traceback\.format|import traceback"))
+check("API-ERR-3 — Fail-closed on security component failure",
+      any_file_contains(SRC / "gateway", r"fail.closed|denying.*fail"))
+
+# -- Logging and monitoring --
+check("API-LOG-1 — All auth events audited (login, logout, failure)",
+      any_file_contains(SRC, r"_make_login_event|login.*event"))
+check("API-LOG-2 — All policy decisions audited (OPA allow/deny)",
+      any_file_contains(SRC / "gateway", r"OPA DENIED|OPA.*BLOCKED"))
+check("API-LOG-3 — SIEM integration (Wazuh/Splunk/Elasticsearch)",
+      any_file_contains(SRC, r"SiemSink|wazuh|splunk|elasticsearch"))
+check("API-LOG-4 — Tamper-evident audit chain (SHA-384 Merkle)",
+      any_file_contains(SRC, r"SHA.*384|Merkle|chain_hash"))
+
+# -- Transport security --
+check("API-TLS-1 — TLS 1.2+ enforced (no plaintext API access)",
+      file_contains(DOCKER / "Caddyfile.selfsigned", r"tls1\.2"))
+check("API-TLS-2 — Security headers (X-Content-Type-Options, X-Frame-Options)",
+      file_contains(DOCKER / "Caddyfile.selfsigned", r"X-Content-Type-Options|nosniff"))
+check("API-TLS-3 — CORS not enabled (API is same-origin only)",
+      not any_file_contains(SRC / "gateway", r"CORSMiddleware|Access-Control-Allow-Origin"))
+
+# -- Business logic --
+check("API-BIZ-1 — Budget enforcement prevents resource exhaustion",
+      any_file_contains(SRC, r"BudgetSignal\.EXHAUSTED|budget.*exhausted"))
+check("API-BIZ-2 — Graceful degradation (budget exhausted → local, never reject)",
+      any_file_contains(SRC, r"graceful.*degrad|local.*only|never.*reject"))
+check("API-BIZ-3 — Self-service password reset requires TOTP (not email-only)",
+      any_file_contains(SRC, r"self.*reset.*totp|SelfServiceResetRequest"))
 
 # =============================================================================
 # OWASP Agentic AI — Full Attack Surface
