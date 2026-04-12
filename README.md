@@ -328,7 +328,7 @@ Admin account provisioning was enhanced: auto-generated accounts now use fun ani
 All 18 services have verified health checks from a clean-slate installation using the following command:
 
 ```bash
-bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langgraph,goose,openclaw
+bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langflow,letta,openclaw
 ```
 
 ### v0.9.4 — Final Hardening Before v2.0
@@ -547,9 +547,9 @@ The initial release established the core security envelope. Yashigani began as a
   - tmpfs mounts for `/tmp` and audit buffer
   - Read-only root filesystem
 - PgBouncer PostgreSQL connection pooling
-- **Agent bundle containers** (v0.8.0, GA in v1.09.5) — LangGraph, Goose, OpenClaw as opt-in Docker Compose profiles and Helm toggles; installer auto-registers bundles with PSK tokens (v1.09.5); all agent traffic routes through Yashigani's enforcement layer; images are digest-pinned per release; third-party courtesy integrations (no support obligation)
+- **Agent bundle containers** (v0.8.0, GA in v1.09.5) — Langflow, Letta, OpenClaw as opt-in Docker Compose profiles and Helm toggles; installer auto-registers bundles with PSK tokens (v1.09.5); all agent traffic routes through Yashigani's enforcement layer; images are digest-pinned per release; third-party courtesy integrations (no support obligation)
   - **LangGraph** (port 8000) — multi-agent orchestration framework; shares Postgres (separate DB) and Redis (DB 5)
-  - **Goose** (port 3284) — AI developer assistant; uses `goose serve` ACP over HTTP
+  - **Letta** (port 8283) — Stateful agent with persistent memory (formerly MemGPT)
   - **OpenClaw** (port 18789) — personal AI with 30+ messaging integrations; `OPENCLAW_CONFIG_JSON` routes through gateway
 - **Open WebUI integration (v2.0)** — chat interface at `/chat/*`, internal Docker network only (no external port), all LLM calls through gateway, Caddy forwards trusted headers
 - **Container Pool Manager (v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
@@ -665,7 +665,7 @@ The initial release established the core security envelope. Yashigani began as a
 | Multi-replica / HA deployment | Yes | Yes | Yes | Yes | Yes | Yes |
 | Container hardening (seccomp, AppArmor, non-root) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Trivy container scanning | Yes | Yes | Yes | Yes | Yes | Yes |
-| Agent bundles (LangGraph / Goose / OpenClaw) | Yes | Yes | Yes | Yes | Yes | Yes |
+| Agent bundles (Langflow / Letta / OpenClaw) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Open WebUI integration (v2.0) | Yes | Yes | Yes | Yes | Yes | Yes |
 | Container Pool Manager (v2.0) | 1/identity, 3 total | 1/identity, 3 total | 1/identity, 5 total | 3/identity, 15 total | 5/identity, 50 total | Unlimited |
 | 12 Grafana dashboards (v2.0) | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -703,7 +703,7 @@ docker-compose.yml — 17 core services + 3 optional agent bundles (v2.0):
 │
 │   Agent bundles (v1.09.5 — auto-registered with PSK tokens):
 ├── langgraph               # Multi-agent orchestration, port 8000 (shares Postgres + Redis DB 5)
-├── goose                   # AI developer assistant, port 3284 (goose serve ACP over HTTP)
+├── letta                   # Stateful agent with persistent memory, port 8283 (REST API)
 └── openclaw                # Personal AI, port 18789 (30+ messaging integrations)
 
     Dynamic containers (v2.0 — managed by Pool Manager):
@@ -867,9 +867,9 @@ Additionally, the FastAPI gateway migrated from the deprecated `@app.on_event` p
 
 v1.09.5 makes the agent bundle experience zero-friction and adds first-class Podman support. Key changes:
 
-- **Agent bundles work out of the box** — the installer auto-registers LangGraph, Goose, and OpenClaw as agents with pre-shared key (PSK) tokens during installation, eliminating manual agent registration. Bundles are selected via `--agent-bundles langgraph,goose,openclaw`.
+- **Agent bundles work out of the box** — the installer auto-registers Langflow, Letta, and OpenClaw as agents with pre-shared key (PSK) tokens during installation, eliminating manual agent registration. Bundles are selected via `--agent-bundles langflow,letta,openclaw`.
   - **LangGraph** (port 8000): multi-agent orchestration framework; shares Postgres (separate database) and Redis (DB 5)
-  - **Goose** (port 3284): AI developer assistant; runs via `goose serve` ACP over HTTP
+  - **Letta** (port 8283): Stateful agent with persistent memory; REST API
   - **OpenClaw** (port 18789): personal AI with 30+ messaging integrations; `OPENCLAW_CONFIG_JSON` routes through the gateway
 - **First-class Podman support** — runtime detection identifies Docker Engine, Docker Desktop, or Podman; the correct compose command is selected automatically; the Podman override file is auto-applied when Podman is the active runtime
 - **DNS fix for Ollama** — `ollama` and `ollama-init` containers are now on the external network, restoring model registry access for model downloads without compromising internal network isolation
@@ -881,7 +881,7 @@ v1.09.5 makes the agent bundle experience zero-friction and adds first-class Pod
 Full non-interactive install command:
 
 ```bash
-bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langgraph,goose,openclaw
+bash install.sh --non-interactive --deploy demo --domain yashigani.local --tls-mode selfsigned --admin-email admin@yashigani.local --agent-bundles langflow,letta,openclaw
 ```
 
 ### v2.1 Delivered
