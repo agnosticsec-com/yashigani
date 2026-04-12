@@ -133,6 +133,8 @@ class OpenAIRouterState:
         self.pii_cloud_bypass: bool = False  # True = skip PII for cloud-routed requests
         # OPA policy enforcement
         self.opa_url: str = "http://policy:8181"
+        # Content relay detection (agent-to-agent laundering)
+        self.content_relay_detector = None
 
 
 _state = OpenAIRouterState()
@@ -155,6 +157,7 @@ def configure(
     pii_detector=None,    # v2.2 — PiiDetector | None
     pii_cloud_bypass: bool = False,  # v2.2 — True = skip PII for cloud-routed requests
     opa_url: str = "http://policy:8181",
+    content_relay_detector=None,
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
     _state.identity_registry = identity_registry
@@ -173,6 +176,7 @@ def configure(
     _state.pii_detector = pii_detector
     _state.pii_cloud_bypass = pii_cloud_bypass
     _state.opa_url = opa_url
+    _state.content_relay_detector = content_relay_detector
 
     # v2.2 — streaming config from environment
     _state.streaming_enabled = (
@@ -271,6 +275,22 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # ── 2. Extract prompt text for classification ─────────────────────
     prompt_text = "\n".join(m.content for m in body.messages if m.content)
+
+    # ── 2b. Content relay detection (agent-to-agent laundering) ──────
+    if _state.content_relay_detector and prompt_text:
+        try:
+            relay_result = _state.content_relay_detector.check_request(prompt_text)
+            if relay_result.relay_detected:
+                logger.warning(
+                    "CONTENT RELAY DETECTED: request_id=%s identity=%s "
+                    "matching_windows=%d source_agent=%s confidence=%.2f",
+                    request_id, identity_id, relay_result.matching_windows,
+                    relay_result.source_agent, relay_result.confidence,
+                )
+                # Do not block — flag via header and audit. The sensitivity
+                # scan and OPA check downstream will still evaluate the content.
+        except Exception as exc:
+            logger.warning("Content relay check failed: %s", exc)
 
     # ── 3. Sensitivity scan ───────────────────────────────────────────
     sensitivity_level = "PUBLIC"

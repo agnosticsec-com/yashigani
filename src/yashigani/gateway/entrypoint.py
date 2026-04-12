@@ -187,6 +187,7 @@ def _build_app():
     db_pool = None
     inference_logger = None
     anomaly_detector = None
+    content_relay_detector = None
     try:
         from yashigani.db import create_pool, run_migrations
         from yashigani.inference import InferencePayloadLogger, AnomalyDetector
@@ -213,7 +214,9 @@ def _build_app():
             redis_client_anomaly = _redis.from_url(f"{redis_base}/2", decode_responses=False)
             redis_client_anomaly.ping()
             anomaly_detector = AnomalyDetector(redis_client=redis_client_anomaly)
-            logger.info("DB pool + inference logger + anomaly detector ready")
+            from yashigani.inference.content_relay import ContentRelayDetector
+            content_relay_detector = ContentRelayDetector(redis_client=redis_client_anomaly)
+            logger.info("DB pool + inference logger + anomaly detector + content relay detector ready")
         else:
             logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled")
     except Exception as exc:
@@ -332,6 +335,7 @@ def _build_app():
         pii_detector=pii_detector,
         pii_cloud_bypass=pii_cloud_bypass,
         opa_url=opa_url,
+        content_relay_detector=content_relay_detector,
     )
 
     gateway_app = create_gateway_app(
