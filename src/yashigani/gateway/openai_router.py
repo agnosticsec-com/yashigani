@@ -29,8 +29,10 @@ Streaming limitations
 - Agent routing (``@agent`` model prefix) always uses the buffered path
   regardless of the ``stream`` flag, because agent upstreams may not
   support SSE.
-- PII filtering on streaming responses covers the request path only.
-  Response-path PII filtering requires a buffered response (stream=False).
+- PII mode=log: streaming responses are allowed (request-path PII only).
+  PII mode=block|redact: streaming is force-disabled to enable full
+  response-path inspection. This adds ~2-3s latency but ensures PII
+  cannot leak through streamed responses.
 """
 from __future__ import annotations
 
@@ -439,6 +441,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         and _state.streaming_enabled
         and not is_agent_call
     )
+
+    # PII block/redact modes require full response inspection — force buffered
+    if use_streaming and _state.pii_detector is not None:
+        from yashigani.pii.detector import PiiMode
+        if _state.pii_detector.mode in (PiiMode.BLOCK, PiiMode.REDACT):
+            use_streaming = False
+            logger.info("Streaming disabled: PII mode=%s requires buffered response inspection", _state.pii_detector.mode.value)
 
     try:
         import httpx
