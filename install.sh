@@ -1665,9 +1665,21 @@ compose_up() {
   if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
     log_info "Podman detected — configuring rootless deployment"
 
-    # 1. Ensure Podman socket is running
+    # 1. Ensure Podman socket is running and find socket path
     systemctl --user start podman.socket 2>/dev/null || true
-    local _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+    local _podman_sock=""
+    # macOS: socket path from podman machine inspect
+    if [[ "$(uname)" == "Darwin" ]]; then
+      _podman_sock="$(podman machine inspect 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['ConnectionInfo']['PodmanSocket']['Path'])" 2>/dev/null || echo "")"
+    fi
+    # Linux: standard path
+    if [[ -z "$_podman_sock" ]]; then
+      _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+    fi
+    # Verify socket exists
+    if [[ ! -S "$_podman_sock" ]]; then
+      log_warn "Podman socket not found at ${_podman_sock} — compose may fail"
+    fi
     export DOCKER_HOST="unix://${_podman_sock}"
     # Write socket path for gateway container mount (Pool Manager isolation)
     local env_file="${WORK_DIR}/docker/.env"
