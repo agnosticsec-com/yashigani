@@ -39,7 +39,10 @@ def hash_api_key(plaintext: str) -> str:
 
 
 def verify_api_key(plaintext: str, hashed: str) -> bool:
-    """Verify a plaintext API key against a bcrypt hash. Fail-closed."""
+    """
+    Verify a plaintext API key against a bcrypt hash. Fail-closed.
+    bcrypt.checkpw uses constant-time comparison internally (ASVS 11.2.4).
+    """
     try:
         return bcrypt.checkpw(
             plaintext.encode("utf-8"),

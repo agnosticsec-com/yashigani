@@ -943,6 +943,35 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 ---
 
+### Random Number Generation (ASVS 11.5.2)
+
+Yashigani uses Python's `secrets` module exclusively for all security-sensitive random values (session tokens, TOTP seeds, CSRF state, recovery codes, PKCE verifiers). The `secrets` module is backed by `os.urandom()` which reads from `/dev/urandom`.
+
+**Kernel CSPRNG guarantee:** On Linux 4.8+ (all supported deployment targets), `/dev/urandom` uses ChaCha20 in the kernel CSPRNG. The kernel CSPRNG is seeded from hardware entropy (RDRAND, timing jitter, interrupt randomness) and is non-blocking. It does not degrade under load -- once seeded, output quality is cryptographically equivalent to `/dev/random`.
+
+**Platform scope:** Docker containers inherit the host kernel's CSPRNG. No additional entropy sources are required. The `getrandom(2)` syscall (used by Python 3.6+) blocks only during early boot before the CSPRNG is seeded, which does not apply to containerised processes.
+
+**No application-level RNG:** Yashigani does not use `random.Random`, `os.urandom()` directly, or any third-party RNG library. All paths go through `secrets.token_urlsafe()`, `secrets.token_bytes()`, or `secrets.randbits()`.
+
+---
+
+### Memory Encryption (ASVS 11.7.1)
+
+Yashigani does **not** implement application-level memory encryption. Python's garbage-collected runtime does not support deterministic memory zeroing of string or bytes objects.
+
+**L3 recommendation:** Deployments requiring L3 compliance for memory protection should use hardware-level memory encryption:
+
+- **Intel SGX** (Software Guard Extensions) -- enclave-based memory encryption for sensitive operations
+- **AMD SEV / SEV-SNP** (Secure Encrypted Virtualization) -- VM-level memory encryption with attestation
+- **Intel TDX** (Trust Domain Extensions) -- hardware-isolated trust domains
+- **ARM CCA** (Confidential Compute Architecture) -- Realm-based memory isolation
+
+**Preflight check recommendation:** A future release should add a preflight check that detects whether the host supports confidential computing and warns operators of L3 deployments that do not have hardware memory encryption enabled.
+
+**Current mitigations:** Container isolation (separate memory spaces per process), short-lived variables for sensitive data, session invalidation removing server-side state, and seccomp/AppArmor restricting process capabilities reduce the practical attack surface for memory disclosure.
+
+---
+
 ## Appendix: Terminology and References
 
 ### Terminology

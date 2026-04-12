@@ -9,6 +9,16 @@ Design:
   This is safe in PgBouncer transaction mode because the SET is within the
   transaction boundary.
 - All queries use asyncpg's $1/$2 parameterized syntax. No f-strings in SQL.
+
+AES-GCM nonce / IV uniqueness guarantee (ASVS 11.3.4):
+  All column-level encryption uses PostgreSQL's pgcrypto extension via
+  pgp_sym_encrypt(). pgcrypto generates a unique random IV for every call
+  using OpenSSL's CSPRNG — this is a PostgreSQL guarantee documented in the
+  pgcrypto source (src/contrib/pgcrypto/pgp-encrypt.c: pgp_create_pkt_writer
+  calls px_get_random_bytes for each session key packet).
+  There is no application-level AES-GCM cipher usage outside pgcrypto;
+  all symmetric encryption is delegated to pgp_sym_encrypt/pgp_sym_decrypt.
+  No manual nonce management is required or performed.
 """
 from __future__ import annotations
 

@@ -321,6 +321,11 @@ def _verify_primary_signature(payload_bytes: bytes, sig_bytes: bytes) -> bool:
     Verify the primary ECDSA P-256 signature.
 
     Returns True on success, False on InvalidSignature, raises on other errors.
+
+    Note (ASVS 11.2.4): ECDSA verification via the ``cryptography`` library
+    delegates to OpenSSL's constant-time C implementation. The verify() call
+    raises InvalidSignature on mismatch — no timing-vulnerable byte comparison
+    occurs at the Python level.
     """
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
     from cryptography.hazmat.primitives.asymmetric.ec import ECDSA

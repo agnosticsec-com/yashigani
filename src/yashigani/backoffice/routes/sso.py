@@ -82,11 +82,12 @@ def _build_redirect_uri(request: Request, idp_id: str) -> str:
     return f"{base}/auth/sso/oidc/{idp_id}/callback"
 
 
-def _store_state(r, state: str, idp_id: str, nonce: str) -> None:
-    """Persist state → {idp_id, nonce, issued_at} in Redis with TTL."""
+def _store_state(r, state: str, idp_id: str, nonce: str, code_verifier: str = "") -> None:
+    """Persist state -> {idp_id, nonce, code_verifier, issued_at} in Redis with TTL."""
     payload = json.dumps({
         "idp_id": idp_id,
         "nonce": nonce,
+        "code_verifier": code_verifier,
         "issued_at": time.time(),
     })
     r.setex(f"{_STATE_KEY_PREFIX}{state}", _STATE_TTL_SECONDS, payload)
@@ -346,10 +347,8 @@ async def initiate_oidc(idp_id: str, request: Request):
     nonce = secrets.token_urlsafe(32)
     redirect_uri = _build_redirect_uri(request, idp_id)
 
-    _store_state(r, state, idp_id, nonce)
-
     try:
-        auth_url = broker.get_oidc_auth_url(
+        auth_url, code_verifier = broker.get_oidc_auth_url(
             idp_id=idp_id,
             redirect_uri=redirect_uri,
             state=state,
@@ -367,6 +366,9 @@ async def initiate_oidc(idp_id: str, request: Request):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "auth_url_generation_failed"},
         )
+
+    # Store state with PKCE code_verifier for the callback (ASVS 10.4.6).
+    _store_state(r, state, idp_id, nonce, code_verifier=code_verifier)
 
     return RedirectResponse(url=auth_url, status_code=status.HTTP_302_FOUND)
 
@@ -450,13 +452,16 @@ async def oidc_callback(
             detail={"error": "state_idp_mismatch"},
         )
 
-    # Exchange code for tokens + validate ID token
+    # Exchange code for tokens + validate ID token.
+    # Retrieve the PKCE code_verifier stored during initiation (ASVS 10.4.6).
+    code_verifier = state_payload.get("code_verifier", "")
     redirect_uri = _build_redirect_uri(request, idp_id)
     sso_result = broker.handle_oidc_callback(
         idp_id=idp_id,
         code=code,
         redirect_uri=redirect_uri,
         state=state,
+        code_verifier=code_verifier,
     )
 
     if not sso_result.success:
@@ -467,6 +472,37 @@ async def oidc_callback(
             url=f"/login?error=sso_failed&idp={idp_id}",
             status_code=status.HTTP_302_FOUND,
         )
+
+    # -----------------------------------------------------------------------
+    # Validate acr (Authentication Context Class Reference) — ASVS 10.3.4
+    # -----------------------------------------------------------------------
+    _min_acr = os.getenv("YASHIGANI_MIN_ACR_VALUE", "").strip()
+    _id_token_acr = ""
+    if hasattr(sso_result, "raw_claims"):
+        _id_token_acr = str(sso_result.raw_claims.get("acr", ""))
+    # SSOResult may not carry raw_claims yet; fall back to empty.
+    if not _id_token_acr and hasattr(sso_result, "acr"):
+        _id_token_acr = str(getattr(sso_result, "acr", ""))
+
+    if _min_acr and _id_token_acr:
+        # Simple lexicographic comparison — works for well-structured acr URIs
+        # (e.g. urn:mace:incommon:iap:silver < urn:mace:incommon:iap:gold)
+        # and numeric levels (e.g. "1" < "2").
+        if _id_token_acr < _min_acr:
+            logger.warning(
+                "OIDC acr too low: got %s, minimum %s (IdP %s)",
+                _id_token_acr, _min_acr, idp_id,
+            )
+            _write_sso_failure_audit(
+                idp_id, sso_result.idp_name or idp_id,
+                f"acr_insufficient:{_id_token_acr}<{_min_acr}", client_ip,
+            )
+            return RedirectResponse(
+                url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
+                status_code=status.HTTP_302_FOUND,
+            )
+
+    logger.info("OIDC acr=%s for IdP %s (min=%s)", _id_token_acr or "(none)", idp_id, _min_acr or "(any)")
 
     # Resolve or provision the Yashigani identity
     idp_config = broker.get_idp(idp_id)
