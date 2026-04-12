@@ -69,8 +69,7 @@ async def system_health(session: AdminSession):
             components["kms"] = {"status": "critical", "error": str(exc)}
             overall = _degrade(overall, "critical")
     else:
-        components["kms"] = {"status": "not_configured"}
-        overall = _degrade(overall, "degraded")
+        components["kms"] = {"status": "community", "note": "KMS not required for Community tier"}
 
     # Rotation scheduler
     if state.rotation_scheduler is not None:
@@ -82,7 +81,7 @@ async def system_health(session: AdminSession):
         if not running:
             overall = _degrade(overall, "degraded")
     else:
-        components["rotation_scheduler"] = {"status": "not_configured"}
+        components["rotation_scheduler"] = {"status": "community", "note": "Manual rotation — auto-rotation available in Pro+"}
 
     # Inspection pipeline / Ollama
     if state.inspection_pipeline is not None:

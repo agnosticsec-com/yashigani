@@ -55,8 +55,14 @@ async def login(body: LoginRequest, request: Request, response: Response):
         state.audit_writer.write(
             _make_login_event(body.username, "failure", reason)
         )
+        import datetime
+        server_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail={"error": "invalid_credentials"})
+                            detail={
+                                "error": "invalid_credentials",
+                                "hint": "If using TOTP, ensure your device clock is synchronised.",
+                                "server_time": server_time,
+                            })
 
     client_ip = request.client.host if request.client else "unknown"
     session = state.session_store.create(
