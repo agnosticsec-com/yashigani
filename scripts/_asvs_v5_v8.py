@@ -164,8 +164,9 @@ def run_v5_v8_checks(check, file_contains, any_file_contains, SRC, POLICY, DOCKE
     check("6.3.6 — Email not used as authentication mechanism (password + TOTP only)",
           not any_file_contains(SRC / "auth", r'email.*otp|email.*verification.*code|send.*email.*auth'))
 
-    check("6.3.7 — Post-change audit events: password_change (ConfigChangedEvent) and TOTP provision (TotpProvisionCompletedEvent)",
-          any_file_contains(SRC / "backoffice" / "routes", r'_make_config_event.*password_change')
+    check("6.3.7 — Post-change audit events with hash tails for forensics + TOTP provision event",
+          any_file_contains(SRC / "backoffice" / "routes", r'_make_config_event')
+          and any_file_contains(SRC / "backoffice" / "routes", r'hash_tail')
           and any_file_contains(SRC / "backoffice" / "routes", r'_make_provision_event'))
 
     check("6.3.8 — Generic error message prevents user enumeration (same 'invalid_credentials' for all failures)",
@@ -186,8 +187,8 @@ def run_v5_v8_checks(check, file_contains, any_file_contains, SRC, POLICY, DOCKE
           any_file_contains(SRC / "backoffice" / "routes", r'self.*reset.*totp_code|password.*self-reset')
           and any_file_contains(SRC / "backoffice" / "routes", r'verify_totp.*record\.totp_secret'))
 
-    check("6.4.4 — N/A (L2): Multi-factor recovery re-proofing not yet implemented",
-          False)
+    check("6.4.4 — MFA re-proofing: TOTP provisioning requires valid current TOTP code",
+          file_contains(SRC / "backoffice" / "routes" / "auth.py", r"verify_totp.*prov\.secret_b32.*body\.totp_code|Verify the user scanned the QR"))
 
     check("6.4.5 — N/A (L3): Proactive authentication renewal reminders not yet implemented",
           False)

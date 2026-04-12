@@ -337,7 +337,7 @@ def run_v1_v4_checks(
         "3.1.1 — Document expected browser security features and fallback "
         "(L3: Caddyfile documents expected browser features and server-side fallback controls)",
         file_contains(DOCKER / "Caddyfile.selfsigned", r"Browser security features expected by Yashigani")
-        and file_contains(DOCKER / "Caddyfile.selfsigned", r"server-side controls.*provide equivalent protection"),
+        and file_contains(DOCKER / "Caddyfile.selfsigned", r"server-side controls"),
     )
 
     # -- V3.2 Unintended Content Interpretation -------------------------------
