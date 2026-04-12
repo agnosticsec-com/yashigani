@@ -100,6 +100,23 @@ class BudgetEnforcer:
         key = f"budget:allocation:{identity_id}:{provider}"
         self._r.set(key, str(token_budget))
 
+    def sync_allocations(self, allocations: list[dict]) -> int:
+        """
+        Bulk-sync budget allocations from Postgres to Redis.
+        Called at gateway startup to restore allocations after restart.
+        Returns count of allocations synced.
+        """
+        count = 0
+        pipe = self._r.pipeline(transaction=False)
+        for alloc in allocations:
+            key = f"budget:allocation:{alloc['identity_id']}:{alloc['provider']}"
+            pipe.set(key, str(alloc['token_budget']))
+            count += 1
+        pipe.execute()
+        if count:
+            logger.info("Budget allocations synced from DB: %d", count)
+        return count
+
     def check(
         self,
         identity_id: str,
