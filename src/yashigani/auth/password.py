@@ -16,6 +16,39 @@ logger = logging.getLogger(__name__)
 _MIN_PASSWORD_LENGTH = 36
 _AUTO_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
 
+# OWASP ASVS 6.1.2 + 6.2.11 — context-specific word list.
+# Passwords containing these words (case-insensitive) are rejected to prevent
+# easily guessable passwords tied to the product, company, or common defaults.
+_CONTEXT_BANNED_WORDS = frozenset([
+    "yashigani", "agnostic", "security", "admin", "password", "gateway",
+])
+
+
+class PasswordContextError(ValueError):
+    """Raised when a password contains a context-specific banned word."""
+
+    def __init__(self, word: str):
+        self.word = word
+        super().__init__(
+            f"Password must not contain the word '{word}'. "
+            "Choose a password that does not include product, company, or common default terms."
+        )
+
+
+def validate_password_context(password: str) -> None:
+    """
+    Check password against the context-specific banned word list.
+    OWASP ASVS 6.1.2 + 6.2.11: reject passwords containing product name,
+    company name, domain, or common default terms.
+
+    Raises:
+        PasswordContextError: if the password contains a banned word.
+    """
+    pw_lower = password.lower()
+    for word in _CONTEXT_BANNED_WORDS:
+        if word in pw_lower:
+            raise PasswordContextError(word)
+
 
 def _import_argon2():
     try:
@@ -58,6 +91,7 @@ def hash_password(password: str, *, check_breach: bool = True) -> str:
         raise ValueError(
             f"Password must be at least {_MIN_PASSWORD_LENGTH} characters"
         )
+    validate_password_context(password)
     if check_breach:
         validate_password_not_breached(password)
     return _hasher().hash(password)

@@ -10,8 +10,8 @@ from fastapi import Cookie, Depends, HTTPException, status, Request
 
 from yashigani.auth.session import SessionStore, Session
 
-_SESSION_COOKIE = "yashigani_admin_session"
-_USER_SESSION_COOKIE = "yashigani_session"
+_SESSION_COOKIE = "__Host-yashigani_admin_session"
+_USER_SESSION_COOKIE = "__Host-yashigani_session"
 
 
 def get_session_store() -> SessionStore:

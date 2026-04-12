@@ -95,7 +95,7 @@ async def logout(
     store=Depends(get_session_store),
 ):
     store.invalidate(session.token)
-    response.delete_cookie(_SESSION_COOKIE, path="/admin")
+    response.delete_cookie(_SESSION_COOKIE, path="/")
     response.delete_cookie(_USER_SESSION_COOKIE, path="/")
     return {"status": "ok"}
 
@@ -166,7 +166,7 @@ async def verify_session(request: Request):
     the authenticated user's identity in response headers.
     200 + X-Forwarded-User header → Caddy proceeds with the request.
     401 → Caddy redirects to login.
-    Checks both user cookie (yashigani_session) and admin cookie (yashigani_admin_session).
+    Checks both user cookie (__Host-yashigani_session) and admin cookie (__Host-yashigani_admin_session).
     """
     state = backoffice_state
     token = request.cookies.get(_USER_SESSION_COOKIE) or request.cookies.get(_SESSION_COOKIE)
@@ -275,7 +275,7 @@ async def provision_totp(
 # Helpers
 # ---------------------------------------------------------------------------
 
-_USER_SESSION_COOKIE = "yashigani_session"
+_USER_SESSION_COOKIE = "__Host-yashigani_session"
 
 
 def _set_session_cookie(response: Response, token: str, account_tier: str = "admin") -> None:
@@ -287,7 +287,7 @@ def _set_session_cookie(response: Response, token: str, account_tier: str = "adm
             secure=True,
             samesite="strict",
             max_age=14400,   # 4 hours absolute
-            path="/admin",
+            path="/",        # __Host- prefix requires Path=/
         )
     # Always set the user-level cookie (used by forward_auth for Open WebUI)
     response.set_cookie(

@@ -248,7 +248,7 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
     if rate_limiter is not None:
         client_ip = _get_client_ip(request)
         agent_id_rl = request.headers.get("x-yashigani-agent-id", "unknown")
-        session_id_rl = request.cookies.get("yashigani_session", "")
+        session_id_rl = request.cookies.get("__Host-yashigani_session", "")
         user_email_rl = request.headers.get("x-yashigani-user-id", "")
 
         # Apply per-role rate limit override: use the most permissive (highest) RPS
@@ -740,7 +740,7 @@ def _build_response(
 
 def _extract_identity(request: Request) -> tuple[str, str, str]:
     """Extract session_id, agent_id, user_id from request headers/cookies."""
-    session_id = request.cookies.get("yashigani_session", "")
+    session_id = request.cookies.get("__Host-yashigani_session", "")
     if not session_id:
         # API key or Bearer token — use a hash as the session_id handle
         auth = request.headers.get("authorization", "")

@@ -112,10 +112,12 @@ def create_backoffice_app() -> FastAPI:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Referrer-Policy"] = "no-referrer"
         # CSP: relaxed for admin UI pages (inline scripts/styles), strict for API
+        # ASVS 3.4.3: object-src 'none' + base-uri 'none'; 3.4.7: report-uri
+        _csp_suffix = "; object-src 'none'; base-uri 'none'; report-uri /admin/csp-report; report-to default"
         if request.url.path.startswith("/admin/login") or request.url.path == "/admin/" or request.url.path == "/login":
-            response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline'"
+            response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline'" + _csp_suffix
         else:
-            response.headers["Content-Security-Policy"] = "default-src 'self'"
+            response.headers["Content-Security-Policy"] = "default-src 'self'" + _csp_suffix
         return response
 
     # Generic error handlers — never leak internal state
@@ -188,6 +190,10 @@ def create_backoffice_app() -> FastAPI:
     # v2.3 — Cryptographic inventory (ASVS 11.1.3)
     from yashigani.backoffice.routes.crypto_inventory import router as crypto_inventory_router
     app.include_router(crypto_inventory_router, prefix="/admin", tags=["crypto"])
+
+    # ASVS 3.4.7 — CSP violation report endpoint
+    from yashigani.backoffice.routes.csp_report import router as csp_report_router
+    app.include_router(csp_report_router, prefix="/admin", tags=["csp"])
 
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)

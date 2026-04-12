@@ -729,7 +729,7 @@ The backoffice exposes a REST API for managing groups. Every mutation automatica
 **Create a group:**
 ```bash
 curl -X POST https://your-domain/admin/rbac/groups \
-  -H "Cookie: yashigani_session=<session>" \
+  -H "Cookie: __Host-yashigani_session=<session>" \
   -H "Content-Type: application/json" \
   -d '{
     "display_name": "Readers",
@@ -744,7 +744,7 @@ curl -X POST https://your-domain/admin/rbac/groups \
 **Add a user to a group:**
 ```bash
 curl -X POST https://your-domain/admin/rbac/groups/grp_<uuid>/members \
-  -H "Cookie: yashigani_session=<session>" \
+  -H "Cookie: __Host-yashigani_session=<session>" \
   -H "Content-Type: application/json" \
   -d '{"email": "alice@example.com"}'
 ```
@@ -752,13 +752,13 @@ curl -X POST https://your-domain/admin/rbac/groups/grp_<uuid>/members \
 **List groups:**
 ```bash
 curl https://your-domain/admin/rbac/groups \
-  -H "Cookie: yashigani_session=<session>"
+  -H "Cookie: __Host-yashigani_session=<session>"
 ```
 
 **Delete a group:**
 ```bash
 curl -X DELETE https://your-domain/admin/rbac/groups/grp_<uuid> \
-  -H "Cookie: yashigani_session=<session>"
+  -H "Cookie: __Host-yashigani_session=<session>"
 ```
 
 Each of these calls triggers an OPA push. Changes take effect on the next request — typically within milliseconds.
@@ -1408,7 +1408,7 @@ The OPA Policy Assistant allows administrators to describe an access control req
 
 ```bash
 curl -X POST https://your-domain/admin/opa-assistant/suggest \
-  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE" \
+  -H "Cookie: __Host-yashigani_session=YOUR_SESSION_COOKIE" \
   -H "Content-Type: application/json" \
   -d '{
     "description": "Engineering team can call any tool. Finance team can only call tools under /finance/**. No other users get access.",
@@ -1455,7 +1455,7 @@ The `/apply` endpoint re-validates the document before pushing to OPA. Never bli
 
 ```bash
 curl -X POST https://your-domain/admin/opa-assistant/apply \
-  -H "Cookie: yashigani_session=YOUR_SESSION_COOKIE" \
+  -H "Cookie: __Host-yashigani_session=YOUR_SESSION_COOKIE" \
   -H "Content-Type: application/json" \
   -d '{
     "suggestion": { "groups": {...}, "user_groups": {...} },
