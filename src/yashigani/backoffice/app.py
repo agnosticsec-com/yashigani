@@ -197,6 +197,10 @@ def create_backoffice_app() -> FastAPI:
     from yashigani.backoffice.routes.csp_report import router as csp_report_router
     app.include_router(csp_report_router, prefix="/admin", tags=["csp"])
 
+    # Service management — enable/disable optional compose profiles from admin panel
+    from yashigani.backoffice.routes.services import router as services_router
+    app.include_router(services_router, tags=["services"])
+
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)
     app.include_router(webauthn_router, tags=["webauthn"])

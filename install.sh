@@ -69,6 +69,7 @@ WORK_DIR=""
 AGENT_BUNDLES=""          # comma-separated: langflow,letta,openclaw
 INSTALL_WAZUH=false       # opt-in: --wazuh flag
 INSTALL_OPENWEBUI=false   # opt-in: --with-openwebui flag
+INSTALL_INTERNAL_CA=false # opt-in: --with-internal-ca flag
 COMPOSE_PROFILES=()       # populated by select_agent_bundles()
 
 # If stdin is not a TTY (piped from curl), force non-interactive
@@ -99,6 +100,7 @@ OPTIONS
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
   --agent-bundles  BUNDLES               Comma-separated opt-in agents: langflow,letta,openclaw (or "all")
   --with-openwebui                        Include Open WebUI chat interface
+  --with-internal-ca                      Include Smallstep CA for internal service-to-service TLS
   --wazuh                                 Install Wazuh SIEM (manager + indexer + dashboard)
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
@@ -172,6 +174,7 @@ parse_args() {
         shift 2
         ;;
       --with-openwebui)  INSTALL_OPENWEBUI=true;  shift ;;
+      --with-internal-ca) INSTALL_INTERNAL_CA=true; shift ;;
       --wazuh)           INSTALL_WAZUH=true;     shift ;;
       --offline)         OFFLINE=true;           shift ;;
       --non-interactive) NON_INTERACTIVE=true;  shift ;;

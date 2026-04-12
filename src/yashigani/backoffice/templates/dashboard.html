@@ -456,6 +456,19 @@
         <div class="page" id="page-settings">
             <h2>Settings</h2>
 
+            <!-- Optional Services -->
+            <div class="panel" style="margin-bottom:16px;">
+                <div class="panel-header">Optional Services</div>
+                <div class="panel-body">
+                    <p style="font-size:0.8rem;color:#64748b;margin-bottom:8px;">Enable or disable optional components. Changes take effect immediately.</p>
+                    <table>
+                        <thead><tr><th>Service</th><th>Description</th><th>Status</th><th>Action</th></tr></thead>
+                        <tbody id="services-list"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+                    </table>
+                    <div id="services-result" style="margin-top:6px;font-size:0.8rem;"></div>
+                </div>
+            </div>
+
             <!-- IP Access Control (fail2ban-style) -->
             <div class="panel" style="margin-bottom:16px;">
                 <div class="panel-header">IP Access Control</div>

@@ -888,6 +888,33 @@ services:
     profiles:
       - wazuh
 
+  # ---------------------------------------------------------------------------
+  # Smallstep CA — Internal Certificate Authority for service-to-service TLS
+  # Provides automated certificate issuance and renewal for all internal
+  # services. Caddy integrates natively with step-ca via ACME.
+  # Enable with: --with-internal-ca
+  # ---------------------------------------------------------------------------
+  step-ca:
+    image: docker.io/smallstep/step-ca:latest
+    restart: unless-stopped
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "Yashigani Internal CA"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "step-ca,localhost"
+      DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT: "true"
+      DOCKER_STEPCA_INIT_ACME: "true"
+    volumes:
+      - step_ca_data:/home/step
+    healthcheck:
+      test: ["CMD-SHELL", "step ca health --ca-url https://localhost:9000 --root /home/step/certs/root_ca.crt 2>/dev/null || curl -sf -k https://localhost:9000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+    profiles:
+      - internal-ca
+
 # ---------------------------------------------------------------------------
 # Named volumes
 # ---------------------------------------------------------------------------
@@ -934,6 +961,8 @@ volumes:
   openwebui_data:
     driver: local
   budget_redis_data:
+    driver: local
+  step_ca_data:
     driver: local
   # Wazuh SIEM volumes (opt-in)
   wazuh_api_configuration:

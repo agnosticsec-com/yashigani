@@ -34,6 +34,8 @@ from yashigani.backoffice.routes.pii import router as pii_router
 from yashigani.backoffice.routes.crypto_inventory import router as crypto_inventory_router
 # ASVS 3.4.7 — CSP report endpoint
 from yashigani.backoffice.routes.csp_report import router as csp_report_router
+# Service management (enable/disable optional compose profiles from admin panel)
+from yashigani.backoffice.routes.services import router as services_router
 
 __all__ = [
     "auth_router", "accounts_router", "users_router",

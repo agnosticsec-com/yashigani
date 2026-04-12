@@ -1011,5 +1011,50 @@ document.addEventListener('click', function(e) {
         case 'exportCryptoJson':
             exportCryptoJson();
             break;
+        // Services
+        case 'enableService':
+            toggleService(e.target.dataset.service, 'enable');
+            break;
+        case 'disableService':
+            toggleService(e.target.dataset.service, 'disable');
+            break;
     }
 });
+
+// Service management
+async function loadServices() {
+    var data = await api('/admin/services');
+    var el = document.getElementById('services-list');
+    if (!el || !data || !data.services) return;
+    var html = '';
+    data.services.forEach(function(s) {
+        var badge = s.status === 'running'
+            ? '<span class="badge badge-green">Running</span>'
+            : '<span class="badge" style="background:#f1f5f9;color:#64748b;">Stopped</span>';
+        var btn = s.status === 'running'
+            ? '<button data-action="disableService" data-service="' + s.id + '" style="padding:2px 8px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem">Disable</button>'
+            : '<button data-action="enableService" data-service="' + s.id + '" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem">Enable</button>';
+        html += '<tr><td>' + s.name + '</td><td style="font-size:0.8rem;color:#64748b">' + s.description + '</td><td>' + badge + '</td><td>' + btn + '</td></tr>';
+    });
+    el.innerHTML = html || '<tr><td colspan="4" class="empty">No optional services available</td></tr>';
+}
+
+async function toggleService(serviceId, action) {
+    var result = document.getElementById('services-result');
+    if (result) result.innerHTML = '<span class="badge badge-yellow">' + action + 'ing ' + serviceId + '...</span>';
+    var r = await fetch('/admin/services/' + serviceId, {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: action})
+    });
+    if (r.ok) {
+        var data = await r.json();
+        if (result) result.innerHTML = '<span class="badge badge-green">' + (data.message || 'Done') + '</span>';
+        loadServices();
+    } else {
+        var err = await r.json().catch(function(){return {};});
+        if (result) result.innerHTML = '<span class="badge badge-red">Failed: ' + (err.detail?.error || r.status) + '</span>';
+    }
+}
+
+loadServices();
