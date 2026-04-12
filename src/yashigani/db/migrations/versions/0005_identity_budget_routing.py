@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import text
 
 revision: str = "0005"
 down_revision: Union[str, None] = "0004"
@@ -350,8 +351,12 @@ DROP TABLE IF EXISTS identities CASCADE;
 
 
 def upgrade() -> None:
-    op.execute(_DDL_UP)
+    # Escape colons in DDL to prevent SQLAlchemy from interpreting :word as bind params
+    # (sensitivity_patterns seed data contains regex patterns like :sk-ant- and :sk-proj-)
+    import re
+    escaped = re.sub(r':([a-zA-Z_])', r'\\:\1', _DDL_UP)
+    op.execute(text(escaped))
 
 
 def downgrade() -> None:
-    op.execute(_DDL_DOWN)
+    op.execute(text(_DDL_DOWN))
