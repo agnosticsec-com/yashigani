@@ -181,7 +181,9 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         reverse_proxy prometheus:9090
     }
 
-    # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
+    # ── Open WebUI — catch-all (only active when --with-openwebui is used) ──
+    # When Open WebUI is not deployed, Caddy returns 502 on / which is
+    # acceptable — admin UI at /admin/ and API at /v1/ still work.
     handle {
         # Strip any externally-supplied identity headers (anti-spoofing)
         request_header -X-Forwarded-User

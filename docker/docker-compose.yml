@@ -58,8 +58,7 @@ services:
         condition: service_healthy
       backoffice:
         condition: service_healthy
-      open-webui:
-        condition: service_healthy
+      # open-webui dependency removed — Open WebUI is optional (--with-openwebui)
     networks:
       - external
       - internal
@@ -253,6 +252,8 @@ services:
       - no-new-privileges:true
     networks:
       - internal
+    profiles:
+      - openwebui
 
   # ---------------------------------------------------------------------------
   # Budget Redis — Dedicated Redis for budget counters (noeviction)
