@@ -54,6 +54,7 @@
                 <button onclick="showPage('models')">Models</button>
                 <button onclick="showPage('sensitivity')">Sensitivity</button>
                 <button onclick="showPage('alerts')">Alerts</button>
+                <button onclick="showPage('monitoring')">Monitoring</button>
                 <button onclick="showPage('settings')">Settings</button>
             </div>
         </div>
@@ -355,6 +356,45 @@
                     <textarea id="test-text" rows="3" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical" placeholder="Paste text to classify..."></textarea>
                     <button onclick="testClassify()" style="margin-top:8px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem">Classify</button>
                     <div id="classify-result" style="margin-top:8px;font-size:0.85rem"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Monitoring Page -->
+        <div class="page" id="page-monitoring">
+            <h2>Monitoring</h2>
+            <div class="cards" style="margin-bottom:24px;">
+                <div class="card" style="cursor:pointer" onclick="window.open('/admin/grafana/','_blank')">
+                    <div class="card-label">Grafana Dashboards</div>
+                    <div class="card-value" style="font-size:1.2rem">12 dashboards</div>
+                    <p style="font-size:0.75rem;color:#64748b;margin-top:4px">System health, budget usage, agent activity, security overview, tracing, and more. Click to open.</p>
+                </div>
+                <div class="card" style="cursor:pointer" onclick="window.open('/admin/prometheus/','_blank')">
+                    <div class="card-label">Prometheus Metrics</div>
+                    <div class="card-value" style="font-size:1.2rem">Query Engine</div>
+                    <p style="font-size:0.75rem;color:#64748b;margin-top:4px">Direct access to Prometheus PromQL queries, alert rules, and target status. Click to open.</p>
+                </div>
+            </div>
+            <h2>Quick Links</h2>
+            <div class="panel">
+                <div class="panel-body">
+                    <table>
+                        <thead><tr><th>Dashboard</th><th>Description</th><th>Link</th></tr></thead>
+                        <tbody>
+                            <tr><td>System Health</td><td>CPU, memory, uptime, container status</td><td><a href="/admin/grafana/d/system_health" target="_blank">Open</a></td></tr>
+                            <tr><td>Security Overview</td><td>Prompt injection, credential exfil, OPA denials</td><td><a href="/admin/grafana/d/security_overview" target="_blank">Open</a></td></tr>
+                            <tr><td>Budget Usage</td><td>Token consumption per identity and provider</td><td><a href="/admin/grafana/d/budget_usage" target="_blank">Open</a></td></tr>
+                            <tr><td>Agent Activity</td><td>Request patterns, latency, error rates per agent</td><td><a href="/admin/grafana/d/agent_activity" target="_blank">Open</a></td></tr>
+                            <tr><td>Rate Limit Status</td><td>Rate limit violations and near-limit warnings</td><td><a href="/admin/grafana/d/rate_limit_status" target="_blank">Open</a></td></tr>
+                            <tr><td>Optimization Engine</td><td>Routing decisions, model selection, cost tracking</td><td><a href="/admin/grafana/d/optimization_engine" target="_blank">Open</a></td></tr>
+                            <tr><td>Pool Manager</td><td>Container lifecycle, per-identity isolation</td><td><a href="/admin/grafana/d/pool_manager" target="_blank">Open</a></td></tr>
+                            <tr><td>Logs (Loki)</td><td>Aggregated application and service logs</td><td><a href="/admin/grafana/d/logs" target="_blank">Open</a></td></tr>
+                            <tr><td>Tracing (Jaeger)</td><td>Distributed request traces end-to-end</td><td><a href="/admin/grafana/d/tracing" target="_blank">Open</a></td></tr>
+                            <tr><td>Anomaly Detection</td><td>Behavioral anomaly metrics and alerts</td><td><a href="/admin/grafana/d/anomaly" target="_blank">Open</a></td></tr>
+                            <tr><td>Inspection Backend</td><td>Classification backend health and latency</td><td><a href="/admin/grafana/d/inspection_backend" target="_blank">Open</a></td></tr>
+                            <tr><td>CI/CD</td><td>Pipeline metrics and deployment tracking</td><td><a href="/admin/grafana/d/cicd" target="_blank">Open</a></td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
