@@ -116,22 +116,22 @@ async def verify_session(request: Request):
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
-    # Resolve username from account_id
-    username = None
-    for record in state.auth_service._accounts.values():
-        if record.account_id == session.account_id:
-            username = record.username
+    # Resolve account from account_id
+    record = None
+    for r in state.auth_service._accounts.values():
+        if r.account_id == session.account_id:
+            record = r
             break
 
-    if username is None:
+    if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     from starlette.responses import Response as StarletteResponse
     resp = StarletteResponse(status_code=200)
     # X-Forwarded-User must be an email for Open WebUI's trusted header auth
-    email = f"{username}@yashigani.local"
+    email = record.email or f"{record.username}@yashigani.local"
     resp.headers["X-Forwarded-User"] = email
-    resp.headers["X-Forwarded-Name"] = username
+    resp.headers["X-Forwarded-Name"] = record.username
     resp.headers["X-Forwarded-Email"] = email
     return resp
 

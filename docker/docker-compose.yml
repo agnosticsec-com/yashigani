@@ -669,9 +669,8 @@ services:
   # Images are pinned to upstream-tagged digests and updated with each
   # Yashigani release. All support goes to the upstream maintainers.
   # Enable at install time or via:
-  #   docker compose --profile langgraph up -d
-  #   docker compose --profile goose up -d
-  #   docker compose --profile crewai up -d
+  #   docker compose --profile langflow up -d
+  #   docker compose --profile letta up -d
   #   docker compose --profile openclaw up -d
   #
   # DISCLAIMER: These integrations carry no support obligation from
