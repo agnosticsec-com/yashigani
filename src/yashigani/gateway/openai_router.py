@@ -296,8 +296,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     budget_total = 0
     if _state.budget_enforcer and identity:
         from yashigani.billing.budget_enforcer import BudgetState
+        allocation = _state.budget_enforcer.get_allocation(identity_id, "cloud")
         budget_state = _state.budget_enforcer.check(
-            identity_id, "cloud", budget_total=10000,  # TODO: read from identity's budget allocation
+            identity_id, "cloud", budget_total=allocation,
         )
         budget_signal = budget_state.signal.value
         budget_pct = budget_state.pct

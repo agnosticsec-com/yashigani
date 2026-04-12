@@ -20,10 +20,16 @@ ADMIN_USER_ID = os.getenv("OWUI_ADMIN_USER_ID", "")
 
 AGENTS = [
     {
-        "id": "@LangGraph",
-        "name": "LangGraph Agent",
+        "id": "@Langflow",
+        "name": "Langflow Agent",
         "base_model_id": "qwen2.5:3b",
-        "description": "AI agent framework by LangChain. Multi-step reasoning, tool use, and memory.",
+        "description": "Visual multi-agent workflow builder by DataStax. Drag-and-drop agent workflows.",
+    },
+    {
+        "id": "@Letta",
+        "name": "Letta Agent",
+        "base_model_id": "qwen2.5:3b",
+        "description": "Stateful agent with persistent memory (formerly MemGPT). Retains context across sessions.",
     },
     {
         "id": "@OpenClaw",
