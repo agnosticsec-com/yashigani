@@ -194,6 +194,9 @@ async def create_individual_budget(body: IndividualBudgetRequest):
             "00000000-0000-0000-0000-000000000000",
             body.identity_id, body.provider, body.token_budget, body.period,
         )
+    # Sync allocation to Redis so gateway can enforce without DB round-trip
+    if _state.budget_enforcer:
+        _state.budget_enforcer.set_allocation(body.identity_id, body.provider, body.token_budget)
     return IndividualBudgetResponse(
         identity_id=body.identity_id,
         provider=body.provider,

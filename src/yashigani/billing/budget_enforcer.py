@@ -85,11 +85,26 @@ class BudgetEnforcer:
         self._warn_pct = warn_pct
         logger.info("BudgetEnforcer initialised (warn_pct=%d%%)", warn_pct)
 
+    def get_allocation(self, identity_id: str, provider: str = "cloud") -> int:
+        """
+        Get the budget allocation for an identity from Redis.
+        Returns 0 if no allocation is configured (unlimited / Community tier).
+        Allocations are synced to Redis by the budget admin API.
+        """
+        key = f"budget:allocation:{identity_id}:{provider}"
+        val = self._r.get(key)
+        return int(val) if val else 0
+
+    def set_allocation(self, identity_id: str, provider: str, token_budget: int) -> None:
+        """Cache a budget allocation in Redis (called by the budget admin API)."""
+        key = f"budget:allocation:{identity_id}:{provider}"
+        self._r.set(key, str(token_budget))
+
     def check(
         self,
         identity_id: str,
         provider: str,
-        budget_total: int,
+        budget_total: int = 0,
         period: str = "monthly",
     ) -> BudgetState:
         """
