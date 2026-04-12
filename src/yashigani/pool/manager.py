@@ -13,8 +13,8 @@ Responsibilities:
   - Enforce license tier container limits
   - Tear down idle containers
 
-Uses Docker SDK (docker-py) for container lifecycle.
-Falls back to Podman API if Docker is not available.
+Uses ContainerBackend abstraction (pool/backend.py) which supports
+both Docker SDK and Podman SDK with automatic detection.
 """
 from __future__ import annotations
 
@@ -68,18 +68,22 @@ class PoolManager:
     """
     Manages per-identity container lifecycle.
 
-    Thread-safe. All container operations go through the Docker SDK.
+    Thread-safe. Container operations go through ContainerBackend
+    (supports Docker SDK, Podman SDK, or stub mode).
     """
 
     def __init__(
         self,
         docker_client=None,
+        backend=None,
         network_name: str = "docker_internal",
         idle_timeout_seconds: int = 1800,  # 30 minutes
         tier: str = "community",
         postmortem_dir: str = "/data/postmortem",
     ) -> None:
-        self._docker = docker_client
+        # Prefer new backend param; fall back to legacy docker_client for test compat
+        self._backend = backend
+        self._docker = docker_client if not backend else None
         self._network = network_name
         self._idle_timeout = idle_timeout_seconds
         self._limits = TierLimits.from_tier(tier)
@@ -187,7 +191,7 @@ class PoolManager:
         logger.info("Replacing container %s: %s", old.container_name, reason)
 
         # Collect postmortem
-        if self._docker:
+        if self._backend or self._docker:
             try:
                 from yashigani.pool.postmortem import collect_postmortem
                 collect_postmortem(
@@ -219,7 +223,7 @@ class PoolManager:
         info = self._containers.pop(key, None)
         if info:
             logger.info("Tearing down %s: %s", info.container_name, reason)
-            if self._docker:
+            if self._backend or self._docker:
                 try:
                     from yashigani.pool.postmortem import collect_postmortem
                     collect_postmortem(
@@ -278,11 +282,31 @@ class PoolManager:
         env: dict,
         port: int,
     ) -> ContainerInfo:
-        """Create a new container via Docker SDK."""
+        """Create a new container via ContainerBackend (Docker or Podman)."""
         short_id = identity_id[-8:] if len(identity_id) > 8 else identity_id
         container_name = f"ysg-{service_slug}-{short_id}-{uuid.uuid4().hex[:6]}"
 
-        if self._docker:
+        if self._backend:
+            try:
+                handle = self._backend.run(
+                    image=image,
+                    name=container_name,
+                    environment=env,
+                    network=self._network,
+                    labels={
+                        "yashigani.managed": "true",
+                        "yashigani.identity": identity_id,
+                        "yashigani.service": service_slug,
+                    },
+                )
+                container_id = handle.id
+                ip = handle.get_network_ip(self._network)
+                endpoint = f"{ip}:{port}"
+            except Exception as exc:
+                logger.error("Failed to create container %s: %s", container_name, exc)
+                raise
+        elif self._docker:
+            # Legacy Docker client path (test compatibility)
             try:
                 container = self._docker.containers.run(
                     image=image,
@@ -290,7 +314,7 @@ class PoolManager:
                     environment=env,
                     network=self._network,
                     detach=True,
-                    remove=False,  # Keep for postmortem
+                    remove=False,
                     labels={
                         "yashigani.managed": "true",
                         "yashigani.identity": identity_id,
@@ -298,20 +322,17 @@ class PoolManager:
                     },
                 )
                 container_id = container.id
-
-                # Resolve container IP on the network
                 container.reload()
                 networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
                 ip = "127.0.0.1"
                 if self._network in networks:
                     ip = networks[self._network].get("IPAddress", "127.0.0.1")
-
                 endpoint = f"{ip}:{port}"
             except Exception as exc:
                 logger.error("Failed to create container %s: %s", container_name, exc)
                 raise
         else:
-            # No Docker client — return a stub (for testing)
+            # No backend — return a stub (for testing)
             container_id = f"stub-{uuid.uuid4().hex[:12]}"
             endpoint = f"127.0.0.1:{port}"
 
@@ -335,14 +356,20 @@ class PoolManager:
 
     def _kill_container(self, container_id: str) -> None:
         """Kill and remove a container."""
-        if not self._docker:
-            return
-        try:
-            container = self._docker.containers.get(container_id)
-            container.kill()
-            container.remove(force=True)
-        except Exception as exc:
-            logger.warning("Failed to kill container %s: %s", container_id[:12], exc)
+        if self._backend:
+            try:
+                handle = self._backend.get(container_id)
+                handle.kill()
+                handle.remove(force=True)
+            except Exception as exc:
+                logger.warning("Failed to kill container %s: %s", container_id[:12], exc)
+        elif self._docker:
+            try:
+                container = self._docker.containers.get(container_id)
+                container.kill()
+                container.remove(force=True)
+            except Exception as exc:
+                logger.warning("Failed to kill container %s: %s", container_id[:12], exc)
 
 
 class PoolLimitExceeded(Exception):
