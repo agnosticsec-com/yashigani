@@ -18,8 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 _DDL_UP = """
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pg_partman";
-CREATE EXTENSION IF NOT EXISTS "pg_cron";
+-- pg_partman and pg_cron are optional — require specialized Postgres images.
+-- When not available, audit table partitions must be created manually.
+DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS "pg_partman"; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'pg_partman not available — manual partition management required'; END $$;
+DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS "pg_cron"; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'pg_cron not available — scheduled jobs disabled'; END $$;
 
 -- tenants (not per-tenant; platform-scoped)
 CREATE TABLE tenants (
@@ -246,24 +248,32 @@ REVOKE DELETE ON inference_events FROM yashigani_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE ON TABLES TO yashigani_app;
 
--- pg_partman: register partitioned tables for auto-maintenance
-SELECT partman.create_parent(
-    p_parent_table := 'public.audit_events',
-    p_control := 'created_at',
-    p_type := 'range',
-    p_interval := 'monthly',
-    p_premake := 3
-);
-SELECT partman.create_parent(
-    p_parent_table := 'public.inference_events',
-    p_control := 'created_at',
-    p_type := 'range',
-    p_interval := 'monthly',
-    p_premake := 3
-);
+-- pg_partman: register partitioned tables for auto-maintenance (optional)
+DO $$ BEGIN
+    PERFORM partman.create_parent(
+        p_parent_table := 'public.audit_events',
+        p_control := 'created_at',
+        p_type := 'range',
+        p_interval := 'monthly',
+        p_premake := 3
+    );
+    PERFORM partman.create_parent(
+        p_parent_table := 'public.inference_events',
+        p_control := 'created_at',
+        p_type := 'range',
+        p_interval := 'monthly',
+        p_premake := 3
+    );
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_partman not available — skipping partition auto-management';
+END $$;
 
--- pg_cron: nightly partition maintenance
-SELECT cron.schedule('partman-maintenance', '0 2 * * *', $$SELECT partman.run_maintenance()$$);
+-- pg_cron: nightly partition maintenance (optional)
+DO $$ BEGIN
+    PERFORM cron.schedule('partman-maintenance', '0 2 * * *', $$SELECT partman.run_maintenance()$$);
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'pg_cron not available — skipping scheduled maintenance';
+END $$;
 """
 
 _DDL_DOWN = """
