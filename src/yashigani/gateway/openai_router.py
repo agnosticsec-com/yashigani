@@ -993,7 +993,12 @@ def _resolve_identity(request: Request) -> Optional[dict]:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         key = auth[7:]
-        if key and key != "yashigani-internal":
+        if key == "yashigani-internal":
+            # Internal service-to-service calls (Open WebUI, agents)
+            # Treated as authenticated internal identity — same OPA rules apply
+            return {"identity_id": "internal", "status": "active", "kind": "service",
+                    "groups": [], "allowed_models": [], "sensitivity_ceiling": "RESTRICTED"}
+        if key:
             return _state.identity_registry.get_by_api_key(key)
 
     return None
