@@ -128,6 +128,36 @@
         }
     }
 
+    # ── Grafana — admin-authenticated access via /admin/grafana/* ──────────
+    handle_path /admin/grafana/* {
+        forward_auth backoffice:8443 {
+            uri /auth/verify
+            @unauthorized status 401
+            handle_response @unauthorized {
+                redir * /admin/login 302
+            }
+        }
+        reverse_proxy grafana:3000 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # ── Prometheus — admin-authenticated access via /admin/prometheus/* ───
+    handle_path /admin/prometheus/* {
+        forward_auth backoffice:8443 {
+            uri /auth/verify
+            @unauthorized status 401
+            handle_response @unauthorized {
+                redir * /admin/login 302
+            }
+        }
+        reverse_proxy prometheus:9090 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
     # ── User login page — /login (before catch-all) ────────────────────────
     handle /login {
         reverse_proxy backoffice:8443 {
