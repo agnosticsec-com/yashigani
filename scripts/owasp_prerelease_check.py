@@ -55,9 +55,17 @@ def any_file_contains(directory: Path, pattern: str, glob: str = "**/*.py") -> b
 
 
 # =============================================================================
-# OWASP ASVS v5 Level 3 — Key Controls
+# OWASP ASVS v5 — Partial Coverage (22/345 controls)
+#
+# ASVS v5 has 345 controls across 17 chapters (V1-V17), all levels (L1-L3).
+# We currently verify 22 key controls. Full 345-control coverage is a
+# dedicated project — see memory/project_asvs_full_coverage.md.
+#
+# Chapters with ZERO coverage: V1 (Encoding), V3 (Frontend), V4 (API),
+# V5 (File), V9 (Tokens), V10 (OAuth), V15 (Secure Coding), V16 (Logging),
+# V17 (WebRTC). These MUST be addressed.
 # =============================================================================
-print("\n=== OWASP ASVS v5 Level 3 ===\n")
+print("\n=== OWASP ASVS v5 — Partial (22/345 controls, L1+L2+L3) ===\n")
 
 # V2: Authentication
 check("V2.1 — Argon2id password hashing",
@@ -259,15 +267,57 @@ check("Wazuh SIEM available as compose profile",
       file_contains(DOCKER / "docker-compose.yml", r"wazuh-manager"))
 
 # =============================================================================
+# ASVS Coverage Report
+# =============================================================================
+print("\n=== ASVS v5 Coverage Report ===\n")
+
+_ASVS_CHAPTERS = {
+    "V1  Encoding & Sanitization":       (30, 0),
+    "V2  Validation & Business Logic":    (13, 2),
+    "V3  Web Frontend Security":          (31, 0),
+    "V4  API & Web Service":              (16, 0),
+    "V5  File Handling":                  (13, 0),
+    "V6  Authentication":                 (47, 6),
+    "V7  Session Management":             (19, 2),
+    "V8  Authorization":                  (13, 4),
+    "V9  Self-contained Tokens":          (7, 0),
+    "V10 OAuth & OIDC":                   (36, 0),
+    "V11 Cryptography":                   (24, 3),
+    "V12 Secure Communication":           (12, 1),
+    "V13 Configuration":                  (21, 1),
+    "V14 Data Protection":                (13, 3),
+    "V15 Secure Coding & Architecture":   (21, 0),
+    "V16 Security Logging & Error":       (17, 0),
+    "V17 WebRTC":                         (12, 0),
+}
+
+total_asvs = sum(t for t, _ in _ASVS_CHAPTERS.values())
+covered_asvs = sum(c for _, c in _ASVS_CHAPTERS.values())
+zero_chapters = [k for k, (_, c) in _ASVS_CHAPTERS.items() if c == 0]
+
+for name, (total_ch, covered_ch) in _ASVS_CHAPTERS.items():
+    pct = int(covered_ch / total_ch * 100) if total_ch else 0
+    bar = "X" * (pct // 10) + "." * (10 - pct // 10)
+    status = "ZERO" if covered_ch == 0 else f"{pct}%"
+    print(f"  {name:<40} [{bar}] {covered_ch:>3}/{total_ch:<3} {status}")
+
+print(f"\n  ASVS coverage: {covered_asvs}/{total_asvs} controls ({int(covered_asvs/total_asvs*100)}%)")
+print(f"  Chapters with ZERO coverage: {len(zero_chapters)}/17")
+if zero_chapters:
+    print(f"  Missing: {', '.join(zero_chapters)}")
+
+# =============================================================================
 # Summary
 # =============================================================================
 print(f"\n{'='*60}")
 total = PASS + FAIL
 print(f"  TOTAL: {total} checks | PASS: {PASS} | FAIL: {FAIL}")
+print(f"  ASVS: {covered_asvs}/{total_asvs} ({int(covered_asvs/total_asvs*100)}%) | API: 28 | Agentic AI: 10 | Infra: 7")
 if FAIL > 0:
     print(f"\n  *** RELEASE BLOCKED — {FAIL} control(s) failed ***")
     print(f"  Fix all failures before tagging a release.")
     sys.exit(1)
 else:
-    print(f"\n  All controls verified. Safe to release.")
+    print(f"\n  All {total} implemented checks pass.")
+    print(f"  WARNING: ASVS coverage is {int(covered_asvs/total_asvs*100)}% — {total_asvs - covered_asvs} controls not yet automated.")
     sys.exit(0)
