@@ -1697,13 +1697,21 @@ compose_up() {
       echo "CONTAINER_SOCKET=${_podman_sock}" >> "$env_file"
     fi
 
-    # 2. Check sysctl for privileged port binding (Caddy needs 80/443)
-    local port_start
-    port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
-    if [[ "$port_start" -gt 80 ]]; then
-      log_warn "Podman rootless: ports 80/443 require sysctl change"
-      log_warn "Run: echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p"
-      log_warn "Caddy will not start until this is configured"
+    # 2. Check port binding — macOS can't bind 80/443 rootless, use high ports
+    if [[ "$(uname)" == "Darwin" ]]; then
+      log_info "macOS detected — using high ports (8080/8443) for Caddy"
+      local env_file="${WORK_DIR}/docker/.env"
+      grep -q "^YASHIGANI_HTTP_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTP_PORT=8080" >> "$env_file"
+      grep -q "^YASHIGANI_HTTPS_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTPS_PORT=8443" >> "$env_file"
+    else
+      local port_start
+      port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+      if [[ "$port_start" -gt 80 ]]; then
+        log_warn "Podman rootless: ports 80/443 require sysctl change"
+        log_warn "Run: echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p"
+        log_warn "Or use high ports: YASHIGANI_HTTP_PORT=8080 YASHIGANI_HTTPS_PORT=8443"
+        log_warn "Caddy will not start until this is configured"
+      fi
     fi
 
     # 3. Create Docker-compatible directories for promtail
