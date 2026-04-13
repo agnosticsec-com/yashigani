@@ -24,6 +24,8 @@ spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       securityContext:
         runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -32,8 +34,6 @@ spec:
           imagePullPolicy: {{ .Values.pgbouncer.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
           ports:
             - name: pgbouncer
               containerPort: 5432

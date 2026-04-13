@@ -1,0 +1,200 @@
+{{/* ConfigMaps for services that need mounted config files */}}
+
+{{- if .Values.policy.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-policy-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  yashigani.rego: |
+    package yashigani
+    import rego.v1
+    default allow := true
+  v1_routing.rego: |
+    package yashigani.v1_routing
+    import rego.v1
+    default allow := true
+    default response_allow := true
+  rbac.rego: |
+    package yashigani.rbac
+    import rego.v1
+    default allow := true
+  agents.rego: |
+    package yashigani.agents
+    import rego.v1
+    default allow := true
+{{- end }}
+
+{{- if .Values.otelCollector.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-otel-collector-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  otel-collector.yml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 256
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+    exporters:
+      otlp/jaeger:
+        endpoint: "yashigani-jaeger:4317"
+        tls:
+          insecure: true
+      loki:
+        endpoint: "http://yashigani-loki:3100/loki/api/v1/push"
+    extensions:
+      health_check:
+        endpoint: "0.0.0.0:13133"
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/jaeger]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [loki]
+{{- end }}
+
+{{- if .Values.alertmanager.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-alertmanager-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: default
+      group_by: ['alertname']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 1h
+    receivers:
+      - name: default
+{{- end }}
+
+{{- if .Values.loki.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-loki-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  loki.yml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: "2020-10-24"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      reject_old_samples: false
+{{- end }}
+
+{{- if .Values.caddy.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-caddy-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  Caddyfile: |
+    {
+      local_certs
+      servers {
+        timeouts {
+          read_body   10s
+          read_header 5s
+          write       30s
+          idle        120s
+        }
+      }
+    }
+    https://{{ .Values.global.tlsDomain }}:443 {
+      tls internal
+      header {
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "no-referrer"
+        Content-Security-Policy   "default-src 'self'; object-src 'none'; base-uri 'none'"
+        Cross-Origin-Opener-Policy "same-origin"
+        -Server
+      }
+      handle /healthz {
+        reverse_proxy yashigani-gateway:8080
+      }
+      handle /v1/* {
+        reverse_proxy yashigani-gateway:8080
+      }
+      handle /agents/* {
+        reverse_proxy yashigani-gateway:8080
+      }
+      handle /mcp/* {
+        reverse_proxy yashigani-gateway:8080
+      }
+      handle /admin/* {
+        reverse_proxy yashigani-backoffice:8443
+      }
+      handle /auth/* {
+        reverse_proxy yashigani-backoffice:8443
+      }
+      handle /static/* {
+        reverse_proxy yashigani-backoffice:8443
+      }
+      handle /login {
+        reverse_proxy yashigani-backoffice:8443
+      }
+      handle {
+        reverse_proxy open-webui:8080
+      }
+    }
+{{- end }}

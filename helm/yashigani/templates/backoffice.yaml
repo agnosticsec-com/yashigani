@@ -24,6 +24,8 @@ spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -31,6 +33,8 @@ spec:
           image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.backoffice.image.repository }}:{{ .Values.backoffice.image.tag }}"
           imagePullPolicy: {{ .Values.backoffice.image.pullPolicy }}
           securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -40,6 +44,10 @@ spec:
               containerPort: 8443
               protocol: TCP
           env:
+            - name: YASHIGANI_ENV
+              value: {{ .Values.global.environment | quote }}
+            - name: YASHIGANI_KSM_PROVIDER
+              value: "docker"
             - name: REDIS_HOST
               value: "yashigani-redis"
             - name: REDIS_PORT
@@ -85,6 +93,8 @@ spec:
               mountPath: /tmp
             - name: varlog
               mountPath: /var/log/yashigani
+            - name: secrets
+              mountPath: /run/secrets
       volumes:
         - name: tmp
           emptyDir:
@@ -92,6 +102,9 @@ spec:
         - name: varlog
           emptyDir:
             sizeLimit: 50Mi
+        - name: secrets
+          emptyDir:
+            sizeLimit: 10Mi
 ---
 apiVersion: v1
 kind: Service

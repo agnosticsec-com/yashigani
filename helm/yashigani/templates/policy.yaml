@@ -69,7 +69,20 @@ spec:
             {{- toYaml .Values.policy.resources | nindent 12 }}
           volumeMounts:
             - name: policies
-              mountPath: /policies
+              mountPath: /policies/yashigani.rego
+              subPath: yashigani.rego
+              readOnly: true
+            - name: policies
+              mountPath: /policies/v1_routing.rego
+              subPath: v1_routing.rego
+              readOnly: true
+            - name: policies
+              mountPath: /policies/rbac.rego
+              subPath: rbac.rego
+              readOnly: true
+            - name: policies
+              mountPath: /policies/agents.rego
+              subPath: agents.rego
               readOnly: true
       volumes:
         - name: policies

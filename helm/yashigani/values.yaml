@@ -44,7 +44,7 @@ gateway:
   service:
     port: 8080
     type: ClusterIP
-  existingSecretName: yashigani-gateway-secrets
+  existingSecretName: ""  # leave empty to auto-generate, or set to a pre-created K8s secret name
   hpa:
     enabled: true
     minReplicas: 2
@@ -88,7 +88,7 @@ backoffice:
   service:
     port: 8443
     type: ClusterIP
-  existingSecretName: yashigani-backoffice-secrets
+  existingSecretName: ""
   hpa:
     enabled: true
     minReplicas: 2
@@ -148,7 +148,7 @@ redis:
   service:
     port: 6379
     type: ClusterIP
-  existingSecretName: yashigani-redis-secrets
+  existingSecretName: ""
   persistence:
     enabled: true
     size: 1Gi
@@ -235,7 +235,7 @@ grafana:
   service:
     port: 3000
     type: ClusterIP
-  existingSecretName: yashigani-grafana-secrets
+  existingSecretName: ""
   adminUser: "grafana-admin"
   persistence:
     enabled: true
@@ -489,7 +489,7 @@ budgetRedis:
   service:
     port: 6379
     type: ClusterIP
-  existingSecretName: yashigani-redis-secrets
+  existingSecretName: ""
   persistence:
     enabled: true
     size: 1Gi
@@ -515,7 +515,7 @@ postgres:
   service:
     port: 5432
     type: ClusterIP
-  existingSecretName: yashigani-postgres-secrets
+  existingSecretName: ""
   persistence:
     enabled: true
     size: 20Gi

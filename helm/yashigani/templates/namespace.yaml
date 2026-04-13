@@ -1,6 +1,2 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{/* Namespace is created by helm install --create-namespace.
+     This template is intentionally empty to avoid conflicts. */}}
