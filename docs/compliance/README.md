@@ -21,17 +21,22 @@
 | ISO 27001 | v2022 | 93 | 70 | 10 | 13 | 88% | [iso_27001_2022.md](iso_27001_2022.md) |
 | SOC 2 Type II | v2017 | 60 | 55 | 3 | 2 | 95% | [soc2_type2.md](soc2_type2.md) |
 | HIPAA Security Rule | v2013 | 62 | 42 | 9 | 11 | 82% | [hipaa_security.md](hipaa_security.md) |
+| PCI DSS | v4.0 | 250 | 149 | 10 | 91 | 94% | [pci_dss_v4.md](pci_dss_v4.md) |
+| NIST 800-53 | Rev 5 Moderate | 325 | 196 | 10 | 119 | 95% | [nist_800_53_moderate.md](nist_800_53_moderate.md) |
+| FedRAMP Moderate | Rev 5 Overlay | 55 | 32 | 8 | 15 | 80% | [fedramp_moderate.md](fedramp_moderate.md) |
+| EU AI Act | 2024/1689 | 30 | 19 | 6 | 5 | 76% | [eu_ai_act.md](eu_ai_act.md) |
+| Infrastructure Security | v1.0 | 7 | 5 | 1 | 1 | 83% | [infrastructure.md](infrastructure.md) |
 
 ## Overall Summary
 
 | Metric | Value |
 |--------|-------|
-| Total Frameworks | 6 |
-| Total Controls | 608 |
-| Total Passed | 456 |
-| Total Failed | 36 |
-| Total N/A | 116 |
-| Overall Pass Rate | 93% |
+| Total Frameworks | 11 |
+| Total Controls | 1275 |
+| Total Passed | 857 |
+| Total Failed | 71 |
+| Total N/A | 347 |
+| Overall Pass Rate | 92% |
 
 ## Methodology
 
@@ -57,5 +62,7 @@ Each control was verified using automated static analysis against the Yashigani 
 | `{compose_file}` | `docker/docker-compose.yml` |
 | `{dockerfile}` | `docker/Dockerfile.gateway` |
 | `{caddyfile}` | `docker/Caddyfile.selfsigned` |
-| `{policy_dir}` | `policy/` |
+| `{policy_dir}` | `docs/` |
 | `{docs_dir}` | `docs/` |
+| `{install_script}` | `scripts/wizard.sh` |
+| `{project_root}` | `.` |

@@ -164,6 +164,14 @@
         }
     }
 
+    # ── Static assets — public, no auth required (CSS/JS for admin UI) ────
+    handle /static/* {
+        reverse_proxy backoffice:8443 {
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
     # ── User login page — /login (before catch-all) ────────────────────────
     handle /login {
         reverse_proxy backoffice:8443 {
