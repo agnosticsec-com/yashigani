@@ -75,3 +75,14 @@ scripts/_asvs_*.py
 scripts/sign_license.py
 scripts/generate_license.py
 backups/
+
+# Backup data (contains secrets)
+backups/
+
+# Docker secrets (never commit)
+docker/secrets/
+
+# Any secret files
+*.secret
+*.pem
+*.key
