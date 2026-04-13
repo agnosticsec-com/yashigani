@@ -186,6 +186,13 @@ def create_gateway_app(
 # Core request handler
 # ---------------------------------------------------------------------------
 
+class _NullSpan:
+    """No-op OTEL span context manager used when the tracer is unavailable."""
+    def __enter__(self): return self
+    def __exit__(self, *args): pass
+    def set_attribute(self, *args): pass
+
+
 async def _handle_request(request: Request, path: str, state: dict) -> Response:
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
@@ -201,6 +208,36 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
     except Exception:
         logger.debug("proxy: tracer import or initialisation failed", exc_info=True)
         _tracer = None
+
+    with (_tracer.start_as_current_span("gateway-request") if _tracer else _NullSpan()) as _root_span:
+        _root_span.set_attribute("http.method", request.method)
+        _root_span.set_attribute("http.target", path)
+        _root_span.set_attribute("yashigani.request_id", request_id)
+
+        response = await _proxy_request_body(
+            request, path, state, _tracer, _root_span, request_id, cfg, audit_writer, start
+        )
+        _root_span.set_attribute("http.status_code", response.status_code)
+        return response
+
+
+async def _proxy_request_body(
+    request: Request,
+    path: str,
+    state: dict,
+    _tracer,
+    _root_span,
+    request_id: str,
+    cfg: GatewayConfig,
+    audit_writer,
+    start: float,
+) -> Response:
+    """Main proxy logic — called inside the root OTEL span from _handle_request."""
+    try:
+        from yashigani.tracing import current_trace_id
+    except Exception:
+        def current_trace_id() -> str:  # type: ignore[misc]
+            return ""
 
     # Agent routing — intercept /agents/* before rate limiting and inspection.
     # AgentAuthMiddleware (added via add_middleware) has already run and set
@@ -373,6 +410,18 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
         agent_id = agent_id or "internal"
         session_id = session_id or "internal"
 
+    # Annotate root span with identity and model (low-cardinality values only)
+    _root_span.set_attribute("yashigani.agent_id", agent_id)
+    _root_span.set_attribute("yashigani.user_id", user_id)
+    try:
+        import json as _json
+        _body_obj = _json.loads(body_bytes) if body_bytes else {}
+        _model = _body_obj.get("model", "")
+        if _model:
+            _root_span.set_attribute("llm.model", _model)
+    except Exception:
+        pass
+
     # 3. Run inspection pipeline (if configured)
     pipeline = state["inspection_pipeline"]
     forwarded_body = body_bytes
@@ -457,7 +506,11 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
                     forwarded_body = _req_pii_text.encode("utf-8", errors="replace")
 
     # 4. OPA policy check
-    opa_allowed = await _opa_check(cfg, request, path, session_id, agent_id, user_id)
+    with (_tracer.start_as_current_span("opa-check") if _tracer else _NullSpan()) as _opa_span:
+        _opa_span.set_attribute("opa.path", path)
+        _opa_span.set_attribute("yashigani.agent_id", agent_id)
+        opa_allowed = await _opa_check(cfg, request, path, session_id, agent_id, user_id)
+        _opa_span.set_attribute("opa.allowed", opa_allowed)
     if not opa_allowed:
         _audit_request(audit_writer, request_id, "DENIED", "opa_policy", request, path)
         return _error_response(request_id, 403, "POLICY_DENIED")
@@ -485,7 +538,12 @@ async def _handle_request(request: Request, path: str, state: dict) -> Response:
 
     # 5. Forward to upstream MCP server
     client: httpx.AsyncClient = state["http_client"]
-    upstream_response = await _forward(client, request, path, forwarded_body, request_id)
+    with (_tracer.start_as_current_span("upstream-llm-call") if _tracer else _NullSpan()) as _up_span:
+        _up_span.set_attribute("http.method", request.method)
+        _up_span.set_attribute("http.target", path)
+        _up_span.set_attribute("yashigani.agent_id", agent_id)
+        upstream_response = await _forward(client, request, path, forwarded_body, request_id)
+        _up_span.set_attribute("http.status_code", upstream_response.status_code)
 
     # 5a. Response inspection — v0.9.0 F-01
     # Inspect the upstream response for indirect prompt injection before

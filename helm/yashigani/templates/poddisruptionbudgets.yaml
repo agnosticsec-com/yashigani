@@ -9,7 +9,8 @@ spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: yashigani-gateway
+      app.kubernetes.io/name: yashigani-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -20,7 +21,8 @@ spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: yashigani-backoffice
+      app.kubernetes.io/name: yashigani-backoffice
+      app.kubernetes.io/instance: {{ .Release.Name }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -31,5 +33,6 @@ spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: yashigani-policy
+      app.kubernetes.io/name: yashigani-policy
+      app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

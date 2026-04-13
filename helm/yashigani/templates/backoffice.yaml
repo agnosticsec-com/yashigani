@@ -1,0 +1,115 @@
+{{- if .Values.backoffice.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-backoffice
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-backoffice
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backoffice.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-backoffice
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yashigani-backoffice
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backoffice
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.backoffice.image.repository }}:{{ .Values.backoffice.image.tag }}"
+          imagePullPolicy: {{ .Values.backoffice.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8443
+              protocol: TCP
+          env:
+            - name: REDIS_HOST
+              value: "yashigani-redis"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: YASHIGANI_OPA_URL
+              value: "http://yashigani-policy:8181"
+            - name: YASHIGANI_SECRETS_DIR
+              value: "/run/secrets"
+            - name: YASHIGANI_DEPLOYMENT_STREAM
+              value: {{ .Values.gateway.env.deploymentStream | quote }}
+            - name: YASHIGANI_TLS_DOMAIN
+              value: {{ .Values.global.tlsDomain | quote }}
+            - name: OWUI_API_URL
+              value: "http://open-webui:8080"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
+                  key: redis_password
+          envFrom:
+            - secretRef:
+                name: {{ .Values.backoffice.existingSecretName | default "yashigani-backoffice-secrets" }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.backoffice.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: varlog
+              mountPath: /var/log/yashigani
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: varlog
+          emptyDir:
+            sizeLimit: 50Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-backoffice
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-backoffice
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.backoffice.service.type }}
+  selector:
+    app.kubernetes.io/name: yashigani-backoffice
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.backoffice.service.port }}
+      targetPort: 8443
+      protocol: TCP
+{{- end }}

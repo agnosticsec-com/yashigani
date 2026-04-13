@@ -1,0 +1,132 @@
+{{- if .Values.openWebui.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.openWebui.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: open-webui
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: open-webui
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: open-webui
+          image: "{{ .Values.openWebui.image.repository }}:{{ .Values.openWebui.image.tag }}"
+          imagePullPolicy: {{ .Values.openWebui.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: WEBUI_AUTH
+              value: {{ .Values.openWebui.env.webuiAuth | quote }}
+            - name: WEBUI_AUTH_TRUSTED_EMAIL_HEADER
+              value: {{ .Values.openWebui.env.webuiAuthTrustedEmailHeader | quote }}
+            - name: WEBUI_AUTH_TRUSTED_NAME_HEADER
+              value: {{ .Values.openWebui.env.webuiAuthTrustedNameHeader | quote }}
+            - name: ENABLE_SIGNUP
+              value: {{ .Values.openWebui.env.enableSignup | quote }}
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.openWebui.env.webuiSecretKeySecretName }}
+                  key: {{ .Values.openWebui.env.webuiSecretKeySecretKey }}
+            - name: OPENAI_API_BASE_URL
+              value: {{ .Values.openWebui.env.openaiApiBaseUrl | quote }}
+            - name: OPENAI_API_KEY
+              value: {{ .Values.openWebui.env.openaiApiKey | quote }}
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.openWebui.env.ollamaBaseUrl | quote }}
+            - name: ENABLE_OLLAMA_API
+              value: {{ .Values.openWebui.env.enableOllamaApi | quote }}
+            - name: DEFAULT_MODELS
+              value: {{ .Values.openWebui.env.defaultModels | quote }}
+            - name: WEBUI_NAME
+              value: {{ .Values.openWebui.env.webuiName | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.openWebui.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: open-webui-data
+---
+{{- if .Values.openWebui.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.openWebui.persistence.storageClass }}
+  storageClassName: {{ .Values.openWebui.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.openWebui.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.openWebui.service.type }}
+  selector:
+    app.kubernetes.io/name: open-webui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.openWebui.service.port }}
+      targetPort: 8080
+      protocol: TCP
+{{- end }}

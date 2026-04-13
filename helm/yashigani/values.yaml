@@ -314,6 +314,29 @@ jaeger:
     type: ClusterIP
 
 # ---------------------------------------------------------------------------
+# OpenTelemetry Collector — OTLP receiver, Jaeger exporter
+# ---------------------------------------------------------------------------
+otelCollector:
+  enabled: true
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.100.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  service:
+    otlpGrpcPort: 4317
+    otlpHttpPort: 4318
+    metricsPort: 8889
+    type: ClusterIP
+
+# ---------------------------------------------------------------------------
 # Caddy — TLS edge proxy (optional in K8s — prefer nginx-ingress + cert-manager)
 # ---------------------------------------------------------------------------
 caddy:

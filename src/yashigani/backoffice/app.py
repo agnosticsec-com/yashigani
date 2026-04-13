@@ -6,13 +6,41 @@ No data-plane access. TLS required.
 from __future__ import annotations
 
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+try:
+    from prometheus_client import (
+        Counter, Histogram,
+        generate_latest, CONTENT_TYPE_LATEST,
+    )
+    _PROM_AVAILABLE = True
+except ImportError:
+    _PROM_AVAILABLE = False
+
+if _PROM_AVAILABLE:
+    _bo_requests_total = Counter(
+        "yashigani_backoffice_requests_total",
+        "Total backoffice HTTP requests.",
+        ["method", "path_prefix", "status_code"],
+    )
+    _bo_request_duration_seconds = Histogram(
+        "yashigani_backoffice_request_duration_seconds",
+        "Backoffice request latency in seconds.",
+        ["method", "path_prefix"],
+        buckets=[.005, .01, .025, .05, .1, .25, .5, 1.0, 2.5, 5.0],
+    )
+    _bo_auth_failures_total = Counter(
+        "yashigani_backoffice_auth_failures_total",
+        "Backoffice authentication failures by reason.",
+        ["reason"],
+    )
 
 from yashigani.backoffice.routes import (
     auth_router,
@@ -102,6 +130,30 @@ def create_backoffice_app() -> FastAPI:
         allow_headers=[],
     )
 
+    # Prometheus instrumentation middleware — must be registered before security headers
+    # so we record metrics even on requests that return error responses.
+    # /internal/metrics is excluded to avoid self-scrape cardinality noise.
+    @app.middleware("http")
+    async def prometheus_middleware(request: Request, call_next):
+        if not _PROM_AVAILABLE or request.url.path == "/internal/metrics":
+            return await call_next(request)
+        # Collapse path to a low-cardinality prefix (first two segments)
+        segments = [s for s in request.url.path.split("/") if s]
+        path_prefix = "/" + "/".join(segments[:2]) if segments else "/"
+        start = time.monotonic()
+        response = await call_next(request)
+        elapsed = time.monotonic() - start
+        _bo_requests_total.labels(
+            method=request.method,
+            path_prefix=path_prefix,
+            status_code=str(response.status_code),
+        ).inc()
+        _bo_request_duration_seconds.labels(
+            method=request.method,
+            path_prefix=path_prefix,
+        ).observe(elapsed)
+        return response
+
     # Security headers middleware
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -129,6 +181,18 @@ def create_backoffice_app() -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"status": "ok"}
+
+    # Internal Prometheus metrics endpoint — scraped by Prometheus on internal network only.
+    # No auth required: reachable only within the internal Docker/Podman network.
+    # ASVS V9.1.1: network-layer isolation replaces endpoint auth here.
+    @app.get("/internal/metrics")
+    async def internal_metrics():
+        if not _PROM_AVAILABLE:
+            return PlainTextResponse("# prometheus_client not installed\n")
+        return PlainTextResponse(
+            generate_latest().decode("utf-8"),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     # Static files (CSS/JS for login pages etc.)
     import pathlib

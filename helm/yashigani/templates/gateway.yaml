@@ -1,0 +1,130 @@
+{{- if .Values.gateway.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yashigani-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: YASHIGANI_UPSTREAM_URL
+              value: {{ .Values.gateway.env.upstreamUrl | quote }}
+            - name: YASHIGANI_OPA_URL
+              value: {{ .Values.gateway.env.opaUrl | quote }}
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.gateway.env.ollamaUrl | quote }}
+            - name: REDIS_HOST
+              value: {{ .Values.gateway.env.redisHost | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.gateway.env.redisPort | quote }}
+            - name: YASHIGANI_AGENT_ROUTING_ENABLED
+              value: {{ .Values.gateway.env.agentRoutingEnabled | quote }}
+            - name: YASHIGANI_AGENT_PATH_PREFIX
+              value: {{ .Values.gateway.env.agentPathPrefix | quote }}
+            - name: YASHIGANI_AGENT_TOKEN_MIN_LENGTH
+              value: {{ .Values.gateway.env.agentTokenMinLength | quote }}
+            - name: YASHIGANI_DEPLOYMENT_STREAM
+              value: {{ .Values.gateway.env.deploymentStream | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.gateway.env.otelEndpoint | quote }}
+            - name: FASTTEXT_MODEL_PATH
+              value: {{ .Values.gateway.env.fasttextModelPath | quote }}
+            - name: YASHIGANI_SECRETS_DIR
+              value: "/run/secrets"
+            - name: YASHIGANI_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
+                  key: postgres_password
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
+                  key: redis_password
+          envFrom:
+            - secretRef:
+                name: {{ .Values.gateway.existingSecretName | default "yashigani-gateway-secrets" }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: varlog
+              mountPath: /var/log/yashigani
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: varlog
+          emptyDir:
+            sizeLimit: 50Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.gateway.service.type }}
+  selector:
+    app.kubernetes.io/name: yashigani-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.gateway.service.port }}
+      targetPort: 8080
+      protocol: TCP
+{{- end }}

@@ -1,3 +1,4 @@
+{{- if .Capabilities.APIVersions.Has "cert-manager.io/v1" }}
 ---
 # Let's Encrypt production ClusterIssuer
 apiVersion: cert-manager.io/v1
@@ -38,3 +39,4 @@ metadata:
   name: selfsigned
 spec:
   selfSigned: {}
+{{- end }}

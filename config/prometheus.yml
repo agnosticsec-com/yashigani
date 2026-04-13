@@ -27,11 +27,9 @@ scrape_configs:
     static_configs:
       - targets: ['backoffice:8443']
     metrics_path: /internal/metrics
-    scheme: https
-    tls_config:
-      # RISK ACCEPTED: Internal Docker network only. Backoffice uses self-signed
-      # cert. For production with external Prometheus, configure proper CA trust.
-      insecure_skip_verify: true
+    # Backoffice binds HTTP internally on port 8443; TLS is terminated by Caddy.
+    # Prometheus scrapes the internal HTTP endpoint directly — no TLS needed here.
+    scheme: http
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance

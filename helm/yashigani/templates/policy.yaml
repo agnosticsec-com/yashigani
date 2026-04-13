@@ -1,0 +1,98 @@
+{{- if .Values.policy.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yashigani-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-policy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.policy.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-policy
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yashigani-policy
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opa
+          image: "{{ .Values.policy.image.repository }}:{{ .Values.policy.image.tag }}"
+          imagePullPolicy: {{ .Values.policy.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - "run"
+            - "--server"
+            - "--addr=0.0.0.0:8181"
+            - "--diagnostic-addr=0.0.0.0:8282"
+            - "--log-level=error"
+            - "/policies"
+          ports:
+            - name: http
+              containerPort: 8181
+              protocol: TCP
+            - name: diagnostic
+              containerPort: 8282
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8282
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8282
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.policy.resources | nindent 12 }}
+          volumeMounts:
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+      volumes:
+        - name: policies
+          configMap:
+            name: yashigani-policy-bundle
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yashigani-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-policy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.policy.service.type }}
+  selector:
+    app.kubernetes.io/name: yashigani-policy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.policy.service.port }}
+      targetPort: 8181
+      protocol: TCP
+{{- end }}

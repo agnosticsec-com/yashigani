@@ -30,6 +30,16 @@ processors:
         type: probabilistic
         probabilistic:
           sampling_percentage: 10
+  # Resource attributes → Loki stream labels.
+  # Keep label cardinality low: only service.name and deployment.environment.
+  resource/loki_labels:
+    attributes:
+      - key: service.name
+        action: insert
+        value: unknown
+      - key: deployment.environment
+        action: insert
+        value: production
 
 exporters:
   otlp/jaeger:
@@ -38,6 +48,20 @@ exporters:
       insecure: true
   logging:
     verbosity: basic
+  # Loki log exporter — ships OTLP log records from gateway and backoffice.
+  # Uses the collector-contrib loki exporter (included in otel/opentelemetry-collector-contrib).
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    default_labels_enabled:
+      exporter: false
+      job: true
+    # Map OTEL resource attributes to Loki stream labels (low-cardinality only).
+    labels:
+      resource:
+        service.name: "service"
+        deployment.environment: "env"
+      attributes:
+        log.level: "level"
 
 extensions:
   health_check:
@@ -50,3 +74,11 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, batch, tail_sampling]
       exporters: [otlp/jaeger, logging]
+    # Logs pipeline: receives OTLP log records from gateway/backoffice,
+    # ships them to Loki. Promtail's docker_sd_configs approach is
+    # incompatible with macOS Podman (no /var/lib/docker/containers on host).
+    # OTLP log export is the Podman-compatible alternative.
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [loki]
