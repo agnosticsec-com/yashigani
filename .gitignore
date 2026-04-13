@@ -74,3 +74,4 @@ scripts/_asvs_*.py
 # License signing (NEVER public)
 scripts/sign_license.py
 scripts/generate_license.py
+backups/
