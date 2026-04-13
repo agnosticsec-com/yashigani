@@ -273,13 +273,15 @@ _check_port() {
 }
 
 _check_ports() {
+  local http_port="${YASHIGANI_HTTP_PORT:-80}"
+  local https_port="${YASHIGANI_HTTPS_PORT:-443}"
   if [ "$SKIP_PORTS" -eq 1 ]; then
-    _pass "Port 80"  "skipped (--skip-ports)"
-    _pass "Port 443" "skipped (--skip-ports)"
+    _pass "Port ${http_port}"  "skipped (--skip-ports)"
+    _pass "Port ${https_port}" "skipped (--skip-ports)"
     return
   fi
-  _check_port 80
-  _check_port 443
+  _check_port "$http_port"
+  _check_port "$https_port"
 }
 
 # 6. Disk space

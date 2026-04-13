@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Yashigani v2.1.0 Installer
+# Yashigani Installer
 # https://yashigani.io
 #
 # Usage:
@@ -1181,15 +1181,17 @@ _backup_existing_data() {
   fi
 
   # Backup audit logs (if accessible)
+  local _runtime_cmd=""
+  command -v podman >/dev/null 2>&1 && _runtime_cmd="podman" || _runtime_cmd="docker"
   local audit_volume
-  audit_volume="$(${COMPOSE_CMD[0]} volume ls -q 2>/dev/null | grep audit_data || true)"
+  audit_volume="$($_runtime_cmd volume ls -q 2>/dev/null | grep audit_data || true)"
   if [[ -n "$audit_volume" ]]; then
     log_info "  Audit volume detected: ${audit_volume} (preserved in named volume)"
   fi
 
   # Backup Postgres data (dump if possible)
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
-  if ${COMPOSE_CMD[0]} compose -f "$compose_file" exec -T postgres pg_dump -U yashigani_app yashigani > "${backup_dir}/postgres_dump.sql" 2>/dev/null; then
+  if $_runtime_cmd exec docker-postgres-1 pg_dump -U yashigani_app yashigani > "${backup_dir}/postgres_dump.sql" 2>/dev/null; then
     log_info "  postgres_dump.sql backed up"
   else
     log_info "  Postgres dump skipped (not accessible)"
@@ -1698,20 +1700,28 @@ compose_up() {
     fi
 
     # 2. Check port binding — macOS can't bind 80/443 rootless, use high ports
+    #    On Linux, also detect if ports are already in use and fall back
+    local env_file="${WORK_DIR}/docker/.env"
+    local _need_high_ports=0
+
     if [[ "$(uname)" == "Darwin" ]]; then
       log_info "macOS detected — using high ports (8080/8443) for Caddy"
-      local env_file="${WORK_DIR}/docker/.env"
-      grep -q "^YASHIGANI_HTTP_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTP_PORT=8080" >> "$env_file"
-      grep -q "^YASHIGANI_HTTPS_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTPS_PORT=8443" >> "$env_file"
+      _need_high_ports=1
     else
       local port_start
       port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
       if [[ "$port_start" -gt 80 ]]; then
         log_warn "Podman rootless: ports 80/443 require sysctl change"
-        log_warn "Run: echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p"
-        log_warn "Or use high ports: YASHIGANI_HTTP_PORT=8080 YASHIGANI_HTTPS_PORT=8443"
-        log_warn "Caddy will not start until this is configured"
+        log_info "Falling back to high ports (8080/8443)"
+        _need_high_ports=1
       fi
+    fi
+
+    if [[ "$_need_high_ports" -eq 1 ]]; then
+      grep -q "^YASHIGANI_HTTP_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTP_PORT=8080" >> "$env_file"
+      grep -q "^YASHIGANI_HTTPS_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTPS_PORT=8443" >> "$env_file"
+      export YASHIGANI_HTTP_PORT=8080
+      export YASHIGANI_HTTPS_PORT=8443
     fi
 
     # 3. Create Docker-compatible directories for promtail
@@ -1738,10 +1748,19 @@ compose_up() {
     fi
 
     # 5. Build images with podman build (compose build uses Docker buildx)
-    log_info "Building images with Podman..."
-    podman build -f "${WORK_DIR}/docker/Dockerfile.gateway" -t yashigani/gateway:latest "${WORK_DIR}" 2>&1 | tail -1
-    podman build -f "${WORK_DIR}/docker/Dockerfile.backoffice" -t yashigani/backoffice:latest "${WORK_DIR}" 2>&1 | tail -1
-    log_success "Images built with Podman"
+    #    Skip rebuild on upgrade if images already exist
+    local _gw_exists=false _bo_exists=false
+    podman image exists yashigani/gateway:latest 2>/dev/null && _gw_exists=true
+    podman image exists yashigani/backoffice:latest 2>/dev/null && _bo_exists=true
+
+    if [[ "$UPGRADE" == "true" && "$_gw_exists" == "true" && "$_bo_exists" == "true" ]]; then
+      log_info "Images already built — skipping rebuild (upgrade path)"
+    else
+      log_info "Building images with Podman..."
+      podman build -f "${WORK_DIR}/docker/Dockerfile.gateway" -t yashigani/gateway:latest "${WORK_DIR}" 2>&1 | tail -1
+      podman build -f "${WORK_DIR}/docker/Dockerfile.backoffice" -t yashigani/backoffice:latest "${WORK_DIR}" 2>&1 | tail -1
+      log_success "Images built with Podman"
+    fi
   fi
 
   # Ensure all required directories and secret files exist (handles upgrades,
@@ -2151,6 +2170,8 @@ generate_secrets() {
     GEN_POSTGRES_PASSWORD="$(cat "${secrets_dir}/postgres_password" 2>/dev/null || echo "[preserved]")"
     GEN_REDIS_PASSWORD="$(cat "${secrets_dir}/redis_password" 2>/dev/null || echo "[preserved]")"
     GEN_GRAFANA_PASSWORD="$(cat "${secrets_dir}/grafana_admin_password" 2>/dev/null || echo "[preserved]")"
+    GEN_ADMIN1_USERNAME="$(cat "${secrets_dir}/admin1_username" 2>/dev/null || echo "[preserved]")"
+    GEN_ADMIN2_USERNAME="$(cat "${secrets_dir}/admin2_username" 2>/dev/null || echo "[preserved]")"
     GEN_ADMIN1_PASSWORD="[preserved — check secrets dir]"
     GEN_ADMIN2_PASSWORD="[preserved — check secrets dir]"
     GEN_ADMIN1_TOTP_SECRET="[preserved]"
@@ -2201,6 +2222,11 @@ generate_secrets() {
     if [[ "$_new_creds_generated" == "true" ]]; then
       log_success "New service credentials generated (upgrade path)"
     fi
+
+    # Read Wazuh credentials (may have been generated above or in a previous install)
+    GEN_WAZUH_INDEXER_PASSWORD="$(cat "${secrets_dir}/wazuh_indexer_password" 2>/dev/null || echo "")"
+    GEN_WAZUH_API_PASSWORD="$(cat "${secrets_dir}/wazuh_api_password" 2>/dev/null || echo "")"
+    GEN_WAZUH_DASHBOARD_PASSWORD="$(cat "${secrets_dir}/wazuh_dashboard_password" 2>/dev/null || echo "")"
 
     return 0
   fi
@@ -2533,11 +2559,13 @@ print_completion_summary() {
   printf "  ${C_YELLOW}║${C_RESET}    Username:     admin                                          ${C_YELLOW}║${C_RESET}\n"
   printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_GRAFANA_PASSWORD}"
   printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
-  printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Wazuh SIEM:${C_RESET}                                                  ${C_YELLOW}║${C_RESET}\n"
-  printf "  ${C_YELLOW}║${C_RESET}    Indexer:      admin / %-34s ${C_YELLOW}║${C_RESET}\n" "${GEN_WAZUH_INDEXER_PASSWORD}"
-  printf "  ${C_YELLOW}║${C_RESET}    API:          wazuh-wui / %-30s ${C_YELLOW}║${C_RESET}\n" "${GEN_WAZUH_API_PASSWORD}"
-  printf "  ${C_YELLOW}║${C_RESET}    Dashboard:    kibanaserver / %-28s ${C_YELLOW}║${C_RESET}\n" "${GEN_WAZUH_DASHBOARD_PASSWORD}"
-  printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  if [[ -n "${GEN_WAZUH_INDEXER_PASSWORD:-}" ]]; then
+    printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Wazuh SIEM:${C_RESET}                                                  ${C_YELLOW}║${C_RESET}\n"
+    printf "  ${C_YELLOW}║${C_RESET}    Indexer:      admin / %-34s ${C_YELLOW}║${C_RESET}\n" "${GEN_WAZUH_INDEXER_PASSWORD}"
+    printf "  ${C_YELLOW}║${C_RESET}    API:          wazuh-wui / %-30s ${C_YELLOW}║${C_RESET}\n" "${GEN_WAZUH_API_PASSWORD}"
+    printf "  ${C_YELLOW}║${C_RESET}    Dashboard:    kibanaserver / %-28s ${C_YELLOW}║${C_RESET}\n" "${GEN_WAZUH_DASHBOARD_PASSWORD}"
+    printf "  ${C_YELLOW}║${C_RESET}                                                                ${C_YELLOW}║${C_RESET}\n"
+  fi
   printf "  ${C_YELLOW}╚══════════════════════════════════════════════════════════════════╝${C_RESET}\n"
   printf "\n"
   printf "  ${C_RED}${C_BOLD}WARNING:${C_RESET} These credentials will NOT be shown again.\n"
@@ -2865,7 +2893,7 @@ main() {
     register_agent_bundles
 
     # Step 11c: Auto-configure SIEM sink when Wazuh is installed
-    if [[ "$INSTALL_WAZUH" == "true" ]] || echo "${COMPOSE_PROFILES[*]}" | grep -q "wazuh"; then
+    if [[ "$INSTALL_WAZUH" == "true" ]] || echo "${COMPOSE_PROFILES[*]+"${COMPOSE_PROFILES[*]}"}" | grep -q "wazuh"; then
       log_info "Configuring audit SIEM sink for Wazuh..."
       local _bo_url="http://localhost:8443"
       local _siem_config='{"backend":"wazuh","wazuh_url":"https://wazuh-manager:55000","wazuh_username":"wazuh-wui","wazuh_password":"'"${GEN_WAZUH_API_PASSWORD:-}"'","enabled":true}'

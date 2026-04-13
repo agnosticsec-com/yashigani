@@ -415,7 +415,11 @@ async def change_password(
                             detail={"error": "invalid_current_password"})
 
     old_hash_tail = record.password_hash[-8:] if record.password_hash else ""
-    record.password_hash = hash_password(body.new_password)
+    try:
+        record.password_hash = hash_password(body.new_password)
+    except Exception as pwd_err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={"error": "password_rejected", "message": str(pwd_err)})
     new_hash_tail = record.password_hash[-8:]
     record.force_password_change = False
     record.password_changed_at = time.time()
