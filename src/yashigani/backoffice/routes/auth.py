@@ -235,9 +235,16 @@ async def login(body: LoginRequest, request: Request, response: Response):
     await _apply_auth_throttle(client_ip)
 
     state = backoffice_state
-    success, record, reason = state.auth_service.authenticate(
-        body.username, body.password, body.totp_code
-    )
+    try:
+        success, record, reason = state.auth_service.authenticate(
+            body.username, body.password, body.totp_code
+        )
+    except (ValueError, TypeError):
+        _record_auth_failure(client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_credentials_format"},
+        )
 
     if not success:
         _record_auth_failure(client_ip)
@@ -340,7 +347,13 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     # TOTP valid — generate new temporary password
     from yashigani.auth.password import generate_password, hash_password
     temp_password = generate_password(36)
-    record.password_hash = hash_password(temp_password)
+    try:
+        record.password_hash = hash_password(temp_password)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_credentials_format"},
+        )
     record.force_password_change = True
 
     # Invalidate all sessions
@@ -417,9 +430,9 @@ async def change_password(
     old_hash_tail = record.password_hash[-8:] if record.password_hash else ""
     try:
         record.password_hash = hash_password(body.new_password)
-    except Exception as pwd_err:
+    except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail={"error": "password_rejected", "message": str(pwd_err)})
+                            detail={"error": "password_rejected"})
     new_hash_tail = record.password_hash[-8:]
     record.force_password_change = False
     record.password_changed_at = time.time()
@@ -513,11 +526,25 @@ def _set_session_cookie(response: Response, token: str, account_tier: str = "adm
 # ---------------------------------------------------------------------------
 
 @router.get("/blocked-ips")
-async def list_blocked_ips(session: AdminSession):
-    """List all permanently blocked IPs."""
+async def list_blocked_ips(request: Request, session: AdminSession):
+    """List permanently blocked IPs AND currently soft-throttled IPs.
+
+    Previously only returned permanent blocks, which gave operators no
+    self-visibility when they were themselves being slow-throttled
+    (Ava Wave 2 Issue F). Now includes:
+
+      * ``blocked_ips`` — permanent blocks (auth:blocked:*)
+      * ``throttled_ips`` — IPs with a current non-zero throttle level
+        (auth:throttle:ip:* > 0), mapped to {level, delay_s, fail_count}
+      * ``self`` — the caller's own IP + throttle state so an admin
+        can see if they are throttled from the UI (fixes the "login
+        page hangs and /auth/blocked-ips says {}" diagnostic gap)
+    """
     import json
     r = _get_throttle_redis()
-    blocked = {}
+
+    # Permanent blocks (existing behaviour)
+    blocked: dict = {}
     for key in r.scan_iter("auth:blocked:*"):
         ip = key.decode().split("auth:blocked:")[-1] if isinstance(key, bytes) else key.split("auth:blocked:")[-1]
         data = r.get(key)
@@ -525,7 +552,45 @@ async def list_blocked_ips(session: AdminSession):
             blocked[ip] = json.loads(data) if data else {"reason": "unknown"}
         except (json.JSONDecodeError, TypeError):
             blocked[ip] = {"reason": str(data)}
-    return {"blocked_ips": blocked, "total": len(blocked)}
+
+    # Soft-throttle state — every IP with a non-zero throttle level
+    throttled: dict = {}
+    for key in r.scan_iter("auth:throttle:ip:*"):
+        key_str = key.decode() if isinstance(key, bytes) else key
+        ip = key_str.split("auth:throttle:ip:")[-1]
+        level_raw = r.get(key_str)
+        level = int(level_raw or 0)
+        if level <= 0:
+            continue
+        fail_raw = r.get(f"auth:fail:ip:{ip}")
+        throttled[ip] = {
+            "level": level,
+            "delay_s": _throttle_delay_for_level(level),
+            "fail_count": int(fail_raw or 0),
+        }
+
+    # Caller's own state — resolved from request headers so the admin
+    # sees exactly what server-side records about their IP, even when
+    # they are being throttled (non-200 paths still emit this view).
+    caller_ip = request.client.host if request.client else "unknown"
+    caller_level = int(r.get(f"auth:throttle:ip:{caller_ip}") or 0)
+    caller_fails = int(r.get(f"auth:fail:ip:{caller_ip}") or 0)
+    caller_blocked_data = r.get(f"auth:blocked:{caller_ip}")
+    self_state = {
+        "ip": caller_ip,
+        "fail_count": caller_fails,
+        "throttle_level": caller_level,
+        "delay_s": _throttle_delay_for_level(caller_level) if caller_level > 0 else 0,
+        "permanently_blocked": caller_blocked_data is not None,
+    }
+
+    return {
+        "blocked_ips": blocked,
+        "throttled_ips": throttled,
+        "self": self_state,
+        "total": len(blocked),
+        "total_throttled": len(throttled),
+    }
 
 
 @router.delete("/blocked-ips/{ip}")

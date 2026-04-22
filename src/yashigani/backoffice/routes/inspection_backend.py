@@ -291,7 +291,7 @@ async def swap_backend(
             audit.write(InspectionBackendChangedEvent(
                 previous_backend=previous_backend,
                 new_backend=body.active_backend,
-                admin_account=session.username,
+                admin_account=session.account_id,
             ))
         except Exception as exc:
             logger.error("swap_backend: failed to write audit event: %s", exc)

@@ -53,7 +53,7 @@ def _limit_block(current: int, maximum: int) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
-@license_router.get("/admin/license")
+@license_router.get("")
 async def get_license_status(session=Depends(require_admin_session)):
     from yashigani.licensing import get_license
     from yashigani.backoffice.state import backoffice_state
@@ -69,20 +69,25 @@ async def get_license_status(session=Depends(require_admin_session)):
         except Exception:
             current_agents = 0
 
-    # End user count — non-admin accounts in auth_service
+    # End user count — non-admin accounts in auth_service.
+    # NOTE: previously called `auth.count_users(admin=False)` which doesn't
+    # exist on LocalAuthService — the AttributeError was swallowed by the
+    # except clause and current_end_users silently reported 0, disagreeing
+    # with the enforcer which uses total_user_count() correctly (Ava Wave 2
+    # Issue D).
     current_end_users = 0
     auth = backoffice_state.auth_service
     if auth is not None:
         try:
-            current_end_users = auth.count_users(admin=False)
+            current_end_users = auth.total_user_count()
         except Exception:
             current_end_users = 0
 
-    # Admin seat count
+    # Admin seat count — same bug, same fix.
     current_admin_seats = 0
     if auth is not None:
         try:
-            current_admin_seats = auth.count_users(admin=True)
+            current_admin_seats = auth.total_admin_count()
         except Exception:
             current_admin_seats = 0
 
@@ -112,7 +117,7 @@ async def get_license_status(session=Depends(require_admin_session)):
     }
 
 
-@license_router.post("/admin/license/activate")
+@license_router.post("/activate")
 async def activate_license(
     license_content: Optional[str] = Form(default=None),
     license_file: Optional[UploadFile] = File(default=None),
@@ -154,7 +159,7 @@ async def activate_license(
 
     logger.info(
         "License activated by %s: tier=%s org_domain=%s agents=%s end_users=%s admin_seats=%s",
-        session.username,
+        session.account_id,
         new_lic.tier.value,
         new_lic.org_domain,
         new_lic.max_agents,
@@ -176,7 +181,7 @@ async def activate_license(
     }
 
 
-@license_router.delete("/admin/license")
+@license_router.delete("")
 async def revert_license(body: RevertRequest, session=Depends(require_admin_session)):
     from yashigani.licensing import COMMUNITY_LICENSE, set_license
 
@@ -194,6 +199,6 @@ async def revert_license(body: RevertRequest, session=Depends(require_admin_sess
     except OSError as exc:
         logger.warning("Could not remove license key secret file: %s", exc)
 
-    logger.info("License reverted to community by %s", session.username)
+    logger.info("License reverted to community by %s", session.account_id)
 
     return {"status": "reverted", "tier": "community"}

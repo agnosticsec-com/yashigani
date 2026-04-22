@@ -280,6 +280,20 @@ async def register_agent(
     registry = _get_registry()
     audit = backoffice_state.audit_writer
 
+    # Enforce license tier agent limit. Mirror users.py pattern exactly —
+    # the cap is surfaced as HTTP 402 with an explicit error code so the
+    # admin UI and CLI can branch on it. Without this guard, the registry
+    # rejection surfaces as a generic HTTP 500, violating the API contract
+    # (Ava Wave 2 Issue A).
+    from yashigani.licensing.enforcer import check_agent_limit, LicenseLimitExceeded
+    try:
+        check_agent_limit(registry.count())
+    except LicenseLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "agent_limit_exceeded", "limit": exc.max_val, "current": exc.current},
+        )
+
     agent_id, plaintext_token = registry.register(
         name=body.name,
         upstream_url=body.upstream_url,
@@ -294,7 +308,10 @@ async def register_agent(
     if agent is None:
         raise HTTPException(status_code=500, detail="Agent created but not retrievable")
 
-    # Audit
+    # Audit. Use session.account_id (mirrors users.py pattern) — Session
+    # dataclass has no `username` attribute; the previous `session.username`
+    # reference silently failed and AGENT_REGISTERED events never landed in
+    # the audit log (Ava Wave 2 Issue B).
     if audit is not None:
         try:
             from yashigani.audit.schema import AgentRegisteredEvent
@@ -305,7 +322,7 @@ async def register_agent(
                 groups=body.groups,
                 allowed_caller_groups=body.allowed_caller_groups,
                 allowed_paths=body.allowed_paths,
-                admin_account=session.username,
+                admin_account=session.account_id,
             ))
         except Exception as exc:
             logger.error("Failed to write AgentRegisteredEvent: %s", exc)
@@ -387,7 +404,7 @@ async def update_agent(
             audit.write(AgentUpdatedEvent(
                 agent_id=agent_id,
                 changed_fields=changed_fields,
-                admin_account=session.username,
+                admin_account=session.account_id,
             ))
         except Exception as exc:
             logger.error("Failed to write AgentUpdatedEvent: %s", exc)
@@ -423,7 +440,7 @@ async def deactivate_agent(
             from yashigani.audit.schema import AgentDeactivatedEvent
             audit.write(AgentDeactivatedEvent(
                 agent_id=agent_id,
-                admin_account=session.username,
+                admin_account=session.account_id,
                 reason=reason,
             ))
         except Exception as exc:
@@ -452,7 +469,7 @@ async def rotate_agent_token(
             from yashigani.audit.schema import AgentTokenRotatedEvent
             audit.write(AgentTokenRotatedEvent(
                 agent_id=agent_id,
-                admin_account=session.username,
+                admin_account=session.account_id,
             ))
         except Exception as exc:
             logger.error("Failed to write AgentTokenRotatedEvent: %s", exc)
