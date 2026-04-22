@@ -110,11 +110,15 @@ services:
       - /var/log/yashigani:size=50M
     security_opt:
       - no-new-privileges:true
-      # Seccomp (opt-in — uncomment after verifying host/runtime support):
-      # - seccomp=docker/seccomp/yashigani.json
-      # AppArmor (optional — requires host setup):
-      # Load profile first: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
-      # - apparmor=yashigani-gateway
+      # Seccomp default (Lu Review Finding #2 — enabled by default in v2.23.1).
+      # Profile ships at docker/seccomp/yashigani.json. Override with
+      # YASHIGANI_SECCOMP_PROFILE=unconfined if a host kernel rejects it.
+      - seccomp=${YASHIGANI_SECCOMP_PROFILE:-docker/seccomp/yashigani.json}
+      # AppArmor default (Linux hosts with apparmor loaded).
+      # Load once per host: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
+      # Override with YASHIGANI_APPARMOR_PROFILE=unconfined on hosts without
+      # AppArmor (macOS, rootless Podman without profile loaded).
+      - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
     depends_on:
       redis:
         condition: service_healthy
@@ -198,11 +202,12 @@ services:
       - /var/log/yashigani:size=50M
     security_opt:
       - no-new-privileges:true
-      # Seccomp (opt-in — uncomment after verifying host/runtime support):
-      # - seccomp=docker/seccomp/yashigani.json
-      # AppArmor (optional — requires host setup):
-      # Load profile first: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
-      # - apparmor=yashigani-gateway
+      # Seccomp + AppArmor default (Lu Review Finding #2 — enabled in v2.23.1).
+      # See gateway service above for override env var documentation.
+      - seccomp=${YASHIGANI_SECCOMP_PROFILE:-docker/seccomp/yashigani.json}
+      # Backoffice shares the gateway AppArmor profile (same Python/FastAPI
+      # surface). A dedicated yashigani-backoffice profile may ship later.
+      - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""]
       interval: 15s

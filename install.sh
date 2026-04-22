@@ -996,6 +996,16 @@ _write_aes_key_to_env() {
     _env_set "OWUI_SECRET_KEY" "$(openssl rand -hex 32)"
   fi
 
+  # --- Runtime-specific security profile overrides (Lu Review Finding #2) ---
+  # Seccomp + AppArmor profiles are enabled by default in docker-compose.yml.
+  # Podman machine VM on macOS runs SELinux, not AppArmor — loading the
+  # AppArmor profile fails. Relax by setting YASHIGANI_APPARMOR_PROFILE=
+  # unconfined when we detect Podman. Seccomp works on both runtimes so it
+  # stays at the default profile path.
+  if [[ "${RUNTIME:-}" == "podman" ]]; then
+    _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+  fi
+
   # --- Upstream MCP URL ---
   # Demo mode: use a built-in echo server so compose doesn't fail on missing var
   # Production: set from wizard or --upstream-url flag
