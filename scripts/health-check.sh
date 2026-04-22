@@ -231,9 +231,11 @@ fi
 _check_compose_exec "Postgres" "postgres" \
   "pg_isready -U yashigani_app" "accepting connections"
 
-# 4. Redis
+# 4. Redis — v2.23.1: TLS-only on 6380 with client-cert auth.
+# Uses redis_client.crt mounted into the redis container (same cert the
+# compose healthcheck uses). See docker/docker-compose.yml redis service.
 _check_compose_exec "Redis" "redis" \
-  "sh -c 'redis-cli -a \"\$(cat /run/secrets/redis_password)\" ping 2>/dev/null'" "PONG"
+  "sh -c 'redis-cli --tls --cert /run/secrets/redis_client.crt --key /run/secrets/redis_client.key --cacert /run/secrets/ca_root.crt -p 6380 -a \"\$(cat /run/secrets/redis_password)\" ping 2>/dev/null'" "PONG"
 
 # 5. OPA — internal network only, check via docker compose exec
 _check_compose_exec "OPA" "policy" "/opa eval true"

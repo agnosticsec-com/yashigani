@@ -1903,13 +1903,15 @@ bootstrap_postgres() {
     return 0
   fi
 
-  # Wait for backoffice to be ready before running bootstrap
+  # Wait for backoffice to be ready before running bootstrap.
+  # v2.23.1: backoffice terminates mTLS on :8443 — the readiness probe must
+  # present a client cert, same pattern as the Dockerfile HEALTHCHECK.
   local retries=45
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
   resolve_compose_cmd
   log_info "Waiting for backoffice to be ready..."
   for i in $(seq 1 $retries); do
-    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')" >/dev/null 2>&1; then
+    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)" >/dev/null 2>&1; then
       break
     fi
     if [[ "$i" -eq "$retries" ]]; then
