@@ -77,6 +77,10 @@ if [ -f "$ENV_FILE" ]; then
   set +o allexport
 fi
 DOMAIN="${YASHIGANI_TLS_DOMAIN:-localhost}"
+# v2.23.1: Caddy maps host port YASHIGANI_HTTPS_PORT → container :443.
+# Demo installs default to 8443; production to 443. The external curl check
+# must hit the HOST port, not :443.
+HTTPS_PORT="${YASHIGANI_HTTPS_PORT:-443}"
 
 # ---------------------------------------------------------------------------
 # Color/print helpers
@@ -204,20 +208,23 @@ _check_compose_exec() {
 _info "Starting health checks (timeout: ${TIMEOUT}s per service)..."
 printf "\n"
 
-# 1. Gateway — try via Caddy (HTTPS), fall back to docker compose exec
+# 1. Gateway — try via Caddy (HTTPS on host port), fall back to container exec.
+# v2.23.1: gateway now terminates mTLS, so the container-exec fallback must
+# present a client cert from /run/secrets (the in-container healthcheck uses
+# the same pattern — see Dockerfile.gateway HEALTHCHECK).
 if ! _wait_for "Gateway" \
-  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:443:127.0.0.1' 'https://${DOMAIN}/healthz' -o /dev/null 2>/dev/null"; then
+  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:${HTTPS_PORT}:127.0.0.1' 'https://${DOMAIN}:${HTTPS_PORT}/healthz' -o /dev/null 2>/dev/null"; then
   _info "Trying Gateway via container exec..."
   _check_compose_exec "Gateway" "gateway" \
-    "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""
+    "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)\""
 fi
 
-# 2. Backoffice — try via Caddy first, fall back to docker compose exec
+# 2. Backoffice — try via Caddy first, fall back to mTLS container exec.
 if ! _wait_for "Backoffice" \
-  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:443:127.0.0.1' 'https://${DOMAIN}/admin/healthz' -o /dev/null 2>/dev/null"; then
+  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:${HTTPS_PORT}:127.0.0.1' 'https://${DOMAIN}:${HTTPS_PORT}/admin/healthz' -o /dev/null 2>/dev/null"; then
   _info "Trying Backoffice via container exec..."
   _check_compose_exec "Backoffice" "backoffice" \
-    "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""
+    "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""
 fi
 
 # 3. Postgres

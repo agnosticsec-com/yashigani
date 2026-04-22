@@ -77,6 +77,59 @@ from yashigani.backoffice.routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # v2.23.1: Async DB pool + inference logger + anomaly detector init.
+    # Moved from _bootstrap() because uvicorn imports the entrypoint module
+    # inside its running server loop, so sync loop.run_until_complete() raises
+    # "this event loop is already running" and disables Postgres features.
+    import logging as _logging
+    import os
+    from urllib.parse import quote
+    _log = _logging.getLogger("yashigani.backoffice.lifespan")
+    db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
+    if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
+        try:
+            from yashigani.db import create_pool
+            from yashigani.inference import InferencePayloadLogger, AnomalyDetector
+            from yashigani.backoffice.state import backoffice_state
+
+            await create_pool()
+
+            inference_logger = InferencePayloadLogger()
+            inference_logger.start()
+            backoffice_state.inference_logger = inference_logger
+
+            # Anomaly detector Redis client (DB 2), mirrors _bootstrap URL logic.
+            redis_host = os.getenv("REDIS_HOST", "redis")
+            redis_port = os.getenv("REDIS_PORT", "6380")
+            redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
+            secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
+            redis_pwd_file = os.path.join(secrets_dir, "redis_password")
+            redis_password = (
+                open(redis_pwd_file).read().strip()
+                if os.path.exists(redis_pwd_file)
+                else os.getenv("REDIS_PASSWORD", "")
+            )
+            _q = quote(redis_password, safe="")
+            if redis_use_tls:
+                anomaly_redis_url = (
+                    f"rediss://:{_q}@{redis_host}:{redis_port}/2"
+                    f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
+                    f"&ssl_certfile={secrets_dir}/backoffice_client.crt"
+                    f"&ssl_keyfile={secrets_dir}/backoffice_client.key"
+                )
+            else:
+                anomaly_redis_url = f"redis://:{_q}@{redis_host}:{redis_port}/2"
+
+            import redis as _redis
+            anomaly_client = _redis.from_url(anomaly_redis_url, decode_responses=False)
+            backoffice_state.anomaly_detector = AnomalyDetector(redis_client=anomaly_client)
+            _log.info("Backoffice: DB pool + inference logger + anomaly detector ready (lifespan)")
+        except Exception as exc:
+            _log.warning(
+                "Backoffice DB/inference lifespan init failed (%s) — Postgres features disabled",
+                exc,
+            )
+
     # Startup — schedule daily licence expiry check (v0.7.1)
     scheduler = None
     try:

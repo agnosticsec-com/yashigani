@@ -13,7 +13,6 @@ First-run behaviour:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 
@@ -321,40 +320,30 @@ def _bootstrap():
         logger.warning("Response cache init failed (%s) — cache management disabled", exc)
 
     # ── PostgreSQL pool + inference logger + anomaly detector ───────────────
-    db_pool_ready = False
+    # v2.23.1: The async init (create_pool + logger.start) is deferred to the
+    # FastAPI lifespan in app.py. Reason: uvicorn imports this module inside
+    # its server loop, so calling loop.run_until_complete() here raises
+    # "this event loop is already running" and disables Postgres features.
+    # Here we only resolve the ${POSTGRES_PASSWORD} placeholder in the DSN;
+    # the lifespan picks up the resolved env var and does `await create_pool()`.
     inference_logger = None
     anomaly_detector = None
-    try:
-        from yashigani.db import create_pool
-        from yashigani.inference import InferencePayloadLogger, AnomalyDetector
-
-        db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
-        if db_dsn and "${POSTGRES_PASSWORD}" in db_dsn:
-            pg_pwd_file = os.path.join(secrets_dir, "postgres_password")
-            try:
-                with open(pg_pwd_file) as f:
-                    pg_password = f.read().strip()
-                db_dsn = db_dsn.replace("${POSTGRES_PASSWORD}", pg_password)
-                os.environ["YASHIGANI_DB_DSN"] = db_dsn
-            except OSError:
-                logger.warning("postgres_password secret not found — DB DSN unresolved")
-        if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(create_pool())
-            db_pool_ready = True
-
-            inference_logger = InferencePayloadLogger()
-            asyncio.ensure_future(inference_logger.start())
-
-            import redis as _redis
-            redis_anomaly_url = _backoffice_redis_url(2)
-            redis_anomaly_client = _redis.from_url(redis_anomaly_url, decode_responses=False)
-            anomaly_detector = AnomalyDetector(redis_client=redis_anomaly_client)
-            logger.info("Backoffice: DB pool + inference logger + anomaly detector ready")
-        else:
-            logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled in backoffice")
-    except Exception as exc:
-        logger.warning("Backoffice DB/inference init failed (%s) — Postgres features disabled", exc)
+    db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
+    if db_dsn and "${POSTGRES_PASSWORD}" in db_dsn:
+        pg_pwd_file = os.path.join(secrets_dir, "postgres_password")
+        try:
+            with open(pg_pwd_file) as f:
+                pg_password = f.read().strip()
+            db_dsn = db_dsn.replace("${POSTGRES_PASSWORD}", pg_password)
+            os.environ["YASHIGANI_DB_DSN"] = db_dsn
+        except OSError:
+            logger.warning("postgres_password secret not found — DB DSN unresolved")
+    if not db_dsn:
+        logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled in backoffice")
+    elif "${POSTGRES_PASSWORD}" in db_dsn:
+        logger.warning("YASHIGANI_DB_DSN contains unresolved ${POSTGRES_PASSWORD} — Postgres features disabled")
+    else:
+        logger.info("Backoffice: DB DSN resolved — pool creation deferred to lifespan")
 
     # ── License ──────────────────────────────────────────────────────────────
     from yashigani.licensing import load_license, set_license

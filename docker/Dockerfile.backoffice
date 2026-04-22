@@ -47,6 +47,11 @@ COPY src/yashigani/backoffice/static/ /usr/local/lib/python3.12/site-packages/ya
 COPY alembic.ini /app/alembic.ini
 RUN sed -i 's|script_location = src/yashigani/db/migrations|script_location = /usr/local/lib/python3.12/site-packages/yashigani/db/migrations|' /app/alembic.ini
 
+# v2.23.1: DB bootstrap script — install.sh runs
+# `docker compose exec backoffice python scripts/bootstrap_postgres.py` after
+# service start. Missing this COPY caused step 11 to be silently skipped.
+COPY scripts/bootstrap_postgres.py /app/scripts/bootstrap_postgres.py
+
 RUN mkdir -p /data/audit /data/bootstrap /var/log/yashigani && \
     chown -R yashigani:yashigani /data /var/log/yashigani /app
 
