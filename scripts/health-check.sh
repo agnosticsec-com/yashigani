@@ -220,8 +220,11 @@ if ! _wait_for "Gateway" \
 fi
 
 # 2. Backoffice — try via Caddy first, fall back to mTLS container exec.
+# v2.23.1 retro #3n: use /login (Caddy-routed to backoffice, unauth-200) instead
+# of /admin/healthz which hits the admin-auth wall and always 401s → falls to
+# the slow container-exec path. /login 200 proves end-to-end Caddy→backoffice.
 if ! _wait_for "Backoffice" \
-  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:${HTTPS_PORT}:127.0.0.1' 'https://${DOMAIN}:${HTTPS_PORT}/admin/healthz' -o /dev/null 2>/dev/null"; then
+  "curl --silent --fail --insecure --max-time 5 --resolve '${DOMAIN}:${HTTPS_PORT}:127.0.0.1' 'https://${DOMAIN}:${HTTPS_PORT}/login' -o /dev/null 2>/dev/null"; then
   _info "Trying Backoffice via container exec..."
   _check_compose_exec "Backoffice" "backoffice" \
     "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""
