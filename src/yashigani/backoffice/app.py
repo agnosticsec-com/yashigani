@@ -169,6 +169,34 @@ def create_backoffice_app() -> FastAPI:
         response.headers["Content-Security-Policy"] = _csp
         return response
 
+    # Uniform 401 for unauthenticated /admin/* requests (Ava Wave 2 Issue 10).
+    # Before this middleware, some admin endpoints returned 401 (route exists,
+    # auth dep failed) while others returned 404 (no root route under that
+    # prefix, e.g. /admin/license/status existed but /admin/license didn't).
+    # The inconsistency leaked which routes were mounted. This middleware
+    # inspects the response AFTER routing: if the result is 404 for an
+    # /admin/* path AND the caller has no session cookie, we mask the 404
+    # as 401 authentication_required so every /admin/* probe looks the same
+    # pre-auth.
+    _ADMIN_SESSION_COOKIES = (
+        "__Host-yashigani_admin_session",
+        "__Host-yashigani_session",
+    )
+
+    @app.middleware("http")
+    async def uniform_admin_404_as_401(request: Request, call_next):
+        response = await call_next(request)
+        if response.status_code == 404 and request.url.path.startswith("/admin/"):
+            has_session = any(
+                request.cookies.get(k) for k in _ADMIN_SESSION_COOKIES
+            )
+            if not has_session:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "authentication_required"},
+                )
+        return response
+
     # Generic error handlers — never leak internal state
     @app.exception_handler(Exception)
     async def generic_error_handler(request: Request, exc: Exception):
