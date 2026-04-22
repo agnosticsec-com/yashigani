@@ -264,9 +264,24 @@ async def login(body: LoginRequest, request: Request, response: Response):
     # Success — reset per-IP failure counter (global decays via TTL)
     _reset_ip_auth_failures(client_ip)
 
-    # Check password age against admin-configurable policy (max 13 months)
-    # YASHIGANI_PASSWORD_MAX_AGE_DAYS: 0 = no expiry (default), max 395 (13 months)
-    max_age_days = int(os.getenv("YASHIGANI_PASSWORD_MAX_AGE_DAYS", "0"))
+    # Check password age against admin-configurable policy.
+    #
+    # YASHIGANI_PASSWORD_MAX_AGE_DAYS — explicit override. If set, it wins.
+    # YASHIGANI_PROFILE — compliance profile that sets sensible defaults:
+    #     "pci"    → 90 days (PCI DSS 8.3.9)
+    #     "nist"   → 0 days / no expiry (NIST 800-63B discourages rotation)
+    #     unset    → 0 days / no expiry (NIST-aligned default)
+    # Hard cap: 395 days (13 months). Lu Review Finding #9 — PCI-scoped
+    # deployments need a ≤90d option without editing code.
+    max_age_env = os.getenv("YASHIGANI_PASSWORD_MAX_AGE_DAYS")
+    if max_age_env is not None:
+        max_age_days = int(max_age_env)
+    else:
+        profile = os.getenv("YASHIGANI_PROFILE", "").strip().lower()
+        if profile == "pci":
+            max_age_days = 90
+        else:
+            max_age_days = 0  # NIST-aligned default (no forced rotation)
     if max_age_days > 395:
         max_age_days = 395  # Hard cap: 13 months
     if max_age_days > 0 and hasattr(record, "password_changed_at"):

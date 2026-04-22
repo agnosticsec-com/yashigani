@@ -326,13 +326,41 @@ def _verify_primary_signature(payload_bytes: bytes, sig_bytes: bytes) -> bool:
     delegates to OpenSSL's constant-time C implementation. The verify() call
     raises InvalidSignature on mismatch — no timing-vulnerable byte comparison
     occurs at the Python level.
+
+    Algorithm allowlist (Lu Review Finding #11): we dispatch verify() only
+    when the embedded public key is EllipticCurvePublicKey on curve SECP256R1
+    (aka P-256 / NIST P-256 / prime256v1). Any other key type — even if it
+    parses successfully from the bundled PEM — raises RuntimeError before
+    reaching verify(). This defends against future key-type confusion when
+    we add ML-DSA / Ed25519 alternative key slots to the licence format.
     """
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
-    from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
+    from cryptography.hazmat.primitives.asymmetric.ec import (
+        ECDSA,
+        EllipticCurvePublicKey,
+        SECP256R1,
+    )
     from cryptography.hazmat.primitives.hashes import SHA256
     from cryptography.exceptions import InvalidSignature
 
     public_key = load_pem_public_key(_PUBLIC_KEY_PEM.encode("utf-8"))
+
+    # Explicit allowlist: must be an EC public key on P-256. Refuse to verify
+    # with any other key type. Without this gate the cryptography library
+    # would happily accept (for example) an RSA or Ed25519 key at the same
+    # PEM slot and silently change the algorithm envelope, an attack class
+    # known as "key-type confusion".
+    if not isinstance(public_key, EllipticCurvePublicKey):
+        raise RuntimeError(
+            f"License verifier: unexpected public key type "
+            f"{type(public_key).__name__}; expected EllipticCurvePublicKey"
+        )
+    if not isinstance(public_key.curve, SECP256R1):
+        raise RuntimeError(
+            f"License verifier: unexpected curve "
+            f"{public_key.curve.name}; expected secp256r1"
+        )
+
     try:
         public_key.verify(sig_bytes, payload_bytes, ECDSA(SHA256()))
         return True
