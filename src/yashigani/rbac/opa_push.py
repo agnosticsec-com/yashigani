@@ -87,6 +87,8 @@ def push_rbac_data(
     }
 
     url = opa_url.rstrip("/") + _OPA_DATA_PATH
+    # v2.23.1 NOTE: OPA remains on plaintext HTTP; mTLS for OPA moves to
+    # v2.23.2 (task #54) together with the gateway's hot-path httpx calls.
     with httpx.Client(timeout=10.0) as client:
         response = client.put(
             url,

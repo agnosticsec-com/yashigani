@@ -95,9 +95,12 @@ def _build_app():
         opa_url=opa_url,
     )
 
-    # Redis base URL — derived from env vars set by docker-compose
+    # Redis base URL — derived from env vars set by docker-compose.
+    # v2.23.1: TLS-only (rediss://) with client cert authentication. Redis
+    # rejects plaintext connections (port 0 in redis.conf).
     redis_host = os.getenv("REDIS_HOST", "redis")
-    redis_port = os.getenv("REDIS_PORT", "6379")
+    redis_port = os.getenv("REDIS_PORT", "6380")
+    redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
     redis_password = ""
     secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
     redis_pwd_file = os.path.join(secrets_dir, "redis_password")
@@ -108,7 +111,20 @@ def _build_app():
         redis_password = os.getenv("REDIS_PASSWORD", "")
 
     from urllib.parse import quote
-    redis_base = f"redis://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
+    if redis_use_tls:
+        # redis-py reads ssl_* params from the URL query string when scheme
+        # is rediss://. Client cert is gateway_client.{crt,key}; trust anchor
+        # is ca_root.crt.
+        _ca = f"{secrets_dir}/ca_root.crt"
+        _crt = f"{secrets_dir}/gateway_client.crt"
+        _key = f"{secrets_dir}/gateway_client.key"
+        redis_base = (
+            f"rediss://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
+            f"?ssl_cert_reqs=required&ssl_ca_certs={_ca}"
+            f"&ssl_certfile={_crt}&ssl_keyfile={_key}"
+        )
+    else:
+        redis_base = f"redis://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
 
     # Rate limiter — Redis DB 2
     rate_limiter = None
@@ -254,14 +270,23 @@ def _build_app():
     except Exception as exc:
         logger.warning("Complexity scorer unavailable (%s)", exc)
 
-    # ── v1.0: Budget Enforcer (budget-redis) ──────────────────────────────
+    # ── v1.0: Budget Enforcer (budget-redis, also TLS-only in v2.23.1) ────
     budget_enforcer = None
     try:
         import redis as _redis
         budget_redis_host = os.getenv("BUDGET_REDIS_HOST", "budget-redis")
-        budget_redis_port = os.getenv("BUDGET_REDIS_PORT", "6379")
+        budget_redis_port = os.getenv("BUDGET_REDIS_PORT", "6380")
+        if redis_use_tls:
+            budget_url = (
+                f"rediss://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0"
+                f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
+                f"&ssl_certfile={secrets_dir}/gateway_client.crt"
+                f"&ssl_keyfile={secrets_dir}/gateway_client.key"
+            )
+        else:
+            budget_url = f"redis://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0"
         budget_redis_client = _redis.from_url(
-            f"redis://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0",
+            budget_url,
             decode_responses=False,
         )
         budget_redis_client.ping()

@@ -28,6 +28,21 @@
     }
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal mTLS snippet — imported by every reverse_proxy / forward_auth block
+# that targets a service terminating mTLS (gateway:8080, backoffice:8443).
+# Caddy presents its own client cert and verifies the peer against the
+# internal CA root. The caddy_client.{crt,key} are minted by install.sh via
+# yashigani.pki.issuer.
+# ─────────────────────────────────────────────────────────────────────────────
+(internal-mtls) {
+    transport http {
+        tls
+        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+    }
+}
+
 # Serve on HTTPS with self-signed cert
 https://{env.YASHIGANI_TLS_DOMAIN}:443 {
     tls internal {
@@ -77,7 +92,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Gateway health check — /healthz ──────────────────────────────────
     handle /healthz {
-        reverse_proxy gateway:8080 {
+        reverse_proxy https://gateway:8080 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -85,7 +101,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Agent routing — /agents/* ──────────────────────────────────────────
     handle /agents/* {
-        reverse_proxy gateway:8080 {
+        reverse_proxy https://gateway:8080 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -93,7 +110,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
     handle /v1/* {
-        reverse_proxy gateway:8080 {
+        reverse_proxy https://gateway:8080 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -101,7 +119,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── MCP proxy — /mcp/* ─────────────────────────────────────────────
     handle /mcp/* {
-        reverse_proxy gateway:8080 {
+        reverse_proxy https://gateway:8080 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -109,28 +128,32 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Backoffice routes: /admin/*, /auth/*, /dashboard/*, /scim/* ───────
     handle /admin/* {
-        reverse_proxy backoffice:8443 {
+        reverse_proxy https://backoffice:8443 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }
 
     handle /auth/* {
-        reverse_proxy backoffice:8443 {
+        reverse_proxy https://backoffice:8443 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }
 
     handle /dashboard/* {
-        reverse_proxy backoffice:8443 {
+        reverse_proxy https://backoffice:8443 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }
 
     handle /scim/* {
-        reverse_proxy backoffice:8443 {
+        reverse_proxy https://backoffice:8443 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -138,7 +161,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Grafana — admin-authenticated access via /admin/grafana/* ──────────
     handle_path /admin/grafana/* {
-        forward_auth backoffice:8443 {
+        forward_auth https://backoffice:8443 {
+        import internal-mtls
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -153,7 +177,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Wazuh Dashboard — admin-authenticated access via /admin/wazuh/* ────
     handle_path /admin/wazuh/* {
-        forward_auth backoffice:8443 {
+        forward_auth https://backoffice:8443 {
+        import internal-mtls
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -168,7 +193,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Prometheus — admin-authenticated access via /admin/prometheus/* ───
     handle_path /admin/prometheus/* {
-        forward_auth backoffice:8443 {
+        forward_auth https://backoffice:8443 {
+        import internal-mtls
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -183,7 +209,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── Static assets — public, no auth required (CSS/JS for admin UI) ────
     handle /static/* {
-        reverse_proxy backoffice:8443 {
+        reverse_proxy https://backoffice:8443 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -191,7 +218,8 @@ Hiring: https://agnosticsec.com/careers
 
     # ── User login page — /login (before catch-all) ────────────────────────
     handle /login {
-        reverse_proxy backoffice:8443 {
+        reverse_proxy https://backoffice:8443 {
+        import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -216,7 +244,8 @@ Hiring: https://agnosticsec.com/careers
         # Forward auth: validate session cookie against backoffice.
         # On 200: copies X-Forwarded-User/Name from response into the request.
         # On 401: redirects to login page.
-        forward_auth backoffice:8443 {
+        forward_auth https://backoffice:8443 {
+        import internal-mtls
             uri /auth/verify
             copy_headers X-Forwarded-User X-Forwarded-Name X-Forwarded-Email
 

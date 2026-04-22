@@ -54,13 +54,20 @@ USER yashigani
 
 EXPOSE 8443
 
+# mTLS healthcheck — same pattern as gateway.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')"
+    CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)"
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    YASHIGANI_SERVICE_NAME=backoffice
 
+# Internal mTLS (v2.23.1) — mutual TLS terminated by uvicorn.
 CMD ["uvicorn", "yashigani.backoffice.entrypoint:app", \
      "--host", "0.0.0.0", \
      "--port", "8443", \
+     "--ssl-keyfile", "/run/secrets/backoffice_client.key", \
+     "--ssl-certfile", "/run/secrets/backoffice_client.crt", \
+     "--ssl-ca-certs", "/run/secrets/ca_root.crt", \
+     "--ssl-cert-reqs", "2", \
      "--no-access-log"]

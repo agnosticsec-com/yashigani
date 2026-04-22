@@ -1,0 +1,338 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Yashigani — Service Identity Manifest (IaC-declared ecosystem allowlist)
+#
+# Every container that speaks inside the Yashigani mesh MUST have an entry
+# here. Services not in this file cannot obtain an internal-CA-signed client
+# certificate from install.sh and will fail the mTLS handshake at the edge.
+#
+# Contract (enforced by install.sh enroll_services + src/yashigani/pki):
+#   name                  — compose service name (also DNS SAN on the cert)
+#   dns_sans              — additional DNS SANs to embed (e.g. *.internal)
+#   purpose               — one-line human description (required)
+#   mtls_capable          — whether the service can terminate mTLS itself.
+#                           false => the service uses the internal CA only as
+#                           a client (e.g. Ollama has no TLS; relies on
+#                           bridge-network isolation + bearer token).
+#   bootstrap_token_sha256 — SHA-256 of the per-install bootstrap token that
+#                            lives at ./secrets/<name>_bootstrap_token.
+#                            Populated by install.sh on first deploy;
+#                            refuses to start if the on-disk token does not
+#                            hash to this value (tamper detection).
+#   revoked               — operator kill switch. revoked: true => the next
+#                            install.sh rotate-certs run skips this service
+#                            and the current cert is allowed to expire. Used
+#                            for incident response. A future canary hook can
+#                            flip this programmatically (see docs/incident.md).
+#
+# The manifest is under git — any addition, revocation, or SAN change is a
+# visible commit, never a runtime push. That is the point.
+#
+# Cert lifetime: chosen at install time (YASHIGANI_CERT_LIFETIME_DAYS,
+# range 30–365, default 90). Admins can change it later from
+# /admin/settings/internal-pki and trigger a rotation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version: 1
+
+# ── Core control plane ─────────────────────────────────────────────────────
+services:
+
+  - name: caddy
+    dns_sans: [caddy, caddy.internal]
+    purpose: "TLS edge + internal CA root"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: gateway
+    dns_sans: [gateway, gateway.internal]
+    purpose: "MCP reverse proxy (data plane)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: backoffice
+    dns_sans: [backoffice, backoffice.internal]
+    purpose: "Admin control plane (SSO, RBAC, audit, billing)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: policy
+    dns_sans: [policy, policy.internal, opa, opa.internal]
+    purpose: "Open Policy Agent (policy decisions)"
+    # v2.23.1: mtls_capable flipped to false — OPA retains plaintext HTTP in
+    # this release. Gateway's ~6 direct httpx calls to OPA (proxy.py,
+    # agent_router.py, openai_router.py) need coordinated updates before OPA
+    # can enforce mTLS. Scheduled for v2.23.2 (task #54) alongside the
+    # observability-plane mTLS rollout. Policy decisions are lower-sensitivity
+    # than user credentials / sessions which are the focus of v2.23.1.
+    mtls_capable: false
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  # ── Data stores ───────────────────────────────────────────────────────────
+  - name: postgres
+    dns_sans: [postgres, postgres.internal]
+    purpose: "PostgreSQL 16 (tenants, audit, RBAC, inference)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: pgbouncer
+    dns_sans: [pgbouncer, pgbouncer.internal]
+    purpose: "Transaction-mode PostgreSQL pooler"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: redis
+    dns_sans: [redis, redis.internal]
+    purpose: "Session store, TOTP provisioning, rate-limit counters"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: budget-redis
+    dns_sans: [budget-redis, budget-redis.internal]
+    purpose: "Budget counter store (noeviction)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  # ── Observability ─────────────────────────────────────────────────────────
+  - name: prometheus
+    dns_sans: [prometheus, prometheus.internal]
+    purpose: "Metrics collection + federation"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: grafana
+    dns_sans: [grafana, grafana.internal]
+    purpose: "Dashboards + alerting"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: alertmanager
+    dns_sans: [alertmanager, alertmanager.internal]
+    purpose: "Alert routing"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: loki
+    dns_sans: [loki, loki.internal]
+    purpose: "Log aggregation backend"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: promtail
+    dns_sans: [promtail, promtail.internal]
+    purpose: "Docker container log shipper → Loki"
+    mtls_capable: false       # promtail is a client of Loki, no inbound TLS
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: otel-collector
+    dns_sans: [otel-collector, otel-collector.internal]
+    purpose: "OTLP receiver, Jaeger exporter"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: jaeger
+    dns_sans: [jaeger, jaeger.internal]
+    purpose: "Distributed trace UI"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  # ── AI / inference ────────────────────────────────────────────────────────
+  - name: ollama
+    dns_sans: [ollama, ollama.internal]
+    purpose: "Local LLM inference (classifier + user models)"
+    # Ollama does not support server TLS. Protection = internal bridge-only +
+    # bearer token. This is an honest gap, not a pretend control.
+    mtls_capable: false
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  # ── Optional / profile-gated services ─────────────────────────────────────
+  - name: open-webui
+    dns_sans: [open-webui, open-webui.internal]
+    purpose: "User-facing chat UI (profile: openwebui)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: langflow
+    dns_sans: [langflow, langflow.internal]
+    purpose: "Visual agent workflow builder (profile: langflow)"
+    mtls_capable: false       # upstream image, no TLS. Uses CA as client.
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: letta
+    dns_sans: [letta, letta.internal]
+    purpose: "Stateful agent with persistent memory (profile: letta)"
+    mtls_capable: false       # upstream image, no TLS. Uses CA as client.
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: openclaw
+    dns_sans: [openclaw, openclaw.internal]
+    purpose: "Personal AI w/ messaging channel integrations (profile: openclaw)"
+    mtls_capable: false       # upstream image. Uses CA as client.
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: keycloak
+    dns_sans: [keycloak, keycloak.internal]
+    purpose: "Upstream test IdP for OIDC/SAML federation (profile: test-idp)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: vault
+    dns_sans: [vault, vault.internal]
+    purpose: "HashiCorp Vault dev-mode KMS (profile: vault)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: step-ca
+    dns_sans: [step-ca, step-ca.internal]
+    purpose: "Smallstep CA — legacy, kept for --with-internal-ca profile only"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: wazuh-manager
+    dns_sans: [wazuh-manager, wazuh-manager.internal]
+    purpose: "Wazuh SIEM event ingest (profile: wazuh)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: wazuh-indexer
+    dns_sans: [wazuh-indexer, wazuh-indexer.internal]
+    purpose: "Wazuh SIEM OpenSearch backend (profile: wazuh)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+  - name: wazuh-dashboard
+    dns_sans: [wazuh-dashboard, wazuh-dashboard.internal]
+    purpose: "Wazuh SIEM UI (profile: wazuh)"
+    mtls_capable: true
+    bootstrap_token_sha256: ""
+    revoked: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cert policy — two-tier PKI (root → intermediate → leaf).
+#
+# Bounds here are the hard min/max enforced by install.sh and the
+# /admin/settings/internal-pki API. The running values live in
+# docker/.env + the Postgres settings table so admin-UI edits persist
+# without touching IaC. install.sh reads docker/.env on each run.
+#
+# Rotation model:
+#   * Leaf certs (service client certs) — auto-reissued when <33% of
+#     lifetime remains. No downtime: services reload certs on HUP.
+#   * Intermediate — auto-reissued by cron (same threshold). Existing
+#     leaves remain valid because the root didn't change; new leaves
+#     get signed by the new intermediate.
+#   * Root — never auto. Separate "Rotate Root CA" admin action with
+#     explicit confirmation and an operator-scheduled maintenance window.
+#     A fresh install sets root lifetime once; subsequent edits to
+#     root_lifetime_years only affect the NEXT root rotation event.
+# ─────────────────────────────────────────────────────────────────────────────
+cert_policy:
+  # ── Root CA ─────────────────────────────────────────────────────────────
+  root_lifetime_years_min: 5
+  root_lifetime_years_max: 20
+  root_lifetime_years_default: 10
+  root_rotation_requires_manual_confirmation: true
+
+  # ── Intermediate CA ─────────────────────────────────────────────────────
+  intermediate_lifetime_days_min: 90
+  intermediate_lifetime_days_max: 365
+  intermediate_lifetime_days_default: 180
+
+  # ── Leaf (service client certs) ─────────────────────────────────────────
+  leaf_lifetime_days_min: 30
+  leaf_lifetime_days_max: 90
+  leaf_lifetime_days_default: 90
+
+  # Re-issue when less than this fraction of lifetime remains.
+  renewal_threshold: 0.33
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CA source — tier-gated. The install-time prompt and the admin API refuse
+# to select a mode the current license does not entitle.
+#
+#   yashigani_generated — Community / Starter / Pro / Enterprise
+#     Default. Caddy's pki module bootstraps the root; install.sh derives
+#     an intermediate from it; leaves signed by the intermediate.
+#
+#   byo_intermediate    — Professional / Enterprise
+#     Operator uploads their own intermediate cert + key (signed by their
+#     own corporate root). Yashigani mints leaves under it. Root stays
+#     offline / in their HSM. Their root goes into every service's trust
+#     bundle as the sole trust anchor.
+#     [Implementation: v2.23.2 — admin API accepts upload, install.sh
+#      skips root generation when mode=byo_intermediate.]
+#
+#   byo_root            — Enterprise
+#     Full BYO. Operator supplies root and intermediate. We don't sign
+#     anything at any tier; we only issue leaves against their supplied
+#     intermediate. Compatible with HSM-backed corporate PKI.
+#     [Implementation: v2.23.2.]
+#
+#   remote_acme         — Enterprise
+#     Every leaf cert is signed by an external ACME / ACMEv2 endpoint
+#     (step-ca, AWS Private CA, HashiCorp Vault PKI, Smallstep Cloud).
+#     Yashigani runs an ACME client per service. Their CA is the only
+#     trust anchor. Most appropriate for large orgs with existing
+#     corporate PKI automation.
+#     [Implementation: v2.23.2 — drivers: step-ca, aws-pca, vault-pki,
+#      acme-eab.]
+#
+# Tier gate (v2.23.1 — this release):
+#   License tier is checked server-side on /admin/settings/internal-pki.
+#   Selecting a tier-gated mode below your license returns 402 with an
+#   upgrade CTA. In v2.23.1 the non-default modes are accepted by the API
+#   but install.sh returns 501 "BYO-CA coming in v2.23.2" until drivers
+#   ship.
+# ─────────────────────────────────────────────────────────────────────────────
+ca_source:
+  mode: yashigani_generated
+  # Populated only when mode != yashigani_generated:
+  byo:
+    root_cert_path: ""
+    intermediate_cert_path: ""
+    intermediate_key_path: ""
+  remote_acme:
+    driver: ""              # step-ca | aws-pca | vault-pki | acme-eab
+    directory_url: ""
+    eab_kid: ""
+    eab_hmac_key_secret_ref: ""
+  min_license_tier:
+    yashigani_generated: community
+    byo_intermediate: professional
+    byo_root: enterprise
+    remote_acme: enterprise
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Future hook: canary-triggered revocation.
+# If a service's canary endpoint fires, a small daemon (not yet implemented,
+# tracked as v2.24 follow-up) will PATCH this file to set revoked: true on
+# the offending service, commit, and push to the ops branch for operator
+# review. Purely a design anchor — no runtime behaviour yet.
+# ─────────────────────────────────────────────────────────────────────────────
+canary_policy:
+  auto_revoke_on_canary_hit: false
+  canary_branch: "ops/canary-revocations"

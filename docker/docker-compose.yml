@@ -24,6 +24,16 @@ x-common-env: &common-env
   YASHIGANI_AUDIT_LOG_PATH: /data/audit/audit.log
   YASHIGANI_AUDIT_MAX_FILE_SIZE_MB: ${YASHIGANI_AUDIT_MAX_FILE_SIZE_MB:-100}
   YASHIGANI_AUDIT_RETENTION_DAYS: ${YASHIGANI_AUDIT_RETENTION_DAYS:-90}
+  # Internal mTLS — every service reads its identity from this manifest + its
+  # own bootstrap token. Path is mounted read-only on every Python service.
+  YASHIGANI_SERVICE_MANIFEST_PATH: /etc/yashigani/service_identities.yaml
+  YASHIGANI_INTERNAL_CA_DIR: /run/secrets
+
+# Reminder for readers: the manifest is mounted into each Python service as
+#   ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro
+# Adding a service? Add it to docker/service_identities.yaml AND bind-mount
+# the file here. install.sh bootstrap_internal_pki() will issue its cert on
+# the next rotate-certs run.
 
 services:
 
@@ -48,17 +58,23 @@ services:
       - caddy_data:/data
       - caddy_config:/config
       - ./tls:/etc/caddy/tls:ro    # only used in ca mode
+      # Internal mesh CA — Caddy calls backoffice /auth/verify via forward_auth
+      # (mTLS client). Its own client cert lives in ./secrets; the manifest
+      # is mounted read-only.
+      - ./secrets:/run/secrets:ro
+      - ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
       interval: 15s
       timeout: 5s
       retries: 3
-    depends_on:
-      gateway:
-        condition: service_healthy
-      backoffice:
-        condition: service_healthy
-      # open-webui dependency removed — Open WebUI is optional (--with-openwebui)
+    # v2.23.1: Caddy is the FIRST container to start — no depends_on.
+    # It tolerates 502s on upstreams until gateway/backoffice come up;
+    # external traffic still reaches it immediately for health checks.
+    # Previous depends_on (gateway + backoffice) created a deadlock with
+    # forward_auth — those services now bind-mount the internal CA for
+    # their own mTLS identity, and Caddy waits for them via upstream
+    # retries, not compose ordering.
     networks:
       - external
       - internal
@@ -74,16 +90,20 @@ services:
     restart: unless-stopped
     environment:
       <<: *common-env
+      YASHIGANI_SERVICE_NAME: gateway
       YASHIGANI_UPSTREAM_URL: ${UPSTREAM_MCP_URL:?set UPSTREAM_MCP_URL}
+      # OPA stays on HTTP in v2.23.1 — mTLS for OPA lands in v2.23.2 (task #54).
       YASHIGANI_OPA_URL: http://policy:8181
-      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_BASE_URL: http://ollama:11434  # Ollama has no TLS; internal bridge-only + bearer token (honest gap, tracked in manifest as mtls_capable: false)
       REDIS_HOST: redis
-      REDIS_PORT: "6379"
+      REDIS_PORT: "6380"                     # TLS-only port
+      REDIS_USE_TLS: "true"
       YASHIGANI_SECRETS_DIR: /run/secrets
       YASHIGANI_AGENT_ROUTING_ENABLED: "true"
       YASHIGANI_AGENT_PATH_PREFIX: "/agents"
       YASHIGANI_AGENT_TOKEN_MIN_LENGTH: "64"
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
+      # Postgres via PgBouncer — TLS verify-ca + client cert.
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
@@ -98,6 +118,8 @@ services:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets:ro
+      # Internal mTLS — service identity manifest (read-only).
+      - ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro
       # Container socket for Pool Manager (per-identity isolation)
       # SECURITY: read-only mount, gateway runs as non-root (UID 1001).
       # Pool Manager uses only: containers.run(), .get(), .kill(), .remove().
@@ -129,7 +151,9 @@ services:
       pgbouncer:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""]
+      # mTLS port now used — healthcheck uses the client cert inside the
+      # container. Requires ca_root.crt present in /run/secrets.
+      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -148,8 +172,11 @@ services:
     restart: unless-stopped
     environment:
       <<: *common-env
+      YASHIGANI_SERVICE_NAME: backoffice
       REDIS_HOST: redis
-      REDIS_PORT: "6379"
+      REDIS_PORT: "6380"             # TLS-only
+      REDIS_USE_TLS: "true"
+      # OPA stays on HTTP in v2.23.1 — mTLS for OPA lands in v2.23.2 (task #54).
       YASHIGANI_OPA_URL: http://policy:8181
       YASHIGANI_ADMIN_USERNAME: ${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}
       YASHIGANI_ADMIN_MIN_TOTAL: "2"
@@ -161,7 +188,8 @@ services:
       # cloud providers before PII filtering. Admins who explicitly want cloud fallback
       # can set this var; ensure YASHIGANI_PII_MODE=redact or block first.
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,fail_closed}
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
+      # Postgres via PgBouncer — TLS verify-ca + client cert.
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_API_URL: http://open-webui:8080
       # OWUI_SECRET_KEY is required — install.sh generates a fresh random
@@ -196,6 +224,8 @@ services:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
       - ./secrets:/run/secrets
+      # Internal mTLS — manifest mounted read-only.
+      - ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro
     read_only: true
     tmpfs:
       - /tmp:size=100M
@@ -209,7 +239,8 @@ services:
       # surface). A dedicated yashigani-backoffice profile may ship later.
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')\""]
+      # mTLS — same pattern as gateway healthcheck.
+      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -273,9 +304,17 @@ services:
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
     entrypoint: ["sh", "-c"]
+    # v2.23.1 — TLS-only port 6380 with client-cert auth; plaintext disabled.
     command:
       - |
         redis-server \
+          --port 0 \
+          --tls-port 6380 \
+          --tls-cert-file /run/secrets/budget-redis_client.crt \
+          --tls-key-file /run/secrets/budget-redis_client.key \
+          --tls-ca-cert-file /run/secrets/ca_root.crt \
+          --tls-auth-clients yes \
+          --tls-protocols "TLSv1.2 TLSv1.3" \
           --maxmemory-policy noeviction \
           --maxmemory 256mb \
           --requirepass "$(cat /run/secrets/redis_password)" \
@@ -284,7 +323,7 @@ services:
       - budget_redis_data:/data
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli --tls --cert /run/secrets/budget-redis_client.crt --key /run/secrets/budget-redis_client.key --cacert /run/secrets/ca_root.crt -p 6380 -a \"$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -300,6 +339,13 @@ services:
   policy:
     image: docker.io/openpolicyagent/opa:1.15.1
     restart: unless-stopped
+    # v2.23.1 NOTE: OPA retains plaintext HTTP on the internal bridge network
+    # pending the mTLS migration of the gateway's ~6 direct httpx client
+    # call sites to OPA (proxy.py, agent_router.py, openai_router.py).
+    # Moved to task #54 (v2.23.2) alongside observability mTLS. OPA handles
+    # policy decisions, not user credentials or session secrets — the
+    # internal bridge network + service identity manifest remain the
+    # defence-in-depth for this single service.
     command:
       - "run"
       - "--server"
@@ -311,8 +357,6 @@ services:
       - ../policy:/policies:ro
       - ../policy/data:/policies/data:ro
     healthcheck:
-      # OPA v1.x images are scratch-based (no curl/wget/shell).
-      # Use the built-in /health endpoint via the diagnostic address.
       test: ["CMD", "/opa", "eval", "true"]
       interval: 10s
       timeout: 3s
@@ -326,8 +370,17 @@ services:
   redis:
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
+    # v2.23.1 — plaintext 6379 disabled (port 0), TLS-only on 6380 with
+    # client-cert auth (tls-auth-clients yes). Clients connect via rediss://.
     command: >
       sh -c 'redis-server
+      --port 0
+      --tls-port 6380
+      --tls-cert-file /run/secrets/redis_client.crt
+      --tls-key-file /run/secrets/redis_client.key
+      --tls-ca-cert-file /run/secrets/ca_root.crt
+      --tls-auth-clients yes
+      --tls-protocols "TLSv1.2 TLSv1.3"
       --save ""
       --appendonly no
       --maxmemory 256mb
@@ -337,8 +390,11 @@ services:
       - redis_data:/data
       - ./secrets:/run/secrets:ro
     healthcheck:
+      # redis-cli over TLS with our client cert.
       test: >
-        sh -c 'redis-cli -a "$$(cat /run/secrets/redis_password)" ping'
+        sh -c 'redis-cli --tls --cert /run/secrets/redis_client.crt
+        --key /run/secrets/redis_client.key --cacert /run/secrets/ca_root.crt
+        -p 6380 -a "$$(cat /run/secrets/redis_password)" ping'
       interval: 10s
       timeout: 3s
       retries: 5
@@ -482,9 +538,12 @@ services:
       # Postgres starts before backoffice populates secrets_volume, so it needs
       # the installer-generated password file from disk immediately.
       - ./secrets:/run/secrets:ro
-      # Init scripts — create additional databases (e.g. langgraph) on first start
+      # Init scripts run in alphabetical order — 05 must come before 10.
+      # 05 enables TLS + client-cert verification on first initdb.
+      - ./postgres/05-enable-ssl.sh:/docker-entrypoint-initdb.d/05-enable-ssl.sh:ro
       - ./postgres/init-agent-dbs.sh:/docker-entrypoint-initdb.d/10-agent-dbs.sh:ro
     healthcheck:
+      # pg_isready over a local socket — doesn't need TLS.
       test: ["CMD-SHELL", "pg_isready -U yashigani_app -d yashigani"]
       interval: 10s
       timeout: 5s
@@ -510,7 +569,16 @@ services:
       - ./secrets:/run/secrets:ro
       - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432"]
+      # Captain Review Finding: pg_isready can't negotiate TLS with
+      # client_tls_sslmode=verify-ca (it has no --sslcert flag).
+      # edoburu/pgbouncer image is busybox-based — no bash + sh has no
+      # /dev/tcp support + busybox nc doesn't understand -z. Quirks:
+      #   * localhost resolves IPv6-first, pgbouncer only binds v4 → use 127.0.0.1
+      #   * -w 2 = 2s connect timeout
+      #   * </dev/null so nc doesn't hang on stdin
+      # A successful TCP connect proves the process is listening; real
+      # cert-auth is exercised by gateway/backoffice connection path.
+      test: ["CMD-SHELL", "nc -w 2 127.0.0.1 5432 </dev/null >/dev/null 2>&1"]
       interval: 10s
       timeout: 3s
       retries: 5

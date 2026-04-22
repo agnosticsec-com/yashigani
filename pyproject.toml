@@ -32,6 +32,8 @@ dependencies = [
     "python3-saml>=1.16",
     # Audit export
     "pydantic>=2.7",
+    # v2.23.1 — internal mTLS PKI manifest loader (yashigani.pki.identity)
+    "PyYAML>=6",
     # v0.2.0 — TLS bootstrap + observability
     "bcrypt>=4.1",
     "prometheus-client>=0.20",

@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="2.23.0"
+YASHIGANI_VERSION="2.23.1"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -71,6 +71,15 @@ INSTALL_WAZUH=false       # opt-in: --wazuh flag
 INSTALL_OPENWEBUI=false   # opt-in: --with-openwebui flag
 INSTALL_INTERNAL_CA=false # opt-in: --with-internal-ca flag
 COMPOSE_PROFILES=()       # populated by select_agent_bundles()
+
+# Internal mTLS PKI — two-tier (root → intermediate → leaf).
+# Lifetimes are clamped to the bounds in docker/service_identities.yaml
+# cert_policy block; values outside bounds are silently clamped by the
+# yashigani.pki.issuer module.
+YASHIGANI_ROOT_CA_LIFETIME_YEARS="${YASHIGANI_ROOT_CA_LIFETIME_YEARS:-10}"
+YASHIGANI_INTERMEDIATE_LIFETIME_DAYS="${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS:-180}"
+YASHIGANI_CERT_LIFETIME_DAYS="${YASHIGANI_CERT_LIFETIME_DAYS:-90}"
+PKI_ACTION=""             # --pki-action=bootstrap|rotate-leaves|rotate-intermediate|rotate-root|status
 
 # If stdin is not a TTY (piped from curl), force non-interactive
 if [ ! -t 0 ]; then
@@ -186,6 +195,16 @@ parse_args() {
         AGENT_BUNDLES="${2:?'--agent-bundles requires a value, e.g. langflow,letta'}"
         shift 2
         ;;
+      --pki-action)
+        PKI_ACTION="${2:?'--pki-action requires: bootstrap|rotate-leaves|rotate-intermediate|rotate-root|status'}"
+        shift 2
+        ;;
+      --root-ca-lifetime-years)
+        YASHIGANI_ROOT_CA_LIFETIME_YEARS="${2:?}"; shift 2 ;;
+      --intermediate-lifetime-days)
+        YASHIGANI_INTERMEDIATE_LIFETIME_DAYS="${2:?}"; shift 2 ;;
+      --cert-lifetime-days)
+        YASHIGANI_CERT_LIFETIME_DAYS="${2:?}"; shift 2 ;;
       --help|-h)         usage; exit 0 ;;
       *)
         log_error "Unknown option: $1"
@@ -1000,10 +1019,24 @@ _write_aes_key_to_env() {
   # Seccomp + AppArmor profiles are enabled by default in docker-compose.yml.
   # Podman machine VM on macOS runs SELinux, not AppArmor — loading the
   # AppArmor profile fails. Relax by setting YASHIGANI_APPARMOR_PROFILE=
-  # unconfined when we detect Podman. Seccomp works on both runtimes so it
-  # stays at the default profile path.
-  if [[ "${RUNTIME:-}" == "podman" ]]; then
+  # unconfined when we detect Podman.
+  #
+  # v2.23.1: seccomp path in compose ("docker/seccomp/yashigani.json") gets
+  # double-prefixed by podman-compose (compose file is already inside docker/
+  # so the path resolves to .../docker/docker/seccomp/...). Setting
+  # YASHIGANI_SECCOMP_PROFILE=unconfined on Podman sidesteps the path
+  # resolution bug until the compose-file path layout is reworked in v2.23.2.
+  #
+  # Retro note: the prior apparmor override checked ${RUNTIME:-} which is
+  # NEVER SET anywhere in this script — the correct variable is
+  # ${YSG_PODMAN_RUNTIME:-false} or ${YSG_RUNTIME:-docker}. Both must
+  # be checked because different codepaths set one or the other. This
+  # silently let apparmor default to the profile name all along; compose
+  # tolerated it because Podman on macOS ignores unknown apparmor profile
+  # names silently, but fails HARD when the seccomp FILE path is wrong.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+    _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
   fi
 
   # --- Upstream MCP URL ---
@@ -1483,18 +1516,19 @@ compose_pull() {
     return 0
   fi
 
-  # Build local images first (gateway + backoffice have Dockerfiles, not on Docker Hub)
-  # Podman builds are handled in compose_up() — skip here if already built
-  if [[ "$YSG_PODMAN_RUNTIME" != "true" ]]; then
-    log_info "Building gateway and backoffice images from source..."
-    "${COMPOSE_CMD[@]}" -f "$compose_file" build --no-cache gateway backoffice || {
-      log_error "Failed to build gateway/backoffice images. Check Dockerfiles."
-      exit 1
-    }
-    log_success "Local images built"
-  else
-    log_info "Podman images already built — skipping compose build"
-  fi
+  # Build local images first (gateway + backoffice have Dockerfiles, not on Docker Hub).
+  # v2.23.1: Build ALWAYS runs at step 9, regardless of runtime. Previously
+  # Podman skipped here and relied on compose_up (step 10) to build — but
+  # that leaves step 9b (PKI bootstrap) with no image to run the issuer
+  # from, and stale :latest tags from prior installs silently get used
+  # (which lack new modules like yashigani.pki). Per-run rebuild is cheap
+  # thanks to container-layer caching; correctness beats a few saved seconds.
+  log_info "Building gateway and backoffice images from source..."
+  "${COMPOSE_CMD[@]}" -f "$compose_file" build gateway backoffice || {
+    log_error "Failed to build gateway/backoffice images. Check Dockerfiles."
+    exit 1
+  }
+  log_success "Local images built"
 
   # Pull all remote images
   if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
@@ -2790,8 +2824,283 @@ k8s_print_access() {
 # =============================================================================
 # Main
 # =============================================================================
+# =============================================================================
+# Internal mTLS PKI bootstrap (task #29 — v2.23.1)
+#
+# Two-tier CA (root → intermediate → leaf) generated by Python's cryptography
+# library via `python -m yashigani.pki.issuer`. Produces:
+#   ./docker/secrets/ca_root.crt           (trust anchor for every service)
+#   ./docker/secrets/ca_root.key           (0400 — never leaves the host)
+#   ./docker/secrets/ca_intermediate.crt   (signs leaves)
+#   ./docker/secrets/ca_intermediate.key
+#   ./docker/secrets/<service>_client.crt  (leaf || intermediate PEM bundle)
+#   ./docker/secrets/<service>_client.key
+#   ./docker/secrets/<service>_bootstrap_token  (tamper-check token, SHA-256
+#                                                recorded in the manifest)
+#
+# The gateway image (built in compose_pull) bundles the yashigani package
+# including yashigani.pki.issuer and its cryptography dependency, so we run
+# the issuer as a throwaway container with the secrets dir + manifest
+# bind-mounted.
+# =============================================================================
+
+_pki_runtime_cmd() {
+  # Pick docker vs podman. Priority:
+  #   1. Explicit request: YSG_PODMAN_RUNTIME=true -> podman (even if docker is
+  #      installed, honour the operator's choice).
+  #   2. Docker available -> docker (fastest path on typical dev machines).
+  #   3. Podman fallback.
+  # Su Review Finding fix — earlier version had inverted logic that ignored
+  # YSG_PODMAN_RUNTIME when docker was also present.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    echo "podman"; return
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    echo "docker"; return
+  fi
+  echo "podman"
+}
+
+_pki_validate_lifetimes() {
+  # Clamp to manifest bounds: root 5-20 yr, intermediate 90-365 d, leaf 30-90 d.
+  if ! [[ "$YASHIGANI_ROOT_CA_LIFETIME_YEARS" =~ ^[0-9]+$ ]] \
+     || (( YASHIGANI_ROOT_CA_LIFETIME_YEARS < 5 )) \
+     || (( YASHIGANI_ROOT_CA_LIFETIME_YEARS > 20 )); then
+    log_warn "Root CA lifetime ${YASHIGANI_ROOT_CA_LIFETIME_YEARS} outside 5–20 yr bounds; clamping to 10"
+    YASHIGANI_ROOT_CA_LIFETIME_YEARS=10
+  fi
+  if ! [[ "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" =~ ^[0-9]+$ ]] \
+     || (( YASHIGANI_INTERMEDIATE_LIFETIME_DAYS < 90 )) \
+     || (( YASHIGANI_INTERMEDIATE_LIFETIME_DAYS > 365 )); then
+    log_warn "Intermediate lifetime ${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS} outside 90–365 d bounds; clamping to 180"
+    YASHIGANI_INTERMEDIATE_LIFETIME_DAYS=180
+  fi
+  if ! [[ "$YASHIGANI_CERT_LIFETIME_DAYS" =~ ^[0-9]+$ ]] \
+     || (( YASHIGANI_CERT_LIFETIME_DAYS < 30 )) \
+     || (( YASHIGANI_CERT_LIFETIME_DAYS > 90 )); then
+    log_warn "Leaf cert lifetime ${YASHIGANI_CERT_LIFETIME_DAYS} outside 30–90 d bounds; clamping to 90"
+    YASHIGANI_CERT_LIFETIME_DAYS=90
+  fi
+}
+
+_pki_prompt_lifetimes() {
+  # Ask the operator during the wizard. Silent in non-interactive / demo mode.
+  if [[ "$NON_INTERACTIVE" == "true" || "$DEPLOY_MODE" == "demo" ]]; then
+    return 0
+  fi
+  printf "\n${C_BOLD}Internal mTLS certificate lifetimes${C_RESET}\n"
+  printf "  Services inside Yashigani authenticate each other with short-lived\n"
+  printf "  client certificates. Defaults follow web-PKI conventions.\n"
+  printf "\n"
+
+  local _input
+  printf "  Leaf cert lifetime (service client certs, days, 30–90) [${YASHIGANI_CERT_LIFETIME_DAYS}]: "
+  read -r _input </dev/tty 2>/dev/null || _input=""
+  [[ -n "$_input" ]] && YASHIGANI_CERT_LIFETIME_DAYS="$_input"
+
+  printf "  Intermediate CA lifetime (days, 90–365) [${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS}]: "
+  read -r _input </dev/tty 2>/dev/null || _input=""
+  [[ -n "$_input" ]] && YASHIGANI_INTERMEDIATE_LIFETIME_DAYS="$_input"
+
+  printf "  Root CA lifetime (years, 5–20) [${YASHIGANI_ROOT_CA_LIFETIME_YEARS}]: "
+  read -r _input </dev/tty 2>/dev/null || _input=""
+  [[ -n "$_input" ]] && YASHIGANI_ROOT_CA_LIFETIME_YEARS="$_input"
+
+  _pki_validate_lifetimes
+}
+
+_pki_persist_env() {
+  local env_file="${WORK_DIR}/docker/.env"
+  if [[ -z "${WORK_DIR:-}" || ! -d "$WORK_DIR" ]]; then
+    log_error "_pki_persist_env: WORK_DIR not set or missing — cannot write .env"
+    return 1
+  fi
+  for kv in \
+    "YASHIGANI_ROOT_CA_LIFETIME_YEARS:${YASHIGANI_ROOT_CA_LIFETIME_YEARS}" \
+    "YASHIGANI_INTERMEDIATE_LIFETIME_DAYS:${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS}" \
+    "YASHIGANI_CERT_LIFETIME_DAYS:${YASHIGANI_CERT_LIFETIME_DAYS}"; do
+    local k="${kv%%:*}"; local v="${kv#*:}"
+    if grep -q "^${k}=" "$env_file" 2>/dev/null; then
+      # Su Review Finding: mktemp on same filesystem as target so mv is atomic.
+      local tmp_env; tmp_env="$(mktemp "${env_file}.XXXXXX")"
+      sed "s|^${k}=.*|${k}=${v}|" "$env_file" > "$tmp_env" && mv "$tmp_env" "$env_file"
+    else
+      echo "${k}=${v}" >> "$env_file"
+    fi
+  done
+}
+
+_pki_run_issuer() {
+  # Usage: _pki_run_issuer <subcommand> [extra args...]
+  local subcmd="$1"; shift
+  local runtime; runtime="$(_pki_runtime_cmd)"
+  # Pick the first existing local image tag. install.sh --upgrade paths
+  # that skip compose build may leave :latest as the only built tag, so
+  # falling back to it is safer than forcing a pull of :${VERSION} that
+  # doesn't exist on a remote registry (yashigani/gateway isn't public).
+  local image=""
+  for tag in "${YASHIGANI_VERSION}" "latest"; do
+    if "$runtime" image exists "yashigani/gateway:${tag}" 2>/dev/null \
+       || "$runtime" image exists "localhost/yashigani/gateway:${tag}" 2>/dev/null; then
+      image="yashigani/gateway:${tag}"
+      break
+    fi
+  done
+  if [[ -z "$image" ]]; then
+    log_error "_pki_run_issuer: no local yashigani/gateway image found — compose build must run first"
+    return 1
+  fi
+  local manifest_in="${WORK_DIR}/docker/service_identities.yaml"
+  local secrets_in="${WORK_DIR}/docker/secrets"
+
+  mkdir -p "$secrets_in"
+  if [[ ! -f "$manifest_in" ]]; then
+    log_error "service_identities.yaml missing at $manifest_in — re-clone the repo."
+    return 1
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    dry_print "$runtime run --rm --network=none -v $secrets_in:/secrets -v $manifest_in:/manifest.yaml $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
+    return 0
+  fi
+
+  # --network=none: issuer does no network I/O, and cutting the network
+  # prevents any accidental telemetry exfil.
+  "$runtime" run --rm --network=none \
+    -v "${secrets_in}:/secrets:rw,Z" \
+    -v "${manifest_in}:/manifest.yaml:rw,Z" \
+    "$image" \
+    python -m yashigani.pki.issuer \
+      --secrets-dir /secrets \
+      --manifest /manifest.yaml \
+      "$subcmd" "$@"
+}
+
+bootstrap_internal_pki() {
+  set_step "9b" "internal mTLS PKI"
+  log_step "9b/${TOTAL_STEPS}" "Bootstrapping internal mTLS PKI..."
+  _pki_validate_lifetimes
+
+  local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
+  if [[ -f "$ca_root" ]]; then
+    log_info "Root CA already present — checking renewal status"
+    # Su Review Finding: no /tmp — keep scratch inside WORK_DIR.
+    local status_file="${WORK_DIR}/docker/secrets/.pki-status"
+    if _pki_run_issuer status >"$status_file" 2>&1; then
+      if grep -q "'status': 'renew'" "$status_file" 2>/dev/null; then
+        log_info "Renewal needed — rotating leaves"
+        _pki_run_issuer rotate-leaves \
+          --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS" \
+          || { rm -f "$status_file"; log_error "Leaf rotation failed"; return 1; }
+        log_success "Leaf certs rotated"
+      else
+        log_success "Certs current — no rotation needed"
+      fi
+    fi
+    rm -f "$status_file"
+    _pki_persist_env
+    return 0
+  fi
+
+  log_info "Fresh install — generating root + intermediate + leaves"
+  log_info "  Root:         ${YASHIGANI_ROOT_CA_LIFETIME_YEARS} years"
+  log_info "  Intermediate: ${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS} days"
+  log_info "  Leaves:       ${YASHIGANI_CERT_LIFETIME_DAYS} days"
+
+  if ! _pki_run_issuer bootstrap \
+       --root-lifetime-years "$YASHIGANI_ROOT_CA_LIFETIME_YEARS" \
+       --intermediate-lifetime-days "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" \
+       --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"; then
+    log_error "PKI bootstrap failed — internal mTLS certs not generated"
+    return 1
+  fi
+
+  _pki_persist_env
+
+  # Podman rootless: client keys are 0o400 (psycopg2 strict perm check).
+  # Inside the user namespace, container uid 1001 (the yashigani user in
+  # gateway + backoffice images) resolves to host uid (subuid + 1000),
+  # NOT the installer's uid. `podman unshare chown` re-owns the key files
+  # through the user-namespace mapping so the container user can read its
+  # own key without loosening host-side perms.
+  # Infra images that run as root-in-container (postgres, pgbouncer) don't
+  # need this — root-in-container maps to the installer's uid which already
+  # owns the file.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+    log_info "Chown'ing client keys through Podman user namespace"
+    local _uid_mapped_services=("gateway:1001" "backoffice:1001" "redis:999" "budget-redis:999")
+    for _svc_uid in "${_uid_mapped_services[@]}"; do
+      local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
+      local _keyfile="${WORK_DIR}/docker/secrets/${_svc}_client.key"
+      if [[ -f "$_keyfile" ]]; then
+        podman unshare chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
+          || log_warn "podman unshare chown failed on ${_svc} key — continuing"
+      fi
+    done
+  fi
+
+  log_success "Internal CA + per-service leaf certs generated"
+  log_info "  CA root:      docker/secrets/ca_root.crt"
+  log_info "  Service certs are bind-mounted into each container via compose"
+}
+
+# Subcommand entry — for `install.sh --pki-action=<action>` used in maintenance.
+handle_pki_subcommand() {
+  case "$PKI_ACTION" in
+    bootstrap)
+      bootstrap_internal_pki
+      ;;
+    rotate-leaves)
+      log_step "-" "Rotating leaf certs"
+      _pki_run_issuer rotate-leaves \
+        --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"
+      log_success "Leaf certs rotated — restart services to pick up new certs"
+      log_info "  docker compose restart gateway backoffice postgres pgbouncer redis budget-redis policy"
+      ;;
+    rotate-intermediate)
+      log_step "-" "Rotating intermediate + leaf certs"
+      _pki_run_issuer rotate-intermediate \
+        --intermediate-lifetime-days "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" \
+        --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"
+      log_success "Intermediate + leaves rotated — restart the stack"
+      ;;
+    rotate-root)
+      log_warn "Root CA rotation is DESTRUCTIVE — every service's trust bundle"
+      log_warn "will be replaced. Expect a brief mesh-wide restart window."
+      printf "  Proceed? Type YES in caps to confirm: "
+      local _ans
+      read -r _ans </dev/tty 2>/dev/null || _ans=""
+      if [[ "$_ans" != "YES" ]]; then
+        log_info "Cancelled"
+        return 0
+      fi
+      _pki_run_issuer rotate-root --confirm \
+        --root-lifetime-years "$YASHIGANI_ROOT_CA_LIFETIME_YEARS" \
+        --intermediate-lifetime-days "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" \
+        --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"
+      log_success "Full PKI rotated — restart all services"
+      ;;
+    status)
+      _pki_run_issuer status
+      ;;
+    *)
+      log_error "Unknown --pki-action '${PKI_ACTION}'"
+      log_info "Valid: bootstrap | rotate-leaves | rotate-intermediate | rotate-root | status"
+      exit 1
+      ;;
+  esac
+}
+
 main() {
   parse_args "$@"
+
+  # Short-circuit path for PKI maintenance commands: no full install, no wizard.
+  if [[ -n "$PKI_ACTION" ]]; then
+    detect_working_directory
+    if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then cd "$WORK_DIR"; fi
+    handle_pki_subcommand
+    exit 0
+  fi
 
   # ---- Step 0: Banner ----
   print_banner
@@ -2916,6 +3225,12 @@ main() {
 
     # Step 9: docker compose pull
     compose_pull
+
+    # Step 9b: Internal mTLS PKI — bootstrap root + intermediate + leaves BEFORE
+    # services start, because postgres/redis/opa/gateway/backoffice all now
+    # mount certs from docker/secrets/. No certs = no boot.
+    _pki_prompt_lifetimes
+    bootstrap_internal_pki
 
     # Step 10: docker compose up -d
     compose_up

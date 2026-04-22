@@ -92,8 +92,28 @@ def _bootstrap():
     # ── Session store (Redis db/1) ──────────────────────────────────────────
     from urllib.parse import quote
     redis_host = os.getenv("REDIS_HOST", "redis")
-    redis_port = os.getenv("REDIS_PORT", "6379")
-    redis_url = f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/1"
+    redis_port = os.getenv("REDIS_PORT", "6380")
+    redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
+    _secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
+
+    def _backoffice_redis_url(db: int) -> str:
+        """Build a redis URL for the given DB index, TLS-aware.
+
+        v2.23.1 default: rediss:// with client cert auth. Cert paths point
+        at this service's leaf cert under /run/secrets. Setting
+        REDIS_USE_TLS=false flips to plaintext — used only for local dev.
+        """
+        _q = quote(_redis_password, safe='')
+        if redis_use_tls:
+            return (
+                f"rediss://:{_q}@{redis_host}:{redis_port}/{db}"
+                f"?ssl_cert_reqs=required&ssl_ca_certs={_secrets_dir}/ca_root.crt"
+                f"&ssl_certfile={_secrets_dir}/backoffice_client.crt"
+                f"&ssl_keyfile={_secrets_dir}/backoffice_client.key"
+            )
+        return f"redis://:{_q}@{redis_host}:{redis_port}/{db}"
+
+    redis_url = _backoffice_redis_url(1)
     session_store = SessionStore(redis_url=redis_url)
 
     # ── Auth service ────────────────────────────────────────────────────────
@@ -173,7 +193,7 @@ def _bootstrap():
     rate_limiter = None
     try:
         import redis as _redis
-        redis_rl_url = f"redis://:{_redis_password}@{redis_host}:{redis_port}/2"
+        redis_rl_url = _backoffice_redis_url(2)
         redis_rl_client = _redis.from_url(redis_rl_url, decode_responses=False)
         rate_limiter = RateLimiter(
             redis_client=redis_rl_client,
@@ -188,7 +208,7 @@ def _bootstrap():
     agent_registry = None
     try:
         import redis as _redis
-        redis_rbac_url = f"redis://:{_redis_password}@{redis_host}:{redis_port}/3"
+        redis_rbac_url = _backoffice_redis_url(3)
         redis_rbac_client = _redis.from_url(redis_rbac_url, decode_responses=False)
         rbac_store = RBACStore(redis_client=redis_rbac_client)
         logger.info(
@@ -215,7 +235,7 @@ def _bootstrap():
 
         # BackendConfigStore shares Redis db/1 (session store) — different key namespace
         redis_session_client = _redis.from_url(
-            f"redis://:{_redis_password}@{redis_host}:{redis_port}/1",
+            _backoffice_redis_url(1),
             decode_responses=False,
         )
         backend_config_store = BackendConfigStore(redis_client=redis_session_client)
@@ -266,7 +286,7 @@ def _bootstrap():
         import redis as _redis
         from yashigani.models.alias_store import ModelAliasStore
         redis_alias_client = _redis.from_url(
-            f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/1",
+            _backoffice_redis_url(1),
             decode_responses=False,
         )
         model_alias_store = ModelAliasStore(redis_client=redis_alias_client)
@@ -293,7 +313,7 @@ def _bootstrap():
     try:
         import redis as _redis
         from yashigani.gateway.response_cache import ResponseCache
-        redis_cache_url = f"redis://:{_redis_password}@{redis_host}:{redis_port}/4"
+        redis_cache_url = _backoffice_redis_url(4)
         redis_cache_client = _redis.from_url(redis_cache_url, decode_responses=False)
         response_cache = ResponseCache(redis_client=redis_cache_client)
         logger.info("Backoffice: response cache client ready (Redis DB 4)")
@@ -327,7 +347,7 @@ def _bootstrap():
             asyncio.ensure_future(inference_logger.start())
 
             import redis as _redis
-            redis_anomaly_url = f"redis://:{_redis_password}@{redis_host}:{redis_port}/2"
+            redis_anomaly_url = _backoffice_redis_url(2)
             redis_anomaly_client = _redis.from_url(redis_anomaly_url, decode_responses=False)
             anomaly_detector = AnomalyDetector(redis_client=redis_anomaly_client)
             logger.info("Backoffice: DB pool + inference logger + anomaly detector ready")
@@ -433,7 +453,7 @@ def _bootstrap():
     try:
         from yashigani.identity.registry import IdentityRegistry
         import redis as _redis
-        redis_identity_url = f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/3"
+        redis_identity_url = _backoffice_redis_url(3)
         redis_identity_client = _redis.from_url(redis_identity_url, decode_responses=False)
         backoffice_state.identity_registry = IdentityRegistry(redis_client=redis_identity_client)
         logger.info("Identity registry initialised")
@@ -444,7 +464,7 @@ def _bootstrap():
     try:
         from yashigani.auth.break_glass import init_break_glass
         import redis as _redis
-        redis_bg = _redis.from_url(f"redis://:{quote(_redis_password, safe='')}@{redis_host}:{redis_port}/0", decode_responses=True)
+        redis_bg = _redis.from_url(_backoffice_redis_url(0), decode_responses=True)
         redis_bg.ping()
         backoffice_state.break_glass_manager = init_break_glass(redis_bg, audit_writer)
         logger.info("Break glass manager initialized")

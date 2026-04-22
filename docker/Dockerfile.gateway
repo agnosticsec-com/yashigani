@@ -86,14 +86,26 @@ USER yashigani
 
 EXPOSE 8080
 
+# Image-level healthcheck — talks through the mTLS port using the container's
+# own client cert (same material the service presents for inbound mTLS).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"
+    CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FASTTEXT_MODEL_PATH=/app/models/fasttext_classifier.bin
+    FASTTEXT_MODEL_PATH=/app/models/fasttext_classifier.bin \
+    YASHIGANI_SERVICE_NAME=gateway
 
+# Internal mTLS (v2.23.1) — uvicorn terminates TLS and requires every client
+# to present a cert signed by our internal CA. Certs land in /run/secrets via
+# a bind-mount configured by docker-compose.
+#   --ssl-cert-reqs=2  → ssl.CERT_REQUIRED (stdlib constant, mutual TLS)
+#   --ssl-ca-certs      → the trust anchor for peer verification
 CMD ["uvicorn", "yashigani.gateway.entrypoint:app", \
      "--host", "0.0.0.0", \
      "--port", "8080", \
+     "--ssl-keyfile", "/run/secrets/gateway_client.key", \
+     "--ssl-certfile", "/run/secrets/gateway_client.crt", \
+     "--ssl-ca-certs", "/run/secrets/ca_root.crt", \
+     "--ssl-cert-reqs", "2", \
      "--no-access-log"]
