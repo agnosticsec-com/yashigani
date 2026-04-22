@@ -33,44 +33,67 @@ spec:
         readOnlyRootFilesystem: true
         capabilities:
           drop: ["ALL"]
+      {{- if .Values.mtls.enabled }}
       command:
         - /bin/sh
         - -c
         - |
           set -e
-
-          # Test main Redis — password required
+          # v2.23.1 mTLS: redis listens on 6380, TLS-only, with tls-auth-clients.
+          # We reach it with our own client cert (the "redis" service leaf is
+          # the nearest match; we could issue a dedicated test identity but
+          # that's overkill for helm test).
+          for SVC in yashigani-redis yashigani-budget-redis; do
+            CERT=/run/secrets/${SVC##yashigani-}_client.crt
+            KEY=/run/secrets/${SVC##yashigani-}_client.key
+            echo "Testing ${SVC} over TLS..."
+            RESULT=$(redis-cli --tls \
+              --cert "$CERT" --key "$KEY" \
+              --cacert /run/secrets/ca_root.crt \
+              -h "${SVC}" -p 6380 PING 2>&1 || true)
+            if echo "${RESULT}" | grep -q "PONG"; then
+              echo "${SVC}: PONG (no auth)"
+            elif echo "${RESULT}" | grep -q "NOAUTH\|WRONGPASS\|ERR"; then
+              echo "${SVC}: auth required — PASS"
+            else
+              echo "FAIL: ${SVC} did not respond. Got: ${RESULT}"; exit 1
+            fi
+          done
+          echo "PASS: Both Redis instances reachable over mTLS."
+      volumeMounts:
+        - name: pki-certs
+          mountPath: /run/secrets
+          readOnly: true
+      {{- else }}
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
           echo "Testing main Redis PING..."
           REDIS_HOST=yashigani-redis
           REDIS_PORT={{ .Values.redis.service.port }}
-
-          # Attempt unauthenticated PING first (will fail gracefully if auth required)
           RESULT=$(redis-cli -h "${REDIS_HOST}" -p "${REDIS_PORT}" PING 2>&1 || true)
           if echo "${RESULT}" | grep -q "PONG"; then
             echo "Main Redis PING: PONG (no auth)"
           elif echo "${RESULT}" | grep -q "NOAUTH\|WRONGPASS\|ERR"; then
-            echo "Main Redis PING: auth required (expected in production) — PASS"
+            echo "Main Redis PING: auth required — PASS"
           else
-            echo "FAIL: Main Redis did not respond. Got: ${RESULT}"
-            exit 1
+            echo "FAIL: Main Redis did not respond. Got: ${RESULT}"; exit 1
           fi
-
-          # Test budget Redis
           echo "Testing budget Redis PING..."
           BUDGET_HOST=yashigani-budget-redis
           BUDGET_PORT={{ .Values.budgetRedis.service.port }}
-
           RESULT=$(redis-cli -h "${BUDGET_HOST}" -p "${BUDGET_PORT}" PING 2>&1 || true)
           if echo "${RESULT}" | grep -q "PONG"; then
             echo "Budget Redis PING: PONG (no auth)"
           elif echo "${RESULT}" | grep -q "NOAUTH\|WRONGPASS\|ERR"; then
-            echo "Budget Redis PING: auth required (expected in production) — PASS"
+            echo "Budget Redis PING: auth required — PASS"
           else
-            echo "FAIL: Budget Redis did not respond. Got: ${RESULT}"
-            exit 1
+            echo "FAIL: Budget Redis did not respond. Got: ${RESULT}"; exit 1
           fi
-
           echo "PASS: Both Redis instances are reachable"
+      {{- end }}
       resources:
         requests:
           cpu: "10m"
@@ -78,3 +101,10 @@ spec:
         limits:
           cpu: "100m"
           memory: "64Mi"
+  {{- if .Values.mtls.enabled }}
+  volumes:
+    - name: pki-certs
+      secret:
+        secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+        defaultMode: 0400
+  {{- end }}

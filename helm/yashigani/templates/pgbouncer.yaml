@@ -26,6 +26,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 70
         runAsGroup: 70
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -54,6 +55,25 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
+          {{- if .Values.mtls.enabled }}
+          # mTLS mode: pg_isready cannot negotiate client-cert TLS. Fall back
+          # to a plain TCP connect against 127.0.0.1 — proves the listener is
+          # up; real cert-auth gets exercised on the first gateway connect.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "nc -w 2 127.0.0.1 5432 </dev/null >/dev/null 2>&1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "nc -w 2 127.0.0.1 5432 </dev/null >/dev/null 2>&1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -h localhost -p 5432"]
@@ -68,8 +88,29 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+          {{- if .Values.mtls.enabled }}
+          volumeMounts:
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            - name: pgbouncer-config
+              mountPath: /etc/pgbouncer/pgbouncer.ini
+              subPath: pgbouncer.ini
+              readOnly: true
+          {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0400
+        - name: pgbouncer-config
+          configMap:
+            name: yashigani-pgbouncer-config
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

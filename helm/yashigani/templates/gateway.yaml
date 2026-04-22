@@ -48,6 +48,8 @@ spec:
               value: {{ .Values.global.environment | quote }}
             - name: YASHIGANI_KSM_PROVIDER
               value: "docker"
+            - name: YASHIGANI_SERVICE_NAME
+              value: "gateway"
             - name: YASHIGANI_UPSTREAM_URL
               value: {{ .Values.gateway.env.upstreamUrl | quote }}
             - name: YASHIGANI_OPA_URL
@@ -57,7 +59,21 @@ spec:
             - name: REDIS_HOST
               value: {{ .Values.gateway.env.redisHost | quote }}
             - name: REDIS_PORT
-              value: {{ .Values.gateway.env.redisPort | quote }}
+              value: {{ if .Values.mtls.enabled }}"6380"{{ else }}{{ .Values.gateway.env.redisPort | quote }}{{ end }}
+            # Budget Redis — separate instance, code default "budget-redis"
+            # wouldn't resolve in-cluster. K8s service is yashigani-budget-redis.
+            - name: BUDGET_REDIS_HOST
+              value: "yashigani-budget-redis"
+            - name: BUDGET_REDIS_PORT
+              value: {{ if .Values.mtls.enabled }}"6380"{{ else }}"6379"{{ end }}
+            {{- if .Values.mtls.enabled }}
+            - name: REDIS_USE_TLS
+              value: "true"
+            - name: YASHIGANI_SERVICE_MANIFEST_PATH
+              value: "/etc/yashigani/service_identities.yaml"
+            - name: YASHIGANI_INTERNAL_CA_DIR
+              value: "/run/secrets"
+            {{- end }}
             - name: YASHIGANI_AGENT_ROUTING_ENABLED
               value: {{ .Values.gateway.env.agentRoutingEnabled | quote }}
             - name: YASHIGANI_AGENT_PATH_PREFIX
@@ -72,11 +88,19 @@ spec:
               value: {{ .Values.gateway.env.fasttextModelPath | quote }}
             - name: YASHIGANI_SECRETS_DIR
               value: "/run/secrets"
-            - name: YASHIGANI_DB_DSN
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
+            {{- if .Values.mtls.enabled }}
+            # mTLS DSN — verify-ca + client cert, via pgbouncer.
+            - name: YASHIGANI_DB_DSN
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+            {{- else }}
+            - name: YASHIGANI_DB_DSN
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani"
+            {{- end }}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -85,6 +109,28 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.gateway.existingSecretName | default "yashigani-gateway-secrets" }}
+          {{- if .Values.mtls.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -101,6 +147,7 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
           volumeMounts:
@@ -110,6 +157,12 @@ spec:
               mountPath: /var/log/yashigani
             - name: secrets
               mountPath: /run/secrets
+              readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: service-manifest
+              mountPath: /etc/yashigani
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -118,8 +171,19 @@ spec:
           emptyDir:
             sizeLimit: 50Mi
         - name: secrets
+          {{- if .Values.mtls.enabled }}
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0400
+          {{- else }}
           emptyDir:
             sizeLimit: 10Mi
+          {{- end }}
+        {{- if .Values.mtls.enabled }}
+        - name: service-manifest
+          configMap:
+            name: yashigani-pki-manifest
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

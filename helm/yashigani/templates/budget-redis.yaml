@@ -39,6 +39,28 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          {{- if .Values.mtls.enabled }}
+          command:
+            - "sh"
+            - "-c"
+            - |
+              redis-server \
+                --port 0 \
+                --tls-port 6380 \
+                --tls-cert-file /run/secrets/budget-redis_client.crt \
+                --tls-key-file /run/secrets/budget-redis_client.key \
+                --tls-ca-cert-file /run/secrets/ca_root.crt \
+                --tls-auth-clients yes \
+                --tls-protocols "TLSv1.2 TLSv1.3" \
+                --maxmemory-policy noeviction \
+                --maxmemory 256mb \
+                --requirepass "$(REDIS_PASSWORD)" \
+                --appendonly yes
+          ports:
+            - name: redis-tls
+              containerPort: 6380
+              protocol: TCP
+          {{- else }}
           command:
             - "sh"
             - "-c"
@@ -52,12 +74,43 @@ spec:
             - name: redis
               containerPort: 6379
               protocol: TCP
+          {{- end }}
           env:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.budgetRedis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
+          {{- if .Values.mtls.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - |
+                  redis-cli --tls --cert /run/secrets/budget-redis_client.crt \
+                    --key /run/secrets/budget-redis_client.key \
+                    --cacert /run/secrets/ca_root.crt \
+                    -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - |
+                  redis-cli --tls --cert /run/secrets/budget-redis_client.crt \
+                    --key /run/secrets/budget-redis_client.key \
+                    --cacert /run/secrets/ca_root.crt \
+                    -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             exec:
               command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
@@ -72,11 +125,24 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.budgetRedis.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.mtls.enabled }}
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0400
+      {{- end }}
   {{- if .Values.budgetRedis.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -107,8 +173,15 @@ spec:
     app.kubernetes.io/name: yashigani-budget-redis
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
+    {{- if .Values.mtls.enabled }}
+    - name: redis-tls
+      port: 6380
+      targetPort: 6380
+      protocol: TCP
+    {{- else }}
     - name: redis
       port: {{ .Values.budgetRedis.service.port }}
       targetPort: 6379
       protocol: TCP
+    {{- end }}
 {{- end }}

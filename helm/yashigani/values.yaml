@@ -1,4 +1,4 @@
-# Yashigani v0.9.3 — Umbrella Chart Top-Level Values
+# Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
 
 global:
@@ -25,13 +25,90 @@ global:
     enabled: true
 
 # ---------------------------------------------------------------------------
+# Internal mTLS (v2.23.1) — core-plane mutual TLS between gateway, backoffice,
+# postgres, pgbouncer, redis, budget-redis.
+#
+# On install/upgrade a Helm pre-install hook Job boots the two-tier PKI
+# (root → intermediate → per-service leaves) using the gateway image's
+# `python -m yashigani.pki.issuer` CLI, then writes the resulting certs and
+# trust bundle into a namespace-scoped Secret (yashigani-pki-certs) that
+# every core-plane pod mounts at /run/secrets.
+#
+# A CronJob rotates leaf certs weekly (default Sun 02:00). Pods pick up
+# the new cert on the next roll/restart — no in-place reload in v2.23.1.
+#
+# OPA (policy) stays on plaintext HTTP; mtls_capable:false in the manifest.
+# Observability-plane mTLS lands in v2.23.2 (task #54).
+#
+# UPGRADE NOTE — plaintext → mTLS on an existing PVC:
+# The postgres init script (05-enable-ssl.sh) only runs on a fresh initdb.
+# If you are upgrading a running release whose postgres PVC is non-empty,
+# after the upgrade:
+#   1) kubectl exec into the postgres pod,
+#   2) append the hostssl rules to $PGDATA/pg_hba.conf by hand (the script
+#      is available at /docker-entrypoint-initdb.d/05-enable-ssl.sh as a
+#      reference),
+#   3) psql --host /var/run/postgresql -c "SELECT pg_reload_conf();"
+# Alternatively: uninstall the release + delete the PVC + fresh install.
+# Automated in-place migration for existing data is tracked as task #54.
+# ---------------------------------------------------------------------------
+mtls:
+  # Hard-off switch. When false the chart renders the pre-v2.23.1 plaintext
+  # topology (no PKI job, no cert mounts). Intended for deliberate testing
+  # only — production deployments MUST keep this enabled.
+  enabled: true
+
+  # Image used by the applier container that materialises the Secret from
+  # the issuer output. alpine/k8s ships kubectl + sh in a single image —
+  # necessary because we shell-wrap the apply pipeline. registry.k8s.io/
+  # kubectl is distroless (no sh) and therefore won't work here. Override
+  # to your internal mirror if air-gapped.
+  kubectlImage:
+    repository: "alpine/k8s"
+    tag: "1.29.4"
+    pullPolicy: IfNotPresent
+
+  # Two-tier PKI lifetime policy. Must sit inside the bounds declared in
+  # docker/service_identities.yaml cert_policy.* — the issuer enforces them.
+  rootLifetimeYears: 10
+  intermediateLifetimeDays: 180
+  leafLifetimeDays: 90
+
+  # Weekly rotation of leaf certs. Keeps every service <7 days away from a
+  # fresh cert; aligns with PCI DSS 4.0 4.2.1.1 guidance. Cron in UTC.
+  rotation:
+    enabled: true
+    schedule: "0 2 * * 0"
+    # Keep the last N rotation CronJob runs in history for audit trail.
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    # Backoff before the rotation CronJob gives up on a failing run.
+    backoffLimit: 2
+
+  # Name of the Secret the bootstrap job writes into. Every core-plane
+  # Deployment/StatefulSet mounts this at /run/secrets.
+  # Do NOT set existingSecretName unless you're running the issuer
+  # out-of-band and materialising the Secret yourself.
+  secretName: "yashigani-pki-certs"
+  existingSecretName: ""
+
+  # Bootstrap job resources — small, single-shot, short-lived.
+  bootstrapResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ---------------------------------------------------------------------------
 # Gateway — MCP reverse proxy (data plane)
 # ---------------------------------------------------------------------------
 gateway:
   enabled: true
   image:
     repository: yashigani-gateway
-    tag: "0.9.3"
+    tag: "2.23.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:
@@ -56,9 +133,9 @@ gateway:
     minAvailable: 1
   env:
     upstreamUrl: ""
-    opaUrl: "http://policy:8181"
-    ollamaUrl: "http://ollama:11434"
-    redisHost: "redis"
+    opaUrl: "http://yashigani-policy:8181"
+    ollamaUrl: "http://yashigani-ollama:11434"
+    redisHost: "yashigani-redis"
     redisPort: "6379"
     agentRoutingEnabled: "true"
     agentPathPrefix: "/agents"
@@ -75,7 +152,7 @@ backoffice:
   enabled: true
   image:
     repository: yashigani-backoffice
-    tag: "0.9.3"
+    tag: "2.23.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
   resources:

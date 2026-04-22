@@ -47,6 +47,27 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
+          {{- if .Values.mtls.enabled }}
+          # mTLS mode: pg_hba.conf rewrites to hostssl+clientcert=verify-ca
+          # for anything non-local, which pg_isready cannot satisfy without
+          # cert flags. Hit the local unix socket instead (pg_hba keeps
+          # `local all all trust` so the probe just checks the process is
+          # accepting connections).
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "yashigani_app", "-d", "yashigani"]
@@ -61,11 +82,32 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if .Values.mtls.enabled }}
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d/05-enable-ssl.sh
+              subPath: 05-enable-ssl.sh
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0400
+        - name: init-scripts
+          configMap:
+            name: yashigani-postgres-init
+            defaultMode: 0555
+      {{- end }}
   {{- if .Values.postgres.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:

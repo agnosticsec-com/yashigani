@@ -1,0 +1,145 @@
+{{- if .Values.mtls.enabled }}
+{{- if not .Values.mtls.existingSecretName }}
+{{- /*
+  PKI bootstrap Job — pre-install + pre-upgrade hook.
+
+  Pattern:
+    1. initContainer `issuer` (gateway image) runs
+       `python -m yashigani.pki.issuer bootstrap` against a mounted
+       ConfigMap manifest and writes certs/keys to an in-memory emptyDir.
+       --network=none is implicit: the Job has no network egress except
+       to the apiserver, and the issuer never phones out.
+    2. container `applier` (kubectl image) reads the emptyDir and writes
+       the Secret via `kubectl create secret generic … --dry-run=client
+       -o yaml | kubectl apply -f -` (idempotent, tolerates re-runs).
+
+  Private keys never touch node disk — emptyDir `medium: Memory`.
+*/ -}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: yashigani-pki-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-pki
+    app.kubernetes.io/component: pki
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yashigani-pki
+        app.kubernetes.io/component: pki
+    spec:
+      restartPolicy: Never
+      serviceAccountName: yashigani-pki
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: issuer
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["python", "-m", "yashigani.pki.issuer"]
+          args:
+            - "--secrets-dir"
+            - "/secrets"
+            - "--manifest"
+            - "/manifest/service_identities.yaml"
+            - "bootstrap"
+            - "--root-lifetime-years"
+            - {{ .Values.mtls.rootLifetimeYears | quote }}
+            - "--intermediate-lifetime-days"
+            - {{ .Values.mtls.intermediateLifetimeDays | quote }}
+            - "--leaf-lifetime-days"
+            - {{ .Values.mtls.leafLifetimeDays | quote }}
+          volumeMounts:
+            - name: pki-certs
+              mountPath: /secrets
+            - name: manifest
+              mountPath: /manifest
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.mtls.bootstrapResources | nindent 12 }}
+      containers:
+        - name: applier
+          image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
+          imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              cd /secrets
+              echo "[applier] Files present after issuer bootstrap:"
+              ls -l
+              # Safety guard (Su pre-push review 2026-04-22): under POSIX sh an
+              # unmatched glob expands literally, so `for f in *.crt *.key` with
+              # no files would emit zero --from-file= args and we'd overwrite a
+              # good Secret with an empty one. Fail fast if issuer produced no
+              # certs.
+              crt_count=$(ls -1 *.crt 2>/dev/null | wc -l)
+              key_count=$(ls -1 *.key 2>/dev/null | wc -l)
+              if [ "$crt_count" -eq 0 ] || [ "$key_count" -eq 0 ]; then
+                echo "[applier] FATAL: issuer produced no cert/key files" >&2
+                echo "[applier] crt=$crt_count key=$key_count — aborting to" >&2
+                echo "[applier] avoid clobbering existing Secret." >&2
+                exit 1
+              fi
+              # --dry-run=client + apply -f - gives us an idempotent upsert
+              # that works for both fresh install and upgrade.
+              kubectl create secret generic {{ .Values.mtls.secretName }} \
+                --namespace {{ .Release.Namespace }} \
+                $(for f in *.crt *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
+                --dry-run=client -o yaml \
+              | kubectl apply -n {{ .Release.Namespace }} -f -
+              echo "[applier] Secret {{ .Values.mtls.secretName }} applied."
+          volumeMounts:
+            - name: pki-certs
+              mountPath: /secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.mtls.bootstrapResources | nindent 12 }}
+      volumes:
+        # Private keys in RAM only — never hit node disk.
+        - name: pki-certs
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+        - name: manifest
+          configMap:
+            name: yashigani-pki-manifest
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Mi
+{{- end }}
+{{- end }}

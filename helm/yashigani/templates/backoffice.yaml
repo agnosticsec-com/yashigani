@@ -48,10 +48,27 @@ spec:
               value: {{ .Values.global.environment | quote }}
             - name: YASHIGANI_KSM_PROVIDER
               value: "docker"
+            - name: YASHIGANI_SERVICE_NAME
+              value: "backoffice"
             - name: REDIS_HOST
               value: "yashigani-redis"
             - name: REDIS_PORT
-              value: "6379"
+              value: {{ if .Values.mtls.enabled }}"6380"{{ else }}"6379"{{ end }}
+            {{- if .Values.mtls.enabled }}
+            - name: REDIS_USE_TLS
+              value: "true"
+            - name: YASHIGANI_SERVICE_MANIFEST_PATH
+              value: "/etc/yashigani/service_identities.yaml"
+            - name: YASHIGANI_INTERNAL_CA_DIR
+              value: "/run/secrets"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
+                  key: postgres_password
+            - name: YASHIGANI_DB_DSN
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
+            {{- end }}
             - name: YASHIGANI_OPA_URL
               value: "http://yashigani-policy:8181"
             - name: YASHIGANI_SECRETS_DIR
@@ -70,6 +87,28 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.backoffice.existingSecretName | default "yashigani-backoffice-secrets" }}
+          {{- if .Values.mtls.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -86,6 +125,7 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.backoffice.resources | nindent 12 }}
           volumeMounts:
@@ -95,6 +135,12 @@ spec:
               mountPath: /var/log/yashigani
             - name: secrets
               mountPath: /run/secrets
+              readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: service-manifest
+              mountPath: /etc/yashigani
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -103,8 +149,19 @@ spec:
           emptyDir:
             sizeLimit: 50Mi
         - name: secrets
+          {{- if .Values.mtls.enabled }}
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0400
+          {{- else }}
           emptyDir:
             sizeLimit: 10Mi
+          {{- end }}
+        {{- if .Values.mtls.enabled }}
+        - name: service-manifest
+          configMap:
+            name: yashigani-pki-manifest
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

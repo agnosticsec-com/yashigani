@@ -1,0 +1,31 @@
+{{- if .Values.mtls.enabled }}
+{{- /*
+  ConfigMaps holding the mTLS-aware configs for postgres + pgbouncer.
+  Source of truth: docker/postgres/05-enable-ssl.sh and docker/pgbouncer/
+  pgbouncer.ini — shipped into the chart via `.Files.Get`.
+*/ -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-postgres-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-postgres
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  05-enable-ssl.sh: |
+{{ .Files.Get "files/postgres-05-enable-ssl.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-pgbouncer-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-pgbouncer
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  pgbouncer.ini: |
+{{ .Files.Get "files/pgbouncer.ini" | indent 4 }}
+{{- end }}

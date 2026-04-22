@@ -1,0 +1,144 @@
+{{- if .Values.mtls.enabled }}
+{{- if .Values.mtls.rotation.enabled }}
+{{- if not .Values.mtls.existingSecretName }}
+{{- /*
+  Weekly leaf-cert rotation.
+
+  Same two-container pattern as the bootstrap Job, but:
+    * `rotate-leaves` subcommand (root + intermediate stay untouched).
+    * NOT a Helm hook — this is a persistent CronJob that survives
+      helm upgrade. Uses the same yashigani-pki ServiceAccount so it
+      inherits the RBAC on yashigani-pki-certs.
+    * Pods do not hot-reload in v2.23.1; a restart (manual or HPA churn)
+      is needed to pick up the new cert. Roadmap: SIGHUP reload in v2.24.
+*/ -}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: yashigani-pki-rotate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-pki
+    app.kubernetes.io/component: pki-rotate
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.mtls.rotation.schedule | quote }}
+  timeZone: "UTC"
+  successfulJobsHistoryLimit: {{ .Values.mtls.rotation.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.mtls.rotation.failedJobsHistoryLimit }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.mtls.rotation.backoffLimit }}
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: yashigani-pki
+            app.kubernetes.io/component: pki-rotate
+        spec:
+          restartPolicy: Never
+          serviceAccountName: yashigani-pki
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            fsGroup: 1001
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: issuer
+              image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+              imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+              securityContext:
+                runAsUser: 1001
+                runAsGroup: 1001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  # Seed the existing CA material into the in-memory secrets-dir
+                  # so rotate-leaves doesn't mint a fresh root.
+                  cp /existing-secrets/*.crt /secrets/
+                  cp /existing-secrets/*.key /secrets/
+                  exec python -m yashigani.pki.issuer \
+                    --secrets-dir /secrets \
+                    --manifest /manifest/service_identities.yaml \
+                    rotate-leaves \
+                    --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
+              volumeMounts:
+                - name: pki-certs
+                  mountPath: /secrets
+                - name: existing-secrets
+                  mountPath: /existing-secrets
+                  readOnly: true
+                - name: manifest
+                  mountPath: /manifest
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                {{- toYaml .Values.mtls.bootstrapResources | nindent 16 }}
+          containers:
+            - name: applier
+              image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
+              imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy }}
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1001
+                runAsGroup: 1001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  cd /secrets
+                  # Safety guard (Su pre-push review 2026-04-22): same
+                  # empty-glob protection as the bootstrap Job — refuse to
+                  # apply a stub Secret if the rotator produced nothing.
+                  crt_count=$(ls -1 *.crt 2>/dev/null | wc -l)
+                  key_count=$(ls -1 *.key 2>/dev/null | wc -l)
+                  if [ "$crt_count" -eq 0 ] || [ "$key_count" -eq 0 ]; then
+                    echo "[rotate] FATAL: rotate-leaves produced no files" >&2
+                    echo "[rotate] crt=$crt_count key=$key_count — aborting" >&2
+                    exit 1
+                  fi
+                  kubectl create secret generic {{ .Values.mtls.secretName }} \
+                    --namespace {{ .Release.Namespace }} \
+                    $(for f in *.crt *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
+                    --dry-run=client -o yaml \
+                  | kubectl apply -n {{ .Release.Namespace }} -f -
+                  echo "[rotate] Leaf rotation complete."
+              volumeMounts:
+                - name: pki-certs
+                  mountPath: /secrets
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                {{- toYaml .Values.mtls.bootstrapResources | nindent 16 }}
+          volumes:
+            - name: pki-certs
+              emptyDir:
+                medium: Memory
+                sizeLimit: 10Mi
+            - name: existing-secrets
+              secret:
+                secretName: {{ .Values.mtls.secretName }}
+            - name: manifest
+              configMap:
+                name: yashigani-pki-manifest
+            - name: tmp
+              emptyDir:
+                sizeLimit: 10Mi
+{{- end }}
+{{- end }}
+{{- end }}
