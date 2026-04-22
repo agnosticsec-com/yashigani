@@ -135,7 +135,7 @@ services:
       # Seccomp default (Lu Review Finding #2 — enabled by default in v2.23.1).
       # Profile ships at docker/seccomp/yashigani.json. Override with
       # YASHIGANI_SECCOMP_PROFILE=unconfined if a host kernel rejects it.
-      - seccomp=${YASHIGANI_SECCOMP_PROFILE:-docker/seccomp/yashigani.json}
+      - seccomp=${YASHIGANI_SECCOMP_PROFILE:-./seccomp/yashigani.json}
       # AppArmor default (Linux hosts with apparmor loaded).
       # Load once per host: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
       # Override with YASHIGANI_APPARMOR_PROFILE=unconfined on hosts without
@@ -234,7 +234,7 @@ services:
       - no-new-privileges:true
       # Seccomp + AppArmor default (Lu Review Finding #2 — enabled in v2.23.1).
       # See gateway service above for override env var documentation.
-      - seccomp=${YASHIGANI_SECCOMP_PROFILE:-docker/seccomp/yashigani.json}
+      - seccomp=${YASHIGANI_SECCOMP_PROFILE:-./seccomp/yashigani.json}
       # Backoffice shares the gateway AppArmor profile (same Python/FastAPI
       # surface). A dedicated yashigani-backoffice profile may ship later.
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
