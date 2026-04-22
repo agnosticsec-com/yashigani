@@ -32,6 +32,8 @@ processors:
           sampling_percentage: 10
   # Resource attributes → Loki stream labels.
   # Keep label cardinality low: only service.name and deployment.environment.
+  # The `loki.resource.labels` hint tells the loki exporter (v0.100+) which
+  # resource attributes to project as Loki stream labels.
   resource/loki_labels:
     attributes:
       - key: service.name
@@ -40,6 +42,9 @@ processors:
       - key: deployment.environment
         action: insert
         value: production
+      - key: loki.resource.labels
+        action: insert
+        value: "service.name, deployment.environment"
 
 exporters:
   otlp/jaeger:
@@ -50,18 +55,16 @@ exporters:
     verbosity: basic
   # Loki log exporter — ships OTLP log records from gateway and backoffice.
   # Uses the collector-contrib loki exporter (included in otel/opentelemetry-collector-contrib).
+  #
+  # v2.23.1 (retro #3s): the v0.100.0 loki exporter dropped the nested
+  # `labels.resource` / `labels.attributes` config syntax. Label projection
+  # now happens via the `loki.resource.labels` / `loki.attribute.labels`
+  # attribute hints set by the resource/loki_labels processor below.
   loki:
     endpoint: http://loki:3100/loki/api/v1/push
     default_labels_enabled:
       exporter: false
       job: true
-    # Map OTEL resource attributes to Loki stream labels (low-cardinality only).
-    labels:
-      resource:
-        service.name: "service"
-        deployment.environment: "env"
-      attributes:
-        log.level: "level"
 
 extensions:
   health_check:
@@ -80,5 +83,5 @@ service:
     # OTLP log export is the Podman-compatible alternative.
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource/loki_labels, batch]
       exporters: [loki]
