@@ -295,9 +295,18 @@ def build_leaf(
     key = _gen_keypair()
     now = _utcnow()
 
-    sans = [x509.DNSName(n) for n in service.dns_sans]
+    sans: list[x509.GeneralName] = [x509.DNSName(n) for n in service.dns_sans]
     if not sans:
         sans = [x509.DNSName(service.name)]
+    # Always include localhost + loopback so in-container healthchecks and
+    # self-connecting clients can verify the cert against their own hostname.
+    existing_dns = {n.value for n in sans if isinstance(n, x509.DNSName)}
+    for local_name in ("localhost",):
+        if local_name not in existing_dns:
+            sans.append(x509.DNSName(local_name))
+    import ipaddress as _ipaddr
+    sans.append(x509.IPAddress(_ipaddr.IPv4Address("127.0.0.1")))
+    sans.append(x509.IPAddress(_ipaddr.IPv6Address("::1")))
 
     cert = (
         x509.CertificateBuilder()
