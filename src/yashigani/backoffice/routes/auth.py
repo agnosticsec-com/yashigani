@@ -251,13 +251,14 @@ async def login(body: LoginRequest, request: Request, response: Response):
         state.audit_writer.write(
             _make_login_event(body.username, "failure", reason)
         )
-        import datetime
-        server_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Ava Wave 2 Issue 7 — do NOT disclose server_time to unauthenticated
+        # callers. TOTP drift diagnostics only belong in authenticated flows
+        # (/auth/password/change, /auth/totp/provision/confirm) where the
+        # client has already proved they own an account.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail={
                                 "error": "invalid_credentials",
                                 "hint": "If using TOTP, ensure your device clock is synchronised.",
-                                "server_time": server_time,
                             })
 
     # Success — reset per-IP failure counter (global decays via TTL)
@@ -323,15 +324,14 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     state = backoffice_state
     record = state.auth_service._accounts.get(body.username)
 
-    # Same generic error for unknown user or wrong TOTP (prevent enumeration)
-    import datetime
-    server_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Same generic error for unknown user or wrong TOTP (prevent enumeration).
+    # Ava Wave 2 Issue 7 — self-service password reset is unauthenticated by
+    # design; do NOT leak server_time to callers who have not proved identity.
     generic_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={
             "error": "invalid_credentials",
             "hint": "If using TOTP, ensure your device clock is synchronised.",
-            "server_time": server_time,
         },
     )
 

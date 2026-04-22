@@ -52,12 +52,27 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         Referrer-Policy           "no-referrer"
         Content-Security-Policy   "default-src 'self'; object-src 'none'; base-uri 'none'; report-uri /admin/csp-report; report-to default"
         Cross-Origin-Opener-Policy "same-origin"
+        # Product / fingerprint hygiene (Ava Wave 2 observations 5 + 6).
         -Server
+        -Via
+        -Alt-Svc
     }
 
     # ── Request body size limit (OWASP ASVS 4.1.7) ──────────────────────────
     request_body {
         max_size 10MB
+    }
+
+    # ── RFC 9116 security.txt — vulnerability disclosure ──────────────────
+    handle /.well-known/security.txt {
+        header Content-Type "text/plain; charset=utf-8"
+        respond `Contact: mailto:security@agnosticsec.com
+Contact: https://github.com/agnostic-security/yashigani/security/advisories/new
+Expires: 2027-04-22T00:00:00Z
+Preferred-Languages: en
+Policy: https://agnosticsec.com/security
+Hiring: https://agnosticsec.com/careers
+` 200
     }
 
     # ── Gateway health check — /healthz ──────────────────────────────────
