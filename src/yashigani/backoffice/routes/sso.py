@@ -116,6 +116,14 @@ def _get_hmac_key() -> bytes:
     Deleting this key makes all email hashes permanently unrecoverable
     — clean GDPR Article 17 erasure without breaking the audit chain.
     Multi-tenant: derive per-org key via HKDF if org_id is provided.
+
+    Lu Review Findings #3 + #8 — this function previously fell back to a
+    hardcoded string "yashigani-default-hmac-key" when both the env var
+    and the secrets file were missing. That is safe for dev/demo but
+    disastrous in production: an attacker able to guess the fallback value
+    could forge email-hash collisions across deployments that use it.
+    Fail-closed now: log.critical and raise RuntimeError to abort start-up
+    rather than proceed with a publicly-known key.
     """
     key = os.getenv("YASHIGANI_DB_AES_KEY", "")
     if not key:
@@ -125,7 +133,19 @@ def _get_hmac_key() -> bytes:
             with open(os.path.join(secrets_dir, "db_aes_key")) as f:
                 key = f.read().strip()
         except Exception:
-            key = "yashigani-default-hmac-key"  # dev/demo only
+            pass
+    if not key:
+        import logging as _logging
+        _crit = _logging.getLogger("yashigani.security")
+        _crit.critical(
+            "_get_hmac_key: no YASHIGANI_DB_AES_KEY env var AND no "
+            "/run/secrets/db_aes_key file. Refusing to start with a "
+            "hardcoded fallback key (fail-closed)."
+        )
+        raise RuntimeError(
+            "Missing YASHIGANI_DB_AES_KEY — set the env var or mount "
+            "/run/secrets/db_aes_key. See docs/podman_deployment.md."
+        )
     return key.encode()
 
 

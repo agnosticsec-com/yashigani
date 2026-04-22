@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="2.20.0"
+YASHIGANI_VERSION="2.23.0"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -986,6 +986,16 @@ _write_aes_key_to_env() {
   # --- AES encryption key ---
   _env_set "YASHIGANI_DB_AES_KEY" "${DB_AES_KEY}"
 
+  # --- OWUI secret key ---
+  # Required by docker-compose (OWUI_SECRET_KEY has no fallback default
+  # after Lu Review Finding #4). Generate a fresh 256-bit key on first
+  # install; preserve existing value across re-runs so cookies survive.
+  local existing_owui_key
+  existing_owui_key="$(grep '^OWUI_SECRET_KEY=' "$env_file" 2>/dev/null | sed 's/^OWUI_SECRET_KEY=//' || echo "")"
+  if [[ -z "$existing_owui_key" ]]; then
+    _env_set "OWUI_SECRET_KEY" "$(openssl rand -hex 32)"
+  fi
+
   # --- Upstream MCP URL ---
   # Demo mode: use a built-in echo server so compose doesn't fail on missing var
   # Production: set from wizard or --upstream-url flag
@@ -1679,6 +1689,20 @@ compose_up() {
     # macOS: socket path from podman machine inspect
     if [[ "$(uname)" == "Darwin" ]]; then
       _podman_sock="$(podman machine inspect 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['ConnectionInfo']['PodmanSocket']['Path'])" 2>/dev/null || echo "")"
+      # Pool Manager requires rootful Podman Machine for container-per-identity isolation
+      if [[ ! -S /var/run/docker.sock ]]; then
+        log_warn "Podman Machine socket not found at /var/run/docker.sock"
+        log_warn "Pool Manager requires a rootful Podman machine for container-per-identity isolation."
+        log_warn "Run the following commands, then re-run this installer:"
+        log_warn ""
+        log_warn "  podman machine stop 2>/dev/null || true"
+        log_warn "  podman machine rm -f 2>/dev/null || true"
+        log_warn "  podman machine init --rootful"
+        log_warn "  podman machine start"
+        log_warn ""
+        log_warn "Security note: rootful is required for CIAA-compliant container isolation."
+        log_warn "Continuing without Pool Manager — container isolation will be DISABLED."
+      fi
     fi
     # Linux: standard path
     if [[ -z "$_podman_sock" ]]; then

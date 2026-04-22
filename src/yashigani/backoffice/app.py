@@ -169,6 +169,54 @@ def create_backoffice_app() -> FastAPI:
         response.headers["Content-Security-Policy"] = _csp
         return response
 
+    # Per-endpoint body-size limits (ASVS 4.3.1).
+    #
+    # The global 4 MB app limit + 10 MB Caddy limit covers everything, but
+    # endpoints that only accept small JSON (search, policy probes, admin
+    # config POSTs) should reject oversized bodies early to resist
+    # resource-exhaustion abuse. Patterns are prefix-matched, longest first.
+    # Override via YASHIGANI_BODY_LIMITS_DISABLED=1 for debugging; never in
+    # production.
+    _BODY_LIMITS = [
+        # (prefix, max_bytes)
+        ("/admin/audit/search",         64 * 1024),   # JSON search query
+        ("/admin/agents",               16 * 1024),   # agent register metadata
+        ("/admin/users",                4 * 1024),    # username + opt email
+        ("/admin/license",              4 * 1024),    # confirm flag or small LIC
+        ("/admin/ratelimit",            8 * 1024),
+        ("/admin/rbac",                 32 * 1024),
+        ("/admin/alerts",               32 * 1024),
+        ("/admin/budgets",              16 * 1024),
+        ("/auth/login",                 4 * 1024),    # u/p/totp
+        ("/auth/password/change",       8 * 1024),
+        ("/auth/password/self-reset",   4 * 1024),
+        ("/auth/totp/provision",        4 * 1024),    # start + confirm variants
+        # /v1/chat/completions is intentionally not limited here — LLM prompts
+        # can legitimately be large; the global 4 MB limit still applies.
+    ]
+
+    @app.middleware("http")
+    async def per_endpoint_body_size(request: Request, call_next):
+        if os.getenv("YASHIGANI_BODY_LIMITS_DISABLED") == "1":
+            return await call_next(request)
+        cl = request.headers.get("content-length")
+        if cl:
+            try:
+                length = int(cl)
+            except ValueError:
+                length = 0
+            for prefix, limit in _BODY_LIMITS:
+                if request.url.path.startswith(prefix) and length > limit:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": "payload_too_large",
+                            "max_bytes": limit,
+                            "received_bytes": length,
+                        },
+                    )
+        return await call_next(request)
+
     # Uniform 401 for unauthenticated /admin/* requests (Ava Wave 2 Issue 10).
     # Before this middleware, some admin endpoints returned 401 (route exists,
     # auth dep failed) while others returned 404 (no root route under that

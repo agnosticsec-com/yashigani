@@ -125,20 +125,50 @@ def container_start(name: str) -> None:
 
 
 def _stack_running() -> bool:
-    """Check if the gateway is reachable."""
-    try:
-        r = httpx.get("https://localhost/healthz", verify=False, timeout=3)
-        return r.status_code == 200
-    except Exception:
+    """Check if the gateway is reachable.
+
+    Probes, in order, the host ports the installer is known to bind to:
+      * https://localhost/healthz        (Caddy on :443 — Linux / root-capable)
+      * https://localhost:8443/healthz   (Caddy on :8443 — macOS default)
+      * http://localhost:8080/healthz    (gateway direct, when Caddy is off)
+      * YASHIGANI_HEALTH_URL              (explicit override for custom deploys)
+
+    Fixed for Ava Wave 2 Issue #33 — previously hard-coded :443 which
+    missed macOS installs (installer uses :8443 to avoid root-privilege
+    socket binding), causing all e2e tests to silently skip with
+    "Yashigani stack not running".
+    """
+    candidates = []
+    override = os.getenv("YASHIGANI_HEALTH_URL")
+    if override:
+        candidates.append(override)
+    candidates.extend([
+        "https://localhost/healthz",
+        "https://localhost:8443/healthz",
+        "http://localhost:8080/healthz",
+    ])
+    for url in candidates:
+        try:
+            r = httpx.get(url, verify=False, timeout=3)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            continue
+
+    # Last-resort: exec into the gateway container if one exists under
+    # any of the common name variants.
+    for name in ("docker-gateway-1", "docker_gateway_1", "yashigani-gateway-1"):
         try:
             result = runtime_exec(
-                "docker-gateway-1", "python3", "-c",
+                name, "python3", "-c",
                 "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/healthz').read().decode())",
                 timeout=10,
             )
-            return "ok" in result.stdout
+            if "ok" in (result.stdout or ""):
+                return True
         except Exception:
-            return False
+            continue
+    return False
 
 
 def pytest_collection_modifyitems(config, items):

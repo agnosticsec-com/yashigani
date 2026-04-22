@@ -1,5 +1,5 @@
 ---
-# Yashigani v2.22.0 — Docker Compose stack
+# Yashigani v2.23.0 — Docker Compose stack
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -160,7 +160,12 @@ services:
       YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_API_URL: http://open-webui:8080
-      OWUI_SECRET_KEY: ${OWUI_SECRET_KEY:-yashigani-owui-secret}
+      # OWUI_SECRET_KEY is required — install.sh generates a fresh random
+      # value and writes it to docker/.env. No fallback default here
+      # (Lu Review Finding #4, fail-closed). If unset the container will
+      # fail to start with a clear error rather than run with a
+      # publicly-known secret.
+      OWUI_SECRET_KEY: ${OWUI_SECRET_KEY:?OWUI_SECRET_KEY must be set in docker/.env — run install.sh to generate}
       YASHIGANI_TLS_DOMAIN: ${YASHIGANI_TLS_DOMAIN:-localhost}
       # SSO 2FA — require Yashigani TOTP after IdP authentication
       YASHIGANI_SSO_2FA_REQUIRED: ${YASHIGANI_SSO_2FA_REQUIRED:-false}
