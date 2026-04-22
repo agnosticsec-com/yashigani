@@ -1945,7 +1945,9 @@ register_agent_bundles() {
     return 0
   fi
 
-  local backoffice_url="http://localhost:8443"
+  # v2.23.1: backoffice terminates mTLS on :8443. Intra-container calls below
+  # present the backoffice client cert + CA (same pattern as the Dockerfile
+  # HEALTHCHECK). `backoffice_url` dropped — was unused dead code.
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
@@ -1989,7 +1991,7 @@ register_agent_bundles() {
   local reg_output
   reg_output="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T -e AGENTS_JSON="${agents_json}" backoffice \
     python3 -c '
-import json, os, sys, time, urllib.request
+import json, os, ssl, sys, time, urllib.request
 
 secrets = "/run/secrets"
 def read_secret(name):
@@ -1997,6 +1999,14 @@ def read_secret(name):
         return open(os.path.join(secrets, name)).read().strip()
     except:
         return ""
+
+# v2.23.1: backoffice serves mTLS on :8443. Present the client cert on every
+# call (same chain used by the Dockerfile HEALTHCHECK).
+_ctx = ssl.create_default_context(cafile=os.path.join(secrets, "ca_root.crt"))
+_ctx.load_cert_chain(
+    os.path.join(secrets, "backoffice_client.crt"),
+    os.path.join(secrets, "backoffice_client.key"),
+)
 
 user = read_secret("admin1_username")
 pw = read_secret("admin1_password")
@@ -2011,10 +2021,10 @@ totp_code = pyotp.TOTP(totp_secret, digest=hashlib.sha256).now()
 
 # Login
 login_data = json.dumps({"username": user, "password": pw, "totp_code": totp_code}).encode()
-req = urllib.request.Request("http://localhost:8443/auth/login", data=login_data,
+req = urllib.request.Request("https://localhost:8443/auth/login", data=login_data,
                              headers={"Content-Type": "application/json"})
 try:
-    resp = urllib.request.urlopen(req)
+    resp = urllib.request.urlopen(req, context=_ctx)
 except Exception as e:
     print(f"ERROR:login_failed:{e}", file=sys.stderr)
     sys.exit(1)
@@ -2036,11 +2046,11 @@ agents = json.loads(os.environ.get("AGENTS_JSON", "[]"))
 results = []
 for agent in agents:
     reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"], "protocol": agent.get("protocol", "openai")}).encode()
-    req = urllib.request.Request("http://localhost:8443/admin/agents", data=reg_data,
+    req = urllib.request.Request("https://localhost:8443/admin/agents", data=reg_data,
                                  headers={"Content-Type": "application/json",
                                            "Cookie": f"__Host-yashigani_admin_session={session}"})
     try:
-        resp = urllib.request.urlopen(req)
+        resp = urllib.request.urlopen(req, context=_ctx)
         body = json.loads(resp.read())
         token = body.get("token", "")
         profile = agent["profile"]
@@ -3246,9 +3256,12 @@ main() {
     # Step 11c: Auto-configure SIEM sink when Wazuh is installed
     if [[ "$INSTALL_WAZUH" == "true" ]] || echo "${COMPOSE_PROFILES[*]+"${COMPOSE_PROFILES[*]}"}" | grep -q "wazuh"; then
       log_info "Configuring audit SIEM sink for Wazuh..."
-      local _bo_url="http://localhost:8443"
+      # v2.23.1: reach backoffice via Caddy (host port → :443 in container).
+      # Caddy uses a self-signed cert in demo; -k tolerates it. Admin auth is
+      # the session cookie minted during admin bootstrap.
+      local _bo_url="https://localhost:${YASHIGANI_HTTPS_PORT:-443}"
       local _siem_config='{"backend":"wazuh","wazuh_url":"https://wazuh-manager:55000","wazuh_username":"wazuh-wui","wazuh_password":"'"${GEN_WAZUH_API_PASSWORD:-}"'","enabled":true}'
-      if curl -sf -X PUT "${_bo_url}/admin/alerts/sinks" -H "Content-Type: application/json" -d "$_siem_config" -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" >/dev/null 2>&1; then
+      if curl -skf -X PUT "${_bo_url}/admin/alerts/sinks" -H "Content-Type: application/json" -d "$_siem_config" -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" >/dev/null 2>&1; then
         log_success "Wazuh SIEM sink auto-configured"
       else
         log_warn "Wazuh SIEM sink auto-configuration failed — configure manually via admin UI"
