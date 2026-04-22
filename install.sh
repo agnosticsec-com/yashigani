@@ -2950,10 +2950,14 @@ _pki_run_issuer() {
   # that skip compose build may leave :latest as the only built tag, so
   # falling back to it is safer than forcing a pull of :${VERSION} that
   # doesn't exist on a remote registry (yashigani/gateway isn't public).
+  # Use `image inspect` rather than `image exists` — the latter is a
+  # Podman-only subcommand (Docker errors with "unknown command").
+  # `image inspect IMAGE` is portable across docker/podman and returns 0
+  # when the image is present locally.
   local image=""
   for tag in "${YASHIGANI_VERSION}" "latest"; do
-    if "$runtime" image exists "yashigani/gateway:${tag}" 2>/dev/null \
-       || "$runtime" image exists "localhost/yashigani/gateway:${tag}" 2>/dev/null; then
+    if "$runtime" image inspect "yashigani/gateway:${tag}" >/dev/null 2>&1 \
+       || "$runtime" image inspect "localhost/yashigani/gateway:${tag}" >/dev/null 2>&1; then
       image="yashigani/gateway:${tag}"
       break
     fi
