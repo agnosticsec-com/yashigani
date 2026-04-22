@@ -450,16 +450,22 @@ async def change_password(
     return {"status": "ok", "sessions_invalidated": True, "re_authentication_required": True}
 
 
-@router.post("/totp/provision")
-async def provision_totp(
-    body: TotpConfirmRequest,
+@router.post("/totp/provision/start")
+async def provision_totp_start(
     session: AnySession,
-    response: Response,
 ):
     """
-    Provision TOTP for the current admin account.
-    Requires a valid TOTP code to confirm device pairing.
-    Returns QR code (base64 PNG) and recovery codes — shown ONCE.
+    Start TOTP enrolment for the current account.
+
+    Generates a fresh TOTP seed + recovery codes and returns the QR code
+    + provisioning URI for the client to display. Does NOT clear
+    ``force_totp_provision`` — the account cannot complete authenticated
+    actions until :func:`provision_totp_confirm` verifies a code derived
+    from the returned seed.
+
+    Part of the split-enrolment flow (Ava Wave 2 Issue C). The previous
+    atomic ``/totp/provision`` required a ``totp_code`` on the same call
+    that returned the seed, which was impossible for a first-time client.
     """
     state = backoffice_state
     record = _get_record_by_id(session.account_id)
@@ -467,11 +473,95 @@ async def provision_totp(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, code_set = state.auth_service.provision_totp(record.username)
+    prov, _code_set = state.auth_service.provision_totp_start(record.username)
 
-    # Verify the user scanned the QR correctly
-    if not verify_totp(prov.secret_b32, body.totp_code, set()):
-        # Rollback — remove the newly set seed
+    return {
+        "status": "pending_confirmation",
+        "qr_code_png_b64": prov.qr_code_png_b64,
+        "provisioning_uri": prov.provisioning_uri,
+        "recovery_codes": prov.recovery_codes,  # shown once — client must acknowledge
+        "recovery_codes_count": len(prov.recovery_codes),
+        "message": (
+            "Scan the QR code with your authenticator app, then POST the "
+            "current 6-digit code to /auth/totp/provision/confirm to "
+            "complete enrolment. Store the recovery codes securely — "
+            "they will not be shown again."
+        ),
+    }
+
+
+@router.post("/totp/provision/confirm")
+async def provision_totp_confirm(
+    body: TotpConfirmRequest,
+    session: AnySession,
+):
+    """
+    Finalise TOTP enrolment by confirming a code generated from the seed
+    returned by :func:`provision_totp_start`.
+
+    On success the account is fully enrolled
+    (``force_totp_provision=False``). On failure the seed is preserved
+    so the client can retry without losing the QR code / recovery codes
+    (protects against time-drift and typo retries).
+    """
+    state = backoffice_state
+    record = _get_record_by_id(session.account_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "account_not_found"})
+
+    ok, reason = state.auth_service.provision_totp_confirm(
+        record.username, body.totp_code
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": reason,
+                "message": (
+                    "TOTP code did not match the seed issued by "
+                    "/auth/totp/provision/start. Ensure your authenticator "
+                    "app clock is synchronised and retry with a fresh code."
+                ),
+            },
+        )
+
+    state.audit_writer.write(_make_provision_event(record.username))
+
+    return {"status": "ok", "message": "TOTP enrolment complete."}
+
+
+@router.post("/totp/provision")
+async def provision_totp(
+    body: TotpConfirmRequest,
+    session: AnySession,
+    response: Response,
+):
+    """
+    Atomic TOTP enrolment — back-compat for clients that already hold
+    the seed (e.g. CLI provisioning flows where the secret is delivered
+    out-of-band). Generates a fresh seed, verifies the provided code
+    against it, and on success commits the enrolment in one call.
+
+    For the first-time web-UI flow, prefer the split endpoints:
+    :func:`provision_totp_start` + :func:`provision_totp_confirm`
+    (Ava Wave 2 Issue C).
+    """
+    state = backoffice_state
+    record = _get_record_by_id(session.account_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail={"error": "account_not_found"})
+
+    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+
+    # Verify the user-supplied code against the freshly-stored seed.
+    ok, reason = state.auth_service.provision_totp_confirm(
+        record.username, body.totp_code
+    )
+    if not ok:
+        # Rollback — remove the newly set seed so the account is back to
+        # its pre-call state and the client can retry cleanly.
         record.totp_secret = ""
         record.recovery_codes = None
         record.force_totp_provision = True

@@ -191,12 +191,20 @@ class LocalAuthService:
 
     # -- TOTP provisioning ---------------------------------------------------
 
-    def provision_totp(
+    def provision_totp_start(
         self, username: str
     ) -> tuple[TotpProvisioning, RecoveryCodeSet]:
         """
-        Generate and store TOTP seed + recovery codes for an account.
-        Returns provisioning data for one-time display.
+        Begin TOTP enrolment. Generates the seed + recovery codes and stores
+        them against the account, but leaves ``force_totp_provision=True``
+        so the account still cannot complete authenticated actions until
+        the user proves possession of the seed via
+        :meth:`provision_totp_confirm`.
+
+        Part of the split-enrolment flow added for Ava Wave 2 Issue C: the
+        previous atomic ``provision_totp`` required a ``totp_code`` on the
+        same call that returned the seed — impossible for a first-time
+        client.
         """
         record = self._accounts[username]
         prov = generate_provisioning(account_name=username)
@@ -204,9 +212,52 @@ class LocalAuthService:
 
         record.totp_secret = prov.secret_b32
         record.recovery_codes = code_set
+        # Leave force_totp_provision=True — only provision_totp_confirm
+        # (with a valid code) may clear it.
+        record.force_totp_provision = True
+        return prov, code_set
+
+    def provision_totp_confirm(
+        self, username: str, totp_code: str
+    ) -> tuple[bool, str]:
+        """
+        Finalise TOTP enrolment by verifying the user's code against the
+        seed stored during :meth:`provision_totp_start`. On success the
+        account is considered enrolled and
+        ``force_totp_provision`` is cleared. On failure the seed is left
+        in place so the user can retry without losing their QR/recovery
+        codes.
+
+        Returns ``(True, "ok")`` on success, ``(False, reason)`` on failure.
+        """
+        record = self._accounts.get(username)
+        if record is None:
+            return False, "account_not_found"
+        if not record.totp_secret:
+            return False, "no_pending_enrolment"
+        if not verify_totp(record.totp_secret, totp_code, self._used_totp_codes):
+            return False, "invalid_totp_code"
         record.force_totp_provision = False
-        # secret_b32 is stored in the record for TOTP verification
-        # — in production this would be encrypted at rest via KSM
+        return True, "ok"
+
+    def provision_totp(
+        self, username: str
+    ) -> tuple[TotpProvisioning, RecoveryCodeSet]:
+        """
+        Back-compat wrapper around :meth:`provision_totp_start`.
+
+        The historical behaviour was to clear ``force_totp_provision``
+        immediately on seed generation, which made the confirmation step
+        in the route handler cosmetic. Callers that want the old atomic
+        behaviour (e.g. CLI provisioning where the seed is already handed
+        to the client) should call ``provision_totp_start`` followed by
+        ``provision_totp_confirm`` with a locally-computed code. This
+        wrapper is kept so existing integrations do not break.
+        """
+        prov, code_set = self.provision_totp_start(username)
+        # Matching the pre-split default: caller is responsible for calling
+        # provision_totp_confirm separately. We do NOT auto-clear the flag
+        # here — the HTTP layer enforces the confirmation contract.
         return prov, code_set
 
     # -- Password change -----------------------------------------------------
