@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yashigani"
-version = "2.22.0"
+version = "2.23.0"
 description = "Security enforcement gateway for MCP servers and agentic AI systems"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
@@ -112,3 +112,21 @@ omit = [
 [tool.bandit]
 targets = ["src/yashigani"]
 skips = ["B101", "B601"]   # B101=assert, B601=paramiko (not used)
+
+[tool.ruff]
+# Lint configuration (ASVS 16.6.1 log-injection defence — Ava Wave 2 #48).
+# Keep the rule set narrow; we're not running ruff as a general formatter,
+# only as a guardrail against log-injection and a handful of other
+# high-value security regressions. Additional rule groups can be enabled
+# later without changing the intent of this block.
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# G004: f-string used directly in a logger call — interpolates at
+# log-format time, opening a log-injection / forgery vector when the
+# interpolated value is attacker-controlled (usernames, agent names,
+# header values). Use positional args instead: logger.info("%s", v).
+# G002: use of % formatting in logger is fine (Python logging's normal form).
+# G010: .warn() is deprecated in favour of .warning().
+extend-select = ["G"]
