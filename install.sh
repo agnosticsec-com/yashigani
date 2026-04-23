@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T15:15:36+01:00
+# last-updated: 2026-04-23T15:28:22+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -1772,11 +1772,28 @@ compose_up() {
         log_warn "Continuing without Pool Manager — container isolation will be DISABLED."
       fi
     fi
-    # Linux: standard path
+    # Linux: rootful vs rootless socket paths differ.
+    #   - Rootful (EUID=0, typical for server installs via sudo): systemd-managed
+    #     socket at /run/podman/podman.sock, enabled via `systemctl enable --now podman.socket`.
+    #     There is no /run/user/0 unless root has a login systemd user session.
+    #   - Rootless (non-root user with `loginctl enable-linger`): XDG runtime at
+    #     /run/user/$(id -u)/podman/podman.sock.
+    # Retro v2.23.1 Ubuntu podman clean-slate: initial attempt defaulted to the
+    # rootless path under sudo, docker-compose plugin then failed to connect.
     if [[ -z "$_podman_sock" ]]; then
-      _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+      if [[ "$(id -u)" == "0" ]]; then
+        _podman_sock="/run/podman/podman.sock"
+      else
+        _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+      fi
     fi
-    # Verify socket exists
+    # Verify socket exists; if rootful and missing, try to bring it up via systemd.
+    if [[ ! -S "$_podman_sock" ]]; then
+      if [[ "$(id -u)" == "0" && "$_podman_sock" == "/run/podman/podman.sock" ]]; then
+        log_info "Enabling rootful podman.socket via systemd"
+        systemctl enable --now podman.socket 2>/dev/null || true
+      fi
+    fi
     if [[ ! -S "$_podman_sock" ]]; then
       log_warn "Podman socket not found at ${_podman_sock} — compose may fail"
     fi
