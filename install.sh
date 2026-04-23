@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T16:15:59+01:00
+# last-updated: 2026-04-23T21:42:59+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -366,6 +366,7 @@ YSG_PODMAN_RUNTIME=false
 
 resolve_compose_cmd() {
   COMPOSE_CMD=()
+  YSG_PODMAN_RUNTIME=false   # reset before resolution — prevents stale env/state bleed
 
   # Runtime override — if operator explicitly set YSG_RUNTIME=docker or =podman,
   # honor that over the auto-detection preference below. Useful on hosts where
@@ -1259,7 +1260,7 @@ _backup_existing_data() {
 
   # Backup audit logs (if accessible)
   local _runtime_cmd=""
-  command -v podman >/dev/null 2>&1 && _runtime_cmd="podman" || _runtime_cmd="docker"
+  [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]] && _runtime_cmd="podman" || _runtime_cmd="docker"
   local audit_volume
   audit_volume="$($_runtime_cmd volume ls -q 2>/dev/null | grep audit_data || true)"
   if [[ -n "$audit_volume" ]]; then
