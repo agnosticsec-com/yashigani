@@ -22,12 +22,45 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets mount collision — see redis.yaml note.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 1001
+        # fsGroup: chgrp Secret volumes so UID 1001 can read them.
+        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
+      {{- if .Values.mtls.enabled }}
+      # Backoffice bootstrap writes admin_initial_password + redis_password
+      # + grafana_admin_password into YASHIGANI_SECRETS_DIR (default
+      # /run/secrets). In docker-compose, /run/secrets is a tmpfs overlay
+      # populated by docker secrets — writable. Under K8s a Secret mount is
+      # readOnly at the kernel level, breaking write_docker_secrets(). Copy
+      # the PKI cert material into a writable emptyDir at startup.
+      initContainers:
+        - name: copy-pki-to-writable
+          # alpine/k8s is already cached on the node (used by pki-bootstrap
+          # Job). Reusing it avoids another image pull + keeps the chart's
+          # image surface small.
+          image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
+          imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy | default "IfNotPresent" }}
+          command: ["sh","-c","cp -L /pki-ro/* /secrets-rw/ && chmod 0400 /secrets-rw/*"]
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: pki-ro
+              mountPath: /pki-ro
+              readOnly: true
+            - name: secrets
+              mountPath: /secrets-rw
+      {{- end }}
       containers:
         - name: backoffice
           image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.backoffice.image.repository }}:{{ .Values.backoffice.image.tag }}"
@@ -88,13 +121,24 @@ spec:
             - secretRef:
                 name: {{ .Values.backoffice.existingSecretName | default "yashigani-backoffice-secrets" }}
           {{- if .Values.mtls.enabled }}
+          # Startup probe: same rationale as gateway — DB pool + anomaly
+          # detector + uvicorn TLS bind can exceed the 30s liveness grace.
+          startupProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8443))"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 30
           readinessProbe:
             exec:
               command:
                 - python3
                 - -c
                 - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
-            initialDelaySeconds: 15
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
@@ -104,7 +148,6 @@ spec:
                 - python3
                 - -c
                 - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
-            initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
@@ -135,7 +178,8 @@ spec:
               mountPath: /var/log/yashigani
             - name: secrets
               mountPath: /run/secrets
-              readOnly: true
+              # writable: initContainer seeds PKI, bootstrap writes
+              # admin_initial_password + friends alongside them.
             {{- if .Values.mtls.enabled }}
             - name: service-manifest
               mountPath: /etc/yashigani
@@ -148,19 +192,25 @@ spec:
         - name: varlog
           emptyDir:
             sizeLimit: 50Mi
+        {{- if .Values.mtls.enabled }}
+        # Writable /run/secrets seeded by initContainer.
         - name: secrets
-          {{- if .Values.mtls.enabled }}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+        # Read-only mount of the PKI Secret — the initContainer reads from
+        # this and copies into the writable /run/secrets emptyDir.
+        - name: pki-ro
           secret:
             secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-            defaultMode: 0400
-          {{- else }}
-          emptyDir:
-            sizeLimit: 10Mi
-          {{- end }}
-        {{- if .Values.mtls.enabled }}
+            defaultMode: 0440
         - name: service-manifest
           configMap:
             name: yashigani-pki-manifest
+        {{- else }}
+        - name: secrets
+          emptyDir:
+            sizeLimit: 10Mi
         {{- end }}
 ---
 apiVersion: v1

@@ -23,6 +23,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets Secret mount collides with SA-token mount at
+      # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+      # Redis doesn't call the K8s API, so disable the automount.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -145,7 +149,7 @@ spec:
         - name: pki-certs
           secret:
             secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
       {{- end }}
   {{- if .Values.redis.persistence.enabled }}
   volumeClaimTemplates:

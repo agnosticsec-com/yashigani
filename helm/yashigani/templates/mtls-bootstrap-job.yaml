@@ -58,25 +58,32 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          command: ["python", "-m", "yashigani.pki.issuer"]
+          # The issuer writes bootstrap_token_sha256 values back into the
+          # manifest (_update_manifest_hashes in pki/issuer.py). That's a
+          # compose-flow artefact; in K8s the Secret itself is the source
+          # of truth, so throwing away those writes is fine. But a RO
+          # ConfigMap mount makes the issuer crash with EROFS, so we copy
+          # the manifest into a writable emptyDir first.
+          command: ["/bin/sh", "-c"]
           args:
-            - "--secrets-dir"
-            - "/secrets"
-            - "--manifest"
-            - "/manifest/service_identities.yaml"
-            - "bootstrap"
-            - "--root-lifetime-years"
-            - {{ .Values.mtls.rootLifetimeYears | quote }}
-            - "--intermediate-lifetime-days"
-            - {{ .Values.mtls.intermediateLifetimeDays | quote }}
-            - "--leaf-lifetime-days"
-            - {{ .Values.mtls.leafLifetimeDays | quote }}
+            - |
+              set -euo pipefail
+              cp /manifest-ro/service_identities.yaml /manifest-rw/service_identities.yaml
+              exec python -m yashigani.pki.issuer \
+                --secrets-dir /secrets \
+                --manifest /manifest-rw/service_identities.yaml \
+                bootstrap \
+                --root-lifetime-years {{ .Values.mtls.rootLifetimeYears }} \
+                --intermediate-lifetime-days {{ .Values.mtls.intermediateLifetimeDays }} \
+                --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
           volumeMounts:
             - name: pki-certs
               mountPath: /secrets
             - name: manifest
-              mountPath: /manifest
+              mountPath: /manifest-ro
               readOnly: true
+            - name: manifest-rw
+              mountPath: /manifest-rw
             - name: tmp
               mountPath: /tmp
           resources:
@@ -138,6 +145,10 @@ spec:
         - name: manifest
           configMap:
             name: yashigani-pki-manifest
+        - name: manifest-rw
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
         - name: tmp
           emptyDir:
             sizeLimit: 10Mi

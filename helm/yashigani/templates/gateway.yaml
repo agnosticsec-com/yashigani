@@ -22,10 +22,15 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets mount collision — see redis.yaml note.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 1001
+        # fsGroup triggers chgrp on Secret volumes so UID 1001 can read
+        # /run/secrets/*. Without this, mode 0440 files stay root:root.
+        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -110,13 +115,25 @@ spec:
             - secretRef:
                 name: {{ .Values.gateway.existingSecretName | default "yashigani-gateway-secrets" }}
           {{- if .Values.mtls.enabled }}
+          # Startup probe: grants up to 30×10s = 5min for FastText + OTEL +
+          # uvicorn TLS bind to come up before liveness starts. Cheap socket
+          # connect (no TLS handshake) so we just confirm uvicorn is bound.
+          startupProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8080))"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 30
           readinessProbe:
             exec:
               command:
                 - python3
                 - -c
                 - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
-            initialDelaySeconds: 15
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
@@ -126,7 +143,6 @@ spec:
                 - python3
                 - -c
                 - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
-            initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
@@ -174,7 +190,8 @@ spec:
           {{- if .Values.mtls.enabled }}
           secret:
             secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-            defaultMode: 0400
+            # 0440 + fsGroup: pod (1001) can read, others blocked.
+            defaultMode: 0440
           {{- else }}
           emptyDir:
             sizeLimit: 10Mi

@@ -66,9 +66,13 @@ spec:
                   # so rotate-leaves doesn't mint a fresh root.
                   cp /existing-secrets/*.crt /secrets/
                   cp /existing-secrets/*.key /secrets/
+                  # Copy manifest to a writable path — the issuer writes
+                  # bootstrap_token_sha256 back into it; ConfigMap mounts are
+                  # read-only. Same rationale as the bootstrap Job.
+                  cp /manifest-ro/service_identities.yaml /manifest-rw/service_identities.yaml
                   exec python -m yashigani.pki.issuer \
                     --secrets-dir /secrets \
-                    --manifest /manifest/service_identities.yaml \
+                    --manifest /manifest-rw/service_identities.yaml \
                     rotate-leaves \
                     --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
               volumeMounts:
@@ -78,8 +82,10 @@ spec:
                   mountPath: /existing-secrets
                   readOnly: true
                 - name: manifest
-                  mountPath: /manifest
+                  mountPath: /manifest-ro
                   readOnly: true
+                - name: manifest-rw
+                  mountPath: /manifest-rw
                 - name: tmp
                   mountPath: /tmp
               resources:
@@ -136,6 +142,10 @@ spec:
             - name: manifest
               configMap:
                 name: yashigani-pki-manifest
+            - name: manifest-rw
+              emptyDir:
+                medium: Memory
+                sizeLimit: 1Mi
             - name: tmp
               emptyDir:
                 sizeLimit: 10Mi

@@ -3,8 +3,8 @@ Helm test: verify both Redis instances respond to PING.
 Run with: helm test <release-name> -n <namespace>
 
 Tests:
-  1. Main Redis (session/rate-limit store) on port 6379
-  2. Budget Redis (token budget counters) on port 6379
+  1. Main Redis (session/rate-limit store) — port 6379 plain, 6380 mTLS
+  2. Budget Redis (token budget counters)  — port 6379 plain, 6380 mTLS
 */ -}}
 apiVersion: v1
 kind: Pod
@@ -19,9 +19,19 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  {{- if .Values.mtls.enabled }}
+  # /run/secrets PKI mount collides with SA-token mount at
+  # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+  # Test pod doesn't need the SA token.
+  automountServiceAccountToken: false
+  {{- end }}
   securityContext:
     runAsNonRoot: true
     runAsUser: 999
+    {{- if .Values.mtls.enabled }}
+    # fsGroup so UID 999 can read the PKI Secret files (mode 0440).
+    fsGroup: 999
+    {{- end }}
     seccompProfile:
       type: RuntimeDefault
   containers:
@@ -106,5 +116,5 @@ spec:
     - name: pki-certs
       secret:
         secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-        defaultMode: 0400
+        defaultMode: 0440
   {{- end }}

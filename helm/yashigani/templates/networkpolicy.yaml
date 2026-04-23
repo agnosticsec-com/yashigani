@@ -114,14 +114,14 @@ spec:
               app.kubernetes.io/name: yashigani-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-budget-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
@@ -200,14 +200,14 @@ spec:
               app.kubernetes.io/name: yashigani-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-budget-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
@@ -279,7 +279,7 @@ spec:
               yashigani.io/bundle: langgraph
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
 
 ---
 # Budget Redis — accept ingress from gateway and backoffice only
@@ -307,7 +307,7 @@ spec:
               app.kubernetes.io/name: yashigani-backoffice
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
 
 ---
 # Ollama — accept ingress from gateway only (inference is data-plane only)
@@ -669,7 +669,7 @@ spec:
               app.kubernetes.io/name: yashigani-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
@@ -677,6 +677,146 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+
+---
+# Helm test pods — transient pods spawned by `helm test` to validate
+# service health. Annotated with helm.sh/hook=test and labelled
+# app.kubernetes.io/component=test by the test templates. Default-deny
+# catches them otherwise. Additive to existing ingress rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: test
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
+      ports:
+        - protocol: TCP
+          port: 8443
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-redis
+      ports:
+        - protocol: TCP
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-budget-redis
+      ports:
+        - protocol: TCP
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-to-gateway-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-to-backoffice-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-backoffice
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - protocol: TCP
+          port: 8443
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-to-redis-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - protocol: TCP
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-to-budget-redis-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-budget-redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - protocol: TCP
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
 
 ---
 # OpenClaw — additional external egress for messaging channel webhooks.

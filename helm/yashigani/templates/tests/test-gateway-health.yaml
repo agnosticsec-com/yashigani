@@ -15,14 +15,33 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  {{- if .Values.mtls.enabled }}
+  # /run/secrets PKI mount collides with SA-token mount at
+  # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+  # Test pod doesn't need the SA token.
+  automountServiceAccountToken: false
+  {{- end }}
   securityContext:
     runAsNonRoot: true
     runAsUser: 65534
+    {{- if .Values.mtls.enabled }}
+    # fsGroup so UID 65534 (nobody) can read the PKI Secret files (mode 0440).
+    fsGroup: 65534
+    {{- end }}
     seccompProfile:
       type: RuntimeDefault
   containers:
     - name: test-gateway-health
+      {{- if .Values.mtls.enabled }}
+      # Python's ssl module validates the two-tier chain correctly when given
+      # only the root CA (alpine curl's OpenSSL incorrectly rejects the same
+      # server-presented chain with "unable to get local issuer certificate",
+      # even with both root and intermediate in --cacert). Mirrors the probe
+      # used by the gateway container itself.
+      image: "python:3.12-alpine"
+      {{- else }}
       image: "curlimages/curl:8.7.1"
+      {{- end }}
       imagePullPolicy: IfNotPresent
       securityContext:
         allowPrivilegeEscalation: false
@@ -35,6 +54,38 @@ spec:
         - |
           set -e
           echo "Testing gateway /healthz..."
+          {{- if .Values.mtls.enabled }}
+          # mTLS: gateway serves HTTPS on 8080 and requires client cert auth.
+          # Server cert SAN is "gateway" (from service_identities.yaml),
+          # not "yashigani-gateway" (K8s service name). Use server_hostname
+          # override so SNI + cert-hostname match the SAN while we connect to
+          # the K8s service IP.
+          # Trust store loads root + intermediate explicitly: even though the
+          # server sends a leaf+intermediate bundle in the TLS handshake,
+          # Python's ssl in this restricted SSLContext does not use the
+          # server-presented intermediate to satisfy peer verification — the
+          # client must load it into its own verify locations.
+          python3 -c "
+          import ssl, socket, sys
+          ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
+          ctx.load_verify_locations(cafile='/run/secrets/ca_intermediate.crt')
+          ctx.load_cert_chain('/run/secrets/gateway_client.crt', '/run/secrets/gateway_client.key')
+          ip = socket.gethostbyname('yashigani-gateway')
+          sock = socket.create_connection((ip, {{ .Values.gateway.service.port }}), timeout=10)
+          ss = ctx.wrap_socket(sock, server_hostname='gateway')
+          ss.sendall(b'GET /healthz HTTP/1.1\r\nHost: gateway\r\nConnection: close\r\n\r\n')
+          resp = b''
+          while True:
+              chunk = ss.recv(4096)
+              if not chunk: break
+              resp += chunk
+          status_line = resp.split(b'\r\n', 1)[0].decode()
+          print('Gateway /healthz returned:', status_line)
+          if ' 200 ' not in status_line:
+              print('FAIL: expected 200'); sys.exit(1)
+          print('PASS')
+          "
+          {{- else }}
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-time 10 \
             http://yashigani-gateway:{{ .Values.gateway.service.port }}/healthz)
@@ -44,6 +95,13 @@ spec:
             exit 1
           fi
           echo "PASS"
+          {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumeMounts:
+        - name: pki-certs
+          mountPath: /run/secrets
+          readOnly: true
+      {{- end }}
       resources:
         requests:
           cpu: "10m"
@@ -51,3 +109,10 @@ spec:
         limits:
           cpu: "100m"
           memory: "64Mi"
+  {{- if .Values.mtls.enabled }}
+  volumes:
+    - name: pki-certs
+      secret:
+        secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+        defaultMode: 0440
+  {{- end }}
