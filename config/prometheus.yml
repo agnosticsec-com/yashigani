@@ -1,3 +1,23 @@
+# Yashigani — Prometheus scrape config
+# Last updated: 2026-04-23T23:32:19+01:00
+#
+# v2.23.1 EX-231-08: Prometheus MUST scrape gateway/backoffice
+# /internal/metrics through Caddy's internal :8444 listener, not directly.
+# Caddy validates Prometheus's client cert against the internal CA, extracts
+# the URI SAN (spiffe://yashigani.internal/prometheus), and forwards it as
+# X-SPIFFE-ID. The Python app rejects any request missing or mismatched.
+#
+# Required on-disk material (mounted into the prometheus container):
+#   /run/secrets/ca_root.crt              — internal CA root
+#   /run/secrets/prometheus_client.crt    — leaf + intermediate bundle
+#   /run/secrets/prometheus_client.key    — prometheus leaf private key
+# install.sh bootstrap_internal_pki() produces all three.
+#
+# Target routing:
+#   Caddy's :8444 handler uses a Host-header matcher to pick the upstream —
+#   Host "backoffice" -> backoffice:8443, anything else -> gateway:8080.
+#   We use http_headers (Prom 2.43+) to override the Host per-job.
+
 global:
   scrape_interval:     15s
   evaluation_interval: 15s
@@ -15,21 +35,36 @@ alerting:
 scrape_configs:
 
   - job_name: yashigani_gateway
+    scheme: https
     static_configs:
-      - targets: ['gateway:8080']
+      - targets: ['caddy:8444']
     metrics_path: /internal/metrics
+    tls_config:
+      ca_file:   /run/secrets/ca_root.crt
+      cert_file: /run/secrets/prometheus_client.crt
+      key_file:  /run/secrets/prometheus_client.key
+      server_name: caddy
+    http_headers:
+      Host:
+        values: ["gateway"]
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
         replacement: gateway
 
   - job_name: yashigani_backoffice
+    scheme: https
     static_configs:
-      - targets: ['backoffice:8443']
+      - targets: ['caddy:8444']
     metrics_path: /internal/metrics
-    # Backoffice binds HTTP internally on port 8443; TLS is terminated by Caddy.
-    # Prometheus scrapes the internal HTTP endpoint directly — no TLS needed here.
-    scheme: http
+    tls_config:
+      ca_file:   /run/secrets/ca_root.crt
+      cert_file: /run/secrets/prometheus_client.crt
+      key_file:  /run/secrets/prometheus_client.key
+      server_name: caddy
+    http_headers:
+      Host:
+        values: ["backoffice"]
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance

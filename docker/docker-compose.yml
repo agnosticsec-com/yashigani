@@ -482,6 +482,9 @@ services:
       - ../config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../config/prometheus_alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
+      # v2.23.1 EX-231-08: Prometheus presents its leaf cert to Caddy's :8444
+      # listener for SPIFFE-URI-gated scrapes of /internal/metrics.
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
       interval: 15s
