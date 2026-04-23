@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-23T11:36:14+01:00
+# Last updated: 2026-04-23T13:28:36+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -260,7 +260,7 @@ services:
   # Auth: trusts X-Forwarded-User from Caddy (SSO) or API key passthrough.
   # ---------------------------------------------------------------------------
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.9.1
     restart: unless-stopped
     environment:
       # Disable Open WebUI's own auth — Caddy/Yashigani handles identity
@@ -770,7 +770,7 @@ services:
   # Single container, embedded SQLite. OpenAI-compatible API on port 7860.
   # Users build custom agent workflows visually via the Langflow UI.
   langflow:
-    image: docker.io/langflowai/langflow:latest
+    image: docker.io/langflowai/langflow:1.9.0
     restart: unless-stopped
     environment:
       # Route all LLM calls through Yashigani gateway (OpenAI-compatible)
@@ -804,7 +804,7 @@ services:
   # Agent with long-term memory, tool use, and conversation persistence.
   # Exposes REST API on port 8283 with OpenAI-compatible chat endpoint.
   letta:
-    image: docker.io/letta/letta:latest
+    image: docker.io/letta/letta:0.16.7
     restart: unless-stopped
     environment:
       # Route LLM calls through Yashigani gateway
@@ -845,7 +845,7 @@ services:
   # Runs its own Gateway on port 18789. All LLM requests route through Yashigani.
   # Integration: OpenClaw (:18789) → Yashigani Gateway (:8080) → Ollama/LLM
   openclaw:
-    image: ghcr.io/openclaw/openclaw:latest
+    image: ghcr.io/openclaw/openclaw:2026.3.1
     restart: unless-stopped
     ports:
       - "18789:18789"
@@ -974,7 +974,7 @@ services:
   # Enable with: --with-internal-ca
   # ---------------------------------------------------------------------------
   step-ca:
-    image: docker.io/smallstep/step-ca:latest
+    image: docker.io/smallstep/step-ca:0.30.2
     restart: unless-stopped
     environment:
       DOCKER_STEPCA_INIT_NAME: "Yashigani Internal CA"

@@ -9,7 +9,7 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir build
 
 COPY pyproject.toml ./
@@ -35,7 +35,7 @@ WORKDIR /app
 
 # Install the wheel — pulls all pyproject.toml install_requires automatically.
 COPY --from=builder /dist/*.whl /tmp/
-RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)" && \
     rm /tmp/*.whl
 
