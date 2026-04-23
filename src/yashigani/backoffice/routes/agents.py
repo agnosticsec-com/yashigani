@@ -171,7 +171,17 @@ def _push_openwebui_model(agent_name: str, upstream_url: str) -> None:
         import urllib.error
 
         owui_url = os.getenv("OWUI_API_URL", "http://open-webui:8080")
-        owui_secret = os.getenv("OWUI_SECRET_KEY", "yashigani-owui-secret")
+        owui_secret = os.getenv("OWUI_SECRET_KEY")
+        if not owui_secret:
+            # Fail-closed: OWUI integration requires an explicit secret. The
+            # installer generates this; refusing to fall back to a literal
+            # default prevents compose-without-installer deployments from
+            # shipping a publicly-known JWT signing key. See Lu P0-1
+            # (YCS-20260423-v2.23.1-OWASP-3X).
+            raise RuntimeError(
+                "OWUI_SECRET_KEY is not set — cannot authenticate to Open WebUI. "
+                "Run install.sh to generate, or export it manually in the backoffice env."
+            )
 
         # Generate a JWT for Open WebUI API auth
         import hashlib
