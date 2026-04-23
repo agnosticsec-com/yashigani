@@ -1542,11 +1542,11 @@ compose_pull() {
       [[ -z "$_profile" ]] && continue
       case "$_profile" in
         langflow) _images="$_images
-docker.io/langflowai/langflow:latest" ;;
+docker.io/langflowai/langflow:1.9.0" ;;
         letta) _images="$_images
-docker.io/letta/letta:latest" ;;
+docker.io/letta/letta:0.16.7" ;;
         openclaw) _images="$_images
-ghcr.io/openclaw/openclaw:latest" ;;
+ghcr.io/openclaw/openclaw:2026.3.1" ;;
       esac
     done
     # Pull 4 at a time
