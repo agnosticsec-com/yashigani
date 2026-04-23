@@ -970,6 +970,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Symbol-bearing generated passwords (`!*,-._~`, category-guaranteed) | ASVS V2.1.1, V2.1.9 | Installer credentials include symbols; character class enforced per-password; safe across URL/.env/sed/shell |
 | `YSG_RUNTIME=docker` stale-env bleed fix + runtime-honouring backup helpers | ASVS V14.1 | Deterministic runtime selection on hosts with both podman + docker installed |
 | Clean-slate install validated on macOS Podman, macOS Docker, Linux Podman, Linux Docker, K8s Helm | ASVS V1.6.1, V14.1 | Five-platform installer gate for every release |
+| Caddy-gated `/internal/metrics` with SPIFFE URI ACL (closes EX-231-08) | ASVS V4.1.1, V4.1.3, V4.2.1, V8.2.1, V10.2, V14.1 | Prometheus scrapes route through Caddy :8444 mTLS listener; Caddy validates client cert against internal CA and forwards the verified URI SAN as `X-SPIFFE-ID`; gateway/backoffice `/internal/metrics` now enforce an allowlist sourced from `service_identities.yaml` (`endpoint_acls`). Per-service SPIFFE URI SANs (`spiffe://yashigani.internal/<service>`) embedded in leaf certs at issuance. Zero-trust: app-layer authN on every endpoint, mTLS no longer used as a sole control. Fails closed on missing/malformed manifest. |
 
 (Authoritative manual evidence sweep for v2.23.1 is produced by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` — outside the code repo per policy.)
 
