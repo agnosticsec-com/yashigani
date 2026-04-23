@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T15:40:15+01:00
+# last-updated: 2026-04-23T16:15:59+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -2207,14 +2207,54 @@ GEN_REDIS_PASSWORD=""
 GEN_GRAFANA_PASSWORD=""
 
 _gen_password() {
-  # 36-char alphanumeric password (matches Agnostic Security policy)
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 36
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits) for _ in range(36)))'
+  # 36-char password with mixed case, digits, and symbols.
+  # Symbol set: ! * , - . _ ~
+  #   - all RFC 3986 unreserved or sub-delim → safe in Postgres DSN userinfo
+  #     without percent-encoding (passwords are interpolated raw into
+  #     postgresql://user:PW@host/db by Docker Compose / Helm / bootstrap).
+  #   - no $ ` \ " to avoid shell / .env variable expansion.
+  #   - no = or # to avoid .env assignment / comment parsing.
+  #   - no | & \ to avoid breaking sed "s|key=...|key=PW|" updates to .env.
+  # Guarantees ≥1 uppercase, lowercase, digit, and symbol (36 chars × ~10%
+  # symbol weight otherwise misses symbols in a non-trivial fraction of runs).
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets, string
+symbols = "!*,-._~"
+alphabet = string.ascii_letters + string.digits + symbols
+while True:
+    pw = "".join(secrets.choice(alphabet) for _ in range(36))
+    if (any(c.isupper() for c in pw)
+        and any(c.islower() for c in pw)
+        and any(c.isdigit() for c in pw)
+        and any(c in symbols for c in pw)):
+        print(pw)
+        break
+PY
+  elif command -v openssl >/dev/null 2>&1; then
+    # openssl base64 only emits [A-Za-z0-9+/=] → insufficient symbol coverage.
+    # Blend with /dev/urandom through tr -dc over the full target alphabet.
+    # Retry up to 8× to satisfy category requirements.
+    local _pw _i
+    for _i in 1 2 3 4 5 6 7 8; do
+      _pw="$(LC_ALL=C tr -dc 'A-Za-z0-9!*,._~-' < /dev/urandom 2>/dev/null | head -c 36)"
+      if [[ "$_pw" =~ [A-Z] ]] && [[ "$_pw" =~ [a-z] ]] && [[ "$_pw" =~ [0-9] ]] && [[ "$_pw" =~ [\!\*,._~-] ]]; then
+        printf "%s" "$_pw"
+        return 0
+      fi
+    done
+    printf "%s" "$_pw"
   else
-    # Last resort — /dev/urandom
-    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 36
+    # Last resort — /dev/urandom only; category guarantee via retry loop.
+    local _pw _i
+    for _i in 1 2 3 4 5 6 7 8; do
+      _pw="$(LC_ALL=C tr -dc 'A-Za-z0-9!*,._~-' < /dev/urandom | head -c 36)"
+      if [[ "$_pw" =~ [A-Z] ]] && [[ "$_pw" =~ [a-z] ]] && [[ "$_pw" =~ [0-9] ]] && [[ "$_pw" =~ [\!\*,._~-] ]]; then
+        printf "%s" "$_pw"
+        return 0
+      fi
+    done
+    printf "%s" "$_pw"
   fi
 }
 
