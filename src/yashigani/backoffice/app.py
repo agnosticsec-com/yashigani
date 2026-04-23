@@ -75,6 +75,72 @@ from yashigani.backoffice.routes import (
 )
 
 
+async def _bootstrap_admin_accounts(auth_service, state) -> None:
+    """
+    Seed admin1 (+ optional admin2) from installer secrets on first boot.
+
+    Replaces the old in-memory `if not auth_service._accounts` guard with
+    a Postgres-backed count so restarts never trigger a re-seed — rotated
+    passwords and re-enrolled TOTPs persist.
+
+    Resolves P0-2 (YCS-20260423-v2.23.1-OWASP-3X).
+    """
+    import logging as _lg
+    import os as _os
+
+    _log = _lg.getLogger("yashigani.backoffice.auth_bootstrap")
+    ctx = getattr(state, "_auth_bootstrap", None)
+    if ctx is None:
+        return
+
+    if await auth_service.total_admin_count() != 0:
+        _log.info("Bootstrap: admin accounts already present — skipping seed")
+        return
+
+    admin_username = ctx["admin_username"]
+    initial_admin_password = ctx["initial_admin_password"]
+    secrets_dir = ctx["secrets_dir"]
+
+    await auth_service.create_admin(
+        username=admin_username,
+        auto_generate=False,
+        plaintext_password=initial_admin_password,
+    )
+    totp_file = _os.path.join(secrets_dir, "admin1_totp_secret")
+    if _os.path.exists(totp_file):
+        totp_secret = open(totp_file).read().strip()
+        if totp_secret:
+            # installer-privileged bootstrap path — see docstring on
+            # PostgresLocalAuthService.set_totp_secret_direct
+            await auth_service.set_totp_secret_direct(admin_username, totp_secret)
+            _log.info("Bootstrap: TOTP pre-provisioned from installer secret")
+    _log.info("Bootstrap: initial admin account created — %s", admin_username)
+
+    # --- Admin 2 (backup — anti-lockout) -------------------------------------
+    admin2_user_file = _os.path.join(secrets_dir, "admin2_username")
+    admin2_pwd_file = _os.path.join(secrets_dir, "admin2_password")
+    if _os.path.exists(admin2_user_file) and _os.path.exists(admin2_pwd_file):
+        admin2_username = open(admin2_user_file).read().strip()
+        admin2_password = open(admin2_pwd_file).read().strip()
+        if admin2_username and admin2_password:
+            await auth_service.create_admin(
+                username=admin2_username,
+                auto_generate=False,
+                plaintext_password=admin2_password,
+            )
+            totp2_file = _os.path.join(secrets_dir, "admin2_totp_secret")
+            if _os.path.exists(totp2_file):
+                totp2_secret = open(totp2_file).read().strip()
+                if totp2_secret:
+                    await auth_service.set_totp_secret_direct(
+                        admin2_username, totp2_secret
+                    )
+                    _log.info(
+                        "Bootstrap: admin2 TOTP pre-provisioned from installer secret"
+                    )
+            _log.info("Bootstrap: backup admin account created — %s", admin2_username)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # v2.23.1: Async DB pool + inference logger + anomaly detector init.
@@ -88,11 +154,27 @@ async def lifespan(app: FastAPI):
     db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
     if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
         try:
-            from yashigani.db import create_pool
+            from yashigani.db import create_pool, get_pool, run_migrations
             from yashigani.inference import InferencePayloadLogger, AnomalyDetector
             from yashigani.backoffice.state import backoffice_state
 
+            # v2.23.1 P0-2: alembic must run BEFORE the pool opens so the
+            # admin_accounts + used_totp_codes tables exist when the auth
+            # service first reads/writes. run_migrations() is sync and uses
+            # its own psycopg2 connection, so it is safe here.
+            run_migrations()
+
             await create_pool()
+
+            # --- v2.23.1 P0-2: bootstrap PostgresLocalAuthService -------------
+            # Seed admin accounts from installer secrets ONLY if the DB has
+            # zero admins. Previously the guard was `if not auth_service._accounts`
+            # (in-memory dict); now we consult the durable store so restarts
+            # never clobber rotated passwords / re-enrolled TOTP.
+            from yashigani.auth.pg_auth import PostgresLocalAuthService
+            auth_service = PostgresLocalAuthService(pool=get_pool())
+            backoffice_state.auth_service = auth_service
+            await _bootstrap_admin_accounts(auth_service, backoffice_state)
 
             inference_logger = InferencePayloadLogger()
             inference_logger.start()

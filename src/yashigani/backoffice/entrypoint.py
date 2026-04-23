@@ -26,6 +26,7 @@ from yashigani.auth.bootstrap import (
     mark_bootstrapped,
 )
 from yashigani.auth.local_auth import LocalAuthService
+from yashigani.auth.pg_auth import PostgresLocalAuthService
 from yashigani.auth.session import SessionStore
 from yashigani.chs.handle import CredentialHandleService
 from yashigani.chs.resource_monitor import ResourceMonitor
@@ -116,46 +117,24 @@ def _bootstrap():
     session_store = SessionStore(redis_url=redis_url)
 
     # ── Auth service ────────────────────────────────────────────────────────
-    auth_service = LocalAuthService()
-
-    if not auth_service._accounts:
-        _, _ = auth_service.create_admin(
-            username=admin_username,
-            auto_generate=False,
-            plaintext_password=initial_admin_password,
-        )
-        # Pre-provision TOTP if the installer wrote a secret
-        totp_file = os.path.join(secrets_dir, "admin1_totp_secret")
-        if os.path.exists(totp_file):
-            totp_secret = open(totp_file).read().strip()
-            record = auth_service._accounts.get(admin_username)
-            if record and totp_secret:
-                record.totp_secret = totp_secret
-                record.force_totp_provision = False
-                logger.info("Bootstrap: TOTP pre-provisioned from installer secret")
-        logger.info("Bootstrap: initial admin account created — %s", admin_username)
-
-        # --- Admin 2 (backup — anti-lockout) ---
-        admin2_user_file = os.path.join(secrets_dir, "admin2_username")
-        admin2_pwd_file = os.path.join(secrets_dir, "admin2_password")
-        if os.path.exists(admin2_user_file) and os.path.exists(admin2_pwd_file):
-            admin2_username = open(admin2_user_file).read().strip()
-            admin2_password = open(admin2_pwd_file).read().strip()
-            if admin2_username and admin2_password:
-                _, _ = auth_service.create_admin(
-                    username=admin2_username,
-                    auto_generate=False,
-                    plaintext_password=admin2_password,
-                )
-                totp2_file = os.path.join(secrets_dir, "admin2_totp_secret")
-                if os.path.exists(totp2_file):
-                    totp2_secret = open(totp2_file).read().strip()
-                    record2 = auth_service._accounts.get(admin2_username)
-                    if record2 and totp2_secret:
-                        record2.totp_secret = totp2_secret
-                        record2.force_totp_provision = False
-                        logger.info("Bootstrap: admin2 TOTP pre-provisioned from installer secret")
-                logger.info("Bootstrap: backup admin account created — %s", admin2_username)
+    # v2.23.1 P0-2 fix: auth_service is now a PostgresLocalAuthService backed
+    # by the admin_accounts table. The DB pool is created asynchronously in
+    # the FastAPI lifespan (after alembic upgrade head), so the service
+    # instance + bootstrap seeding both have to defer until the lifespan
+    # runs. We stash the bootstrap inputs on the state object here and let
+    # backoffice.app.lifespan finalise once the pool is open.
+    backoffice_state._auth_bootstrap = {
+        "admin_username": admin_username,
+        "initial_admin_password": initial_admin_password,
+        "secrets_dir": secrets_dir,
+    }
+    # Leave auth_service = None for now — lifespan will assign the
+    # PostgresLocalAuthService instance after create_pool() completes.
+    # The only code that touches auth_service between module import and
+    # lifespan start is MetricsCollector (instantiated at bottom of this
+    # file) and it tolerates None gracefully via the dashboard degradation
+    # logic in routes/dashboard.py.
+    auth_service = None
 
     # ── Resource monitor ───────────────────────────────────────────────────
     resource_monitor = ResourceMonitor()
@@ -358,6 +337,8 @@ def _bootstrap():
     )
 
     # ── Populate singleton state ────────────────────────────────────────────
+    # auth_service is populated from the FastAPI lifespan in app.py after
+    # create_pool() — see v2.23.1 P0-2 notes above.
     backoffice_state.auth_service = auth_service
     backoffice_state.session_store = session_store
     backoffice_state.audit_writer = audit_writer
