@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Yashigani — Service Identity Manifest (IaC-declared ecosystem allowlist)
-# Last updated: 2026-04-23T11:36:14+01:00
+# Last updated: 2026-04-23T23:32:19+01:00
 #
 # Every container that speaks inside the Yashigani mesh MUST have an entry
 # here. Services not in this file cannot obtain an internal-CA-signed client
@@ -9,6 +9,13 @@
 # Contract (enforced by install.sh enroll_services + src/yashigani/pki):
 #   name                  — compose service name (also DNS SAN on the cert)
 #   dns_sans              — additional DNS SANs to embed (e.g. *.internal)
+#   spiffe_id             — SPIFFE URI embedded as URI SAN on the leaf cert.
+#                           Format: spiffe://yashigani.internal/<name>.
+#                           Caddy extracts this from the validated peer cert
+#                           and forwards it as the X-SPIFFE-ID header to the
+#                           application-layer gate (see endpoint_acls below).
+#                           Strictly generic — any service that terminates or
+#                           originates mTLS inside the mesh gets one.
 #   purpose               — one-line human description (required)
 #   mtls_capable          — whether the service can terminate mTLS itself.
 #                           false => the service uses the internal CA only as
@@ -40,6 +47,7 @@ services:
 
   - name: caddy
     dns_sans: [caddy, caddy.internal]
+    spiffe_id: spiffe://yashigani.internal/caddy
     purpose: "TLS edge + internal CA root"
     mtls_capable: true
     bootstrap_token_sha256: "49b4ec1e4d74378d189a691b5e22766f8e68a10a7f3d0665fe4af4a42a486ae7"
@@ -47,6 +55,7 @@ services:
 
   - name: gateway
     dns_sans: [gateway, gateway.internal]
+    spiffe_id: spiffe://yashigani.internal/gateway
     purpose: "MCP reverse proxy (data plane)"
     mtls_capable: true
     bootstrap_token_sha256: "f69287589eef344eb6c22ecf4444f34f575fe25484075dbf8f915966b383d64e"
@@ -54,6 +63,7 @@ services:
 
   - name: backoffice
     dns_sans: [backoffice, backoffice.internal]
+    spiffe_id: spiffe://yashigani.internal/backoffice
     purpose: "Admin control plane (SSO, RBAC, audit, billing)"
     mtls_capable: true
     bootstrap_token_sha256: "278f40696943321c02465ee7203ac07dad3b7c86a97e6745c1bb6e1dc5105b62"
@@ -61,6 +71,7 @@ services:
 
   - name: policy
     dns_sans: [policy, policy.internal, opa, opa.internal]
+    spiffe_id: spiffe://yashigani.internal/policy
     purpose: "Open Policy Agent (policy decisions)"
     # v2.23.1: mtls_capable flipped to false — OPA retains plaintext HTTP in
     # this release. Gateway's ~6 direct httpx calls to OPA (proxy.py,
@@ -75,6 +86,7 @@ services:
   # ── Data stores ───────────────────────────────────────────────────────────
   - name: postgres
     dns_sans: [postgres, postgres.internal]
+    spiffe_id: spiffe://yashigani.internal/postgres
     purpose: "PostgreSQL 16 (tenants, audit, RBAC, inference)"
     mtls_capable: true
     bootstrap_token_sha256: "da594de08761bff00ff3b43943a6f6af3ddf3d32a58b04b025da667263e371f1"
@@ -82,6 +94,7 @@ services:
 
   - name: pgbouncer
     dns_sans: [pgbouncer, pgbouncer.internal]
+    spiffe_id: spiffe://yashigani.internal/pgbouncer
     purpose: "Transaction-mode PostgreSQL pooler"
     mtls_capable: true
     bootstrap_token_sha256: "a69790cf935320f698a05a5abcde3029f3527f2430875fcb0aa05a1917a6723f"
@@ -89,6 +102,7 @@ services:
 
   - name: redis
     dns_sans: [redis, redis.internal]
+    spiffe_id: spiffe://yashigani.internal/redis
     purpose: "Session store, TOTP provisioning, rate-limit counters"
     mtls_capable: true
     bootstrap_token_sha256: "03a9670dfdbc15f865ebbbe1a3449e2dc3c42d1b2bdfef9365845dcca53a1960"
@@ -96,6 +110,7 @@ services:
 
   - name: budget-redis
     dns_sans: [budget-redis, budget-redis.internal]
+    spiffe_id: spiffe://yashigani.internal/budget-redis
     purpose: "Budget counter store (noeviction)"
     mtls_capable: true
     bootstrap_token_sha256: "7b58169cda193ac27a2b945d00df6ce2f51fb927dc1f2542f98d89ce297137a0"
@@ -104,6 +119,7 @@ services:
   # ── Observability ─────────────────────────────────────────────────────────
   - name: prometheus
     dns_sans: [prometheus, prometheus.internal]
+    spiffe_id: spiffe://yashigani.internal/prometheus
     purpose: "Metrics collection + federation"
     mtls_capable: true
     bootstrap_token_sha256: "b3e6de3dd22a89c059965f18572584996bf16d79e2ade789790f91c61869950c"
@@ -111,6 +127,7 @@ services:
 
   - name: grafana
     dns_sans: [grafana, grafana.internal]
+    spiffe_id: spiffe://yashigani.internal/grafana
     purpose: "Dashboards + alerting"
     mtls_capable: true
     bootstrap_token_sha256: "cf7cef33036f817a4efbe6996a5be297b2b5df7b2bd41d8ff9c8530665b36e75"
@@ -118,6 +135,7 @@ services:
 
   - name: alertmanager
     dns_sans: [alertmanager, alertmanager.internal]
+    spiffe_id: spiffe://yashigani.internal/alertmanager
     purpose: "Alert routing"
     mtls_capable: true
     bootstrap_token_sha256: "5fef8a99c435a539deae9529a5db7ea4c038bb75d2e44ba23fe7a4178df9d944"
@@ -125,6 +143,7 @@ services:
 
   - name: loki
     dns_sans: [loki, loki.internal]
+    spiffe_id: spiffe://yashigani.internal/loki
     purpose: "Log aggregation backend"
     mtls_capable: true
     bootstrap_token_sha256: "adb7c8668b746bc8c60e0fb4bd57c3f125f4889d2567ab20bb4026cb1cab3310"
@@ -132,6 +151,7 @@ services:
 
   - name: promtail
     dns_sans: [promtail, promtail.internal]
+    spiffe_id: spiffe://yashigani.internal/promtail
     purpose: "Docker container log shipper → Loki"
     mtls_capable: false       # promtail is a client of Loki, no inbound TLS
     bootstrap_token_sha256: "b3a01667ae4abdb3ead44bc7cf4d0bd5500fa67f0ae18d690df0c56321df476a"
@@ -139,6 +159,7 @@ services:
 
   - name: otel-collector
     dns_sans: [otel-collector, otel-collector.internal]
+    spiffe_id: spiffe://yashigani.internal/otel-collector
     purpose: "OTLP receiver, Jaeger exporter"
     mtls_capable: true
     bootstrap_token_sha256: "352e56c187102192df998a59fddef00001337912d7263bb81166cfe762b2df73"
@@ -146,6 +167,7 @@ services:
 
   - name: jaeger
     dns_sans: [jaeger, jaeger.internal]
+    spiffe_id: spiffe://yashigani.internal/jaeger
     purpose: "Distributed trace UI"
     mtls_capable: true
     bootstrap_token_sha256: "e5e9888bff75d194f48a9f43ebe09781fe07c4078872ec8390c357becbb2558b"
@@ -154,6 +176,7 @@ services:
   # ── AI / inference ────────────────────────────────────────────────────────
   - name: ollama
     dns_sans: [ollama, ollama.internal]
+    spiffe_id: spiffe://yashigani.internal/ollama
     purpose: "Local LLM inference (classifier + user models)"
     # Ollama does not support server TLS. Protection = internal bridge-only +
     # bearer token. This is an honest gap, not a pretend control.
@@ -164,6 +187,7 @@ services:
   # ── Optional / profile-gated services ─────────────────────────────────────
   - name: open-webui
     dns_sans: [open-webui, open-webui.internal]
+    spiffe_id: spiffe://yashigani.internal/open-webui
     purpose: "User-facing chat UI (profile: openwebui)"
     mtls_capable: true
     bootstrap_token_sha256: "41d3c12d8e54483453e1e8cfba672c8aa0fea92cff16ad5e80ac32b29f062bb9"
@@ -171,6 +195,7 @@ services:
 
   - name: langflow
     dns_sans: [langflow, langflow.internal]
+    spiffe_id: spiffe://yashigani.internal/langflow
     purpose: "Visual agent workflow builder (profile: langflow)"
     mtls_capable: false       # upstream image, no TLS. Uses CA as client.
     bootstrap_token_sha256: "aa321509448ce47126dcba3c90db47ec40772485ec47e13f47ca6a540da900a9"
@@ -178,6 +203,7 @@ services:
 
   - name: letta
     dns_sans: [letta, letta.internal]
+    spiffe_id: spiffe://yashigani.internal/letta
     purpose: "Stateful agent with persistent memory (profile: letta)"
     mtls_capable: false       # upstream image, no TLS. Uses CA as client.
     bootstrap_token_sha256: "e5599e85251e85597908a8d918e098beff4945c4c8d7f5860222d07e8a94d419"
@@ -185,6 +211,7 @@ services:
 
   - name: openclaw
     dns_sans: [openclaw, openclaw.internal]
+    spiffe_id: spiffe://yashigani.internal/openclaw
     purpose: "Personal AI w/ messaging channel integrations (profile: openclaw)"
     mtls_capable: false       # upstream image. Uses CA as client.
     bootstrap_token_sha256: "fa0dadb2125322af4a845492a2465b200d6698fd389f5d662354756e4a53ec57"
@@ -192,6 +219,7 @@ services:
 
   - name: keycloak
     dns_sans: [keycloak, keycloak.internal]
+    spiffe_id: spiffe://yashigani.internal/keycloak
     purpose: "Upstream test IdP for OIDC/SAML federation (profile: test-idp)"
     mtls_capable: true
     bootstrap_token_sha256: "b79119d8685a02239017698146cf2b506324e87ded746946d55e5d64bbc7abef"
@@ -199,6 +227,7 @@ services:
 
   - name: vault
     dns_sans: [vault, vault.internal]
+    spiffe_id: spiffe://yashigani.internal/vault
     purpose: "HashiCorp Vault dev-mode KMS (profile: vault)"
     mtls_capable: true
     bootstrap_token_sha256: "2c852f2453f5a9723de0db1af87f86621d5959aa6d1b0e98016eab7e873fad64"
@@ -206,6 +235,7 @@ services:
 
   - name: step-ca
     dns_sans: [step-ca, step-ca.internal]
+    spiffe_id: spiffe://yashigani.internal/step-ca
     purpose: "Smallstep CA — legacy, kept for --with-internal-ca profile only"
     mtls_capable: true
     bootstrap_token_sha256: "474425e4cd340b569e3db3c39d75048a11bad3934480183acfddf1e2d9efb077"
@@ -213,6 +243,7 @@ services:
 
   - name: wazuh-manager
     dns_sans: [wazuh-manager, wazuh-manager.internal]
+    spiffe_id: spiffe://yashigani.internal/wazuh-manager
     purpose: "Wazuh SIEM event ingest (profile: wazuh)"
     mtls_capable: true
     bootstrap_token_sha256: "08e8700c1944e4d33fd73a6c126610fc282a679fbe056d552488f98f093191d4"
@@ -220,6 +251,7 @@ services:
 
   - name: wazuh-indexer
     dns_sans: [wazuh-indexer, wazuh-indexer.internal]
+    spiffe_id: spiffe://yashigani.internal/wazuh-indexer
     purpose: "Wazuh SIEM OpenSearch backend (profile: wazuh)"
     mtls_capable: true
     bootstrap_token_sha256: "1204b1e858823f176a1247227b9edc8aa39a552124e59f8d3b64d13816af75e0"
@@ -227,10 +259,31 @@ services:
 
   - name: wazuh-dashboard
     dns_sans: [wazuh-dashboard, wazuh-dashboard.internal]
+    spiffe_id: spiffe://yashigani.internal/wazuh-dashboard
     purpose: "Wazuh SIEM UI (profile: wazuh)"
     mtls_capable: true
     bootstrap_token_sha256: "9fc972ae673099b91b49cb9b21004cdfb72d0a59522fb993efc1996fb3547643"
     revoked: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoint ACLs — per-path SPIFFE-ID allowlists.
+#
+# Contract (enforced by yashigani.auth.spiffe.require_spiffe_id):
+#   * Each key is an exact request path.
+#   * allowed_spiffe_ids is the list of SPIFFE URIs permitted to hit that path.
+#   * A request without an X-SPIFFE-ID header is rejected 401.
+#   * A request whose header value is not in the list is rejected 403.
+#   * A request to a path with NO entry here is rejected 403 (default-deny).
+#
+# The X-SPIFFE-ID header is only trustable when set by Caddy after peer-cert
+# validation against the internal CA. Caddy strips any inbound occurrence of
+# the header before setting its own from {http.request.tls.client.san.uris.0}.
+# No other upstream is permitted to send this header.
+# ─────────────────────────────────────────────────────────────────────────────
+endpoint_acls:
+  "/internal/metrics":
+    allowed_spiffe_ids:
+      - spiffe://yashigani.internal/prometheus
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cert policy — two-tier PKI (root → intermediate → leaf).
