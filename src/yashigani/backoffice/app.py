@@ -9,11 +9,13 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+from yashigani.auth.spiffe import require_spiffe_id
 
 try:
     from prometheus_client import (
@@ -393,10 +395,16 @@ def create_backoffice_app() -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
-    # Internal Prometheus metrics endpoint — scraped by Prometheus on internal network only.
-    # No auth required: reachable only within the internal Docker/Podman network.
-    # ASVS V9.1.1: network-layer isolation replaces endpoint auth here.
-    @app.get("/internal/metrics")
+    # Internal Prometheus metrics endpoint — Caddy-gated with SPIFFE URI ACL.
+    # EX-231-08 (v2.23.1, zero-trust default): Prometheus scrapes via Caddy's
+    # :8444 internal listener; Caddy validates the peer cert and sets
+    # X-SPIFFE-ID from the URI SAN. require_spiffe_id enforces the allowlist
+    # defined in service_identities.yaml endpoint_acls. Bridge-network
+    # isolation is now a defence-in-depth measure, not the sole control.
+    @app.get(
+        "/internal/metrics",
+        dependencies=[Depends(require_spiffe_id("/internal/metrics"))],
+    )
     async def internal_metrics():
         if not _PROM_AVAILABLE:
             return PlainTextResponse("# prometheus_client not installed\n")
