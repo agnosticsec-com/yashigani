@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T23:00:00+01:00
+# last-updated: 2026-04-23T23:15:00+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -3093,6 +3093,12 @@ _pki_run_issuer() {
   local _mount_opts="rw,Z"
   if [[ "$runtime" == "podman" ]]; then
     _mount_opts="rw,Z,U"
+  else
+    # Docker: no :U support — manually chown the secrets dir to the container
+    # UID (1001 = yashigani user in our image) so the issuer can write.
+    # mkdir -p above may have created it as root when install runs via sudo.
+    # Retro v2.23.1 item #3ad (Docker path).
+    chown 1001:1001 "$secrets_in" 2>/dev/null || true
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
