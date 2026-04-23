@@ -79,7 +79,7 @@ async def get_license_status(session=Depends(require_admin_session)):
     auth = backoffice_state.auth_service
     if auth is not None:
         try:
-            current_end_users = auth.total_user_count()
+            current_end_users = await auth.total_user_count()
         except Exception:
             current_end_users = 0
 

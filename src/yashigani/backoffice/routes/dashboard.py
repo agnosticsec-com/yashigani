@@ -150,8 +150,8 @@ async def system_health(session: AdminSession):
 
     # Auth service
     if state.auth_service is not None:
-        total_admins = state.auth_service.total_admin_count()
-        active_admins = state.auth_service.active_admin_count()
+        total_admins = await state.auth_service.total_admin_count()
+        active_admins = await state.auth_service.active_admin_count()
         below_min = active_admins < state.admin_min_active
         components["auth"] = {
             "status": "warning" if below_min else "ok",

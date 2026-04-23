@@ -30,6 +30,7 @@ class ForceResetRequest(BaseModel):
 @router.get("")
 async def list_admins(session: AdminSession):
     state = backoffice_state
+    all_accounts = await state.auth_service.list_accounts()
     accounts = [
         {
             "username": r.username,
@@ -39,11 +40,11 @@ async def list_admins(session: AdminSession):
             "force_totp_provision": r.force_totp_provision,
             "created_at": r.created_at,
         }
-        for r in state.auth_service._accounts.values()
+        for r in all_accounts
         if r.account_tier == "admin"
     ]
-    total = state.auth_service.total_admin_count()
-    active = state.auth_service.active_admin_count()
+    total = await state.auth_service.total_admin_count()
+    active = await state.auth_service.active_admin_count()
     return {
         "accounts": accounts,
         "total": total,
@@ -67,26 +68,28 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
     # Enforce license tier admin seat limit
     from yashigani.licensing.enforcer import check_admin_seat_limit, LicenseLimitExceeded
     try:
-        check_admin_seat_limit(state.auth_service.total_admin_count())
+        check_admin_seat_limit(await state.auth_service.total_admin_count())
     except LicenseLimitExceeded as exc:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={"error": "admin_seat_limit_exceeded", "limit": exc.max_val, "current": exc.current},
         )
 
-    if body.username in state.auth_service._accounts:
+    if await state.auth_service.get_account(body.username) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": "username_taken"},
         )
-    record, temp_password = state.auth_service.create_admin(
+    record, temp_password = await state.auth_service.create_admin(
         username=body.username,
         auto_generate=True,
     )
 
-    # Generate TOTP secret for provisioning
+    # Generate TOTP secret for provisioning — installer-privileged path
+    # because another admin is onboarding this account out-of-band.
     from yashigani.auth.totp import generate_provisioning
     totp = generate_provisioning(account_name=body.username, issuer="Yashigani")
+    await state.auth_service.set_totp_secret_direct(body.username, totp.secret_b32)
     record.totp_secret = totp.secret_b32
     record.force_totp_provision = False  # pre-provisioned
 
@@ -107,13 +110,13 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
 async def delete_admin(username: str, session: AdminSession):
     """Delete an admin account. Blocked if total would drop below 2."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
     # Guard: min 2 total (ADMIN_MINIMUM_VIOLATION)
-    if state.auth_service.total_admin_count() <= state.admin_min_total:
+    if await state.auth_service.total_admin_count() <= state.admin_min_total:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -122,7 +125,7 @@ async def delete_admin(username: str, session: AdminSession):
             },
         )
 
-    del state.auth_service._accounts[username]
+    await state.auth_service.delete_account(username)
     state.audit_writer.write(_config_event(
         session.account_id, "admin_account_deleted", username, ""
     ))
@@ -133,7 +136,7 @@ async def delete_admin(username: str, session: AdminSession):
 async def disable_admin(username: str, session: AdminSession):
     """Disable account. Blocked if active count would drop below 2."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -141,7 +144,7 @@ async def disable_admin(username: str, session: AdminSession):
         return {"status": "ok", "message": "already_disabled"}
 
     # Guard: min 2 active (ADMIN_ACTIVE_MINIMUM_VIOLATION)
-    if state.auth_service.active_admin_count() <= state.admin_min_active:
+    if await state.auth_service.active_admin_count() <= state.admin_min_active:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -150,7 +153,7 @@ async def disable_admin(username: str, session: AdminSession):
             },
         )
 
-    state.auth_service.disable(username)
+    await state.auth_service.disable(username)
     state.session_store.invalidate_all_for_account(record.account_id)
     state.audit_writer.write(_config_event(
         session.account_id, "admin_account_disabled", username, "disabled"
@@ -161,7 +164,7 @@ async def disable_admin(username: str, session: AdminSession):
 @router.post("/{username}/enable")
 async def enable_admin(username: str, session: AdminSession):
     state = backoffice_state
-    if not state.auth_service.enable(username):
+    if not await state.auth_service.enable(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
     state.audit_writer.write(_config_event(
@@ -174,18 +177,16 @@ async def enable_admin(username: str, session: AdminSession):
 async def force_reset(username: str, body: ForceResetRequest, session: AdminSession):
     """Force password reset or TOTP reprovision for an admin account."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
     if body.action == "password_reset":
-        record.force_password_change = True
+        await state.auth_service.force_password_change(username)
         state.session_store.invalidate_all_for_account(record.account_id)
     elif body.action == "totp_reprovision":
-        record.totp_secret = ""
-        record.recovery_codes = None
-        record.force_totp_provision = True
+        await state.auth_service.force_totp_reprovision(username)
         state.session_store.invalidate_all_for_account(record.account_id)
 
     state.audit_writer.write(_config_event(

@@ -20,6 +20,14 @@ from pydantic import BaseModel, Field
 from yashigani.backoffice.middleware import AdminSession, AnySession, get_session_store, _SESSION_COOKIE
 from yashigani.backoffice.state import backoffice_state
 from yashigani.auth.totp import verify_totp, generate_provisioning, generate_recovery_code_set
+from yashigani.db.postgres import tenant_transaction as _pg_tenant_transaction_impl
+
+_PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+
+
+def _pg_tenant_transaction():
+    """Shorthand: open a platform-scoped transaction on the shared pool."""
+    return _pg_tenant_transaction_impl(_PLATFORM_TENANT_ID)
 
 router = APIRouter()
 
@@ -236,7 +244,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     state = backoffice_state
     try:
-        success, record, reason = state.auth_service.authenticate(
+        success, record, reason = await state.auth_service.authenticate(
             body.username, body.password, body.totp_code
         )
     except (ValueError, TypeError):
@@ -337,7 +345,7 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     ASVS V2.1: authenticated password reset without admin intervention.
     """
     state = backoffice_state
-    record = state.auth_service._accounts.get(body.username)
+    record = await state.auth_service.get_account(body.username)
 
     # Same generic error for unknown user or wrong TOTP (prevent enumeration).
     # Ava Wave 2 Issue 7 — self-service password reset is unauthenticated by
@@ -356,20 +364,34 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     if not record.totp_secret:
         raise generic_error
 
-    if not verify_totp(record.totp_secret, body.totp_code, state.auth_service._used_totp_codes):
-        raise generic_error
+    # Use the auth service's Postgres-backed replay cache so the self-service
+    # path can't be abused for TOTP replay.
+    # pylint: disable=protected-access
+    async with _pg_tenant_transaction() as conn:
+        if not await state.auth_service._verify_totp_with_replay(
+            conn, record.totp_secret, body.totp_code
+        ):
+            raise generic_error
 
-    # TOTP valid — generate new temporary password
+    # TOTP valid — generate new temporary password and persist via the
+    # Postgres-backed auth service so the reset survives restart (P0-2).
     from yashigani.auth.password import generate_password, hash_password
     temp_password = generate_password(36)
     try:
-        record.password_hash = hash_password(temp_password)
+        new_hash = hash_password(temp_password)
     except (ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "invalid_credentials_format"},
         )
-    record.force_password_change = True
+    # Apply the new password hash + force-change flag durably.
+    async with _pg_tenant_transaction() as conn:
+        await conn.execute(
+            "UPDATE admin_accounts SET password_hash = $1, "
+            "force_password_change = true, password_changed_at = $2 "
+            "WHERE username = $3",
+            new_hash, time.time(), record.username,
+        )
 
     # Invalidate all sessions
     state.session_store.invalidate_all_for_account(record.account_id)
@@ -403,11 +425,7 @@ async def verify_session(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     # Resolve account from account_id
-    record = None
-    for r in state.auth_service._accounts.values():
-        if r.account_id == session.account_id:
-            record = r
-            break
+    record = await state.auth_service.get_account_by_id(session.account_id)
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -432,7 +450,7 @@ async def change_password(
     """Force-change password. Invalidates ALL sessions (ASVS V2.1.4)."""
     state = backoffice_state
     # Find account by account_id
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail={"error": "account_not_found"})
@@ -444,11 +462,20 @@ async def change_password(
 
     old_hash_tail = record.password_hash[-8:] if record.password_hash else ""
     try:
-        record.password_hash = hash_password(body.new_password)
+        new_hash = hash_password(body.new_password)
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "password_rejected"})
-    new_hash_tail = record.password_hash[-8:]
+    new_hash_tail = new_hash[-8:]
+    # Durable update via Postgres — replaces in-memory field mutation.
+    async with _pg_tenant_transaction() as conn:
+        await conn.execute(
+            "UPDATE admin_accounts SET "
+            "password_hash = $1, force_password_change = false, "
+            "password_changed_at = $2 WHERE username = $3",
+            new_hash, time.time(), record.username,
+        )
+    record.password_hash = new_hash
     record.force_password_change = False
     record.password_changed_at = time.time()
 
@@ -483,12 +510,12 @@ async def provision_totp_start(
     that returned the seed, which was impossible for a first-time client.
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+    prov, _code_set = await state.auth_service.provision_totp_start(record.username)
 
     return {
         "status": "pending_confirmation",
@@ -520,12 +547,12 @@ async def provision_totp_confirm(
     (protects against time-drift and typo retries).
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    ok, reason = state.auth_service.provision_totp_confirm(
+    ok, reason = await state.auth_service.provision_totp_confirm(
         record.username, body.totp_code
     )
     if not ok:
@@ -563,23 +590,22 @@ async def provision_totp(
     (Ava Wave 2 Issue C).
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+    prov, _code_set = await state.auth_service.provision_totp_start(record.username)
 
     # Verify the user-supplied code against the freshly-stored seed.
-    ok, reason = state.auth_service.provision_totp_confirm(
+    ok, reason = await state.auth_service.provision_totp_confirm(
         record.username, body.totp_code
     )
     if not ok:
-        # Rollback — remove the newly set seed so the account is back to
-        # its pre-call state and the client can retry cleanly.
-        record.totp_secret = ""
-        record.recovery_codes = None
-        record.force_totp_provision = True
+        # Rollback — clear the newly-set seed in the durable store so the
+        # account is back to its pre-call state and the client can retry
+        # cleanly.
+        await state.auth_service.force_totp_reprovision(record.username)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "invalid_totp_code",
                                     "message": "TOTP code did not match. Re-scan the QR code."})
@@ -753,12 +779,11 @@ async def remove_allowed_ip(ip_or_cidr: str, session: AdminSession):
     raise HTTPException(status_code=404, detail={"error": "entry_not_found"})
 
 
-def _get_record_by_id(account_id: str):
+async def _get_record_by_id(account_id: str):
     state = backoffice_state
-    for record in state.auth_service._accounts.values():
-        if record.account_id == account_id:
-            return record
-    return None
+    if state.auth_service is None:
+        return None
+    return await state.auth_service.get_account_by_id(account_id)
 
 
 def _make_login_event(username: str, outcome: str, reason):
