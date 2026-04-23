@@ -1,5 +1,6 @@
 ---
-# Yashigani v2.23.0 — Docker Compose stack
+# Yashigani v2.23.1 — Docker Compose stack
+# Last updated: 2026-04-23T11:36:14+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
