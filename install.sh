@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T15:28:22+01:00
+# last-updated: 2026-04-23T15:40:15+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -3088,24 +3088,54 @@ bootstrap_internal_pki() {
 
   _pki_persist_env
 
-  # Podman rootless: client keys are 0o400 (psycopg2 strict perm check).
-  # Inside the user namespace, container uid 1001 (the yashigani user in
-  # gateway + backoffice images) resolves to host uid (subuid + 1000),
-  # NOT the installer's uid. `podman unshare chown` re-owns the key files
-  # through the user-namespace mapping so the container user can read its
-  # own key without loosening host-side perms.
-  # Infra images that run as root-in-container (postgres, pgbouncer) don't
-  # need this — root-in-container maps to the installer's uid which already
-  # owns the file.
-  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
-    log_info "Chown'ing client keys through Podman user namespace"
-    local _uid_mapped_services=("gateway:1001" "backoffice:1001" "redis:999" "budget-redis:999")
+  # Client keys are mode 0o400 (psycopg2 strict perm check). Each service
+  # runs as a different UID inside its container image:
+  #   - gateway, backoffice          → 1001 (yashigani user, our images)
+  #   - redis, budget-redis          →  999 (redis user, bitnami redis)
+  #   - pgbouncer                    →   70 (postgres user, edoburu/pgbouncer)
+  # The PKI issuer emits all keys owned by UID 1001 (it runs inside the
+  # yashigani-gateway image). We need to re-own each service's key to the
+  # UID of the consuming container so the 0o400 file is readable.
+  #
+  # Strategy depends on runtime mode:
+  #   - Rootful podman / docker (EUID=0): direct `chown` works — root can
+  #     chown anywhere, and rootful containers use host-identity UIDs (no
+  #     userns remap). Both podman and docker take this path.
+  #   - Rootless podman (EUID≠0): `podman unshare chown` maps the in-container
+  #     UID through the user-namespace to the corresponding host subuid and
+  #     chowns the file there, so the rootless container user can read it
+  #     without loosening host-side perms.
+  #
+  # Retro v2.23.1 (Ubuntu podman rootful): previous code unconditionally
+  # ran `podman unshare chown` — which silently no-ops under rootful podman
+  # (no userns remap), so none of the 4 keys were actually re-owned. Gateway
+  # still worked by coincidence (host file UID 1001 == container UID 1001),
+  # but pgbouncer crashed with "failed to load private key file ... (null)"
+  # because its in-container UID is 70 and the host file was 1001.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" || "${YSG_RUNTIME:-}" == "docker" ]]; then
+    local _uid_mapped_services=(
+      "gateway:1001"
+      "backoffice:1001"
+      "redis:999"
+      "budget-redis:999"
+      "pgbouncer:70"
+    )
+    local _chown_mode="direct"
+    if [[ "$(id -u)" != "0" ]]; then
+      _chown_mode="unshare"
+    fi
+    log_info "Chown'ing client keys to container UIDs (mode: ${_chown_mode})"
     for _svc_uid in "${_uid_mapped_services[@]}"; do
       local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
       local _keyfile="${WORK_DIR}/docker/secrets/${_svc}_client.key"
       if [[ -f "$_keyfile" ]]; then
-        podman unshare chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
-          || log_warn "podman unshare chown failed on ${_svc} key — continuing"
+        if [[ "$_chown_mode" == "direct" ]]; then
+          chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
+            || log_warn "chown failed on ${_svc} key — continuing"
+        else
+          podman unshare chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
+            || log_warn "podman unshare chown failed on ${_svc} key — continuing"
+        fi
       fi
     done
   fi
