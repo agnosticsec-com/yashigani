@@ -366,20 +366,43 @@ YSG_PODMAN_RUNTIME=false
 resolve_compose_cmd() {
   COMPOSE_CMD=()
 
+  # Runtime override — if operator explicitly set YSG_RUNTIME=docker or =podman,
+  # honor that over the auto-detection preference below. Useful on hosts where
+  # BOTH runtimes are installed (Linux VMs, CI runners) — the default prefers
+  # Podman for rootless-first security, but the override allows forcing Docker
+  # when that's what the operator actually wants to test.
+  local _prefer="${YSG_RUNTIME:-auto}"
+
+  if [[ "$_prefer" == "docker" ]]; then
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+      if docker compose version >/dev/null 2>&1; then
+        COMPOSE_CMD=("docker" "compose")
+        YSG_PODMAN_RUNTIME=false
+        return 0
+      fi
+      if command -v docker-compose >/dev/null 2>&1; then
+        COMPOSE_CMD=("docker-compose")
+        YSG_PODMAN_RUNTIME=false
+        return 0
+      fi
+    fi
+    log_warn "YSG_RUNTIME=docker requested but docker daemon not reachable — falling through to auto-detect"
+  fi
+
   # Prefer Podman (rootless, daemonless, more secure)
   # Check Podman FIRST — matches platform-detect.sh priority
   # Prefer podman-compose (Python, sequential) over podman compose (plugin, parallel)
   # because the docker-compose plugin crashes Podman's API socket with EOF on parallel creates.
 
   # Try standalone podman-compose FIRST (pip install podman-compose) — sequential, stable
-  if command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  if [[ "$_prefer" != "docker" ]] && command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
     COMPOSE_CMD=("podman-compose")
     YSG_PODMAN_RUNTIME=true
     return 0
   fi
 
   # Fall back to podman compose (Podman 4+ built-in, delegates to docker-compose plugin)
-  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  if [[ "$_prefer" != "docker" ]] && command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
     if podman compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("podman" "compose")
       YSG_PODMAN_RUNTIME=true
