@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/platform-detect.sh — Yashigani v2.1.0
 # Full platform detection. Source this script; exports YSG_* environment variables.
+# Last updated: 2026-04-23T00:00:00+00:00
 
 set -euo pipefail
 
@@ -363,7 +364,7 @@ YSG_DISTRO="$(_detect_distro "$YSG_OS")"
 YSG_ARCH="$(_detect_arch)"
 YSG_CLOUD="$(_detect_cloud)"
 YSG_VM="$(_detect_vm)"
-YSG_RUNTIME="$(_detect_runtime)"
+YSG_RUNTIME="${YSG_RUNTIME:-$(_detect_runtime)}"
 YSG_COMPOSE="$(_detect_compose)"
 YSG_K8S="$(_detect_k8s)"
 

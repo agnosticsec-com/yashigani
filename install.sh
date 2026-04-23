@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T21:42:59+01:00
+# last-updated: 2026-04-23T22:30:00+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -3088,71 +3088,16 @@ _pki_run_issuer() {
       "$subcmd" "$@"
 }
 
-bootstrap_internal_pki() {
-  set_step "9b" "internal mTLS PKI"
-  log_step "9b/${TOTAL_STEPS}" "Bootstrapping internal mTLS PKI..."
-  _pki_validate_lifetimes
-
-  local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
-  if [[ -f "$ca_root" ]]; then
-    log_info "Root CA already present — checking renewal status"
-    # Su Review Finding: no /tmp — keep scratch inside WORK_DIR.
-    local status_file="${WORK_DIR}/docker/secrets/.pki-status"
-    if _pki_run_issuer status >"$status_file" 2>&1; then
-      if grep -q "'status': 'renew'" "$status_file" 2>/dev/null; then
-        log_info "Renewal needed — rotating leaves"
-        _pki_run_issuer rotate-leaves \
-          --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS" \
-          || { rm -f "$status_file"; log_error "Leaf rotation failed"; return 1; }
-        log_success "Leaf certs rotated"
-      else
-        log_success "Certs current — no rotation needed"
-      fi
-    fi
-    rm -f "$status_file"
-    _pki_persist_env
-    return 0
-  fi
-
-  log_info "Fresh install — generating root + intermediate + leaves"
-  log_info "  Root:         ${YASHIGANI_ROOT_CA_LIFETIME_YEARS} years"
-  log_info "  Intermediate: ${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS} days"
-  log_info "  Leaves:       ${YASHIGANI_CERT_LIFETIME_DAYS} days"
-
-  if ! _pki_run_issuer bootstrap \
-       --root-lifetime-years "$YASHIGANI_ROOT_CA_LIFETIME_YEARS" \
-       --intermediate-lifetime-days "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" \
-       --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"; then
-    log_error "PKI bootstrap failed — internal mTLS certs not generated"
-    return 1
-  fi
-
-  _pki_persist_env
-
-  # Client keys are mode 0o400 (psycopg2 strict perm check). Each service
-  # runs as a different UID inside its container image:
-  #   - gateway, backoffice          → 1001 (yashigani user, our images)
-  #   - redis, budget-redis          →  999 (redis user, bitnami redis)
-  #   - pgbouncer                    →   70 (postgres user, edoburu/pgbouncer)
-  # The PKI issuer emits all keys owned by UID 1001 (it runs inside the
-  # yashigani-gateway image). We need to re-own each service's key to the
-  # UID of the consuming container so the 0o400 file is readable.
-  #
-  # Strategy depends on runtime mode:
-  #   - Rootful podman / docker (EUID=0): direct `chown` works — root can
-  #     chown anywhere, and rootful containers use host-identity UIDs (no
-  #     userns remap). Both podman and docker take this path.
-  #   - Rootless podman (EUID≠0): `podman unshare chown` maps the in-container
-  #     UID through the user-namespace to the corresponding host subuid and
-  #     chowns the file there, so the rootless container user can read it
-  #     without loosening host-side perms.
-  #
-  # Retro v2.23.1 (Ubuntu podman rootful): previous code unconditionally
-  # ran `podman unshare chown` — which silently no-ops under rootful podman
-  # (no userns remap), so none of the 4 keys were actually re-owned. Gateway
-  # still worked by coincidence (host file UID 1001 == container UID 1001),
-  # but pgbouncer crashed with "failed to load private key file ... (null)"
-  # because its in-container UID is 70 and the host file was 1001.
+# ---------------------------------------------------------------------------
+# _pki_chown_client_keys — re-own each service's private key to the UID of
+# the consuming container. Called on both fresh install and skip paths so
+# keys are always readable even when PKI bootstrap is skipped (certs already
+# present). Retro v2.23.1 root cause: pgbouncer (UID 70) crashed because
+# keys were owned by UID 1001 from the issuer image and chown was never
+# called on skip path.
+# Last updated: 2026-04-23T00:00:00+00:00
+# ---------------------------------------------------------------------------
+_pki_chown_client_keys() {
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" || "${YSG_RUNTIME:-}" == "docker" ]]; then
     local _uid_mapped_services=(
       "gateway:1001"
@@ -3180,6 +3125,51 @@ bootstrap_internal_pki() {
       fi
     done
   fi
+}
+
+bootstrap_internal_pki() {
+  set_step "9b" "internal mTLS PKI"
+  log_step "9b/${TOTAL_STEPS}" "Bootstrapping internal mTLS PKI..."
+  _pki_validate_lifetimes
+
+  local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
+  if [[ -f "$ca_root" ]]; then
+    log_info "Root CA already present — checking renewal status"
+    # Su Review Finding: no /tmp — keep scratch inside WORK_DIR.
+    local status_file="${WORK_DIR}/docker/secrets/.pki-status"
+    if _pki_run_issuer status >"$status_file" 2>&1; then
+      if grep -q "'status': 'renew'" "$status_file" 2>/dev/null; then
+        log_info "Renewal needed — rotating leaves"
+        _pki_run_issuer rotate-leaves \
+          --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS" \
+          || { rm -f "$status_file"; log_error "Leaf rotation failed"; return 1; }
+        log_success "Leaf certs rotated"
+      else
+        log_success "Certs current — no rotation needed"
+      fi
+    fi
+    rm -f "$status_file"
+    _pki_persist_env
+    _pki_chown_client_keys   # always re-apply — chown no-ops if already correct
+    return 0
+  fi
+
+  log_info "Fresh install — generating root + intermediate + leaves"
+  log_info "  Root:         ${YASHIGANI_ROOT_CA_LIFETIME_YEARS} years"
+  log_info "  Intermediate: ${YASHIGANI_INTERMEDIATE_LIFETIME_DAYS} days"
+  log_info "  Leaves:       ${YASHIGANI_CERT_LIFETIME_DAYS} days"
+
+  if ! _pki_run_issuer bootstrap \
+       --root-lifetime-years "$YASHIGANI_ROOT_CA_LIFETIME_YEARS" \
+       --intermediate-lifetime-days "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" \
+       --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"; then
+    log_error "PKI bootstrap failed — internal mTLS certs not generated"
+    return 1
+  fi
+
+  _pki_persist_env
+
+  _pki_chown_client_keys   # re-own service keys to container UIDs (see helper above)
 
   log_success "Internal CA + per-service leaf certs generated"
   log_info "  CA root:      docker/secrets/ca_root.crt"
