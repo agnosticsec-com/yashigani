@@ -1,7 +1,7 @@
 # Yashigani — Installation and Configuration Guide
 
-**Version:** 2.23
-**Last updated:** 2026-04-12
+**Version:** 2.23.1
+**Last updated:** 2026-04-23
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -303,7 +303,7 @@ cd yashigani
 
 ```bash
 git tag --list | grep "v2."
-git checkout v2.23.0
+git checkout v2.23.1
 ```
 
 **Step 3.** Verify file integrity (if the project provides checksums):
@@ -1581,7 +1581,7 @@ For backup recovery, use `restore.sh` to restore from a previous backup.
 
 ```bash
 git fetch origin
-git checkout v2.23.0   # replace with target version
+git checkout v2.23.1   # replace with target version
 ```
 
 **Step 2.** Pull updated images:
@@ -2413,4 +2413,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.23 — Installation and Configuration Guide — 2026-04-12*
+*Yashigani v2.23.1 — Installation and Configuration Guide — 2026-04-23*

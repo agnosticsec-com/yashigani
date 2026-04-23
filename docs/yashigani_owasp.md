@@ -1,8 +1,8 @@
 # Yashigani Security Gateway -- OWASP Compliance Mapping
 
-**Document Version:** 2.23
-**Date:** 2026-04-12
-**Codebase version:** v2.23.0
+**Document Version:** 2.23.1
+**Date:** 2026-04-23
+**Codebase version:** v2.23.1
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
@@ -945,7 +945,35 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | LLM policy review for P1-P3 routing | ASVS V4.1, LLM01 | Semantic policy analysis for high-priority routing decisions |
 | 363 tests | ASVS V1.6.1, V14.1 | Comprehensive test coverage across all modules including identity, billing, optimization, and pool |
 
-#### v2.23 Changes
+#### v2.23.1 Changes
+
+| Change | OWASP Relevance | Effect |
+|---|---|---|
+| Core-plane mTLS default-on (gateway / backoffice / postgres / pgbouncer / redis / opa) | ASVS V9.2, V9.3, V10.2, V14.1 | All inter-service traffic on the core plane uses mutual TLS with client-certificate verification; plaintext listeners removed |
+| Two-tier PKI: step-ca root → intermediate → per-service leafs (SPIFFE-style URIs) | ASVS V10.1, V10.2, V10.4 | Short-lived per-service identities issued by an internal CA with automatic rotation; root stays 0400 on disk, never baked into images |
+| seccomp + AppArmor default-on for every service on every runtime | ASVS V14.2, V10.4 | Container kernel-surface confinement; no "skip on dev" branch; AppArmor `mmap` permission added after regression |
+| Fail-closed on missing HMAC + OWUI secrets | ASVS V6.4.1, V14.1 | Startup hard-fails when critical secrets are absent; no silent dev-mode fallback into production |
+| Centralised SSRF allowlist helper | ASVS V12.6, API7, LLM05 | All outbound HTTP from backend services routed through a single allowlist-enforcing helper; ad-hoc outbound calls removed |
+| Per-endpoint body-size limits | ASVS V4.3.1, API4 | Tighter per-endpoint caps below the Caddy global floor; resource-exhaustion surface reduced |
+| Log-injection sanitisation (CR/LF strip, length-cap, unicode-normalise) | ASVS V16.6.1 | All user-controllable strings sanitised before audit/app log formatting |
+| Session rotation on password change | ASVS V7.4.2, V7.2.5 | Password change invalidates all prior sessions for the principal |
+| Uniformised 401 vs 404 on unauth admin endpoints | ASVS V4.1.5, API5 | No information leakage via differential status codes revealing protected route existence |
+| Explicit CSP `script-src` + working `/admin/csp-report` handler | ASVS V14.3.2, V7.1 | CSP no longer falls back to `default-src`; violations captured in audit log |
+| Algorithm allowlist on license ECDSA verifier (ES256 only) | ASVS V6.2.1, V10.1 | Prevents algorithm-substitution downgrade on license verification |
+| Caddy header hygiene (strip Server, remove stale alt-svc) | ASVS V14.3.2, API9 | Reduces version fingerprinting on Shodan / banner-grab |
+| PCI-compliant password expiry profile (≤90 days) | ASVS V2.1.1, PCI-DSS 8.3.9 | Optional tighter expiry profile for PCI-scope deployments |
+| TOTP enrolment split provision/confirm | ASVS V2.5.4, V2.5.5 | Secret is never active without a confirmation round-trip; defeats provision-and-abandon attacks |
+| Auth-throttle operator self-visibility | ASVS V7.2.1 | Operators can see their own lockout status without bypassing the control |
+| Agent tier-limit returns 402 (was 500) with correct body | ASVS V14.2, API8 | Correct HTTP semantics; 500 no longer leaks that tier enforcement is a caught exception |
+| AGENT_REGISTERED audit events persisted | ASVS V7.1.1, V7.1.3 | Registration events land in audit log; previously fired only to in-memory channel |
+| `/.well-known/security.txt` (RFC 9116) | ASVS V1.14.1 | Coordinated-disclosure contact discoverable via standard path |
+| Symbol-bearing generated passwords (`!*,-._~`, category-guaranteed) | ASVS V2.1.1, V2.1.9 | Installer credentials include symbols; character class enforced per-password; safe across URL/.env/sed/shell |
+| `YSG_RUNTIME=docker` stale-env bleed fix + runtime-honouring backup helpers | ASVS V14.1 | Deterministic runtime selection on hosts with both podman + docker installed |
+| Clean-slate install validated on macOS Podman, macOS Docker, Linux Podman, Linux Docker, K8s Helm | ASVS V1.6.1, V14.1 | Five-platform installer gate for every release |
+
+(Authoritative manual evidence sweep for v2.23.1 is produced by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` — outside the code repo per policy.)
+
+#### v2.23.0 Changes
 
 | Change | OWASP Relevance | Effect |
 |---|---|---|
@@ -1048,4 +1076,4 @@ Yashigani does **not** implement application-level memory encryption. Python's g
 
 ---
 
-*This document assesses Yashigani v2.23.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*
+*This document assesses Yashigani v2.23.1 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment. The v2.23.1 manual evidence sweep is produced separately by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` outside the code repo per policy.*

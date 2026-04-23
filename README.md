@@ -15,12 +15,12 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Stable Version:** v2.23 (main) — Open WebUI is optional via `--with-openwebui`
+**Latest Stable Version:** v2.23.1 (main) — Core-plane mTLS default-on, Open WebUI optional via `--with-openwebui`
 
 ---
-**Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, Internal CA, and agent bundles are optional compose profiles.
+**Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, and agent bundles are optional compose profiles. The internal CA (step-ca) is now a base-stack component because core-plane mTLS is default-on.
 ---
-**Document Date:** 2026-04-12
+**Document Date:** 2026-04-23
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -206,7 +206,8 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 
 | Version | Theme | Key Additions |
 |---|---|---|
-| **v2.23** | **Single Branch, API-First Admin, Strict CSP, Compose Profiles, Internal CA** | **Branch consolidation (release/1.x eliminated — Open WebUI is `--with-openwebui` flag), API-first admin UI (static SPA, external JS/CSS, no Jinja2 templates, no inline code), strict CSP (`script-src 'self'; style-src 'self'`, zero `unsafe-inline`, object-src none, base-uri none, COOP same-origin, CSP report endpoint), optional services via compose profiles (openwebui, wazuh, internal-ca, langflow, letta, openclaw), admin service management (enable/disable any service from admin panel, no SSH), Internal CA (Smallstep step-ca for service-to-service TLS, `--with-internal-ca`), Podman socket detection on macOS, restore.sh backup recovery, admin-configurable password policy (max 13 months), domain-bound licensing (ECDSA P-256 signed), container socket mount read-only** |
+| **v2.23.1** | **Core-Plane mTLS + Two-Tier PKI + Release Hardening** | **Core-plane mTLS default-on across gateway / backoffice / postgres / pgbouncer / redis / opa (two-tier PKI: step-ca root → intermediate → per-service leafs with SPIFFE-style URIs, automatic issuance + rotation), seccomp + AppArmor default-on for all runtimes, fail-closed on missing HMAC + OWUI secrets (no silent dev-mode fallback), centralised SSRF allowlist helper for outbound HTTP, per-endpoint body-size limits (ASVS 4.3.1), log-injection sanitisation across audit/app logs, session rotation on password change (ASVS V7.4.2), uniformised 401 vs 404 on unauth admin endpoints, CSP explicit `script-src` + working `/admin/csp-report` handler, algorithm allowlist on license ECDSA verifier, Caddy header hygiene (stripped Server + stale alt-svc), PCI-compliant password expiry profile (≤90 days), TOTP enrolment API split provision/confirm, auth-throttle operator self-visibility, agent tier-limit returns 402 (was 500), AGENT_REGISTERED audit events now persisted, /.well-known/security.txt (RFC 9116), symbol-bearing generated passwords (`!*,-._~` with category guarantees), `YSG_RUNTIME` stale-env bleed fix, AppArmor mmap permission for shared libraries, macOS Podman + Docker / Linux Podman + Docker / K8s Helm all clean-slate tested** |
+| **v2.23.0** | **Single Branch, API-First Admin, Strict CSP, Compose Profiles, Internal CA** | **Branch consolidation (release/1.x eliminated — Open WebUI is `--with-openwebui` flag), API-first admin UI (static SPA, external JS/CSS, no Jinja2 templates, no inline code), strict CSP (`script-src 'self'; style-src 'self'`, zero `unsafe-inline`, object-src none, base-uri none, COOP same-origin, CSP report endpoint), optional services via compose profiles (openwebui, wazuh, internal-ca, langflow, letta, openclaw), admin service management (enable/disable any service from admin panel, no SSH), Internal CA (Smallstep step-ca for service-to-service TLS, `--with-internal-ca`), Podman socket detection on macOS, restore.sh backup recovery, admin-configurable password policy (max 13 months), domain-bound licensing (ECDSA P-256 signed), container socket mount read-only** |
 | **v2.22.x** | **OPA on /v1, Agent Personas, Fail2ban, IP Access Control, 398 OWASP Checks** | **OPA policy enforcement on ALL /v1 traffic (request + response path, fail-closed), Podman SDK (podman-py) for container-per-user isolation, agent personas: Lala (Langflow), Julietta (Letta), Scout (OpenClaw) with descriptions + example prompts, agent chaining (@Scout to @Julietta to @qwen in one prompt, @Help chaining guide), fail2ban auth throttle (per-IP 3 failures + global 5 failures, x5 escalation 30s to 625m, permanent IP block), IP allowlist + blocklist (IPv4/IPv6/CIDR, admin manageable), content relay detection (agent-to-agent laundering), PKCE on OIDC (code_verifier/code_challenge), acr/amr validation on ID tokens, constant-time comparisons (hmac.compare_digest for TOTP), crypto inventory API (/admin/crypto/inventory + admin UI + JSON export), __Host- cookie prefix, context-specific password word list, self-service password reset (TOTP-verified), 398 OWASP checks (345 ASVS v5 all 17 chapters + 38 API Security + 10 Agentic AI + 7 Infrastructure, 97.7% pass rate), risk register (16 risks, 5x5 matrix), Grafana + Prometheus admin access (/admin/grafana/ and /admin/prometheus/), Monitoring tab, Wazuh SIEM full stack (--wazuh), budget allocation wiring (per-identity from Redis), Postgres migrations on startup, dashboard auto-refresh (15s), full agent registration form, audit log viewer with search/filter/export CSV, session timeout warning (10 min), first-run onboarding checklist, login branding (Agnostic Security footer)** |
 | **v2.20** | **Security Hardening, PII Detection, and Compliance** | **License anti-tampering (v4 counter-sig + self-integrity check), PII detection module (3 modes, 10 entity types, bidirectional inspection, cloud-model bypass), response-path inspection wired to /v1 routes, container hardening (seccomp, AppArmor opt-in, read-only FS in compose), WAF/DDoS protection (Caddy timeouts + body limits, per-IP DDoSProtector), FastText model baked into Docker image, model aliases Redis persistence, SBOM (CycloneDX 1.5 + CryptoBoM 12 algorithms) + cosign keyless image signing, Helm K8s chart fixes + network policies, streaming chunk-level inspection (StreamingInspector), HMAC-SHA256 per-tenant email hashing, Ollama model digest pinning, Open WebUI "Powered by Open WebUI" branding, 548 tests (523 unit + 25 e2e), 9 compliance framework mappings, 2 STRIDE threat models** |
 | **v2.1** | **Admin Dashboard + Alerting + SSO + Persistence** | **Admin Dashboard UI (login page + 9-section admin panel), 12 Alertmanager P1-P5 routing/budget alert rules, Budget Postgres persistence (survives restarts), Pool Manager background health monitor (daemon thread), OPA v1_routing.rego verified operational, OIDC identity broker wired end-to-end (JWT validation, JWKS discovery, group extraction), mandatory 2FA after SSO (anti-replay), Keycloak test IdP, SSO audit trail (SHA-256 email hashing), Podman rootless parity (volume permissions fix, e2e runtime auto-detection), 413 tests (388 unit + 25 e2e)** |
@@ -230,9 +231,55 @@ Incoming bearer tokens identify the calling identity and the Optimization Engine
 | v0.2.0 | TLS and identity hardening | ACME/CA/self-signed TLS, Prometheus metrics, bcrypt, multi-admin with lockout protection |
 | v0.1.0 | Core gateway | MCP proxy, prompt injection (Ollama), CHS, OPA, session/API key auth, audit log, Redis rate limiting, TOTP/2FA, Argon2 |
 
-### v2.23 — Single Branch, API-First Admin, Strict CSP, and Compose Profiles
+### v2.23.1 — Core-Plane mTLS, Two-Tier PKI, and Release Hardening
 
-v2.23 consolidates Yashigani to a single branch. The `release/1.x` branch is eliminated. Open WebUI is now an optional flag (`--with-openwebui`) rather than a separate release line. All features, all tiers, one branch.
+v2.23.1 is a security-hardening release on top of v2.23.0. It makes mutual TLS mandatory for all core-plane services, introduces a two-tier internal PKI, enables mandatory container isolation (seccomp + AppArmor) on every install, and lands the full Lu / Ava pre-release review findings. Every clean-slate gate (macOS Podman, macOS Docker, Linux Podman, Linux Docker, K8s Helm) has been re-tested on this release.
+
+**Core-Plane mTLS (Default-On)** -- Gateway, backoffice, Postgres, PgBouncer, Redis, and OPA all terminate mutual TLS using certificates issued by the internal step-ca. Clients present certificates; servers verify against the trusted CA bundle. Plaintext traffic on the core plane is no longer possible, even for local debugging. The `--with-internal-ca` flag is retired as an opt-in gate — step-ca is now a base-stack component.
+
+**Two-Tier PKI (step-ca)** -- A root CA signs an intermediate CA, and the intermediate issues short-lived per-service leaf certificates. Service identities use SPIFFE-style URIs. Certificates rotate automatically via the installer's PKI issuer; the root is stored root-only (0400) on disk and never touches an image.
+
+**Container Isolation Default-On** -- seccomp profiles and AppArmor profiles (on Linux) are loaded for every service in every runtime. No "skip on dev" branch. On macOS / Windows runtimes without AppArmor, the equivalent runtime-specific confinement applies. A shared-library `mmap` permission was added to the AppArmor profile after a regression surfaced during gate #57.
+
+**Fail-Closed on Missing Secrets** -- Missing HMAC or Open WebUI secrets now hard-fail at startup instead of silently falling through to a dev-mode default. Applies to all deploy targets.
+
+**Centralised SSRF Allowlist** -- All outbound HTTP from backend services goes through a single helper that enforces an allowlist per destination category. Ad-hoc `requests.get` / `httpx.get` calls against variable URLs were removed.
+
+**Per-Endpoint Body-Size Limits** -- Every endpoint declares its own body-size limit. The global Caddy cap remains as a floor; per-endpoint caps are tighter where appropriate (ASVS 4.3.1).
+
+**Log-Injection Sanitisation** -- All user-controllable strings feeding audit logs and application logs are sanitised (CR/LF stripped, length-capped, unicode-normalised) before formatting. ASVS 16.6.1.
+
+**Session Rotation on Password Change** -- Changing a password rotates the session token and invalidates all prior sessions for that principal (ASVS V7.4.2).
+
+**Uniformised 401 vs 404** -- Unauth admin endpoints no longer leak the existence of protected routes via differential status codes.
+
+**Explicit CSP `script-src`** -- CSP no longer falls back to `default-src`; `script-src` is explicit, and `/admin/csp-report` is wired to capture violations in the audit log.
+
+**Algorithm Allowlist on License Verifier** -- The license ECDSA verifier now enforces an explicit algorithm allowlist (ES256), preventing algorithm-substitution downgrades.
+
+**Caddy Header Hygiene** -- Server header stripped; stale `alt-svc` removed; no version leakage to Shodan-style fingerprinting.
+
+**PCI Password Expiry Profile** -- Optional expiry profile of ≤90 days for deployments with PCI-DSS scope. Default remains admin-configurable per `YASHIGANI_PASSWORD_MAX_AGE_DAYS`.
+
+**TOTP Enrolment Split** -- TOTP enrolment now follows a two-step provision/confirm flow (Ava issue C). The secret is never active without a confirmation code round-trip.
+
+**Auth-Throttle Operator Self-Visibility** -- Operators locked out by the fail2ban-style throttle can see their own lockout status without bypassing the control (Ava issue F).
+
+**Agent Tier-Limit Returns 402** -- Exceeding an agent tier limit now returns `402 Payment Required` (was `500`), with the correct error body (Ava issue A).
+
+**AGENT_REGISTERED Audit Persistence** -- Agent-registration events now persist to the audit log (Ava issue B). Previously they fired only to the in-memory channel.
+
+**`/.well-known/security.txt`** -- Published per RFC 9116, pointing at the coordinated-disclosure contact.
+
+**Symbol-Bearing Generated Passwords** -- All installer-generated credentials (admin, Postgres, Redis, Grafana, Wazuh) now include at least one uppercase, lowercase, digit, and symbol from the safe set `! * , - . _ ~` (URL / `.env` / sed / shell safe; does not require percent-encoding in Postgres DSN userinfo).
+
+**Runtime-Routing Fixes** -- `install.sh` correctly honours `YSG_RUNTIME=docker` on hosts where Podman is also installed. Stale `YSG_PODMAN_RUNTIME` env-var bleed from prior sessions is neutralised at every call. Backup helpers read the resolved runtime, not `command -v` heuristics.
+
+**Installer Platform Coverage** -- Clean-slate installs are validated on macOS Podman, macOS Docker, Linux Podman (Ubuntu 24.04 aarch64), Linux Docker (Ubuntu 24.04 aarch64), and K8s Helm (Docker Desktop). All five platforms bring 15 containers to Healthy with mTLS active.
+
+### v2.23.0 — Single Branch, API-First Admin, Strict CSP, and Compose Profiles
+
+v2.23.0 consolidates Yashigani to a single branch. The `release/1.x` branch is eliminated. Open WebUI is now an optional flag (`--with-openwebui`) rather than a separate release line. All features, all tiers, one branch.
 
 **Branch Consolidation** -- The dual-branch model (v2.x on `main`, v1.x on `release/1.x`) is retired. Open WebUI, Wazuh, Internal CA, and agent bundles are optional compose profiles controlled by installer flags. Operators who do not want Open WebUI simply omit `--with-openwebui`. No separate branch to maintain, no backport overhead, no version confusion.
 
@@ -244,7 +291,7 @@ v2.23 consolidates Yashigani to a single branch. The `release/1.x` branch is eli
 
 **Admin Service Management** -- Administrators can enable or disable any optional service directly from the admin panel. No SSH access required. Service state changes are audited.
 
-**Internal CA** -- Smallstep step-ca provides service-to-service mTLS within the Yashigani deployment. Enabled via `--with-internal-ca`. Certificates are automatically provisioned and rotated for inter-service communication.
+**Internal CA (v2.23.0 — now v2.23.1 default)** -- Smallstep step-ca provides service-to-service TLS within the Yashigani deployment. In v2.23.0 this was opt-in via `--with-internal-ca`. In v2.23.1 step-ca is a base-stack component because core-plane mTLS is default-on. Certificates are automatically provisioned and rotated for inter-service communication; the root CA stays 0400 on disk and is never baked into an image.
 
 **Domain-Bound Licensing** -- License keys are now bound to the deployment domain using ECDSA P-256 signatures. A license issued for `example.com` will not activate on `other.com`.
 
