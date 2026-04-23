@@ -34,6 +34,7 @@ Streaming limitations
   response-path inspection. This adds ~2-3s latency but ensures PII
   cannot leak through streamed responses.
 """
+# Last updated: 2026-04-23T11:36:14+01:00
 from __future__ import annotations
 
 import json
@@ -495,6 +496,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         and _state.streaming_enabled
         and not is_agent_call
     )
+
+    # OPA enforcement: stream=false when OPA policies are active.
+    # All response content must be inspected before delivery to the user
+    # (human or non-human). Streaming bypasses response-path OPA checks.
+    if use_streaming and _state.opa_url:
+        use_streaming = False
+        logger.info("Streaming disabled: OPA policies active — response inspection required")
 
     # PII block/redact modes require full response inspection — force buffered
     if use_streaming and _state.pii_detector is not None:
