@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T22:45:00+01:00
+# last-updated: 2026-04-23T23:00:00+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -1062,6 +1062,24 @@ _write_aes_key_to_env() {
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
     _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
+  elif [[ "${YSG_OS:-}" == "linux" && "${YSG_RUNTIME:-}" == "docker" ]]; then
+    # Docker on Linux: auto-load our AppArmor profile so containers start without
+    # requiring a manual 'apparmor_parser -r' step. If loading fails (no apparmor,
+    # locked-down kernel, or VM environment), fall back to 'unconfined' so the
+    # install doesn't block. Retro v2.23.1 item #3ae.
+    local _aa_profile_src="${WORK_DIR}/docker/apparmor/yashigani-gateway"
+    if [[ -f "$_aa_profile_src" ]] && command -v apparmor_parser >/dev/null 2>&1; then
+      if apparmor_parser -r "$_aa_profile_src" >/dev/null 2>&1; then
+        log_success "AppArmor profile loaded: yashigani-gateway"
+        _env_set "YASHIGANI_APPARMOR_PROFILE" "yashigani-gateway"
+      else
+        log_warn "AppArmor profile load failed — falling back to unconfined"
+        _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+      fi
+    else
+      log_warn "AppArmor profile or parser not available — using unconfined"
+      _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+    fi
   fi
 
   # --- Upstream MCP URL ---
