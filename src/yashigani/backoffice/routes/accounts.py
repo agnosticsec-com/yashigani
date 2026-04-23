@@ -2,6 +2,7 @@
 Yashigani Backoffice — Admin account management routes.
 Enforces: min 2 total (delete guard), min 2 active (disable guard).
 """
+# Last updated: 2026-04-23T11:36:14+01:00
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
@@ -62,6 +63,17 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
     out-of-band. Admin must change password and provision TOTP at first login.
     """
     state = backoffice_state
+
+    # Enforce license tier admin seat limit
+    from yashigani.licensing.enforcer import check_admin_seat_limit, LicenseLimitExceeded
+    try:
+        check_admin_seat_limit(state.auth_service.total_admin_count())
+    except LicenseLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "admin_seat_limit_exceeded", "limit": exc.max_val, "current": exc.current},
+        )
+
     if body.username in state.auth_service._accounts:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

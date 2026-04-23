@@ -3,6 +3,7 @@ Yashigani Backoffice — User/Operator account management routes.
 Full reset requires admin TOTP re-verification (ASVS V2.8).
 Delete blocked if last user (USER_MINIMUM_VIOLATION).
 """
+# Last updated: 2026-04-23T11:36:14+01:00
 from __future__ import annotations
 
 from typing import Optional
@@ -62,6 +63,16 @@ async def create_user(body: CreateUserRequest, session: AdminSession):
     TOTP at first login.
     """
     state = backoffice_state
+
+    # Enforce license tier end-user limit
+    from yashigani.licensing.enforcer import check_end_user_limit, LicenseLimitExceeded
+    try:
+        check_end_user_limit(state.auth_service.total_user_count())
+    except LicenseLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "end_user_limit_exceeded", "limit": exc.max_val, "current": exc.current},
+        )
 
     if body.username in state.auth_service._accounts:
         raise HTTPException(
