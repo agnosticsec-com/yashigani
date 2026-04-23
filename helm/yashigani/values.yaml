@@ -436,6 +436,16 @@ caddy:
     port: 443
     httpPort: 80
     type: LoadBalancer
+  # v2.23.1 EX-231-08 — Caddy-centric SPIFFE URI ACL on /internal/metrics.
+  # When enabled, Caddy terminates an additional internal-only listener on
+  # :8444 that requires peer-cert auth, validates the URI SAN, and forwards
+  # it as X-SPIFFE-ID to the gateway/backoffice upstream. Prometheus scrapes
+  # go through this listener instead of hitting the pods directly.
+  # Requires the mesh mTLS plane (caddy_client.{crt,key} + ca_root.crt) to
+  # be mounted into the caddy pod — parity with docker-compose is tracked.
+  internalMetricsListener:
+    enabled: false
+    port: 8444
 
 # ---------------------------------------------------------------------------
 # Optional Agent Bundles (v0.8.0)

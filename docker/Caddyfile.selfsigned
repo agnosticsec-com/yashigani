@@ -1,4 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
+# Last updated: 2026-04-23T23:32:19+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -269,4 +270,45 @@ Hiring: https://agnosticsec.com/careers
 # Also serve on HTTP for local convenience (self-signed mode only)
 http://{env.YASHIGANI_TLS_DOMAIN}:80 {
     redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal observability listener — :8444 (mesh-internal only, never published).
+# Last updated: 2026-04-23T23:32:19+01:00
+# See Caddyfile.acme for full comment block — identical semantics apply here.
+# ─────────────────────────────────────────────────────────────────────────────
+:8444 {
+    tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        client_auth {
+            mode require_and_verify
+            trust_pool file /run/secrets/ca_root.crt
+        }
+        protocols tls1.2 tls1.3
+    }
+
+    @metrics path /internal/metrics
+    handle @metrics {
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+
+        @to_backoffice header Host backoffice*
+        handle @to_backoffice {
+            reverse_proxy https://backoffice:8443 {
+                import internal-mtls
+                header_up X-Forwarded-Proto https
+                header_up X-Real-IP {remote_host}
+            }
+        }
+        handle {
+            reverse_proxy https://gateway:8080 {
+                import internal-mtls
+                header_up X-Forwarded-Proto https
+                header_up X-Real-IP {remote_host}
+            }
+        }
+    }
+
+    handle {
+        respond "Not Found" 404
+    }
 }

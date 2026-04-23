@@ -1,4 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
+# Last updated: 2026-04-23T23:32:19+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -281,4 +282,69 @@ Hiring: https://agnosticsec.com/careers
 # Redirect HTTP → HTTPS
 http://{env.YASHIGANI_TLS_DOMAIN} {
     redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal observability listener — :8444 (mesh-internal only, never published).
+# Last updated: 2026-04-23T23:32:19+01:00
+#
+# Purpose:
+#   Prometheus scrapes gateway/backoffice /internal/metrics via Caddy so that
+#   every scrape goes through our SPIFFE-aware identity gate. mTLS client-cert
+#   auth is REQUIRED — Caddy refuses the TLS handshake without one.
+#
+# Identity forwarding (EX-231-08, zero-trust default):
+#   1. `request_header -X-SPIFFE-ID` strips any inbound value. Critical:
+#      only Caddy may set this header downstream; an attacker co-located on
+#      the internal bridge network who forged it would otherwise bypass the
+#      application-layer ACL.
+#   2. `request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}` sets
+#      the header from the peer cert's first URI SAN. The peer cert was
+#      minted by our internal CA (see yashigani.pki.issuer.build_leaf) with a
+#      URI SAN of the form `spiffe://yashigani.internal/<service-name>`.
+#   3. The upstream (gateway/backoffice) enforces the allowlist in
+#      yashigani.auth.spiffe.require_spiffe_id against the parsed manifest.
+#
+# This listener is NOT exposed in docker-compose.yml `ports:` — it is only
+# reachable over the internal bridge network.
+# ─────────────────────────────────────────────────────────────────────────────
+:8444 {
+    tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        client_auth {
+            mode require_and_verify
+            trust_pool file /run/secrets/ca_root.crt
+        }
+        protocols tls1.2 tls1.3
+    }
+
+    @metrics path /internal/metrics
+    handle @metrics {
+        # Spoof-prevention: drop any inbound X-SPIFFE-ID before setting our own.
+        request_header -X-SPIFFE-ID
+        # Populate from the verified peer cert's URI SAN.
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+
+        # Gateway vs backoffice routing — Host header chooses the upstream so
+        # Prometheus can target either service via the same listener.
+        @to_backoffice header Host backoffice*
+        handle @to_backoffice {
+            reverse_proxy https://backoffice:8443 {
+                import internal-mtls
+                header_up X-Forwarded-Proto https
+                header_up X-Real-IP {remote_host}
+            }
+        }
+        handle {
+            reverse_proxy https://gateway:8080 {
+                import internal-mtls
+                header_up X-Forwarded-Proto https
+                header_up X-Real-IP {remote_host}
+            }
+        }
+    }
+
+    # Default: reject anything else on this listener.
+    handle {
+        respond "Not Found" 404
+    }
 }
