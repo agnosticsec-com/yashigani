@@ -1,6 +1,8 @@
 """
 Yashigani internal PKI issuer — generates root, intermediate, and leaf certs.
 
+Last updated: 2026-04-23T23:32:19+01:00
+
 Invoked by:
   * install.sh bootstrap_internal_pki()  — first-install cert generation
   * install.sh rotate-certs               — leaf rotation
@@ -307,6 +309,20 @@ def build_leaf(
     import ipaddress as _ipaddr
     sans.append(x509.IPAddress(_ipaddr.IPv4Address("127.0.0.1")))
     sans.append(x509.IPAddress(_ipaddr.IPv6Address("::1")))
+    # SPIFFE URI SAN (v2.23.1 — EX-231-08). All DNS + URI SANs live in the
+    # SAME SubjectAlternativeName extension — cryptography emits one extension
+    # per add_extension() call, so we must assemble the full GeneralName list
+    # before the single add_extension(x509.SubjectAlternativeName(sans), ...)
+    # call below. Two SAN extensions are illegal per RFC 5280 §4.2.1.6 and
+    # would silently break peer validation in strict clients.
+    spiffe_id = (service.spiffe_id or "").strip()
+    if spiffe_id:
+        if not spiffe_id.startswith("spiffe://"):
+            raise RuntimeError(
+                f"service {service.name!r} has non-SPIFFE URI {spiffe_id!r} — "
+                "manifest validation should have caught this"
+            )
+        sans.append(x509.UniformResourceIdentifier(spiffe_id))
 
     cert = (
         x509.CertificateBuilder()
