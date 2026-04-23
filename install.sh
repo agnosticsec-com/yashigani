@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-04-23T15:15:36+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -2998,16 +2999,30 @@ _pki_run_issuer() {
     return 1
   fi
 
+  # Bind-mount options differ between podman and docker:
+  #   - ":Z" is an SELinux relabel (no-op on non-SELinux hosts like Ubuntu,
+  #     but required on RHEL/Fedora with enforcing policy).
+  #   - ":U" (podman-only) recursively chowns the mount source to the
+  #     container's user/group, so a non-root USER inside the image can
+  #     write. Docker has no equivalent and errors on ":U".
+  # Without ":U", rootful podman fails with EACCES when the image runs as
+  # a non-root user (the image sets `USER yashigani`), since the host dir
+  # is owned by root. Retro: v2.23.1 Ubuntu podman clean-slate failure.
+  local _mount_opts="rw,Z"
+  if [[ "$runtime" == "podman" ]]; then
+    _mount_opts="rw,Z,U"
+  fi
+
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "$runtime run --rm --network=none -v $secrets_in:/secrets -v $manifest_in:/manifest.yaml $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
+    dry_print "$runtime run --rm --network=none -v ${secrets_in}:/secrets:${_mount_opts} -v ${manifest_in}:/manifest.yaml:${_mount_opts} $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
     return 0
   fi
 
   # --network=none: issuer does no network I/O, and cutting the network
   # prevents any accidental telemetry exfil.
   "$runtime" run --rm --network=none \
-    -v "${secrets_in}:/secrets:rw,Z" \
-    -v "${manifest_in}:/manifest.yaml:rw,Z" \
+    -v "${secrets_in}:/secrets:${_mount_opts}" \
+    -v "${manifest_in}:/manifest.yaml:${_mount_opts}" \
     "$image" \
     python -m yashigani.pki.issuer \
       --secrets-dir /secrets \
