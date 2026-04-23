@@ -183,29 +183,25 @@ def _push_openwebui_model(agent_name: str, upstream_url: str) -> None:
                 "Run install.sh to generate, or export it manually in the backoffice env."
             )
 
-        # Generate a JWT for Open WebUI API auth
-        import hashlib
-        import hmac
-        import base64
+        # Generate a JWT for Open WebUI API auth.
+        # Open WebUI itself uses PyJWT with WEBUI_SECRET_KEY — we use the same
+        # library here (already an explicit dep; see gateway/jwt_inspector.py)
+        # rather than hand-rolling HMAC/base64. Defence-in-depth: PyJWT has a
+        # security track record, validates header shape, and avoids any
+        # chance of alg-confusion from hand-rolled JSON encoding. Lu P2
+        # observation (YCS-20260423-v2.23.1-OWASP-3X).
         import time as _time
-
-        # Open WebUI uses PyJWT with the WEBUI_SECRET_KEY. We craft a minimal
-        # HS256 JWT with an admin sub claim to authenticate the API call.
-        header = base64.urlsafe_b64encode(json.dumps(
-            {"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
+        import jwt as _pyjwt
         payload_data = {
             "id": "00000000-0000-0000-0000-000000000000",
             "sub": "admin",
             "role": "admin",
             "exp": int(_time.time()) + 300,
         }
-        payload = base64.urlsafe_b64encode(
-            json.dumps(payload_data).encode()).rstrip(b"=").decode()
-        sig_input = f"{header}.{payload}".encode()
-        sig = base64.urlsafe_b64encode(
-            hmac.new(owui_secret.encode(), sig_input, hashlib.sha256).digest()
-        ).rstrip(b"=").decode()
-        token = f"{header}.{payload}.{sig}"
+        token = _pyjwt.encode(payload_data, owui_secret, algorithm="HS256")
+        # PyJWT ≥2 returns str; older returned bytes. Normalise.
+        if isinstance(token, bytes):
+            token = token.decode()
 
         model_id = "@" + agent_name
         headers = {
