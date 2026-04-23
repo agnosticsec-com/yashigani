@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T22:30:00+01:00
+# last-updated: 2026-04-23T22:45:00+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -1879,6 +1879,12 @@ compose_up() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
+  # PKI issuer runs as UID 1001 inside the gateway image and writes cert/key files
+  # to the bind-mounted secrets dir. When install runs as root (sudo), the dir is
+  # owned by root:root 0755 by default, which makes the issuer's writes fail with
+  # PermissionError. Retro v2.23.1 item #3ad: chown secrets dir to UID 1001 so the
+  # PKI issuer container can write without needing root inside the container.
+  chown 1001:1001 "$secrets_dir" 2>/dev/null || true
   mkdir -p "${data_dir}/audit"
   mkdir -p "${WORK_DIR}/docker/tls"
 
