@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Last updated: 2026-04-24T00:00:00Z (v2.23.1 P0 fixes — #77/#78/#79)
+
+# Tight umask so any files/dirs created during restore inherit 0600/0700.
+# Overrides the host default (often 022) which would leave intermediate
+# artefacts (pre-restore snapshots, temp extractions) world-readable.
+umask 077
 
 # =============================================================================
 # Yashigani Restore Script
@@ -168,31 +174,73 @@ validate_backup() {
   local backup_dir="$1"
   local errors=0
 
-  if [[ ! -d "${backup_dir}/secrets" ]] && [[ ! -f "${backup_dir}/.env" ]]; then
-    log_error "Backup is empty — no secrets directory and no .env file"
+  # Hard fail: backup must have at minimum secrets/ AND .env
+  if [[ ! -d "${backup_dir}/secrets" ]]; then
+    log_error "Backup missing required directory: secrets/"
+    errors=$((errors + 1))
+  fi
+  if [[ ! -f "${backup_dir}/.env" ]]; then
+    log_error "Backup missing required file: .env"
+    errors=$((errors + 1))
+  fi
+
+  # If structural fails, no point checking contents.
+  if [[ "$errors" -gt 0 ]]; then
     return 1
   fi
 
-  # Check secrets have content (not empty files)
-  if [[ -d "${backup_dir}/secrets" ]]; then
-    local empty_count
-    empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$empty_count" -gt 0 ]]; then
-      log_warn "${empty_count} secret file(s) are empty — may indicate a corrupt backup"
+  # Hard fail: v2.23.1-mtls backups MUST carry the CA keypair and at least
+  # one service leaf key. Without these, restoring and then running install.sh
+  # will regenerate a NEW CA that does not match any surviving leaves — every
+  # mTLS peer breaks silently. See CLAUDE.md §4 Docker+Podman+Helm parity.
+  for ca_file in ca_root.key ca_root.crt ca_intermediate.key ca_intermediate.crt; do
+    if [[ ! -f "${backup_dir}/secrets/${ca_file}" ]]; then
+      log_error "Backup missing required CA material: secrets/${ca_file}"
       errors=$((errors + 1))
     fi
+  done
+  # At least one *_client.key must exist (proves leaves were backed up)
+  local leaf_count
+  leaf_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -name '*_client.key' 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$leaf_count" -lt 1 ]]; then
+    log_error "Backup contains no *_client.key leaves — service mTLS certs missing"
+    errors=$((errors + 1))
   fi
 
-  # Check .env has required keys
-  if [[ -f "${backup_dir}/.env" ]]; then
-    for key in YASHIGANI_TLS_DOMAIN POSTGRES_PASSWORD YASHIGANI_DB_AES_KEY; do
-      if ! grep -q "^${key}=" "${backup_dir}/.env" 2>/dev/null; then
-        log_warn "Missing ${key} in backup .env — may cause startup issues"
-        errors=$((errors + 1))
-      fi
-    done
+  # Hard fail: empty secret files indicate corruption.
+  local empty_count
+  empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$empty_count" -gt 0 ]]; then
+    log_error "${empty_count} secret file(s) are empty — backup is corrupt"
+    errors=$((errors + 1))
   fi
 
+  # Hard fail: .env must carry the env keys the app NEEDs to boot.
+  for key in YASHIGANI_TLS_DOMAIN POSTGRES_PASSWORD YASHIGANI_DB_AES_KEY; do
+    if ! grep -q "^${key}=" "${backup_dir}/.env" 2>/dev/null; then
+      log_error "Backup .env missing required key: ${key}"
+      errors=$((errors + 1))
+    fi
+  done
+
+  # Soft: postgres_dump.sql is optional (backup may predate DB data), but if
+  # present it must be non-trivial (>100 bytes — empty file is suspicious).
+  if [[ -f "${backup_dir}/postgres_dump.sql" ]]; then
+    local dump_bytes
+    dump_bytes=$(wc -c < "${backup_dir}/postgres_dump.sql" 2>/dev/null | tr -d ' ')
+    if [[ -z "$dump_bytes" || "$dump_bytes" -lt 100 ]]; then
+      log_error "postgres_dump.sql present but empty or truncated (${dump_bytes} bytes) — backup is corrupt"
+      errors=$((errors + 1))
+    fi
+  else
+    log_warn "No postgres_dump.sql in backup — DB will start empty post-restore"
+  fi
+
+  if [[ "$errors" -gt 0 ]]; then
+    log_error "Backup validation: ${errors} failure(s) detected"
+    return 1
+  fi
+  log_success "Backup validation passed"
   return 0
 }
 
@@ -214,11 +262,16 @@ restore_backup() {
   fi
   printf "\n"
 
-  # Validate backup before restoring
-  validate_backup "$backup_dir" || {
-    log_error "Backup validation failed. Use --force to restore anyway."
-    exit 1
-  }
+  # Validate backup before restoring. --force bypasses validation for
+  # genuine recovery scenarios (e.g. manually-assembled partial backup).
+  if ! validate_backup "$backup_dir"; then
+    if [[ "$FORCE" == "true" ]]; then
+      log_warn "Backup validation failed but --force specified. Proceeding at operator risk."
+    else
+      log_error "Backup validation failed. Use --force to restore anyway (NOT recommended for production)."
+      exit 1
+    fi
+  fi
 
   # Safety: snapshot current state before overwriting
   local pre_restore_dir="${BACKUPS_DIR}/pre-restore-$(date +%Y%m%d_%H%M%S)"
@@ -230,14 +283,28 @@ restore_backup() {
     log_success "Pre-restore snapshot saved"
   fi
 
-  # 1. Restore secrets
+  # 1. Restore secrets (preserve source mode; explicitly tighten CA private keys)
   if [[ -d "${backup_dir}/secrets" ]]; then
     log_info "Restoring secrets..."
     mkdir -p "${WORK_DIR}/docker/secrets"
-    cp -r "${backup_dir}/secrets/"* "${WORK_DIR}/docker/secrets/" 2>/dev/null || true
-    # chmod 644 for bind-mount compatibility (Linux containers can't read 600)
-    chmod 644 "${WORK_DIR}/docker/secrets/"* 2>/dev/null || true
-    log_success "Secrets restored ($(ls "${backup_dir}/secrets/" | wc -l | tr -d ' ') files)"
+    chmod 700 "${WORK_DIR}/docker/secrets"
+    # cp -p preserves source mode/ownership timestamps; no blanket widen.
+    # Pre-existing install.sh-written perms are preserved (container compat).
+    if ! cp -rp "${backup_dir}/secrets/"* "${WORK_DIR}/docker/secrets/"; then
+      log_error "Failed to copy secrets from backup"
+      return 1
+    fi
+    # CA issuer private keys must NEVER be group/world readable (CWE-732).
+    # They are only consumed by install.sh to sign leaves, never by containers
+    # at runtime — so tighter-than-leaf perms are safe.
+    for ca_key in ca_root.key ca_intermediate.key; do
+      if [[ -f "${WORK_DIR}/docker/secrets/${ca_key}" ]]; then
+        chmod 600 "${WORK_DIR}/docker/secrets/${ca_key}"
+      fi
+    done
+    local secret_count
+    secret_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f | wc -l | tr -d ' ')
+    log_success "Secrets restored (${secret_count} files; CA keys forced 0600)"
   else
     log_warn "No secrets directory in backup — skipping"
   fi
@@ -299,11 +366,16 @@ restore_backup() {
 # ---------------------------------------------------------------------------
 _restore_postgres() {
   local dump_file="$1"
-  local dump_size
+  local dump_size dump_bytes
   dump_size=$(du -h "$dump_file" 2>/dev/null | awk '{print $1}')
+  dump_bytes=$(wc -c < "$dump_file" 2>/dev/null | tr -d ' ')
+  if [[ -z "$dump_bytes" || "$dump_bytes" -lt 100 ]]; then
+    log_error "Postgres dump is empty or truncated (${dump_bytes} bytes) — refusing to restore"
+    return 1
+  fi
   log_info "Postgres dump found (${dump_size}). Attempting restore..."
 
-  # Read DB user from .env if available
+  # Read DB user/name from .env if available (preserve existing parse)
   local db_user="yashigani_app"
   local db_name="yashigani"
   if [[ -f "${WORK_DIR}/docker/.env" ]]; then
@@ -316,24 +388,66 @@ _restore_postgres() {
     fi
   fi
 
+  # Read postgres superuser password from docker/secrets/postgres_password.
+  # docker-compose.yml runs postgres as POSTGRES_USER=yashigani_app with
+  # POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password, so yashigani_app
+  # IS the superuser for this container — no separate super account.
+  local pg_password=""
+  if [[ -f "${WORK_DIR}/docker/secrets/postgres_password" ]]; then
+    pg_password=$(<"${WORK_DIR}/docker/secrets/postgres_password")
+  fi
+  if [[ -z "$pg_password" ]]; then
+    log_error "Cannot read docker/secrets/postgres_password — required for drop+recreate. Abort."
+    return 1
+  fi
+
   local pg_container
   pg_container=$(find_pg_container)
 
   if [[ -z "$pg_container" ]]; then
     log_warn "Postgres not running — dump saved for manual restore:"
     log_warn "  ${dump_file}"
-    log_warn "  Manual: cat ${dump_file} | docker exec -i <postgres_container> psql -U ${db_user} -d ${db_name}"
+    log_warn "  Manual (after 'compose up -d postgres'):"
+    log_warn "    cat ${dump_file} | <runtime> exec -i <postgres_container> psql --single-transaction -v ON_ERROR_STOP=1 -U ${db_user} -d ${db_name}"
     return 0
   fi
 
   log_info "Found Postgres: ${pg_container}"
-  log_info "Restoring as user '${db_user}' into database '${db_name}'..."
+  log_info "Preparing target database '${db_name}' (terminate connections, drop, recreate)..."
 
-  if cat "$dump_file" | pg_exec "$pg_container" psql -U "$db_user" -d "$db_name" 2>/dev/null; then
-    log_success "Postgres database restored"
+  # Step 1: drop + recreate the target DB to guarantee clean schema-free state.
+  # Connect to the 'postgres' system DB (always exists). Terminate any existing
+  # connections to the target first, else DROP DATABASE hangs.
+  #
+  # Risk: this IS destructive — existing app state in "${db_name}" is wiped.
+  # That is the intended semantics of a restore ("replace with backup").
+  if ! pg_exec "$pg_container" env PGPASSWORD="$pg_password" \
+        psql -U "$db_user" -d postgres -v ON_ERROR_STOP=1 -q <<EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+  WHERE datname = '${db_name}' AND pid <> pg_backend_pid();
+DROP DATABASE IF EXISTS "${db_name}";
+CREATE DATABASE "${db_name}" OWNER "${db_user}";
+EOF
+  then
+    log_error "Failed to drop+recreate '${db_name}'. Target DB may still have active connections from app containers."
+    log_error "Remediation: stop app containers first (e.g. 'podman compose stop gateway backoffice'), then re-run restore."
+    return 1
+  fi
+  log_success "Target database '${db_name}' recreated clean"
+
+  # Step 2: feed dump with --single-transaction + ON_ERROR_STOP=1.
+  # Any error aborts the whole transaction — no silent partial restore.
+  # Do NOT swallow stderr with 2>/dev/null; surface errors to the operator.
+  log_info "Loading dump into ${db_name} (single-transaction, fail-fast)..."
+  if pg_exec "$pg_container" env PGPASSWORD="$pg_password" \
+       psql --single-transaction -v ON_ERROR_STOP=1 \
+            -U "$db_user" -d "$db_name" < "$dump_file"; then
+    log_success "Postgres database restored (single-transaction, fail-fast)"
   else
-    log_warn "Postgres restore had errors — this may be normal if tables already exist"
-    log_warn "Check manually: review ${dump_file} and compare with running database"
+    log_error "Postgres restore failed. Transaction was rolled back — database is back to the recreated-empty state."
+    log_error "Review dump at: ${dump_file}"
+    log_error "To investigate: cat ${dump_file} | <runtime> exec -i ${pg_container} psql -U ${db_user} -d ${db_name}"
+    return 1
   fi
 }
 
