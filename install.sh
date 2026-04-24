@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-23T23:15:00+01:00
+# last-updated: 2026-04-24T13:45:00+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -3206,6 +3206,99 @@ _pki_chown_client_keys() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# _pki_detect_uri_san_drift — compare URI SANs on existing leaf certs against
+# docker/service_identities.yaml. Detects certs minted before the manifest's
+# spiffe_id for a service existed (or where the spiffe_id was changed since
+# mint). A drift triggers a forced leaf rotation regardless of time-based
+# renewal status.
+#
+# Motivation: v2.23.1 retro #82. Pre-EX-231-08 certs (Apr-22) carry no URI
+# SAN, so Caddy's X-SPIFFE-ID header is empty and the SPIFFE gate at
+# /internal/metrics returns 401 even though the mTLS handshake passes.
+# Time-based status check alone does NOT catch this — those certs are still
+# within their validity window.
+#
+# Return: 0 if every leaf's URI SAN matches the manifest's spiffe_id.
+#         1 if any leaf is missing, has no URI SAN, or the URI SAN disagrees
+#         with the manifest.
+# Prints one line per service.
+# Last updated: 2026-04-24T13:45:00+01:00
+# ---------------------------------------------------------------------------
+_pki_detect_uri_san_drift() {
+  local manifest="${WORK_DIR}/docker/service_identities.yaml"
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+
+  if [[ ! -f "$manifest" ]]; then
+    log_warn "service_identities.yaml missing at ${manifest} — skipping URI SAN drift check"
+    return 0
+  fi
+
+  if ! command -v openssl >/dev/null 2>&1; then
+    log_warn "openssl not on PATH — skipping URI SAN drift check"
+    return 0
+  fi
+
+  # Parse manifest into "<name>|<spiffe_id>" pairs. awk walks the list-of-maps
+  # and emits the spiffe_id encountered within each "- name:" block. Tolerant
+  # to comment lines, blank lines, and quoted values.
+  local pairs
+  pairs=$(awk '
+    /^[[:space:]]*-[[:space:]]+name:[[:space:]]+/ {
+      if (name != "" && sid != "") print name "|" sid
+      sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]+/, "")
+      gsub(/[[:space:]"'\'']/, "")
+      name = $0
+      sid = ""
+      next
+    }
+    /^[[:space:]]+spiffe_id:[[:space:]]+/ {
+      if (name == "") next
+      sub(/^[[:space:]]+spiffe_id:[[:space:]]+/, "")
+      gsub(/[[:space:]"'\'']/, "")
+      sid = $0
+    }
+    END {
+      if (name != "" && sid != "") print name "|" sid
+    }
+  ' "$manifest")
+
+  if [[ -z "$pairs" ]]; then
+    log_warn "No (name, spiffe_id) pairs parsed from manifest — skipping drift check"
+    return 0
+  fi
+
+  local drift=0
+  local svc expected crt san_block got
+  while IFS='|' read -r svc expected; do
+    [[ -z "$svc" || -z "$expected" ]] && continue
+    crt="${secrets_dir}/${svc}_client.crt"
+    if [[ ! -f "$crt" ]]; then
+      log_warn "  ${svc}: leaf cert missing (${crt}) — treating as drift"
+      drift=1
+      continue
+    fi
+    # openssl -text emits SANs on the line immediately following
+    # "X509v3 Subject Alternative Name:" — split on commas, keep URI entries.
+    san_block=$(openssl x509 -in "$crt" -noout -text 2>/dev/null \
+                | awk '/X509v3 Subject Alternative Name/{getline; print; exit}')
+    got=$(printf '%s' "$san_block" | tr ',' '\n' \
+          | sed -n 's/^[[:space:]]*URI:[[:space:]]*//p' \
+          | head -1)
+    if [[ -z "$got" ]]; then
+      log_warn "  ${svc}: no URI SAN on leaf — expected ${expected}"
+      drift=1
+    elif [[ "$got" != "$expected" ]]; then
+      log_warn "  ${svc}: URI SAN mismatch — got ${got}, expected ${expected}"
+      drift=1
+    else
+      log_info "  ${svc}: URI SAN OK (${got})"
+    fi
+  done <<< "$pairs"
+
+  return $drift
+}
+
 bootstrap_internal_pki() {
   set_step "9b" "internal mTLS PKI"
   log_step "9b/${TOTAL_STEPS}" "Bootstrapping internal mTLS PKI..."
@@ -3214,20 +3307,35 @@ bootstrap_internal_pki() {
   local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
   if [[ -f "$ca_root" ]]; then
     log_info "Root CA already present — checking renewal status"
+    local needs_rotation=false
     # Su Review Finding: no /tmp — keep scratch inside WORK_DIR.
     local status_file="${WORK_DIR}/docker/secrets/.pki-status"
     if _pki_run_issuer status >"$status_file" 2>&1; then
       if grep -q "'status': 'renew'" "$status_file" 2>/dev/null; then
-        log_info "Renewal needed — rotating leaves"
-        _pki_run_issuer rotate-leaves \
-          --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS" \
-          || { rm -f "$status_file"; log_error "Leaf rotation failed"; return 1; }
-        log_success "Leaf certs rotated"
-      else
-        log_success "Certs current — no rotation needed"
+        log_info "Time-based renewal needed"
+        needs_rotation=true
       fi
     fi
     rm -f "$status_file"
+
+    # Manifest-aware drift check — v2.23.1 retro #82. Rotates leaves even if
+    # they are still time-valid when the URI SAN doesn't match the manifest.
+    log_info "Checking leaf URI SANs against docker/service_identities.yaml"
+    if ! _pki_detect_uri_san_drift; then
+      log_warn "URI SAN drift detected — forcing leaf rotation"
+      needs_rotation=true
+    fi
+
+    if [[ "$needs_rotation" == "true" ]]; then
+      if ! _pki_run_issuer rotate-leaves \
+             --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"; then
+        log_error "Leaf rotation failed — mTLS mesh will not converge"
+        return 1
+      fi
+      log_success "Leaf certs rotated"
+    else
+      log_success "Certs current — no rotation needed"
+    fi
     _pki_persist_env
     _pki_chown_client_keys   # always re-apply — chown no-ops if already correct
     return 0
