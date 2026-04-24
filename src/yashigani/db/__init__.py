@@ -1,3 +1,4 @@
+# Last updated: 2026-04-24T16:45:00+01:00
 from yashigani.db.postgres import create_pool, close_pool, tenant_transaction, get_pool
 
 __all__ = ["create_pool", "close_pool", "tenant_transaction", "get_pool", "run_migrations"]
@@ -18,7 +19,14 @@ def run_migrations() -> None:
     sync_dsn = dsn.replace("postgresql://", "postgresql+psycopg2://").replace(
         "postgresql+asyncpg://", "postgresql+psycopg2://"
     )
-    alembic_cfg.set_main_option("sqlalchemy.url", sync_dsn)
+    # v2.23.1 fix: alembic.Config backs onto ConfigParser, which treats '%' as
+    # an interpolation sigil. URL-encoded passwords (e.g. ',' -> '%2C',
+    # '!' -> '%21') therefore raise "invalid interpolation syntax" on
+    # set_main_option. Double '%' to escape, then libpq / SQLAlchemy decode it
+    # back to the encoded form, and psycopg2 URL-unquotes it to the real
+    # password before sending to pgbouncer.
+    sync_dsn_alembic = sync_dsn.replace("%", "%%")
+    alembic_cfg.set_main_option("sqlalchemy.url", sync_dsn_alembic)
     try:
         command.upgrade(alembic_cfg, "head")
         logger.info("Database migrations applied successfully")

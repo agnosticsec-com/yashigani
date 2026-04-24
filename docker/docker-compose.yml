@@ -111,7 +111,7 @@ services:
       YASHIGANI_AGENT_PATH_PREFIX: "/agents"
       YASHIGANI_AGENT_TOKEN_MIN_LENGTH: "64"
       # Postgres via PgBouncer — TLS verify-ca + client cert.
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
@@ -197,7 +197,7 @@ services:
       # can set this var; ensure YASHIGANI_PII_MODE=redact or block first.
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,fail_closed}
       # Postgres via PgBouncer — TLS verify-ca + client cert.
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_API_URL: http://open-webui:8080
       # OWUI_SECRET_KEY is required — install.sh generates a fresh random
