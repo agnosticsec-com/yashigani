@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-24T22:30:00+00:00
+# Last updated: 2026-04-24T23:45:00+00:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -18,6 +18,41 @@
 #   selfsigned  — local/demo only, self-signed (Caddy internal CA)
 
 # version field removed — obsolete in Docker Compose v2+
+
+# ---------------------------------------------------------------------------
+# DNS-resolver hardening (retro #3ah, defensive widening)
+# ---------------------------------------------------------------------------
+# Every service in this file declares `dns_search: ["."]`. The single dot is
+# a literal "empty search list" sentinel — Docker treats `[]` as "no override"
+# but `["."]` writes a resolv.conf with no `search` line at all.
+#
+# Why every service, not just pgbouncer?
+# When Docker Engine runs inside a libvirt/qemu VM (or any host where
+# systemd-resolved is the upstream resolver), Docker copies the host's search
+# domains into every container's /etc/resolv.conf — including artefacts like
+# "placeholder-NNNN.hostname.internal lan". The behaviour of a container's
+# DNS resolver against these search domains depends on the resolver library:
+#
+#   * c-ares (pgbouncer) treats SERVFAIL on "postgres.<search>" as fatal and
+#     returns result=0 without falling through to a bare "postgres" lookup.
+#     This was the original observed symptom (#3ah).
+#   * musl-libc and some older glibc versions can exhibit similar fail-fatal
+#     behaviour on transient SERVFAILs from upstream resolvers.
+#   * Modern glibc usually falls through, but the failure mode is host- and
+#     resolver-version-dependent and not under our control.
+#
+# Setting `dns_search: ["."]` per service eliminates the variable: containers
+# resolve service names directly against Docker's embedded DNS (127.0.0.11)
+# with no search-domain expansion. Podman writes its own minimal resolv.conf
+# and was unaffected, but applying the override on Podman is benign — it
+# either matches Podman's existing default or is silently ignored.
+#
+# `dns: [...]` is intentionally NOT set: hardcoding 127.0.0.11 breaks Podman
+# (which uses aardvark-dns at a different address) and breaks user-defined
+# networks where Docker may inject a different resolver address. Empty search
+# is the minimum viable, runtime-portable change.
+# ---------------------------------------------------------------------------
+
 
 x-common-env: &common-env
   YASHIGANI_ENV: ${YASHIGANI_ENV:-development}
@@ -44,6 +79,7 @@ services:
   # everything else to gateway.
   # ---------------------------------------------------------------------------
   caddy:
+    dns_search: ["."]
     image: docker.io/library/caddy:2-alpine
     restart: unless-stopped
     ports:
@@ -91,6 +127,7 @@ services:
   # Gateway — MCP reverse proxy (data plane)
   # ---------------------------------------------------------------------------
   gateway:
+    dns_search: ["."]
     image: yashigani/gateway:${YASHIGANI_VERSION:-latest}
     build:
       context: ..
@@ -173,6 +210,7 @@ services:
   # Backoffice — Admin control plane (generates first-run credentials)
   # ---------------------------------------------------------------------------
   backoffice:
+    dns_search: ["."]
     image: yashigani/backoffice:${YASHIGANI_VERSION:-latest}
     build:
       context: ..
@@ -267,6 +305,7 @@ services:
   # Auth: trusts X-Forwarded-User from Caddy (SSO) or API key passthrough.
   # ---------------------------------------------------------------------------
   open-webui:
+    dns_search: ["."]
     image: ghcr.io/open-webui/open-webui:v0.9.1
     restart: unless-stopped
     environment:
@@ -310,6 +349,7 @@ services:
   # Separate from main Redis to prevent counter loss under memory pressure.
   # ---------------------------------------------------------------------------
   budget-redis:
+    dns_search: ["."]
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
     entrypoint: ["sh", "-c"]
@@ -346,6 +386,7 @@ services:
   # Policy — OPA (Open Policy Agent) — always local, never cloud-delegated
   # ---------------------------------------------------------------------------
   policy:
+    dns_search: ["."]
     image: docker.io/openpolicyagent/opa:1.15.1
     restart: unless-stopped
     # v2.23.1 NOTE: OPA retains plaintext HTTP on the internal bridge network
@@ -377,6 +418,7 @@ services:
   # Redis — session store + TOTP provisioning tokens + rate limiter counters
   # ---------------------------------------------------------------------------
   redis:
+    dns_search: ["."]
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
     # v2.23.1 — plaintext 6379 disabled (port 0), TLS-only on 6380 with
@@ -416,6 +458,7 @@ services:
   # Ollama — local LLM inference (never a cloud call for security classification)
   # ---------------------------------------------------------------------------
   ollama:
+    dns_search: ["."]
     image: docker.io/ollama/ollama:0.6.2
     restart: unless-stopped
     volumes:
@@ -443,6 +486,7 @@ services:
 
   # Model bootstrap — pull classifier model on first start
   ollama-init:
+    dns_search: ["."]
     image: docker.io/ollama/ollama:0.6.2
     restart: on-failure:3
     entrypoint: ["/bin/bash", "-c"]
@@ -477,6 +521,7 @@ services:
   # Exposed externally only via Caddy /metrics-federate (basic auth)
   # ---------------------------------------------------------------------------
   prometheus:
+    dns_search: ["."]
     image: docker.io/prom/prometheus:v3.2.1
     restart: unless-stopped
     command:
@@ -507,6 +552,7 @@ services:
   # Admin password auto-generated at bootstrap (check backoffice logs)
   # ---------------------------------------------------------------------------
   grafana:
+    dns_search: ["."]
     image: docker.io/grafana/grafana:11.5.2
     restart: unless-stopped
     environment:
@@ -540,6 +586,7 @@ services:
   # PostgreSQL 16 — primary durable store (tenants, audit, inference, RBAC)
   # ---------------------------------------------------------------------------
   postgres:
+    dns_search: ["."]
     image: docker.io/pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
@@ -573,25 +620,10 @@ services:
   pgbouncer:
     image: docker.io/edoburu/pgbouncer:v1.23.1-p0
     restart: unless-stopped
-    # ---------------------------------------------------------------------------
-    # Retro #3ah (v2.23.1): pgbouncer uses c-ares for DNS resolution. On Docker
-    # Engine running inside libvirt/qemu VMs, the host's systemd-resolved leaks
-    # search domains (e.g. "placeholder-NNNN.hostname.internal lan") into the
-    # container's /etc/resolv.conf. c-ares treats SERVFAIL on
-    # "postgres.<search-domain>" as fatal and returns result=0 without falling
-    # through to a bare "postgres" lookup. Symptom: pgbouncer logs
-    # "DNS lookup failed: postgres: result=0" → "client_login_timeout
-    # (server down)". Backoffice then sees "peer did not return a certificate"
-    # because the upstream connection never establishes (misleading downstream
-    # symptom — certs and perms were verified clean). Empty dns_search forces
-    # Docker to write resolv.conf without any search line, which c-ares handles
-    # correctly. Podman writes its own minimal resolv.conf and was unaffected,
-    # but the explicit override keeps both runtimes deterministic.
-    # ---------------------------------------------------------------------------
-    # NB: ["."] (literal dot) is required to actually empty the search list.
-    # Docker treats `[]` as "no override" but `["."] ` writes no search line.
-    dns_search:
-      - "."
+    # Retro #3ah (v2.23.1): c-ares fail-fatal on host-leaked search domains.
+    # Originator of the dns_search hardening — see top-of-file block for
+    # the full rationale now that every service inherits the same setting.
+    dns_search: ["."]
     environment:
       DATABASE_URL: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/yashigani
       AUTH_TYPE: plain
@@ -628,6 +660,7 @@ services:
   # Alertmanager — alert routing (Slack → Email → PagerDuty)
   # ---------------------------------------------------------------------------
   alertmanager:
+    dns_search: ["."]
     image: docker.io/prom/alertmanager:v0.27.0
     restart: unless-stopped
     command:
@@ -652,6 +685,7 @@ services:
   # Loki — log aggregation backend
   # ---------------------------------------------------------------------------
   loki:
+    dns_search: ["."]
     image: docker.io/grafana/loki:3.0.0
     restart: unless-stopped
     command: -config.file=/etc/loki/loki.yml
@@ -670,6 +704,7 @@ services:
   # Promtail — ships Docker container logs to Loki
   # ---------------------------------------------------------------------------
   promtail:
+    dns_search: ["."]
     image: docker.io/grafana/promtail:3.0.0
     restart: unless-stopped
     command: -config.file=/etc/promtail/promtail.yml
@@ -691,6 +726,7 @@ services:
   # OpenTelemetry Collector — OTLP receiver, Jaeger exporter
   # ---------------------------------------------------------------------------
   otel-collector:
+    dns_search: ["."]
     image: docker.io/otel/opentelemetry-collector-contrib:0.100.0
     restart: unless-stopped
     command: ["--config=/etc/otel/otel-collector.yml"]
@@ -710,6 +746,7 @@ services:
   # Jaeger — distributed trace UI
   # ---------------------------------------------------------------------------
   jaeger:
+    dns_search: ["."]
     image: docker.io/jaegertracing/all-in-one:1.57
     restart: unless-stopped
     environment:
@@ -730,6 +767,7 @@ services:
   # Realm is imported on first boot from docker/keycloak/yashigani-test-realm.json.
   # ---------------------------------------------------------------------------
   keycloak:
+    dns_search: ["."]
     image: quay.io/keycloak/keycloak:26.0
     restart: unless-stopped
     command:
@@ -765,6 +803,7 @@ services:
   # WARNING: dev-mode — data NOT persisted. NOT for production.
   # ---------------------------------------------------------------------------
   vault:
+    dns_search: ["."]
     image: docker.io/hashicorp/vault:1.16
     restart: unless-stopped
     cap_add:
@@ -802,6 +841,7 @@ services:
   # Single container, embedded SQLite. OpenAI-compatible API on port 7860.
   # Users build custom agent workflows visually via the Langflow UI.
   langflow:
+    dns_search: ["."]
     image: docker.io/langflowai/langflow:1.9.0
     restart: unless-stopped
     environment:
@@ -836,6 +876,7 @@ services:
   # Agent with long-term memory, tool use, and conversation persistence.
   # Exposes REST API on port 8283 with OpenAI-compatible chat endpoint.
   letta:
+    dns_search: ["."]
     image: docker.io/letta/letta:0.16.7
     restart: unless-stopped
     environment:
@@ -877,6 +918,7 @@ services:
   # Runs its own Gateway on port 18789. All LLM requests route through Yashigani.
   # Integration: OpenClaw (:18789) → Yashigani Gateway (:8080) → Ollama/LLM
   openclaw:
+    dns_search: ["."]
     image: ghcr.io/openclaw/openclaw:2026.3.1
     restart: unless-stopped
     ports:
@@ -916,6 +958,7 @@ services:
   # All Yashigani audit events are forwarded via the SIEM sink (audit/sinks.py)
   # ---------------------------------------------------------------------------
   wazuh-manager:
+    dns_search: ["."]
     image: docker.io/wazuh/wazuh-manager:4.9.2
     restart: unless-stopped
     environment:
@@ -952,6 +995,7 @@ services:
       - wazuh
 
   wazuh-indexer:
+    dns_search: ["."]
     image: docker.io/wazuh/wazuh-indexer:4.9.2
     restart: unless-stopped
     environment:
@@ -970,6 +1014,7 @@ services:
       - wazuh
 
   wazuh-dashboard:
+    dns_search: ["."]
     image: docker.io/wazuh/wazuh-dashboard:4.9.2
     restart: unless-stopped
     environment:
@@ -1006,6 +1051,7 @@ services:
   # Enable with: --with-internal-ca
   # ---------------------------------------------------------------------------
   step-ca:
+    dns_search: ["."]
     image: docker.io/smallstep/step-ca:0.30.2
     restart: unless-stopped
     environment:
