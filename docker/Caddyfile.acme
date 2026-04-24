@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
-# Last updated: 2026-04-23T23:32:19+01:00
+# Last updated: 2026-04-24T13:47:12+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -285,13 +285,20 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Internal observability listener — :8444 (mesh-internal only, never published).
-# Last updated: 2026-04-23T23:32:19+01:00
+# Internal observability listeners — :8444 gateway / :8445 backoffice.
+# Mesh-internal only, never published to the host.
+# Last updated: 2026-04-24T13:47:12+01:00
 #
 # Purpose:
-#   Prometheus scrapes gateway/backoffice /internal/metrics via Caddy so that
+#   Prometheus scrapes gateway/backoffice /internal/metrics through Caddy so
 #   every scrape goes through our SPIFFE-aware identity gate. mTLS client-cert
 #   auth is REQUIRED — Caddy refuses the TLS handshake without one.
+#
+# Per-port split (#81 fix):
+#   Prometheus v3.x rejects setting `Host` via http_headers (forbidden). The
+#   previous design used a single :8444 listener with a Host-header matcher
+#   to pick gateway vs backoffice — that is incompatible with Prom v3. We
+#   now give each upstream its own listener with identical semantics.
 #
 # Identity forwarding (EX-231-08, zero-trust default):
 #   1. `request_header -X-SPIFFE-ID` strips any inbound value. Critical:
@@ -305,8 +312,8 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
 #   3. The upstream (gateway/backoffice) enforces the allowlist in
 #      yashigani.auth.spiffe.require_spiffe_id against the parsed manifest.
 #
-# This listener is NOT exposed in docker-compose.yml `ports:` — it is only
-# reachable over the internal bridge network.
+# These listeners are NOT exposed in docker-compose.yml `ports:` — they are
+# only reachable over the internal bridge network.
 # ─────────────────────────────────────────────────────────────────────────────
 :8444 {
     tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
@@ -324,26 +331,42 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
         # Populate from the verified peer cert's URI SAN.
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
 
-        # Gateway vs backoffice routing — Host header chooses the upstream so
-        # Prometheus can target either service via the same listener.
-        @to_backoffice header Host backoffice*
-        handle @to_backoffice {
-            reverse_proxy https://backoffice:8443 {
-                import internal-mtls
-                header_up X-Forwarded-Proto https
-                header_up X-Real-IP {remote_host}
-            }
-        }
-        handle {
-            reverse_proxy https://gateway:8080 {
-                import internal-mtls
-                header_up X-Forwarded-Proto https
-                header_up X-Real-IP {remote_host}
-            }
+        reverse_proxy https://gateway:8080 {
+            import internal-mtls
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
         }
     }
 
     # Default: reject anything else on this listener.
+    handle {
+        respond "Not Found" 404
+    }
+}
+
+# Parallel listener for the backoffice upstream — identical SPIFFE gate,
+# identical strip-before-set header discipline.
+:8445 {
+    tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        client_auth {
+            mode require_and_verify
+            trust_pool file /run/secrets/ca_root.crt
+        }
+        protocols tls1.2 tls1.3
+    }
+
+    @metrics path /internal/metrics
+    handle @metrics {
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+
+        reverse_proxy https://backoffice:8443 {
+            import internal-mtls
+            header_up X-Forwarded-Proto https
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
     handle {
         respond "Not Found" 404
     }

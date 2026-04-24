@@ -446,6 +446,11 @@ caddy:
   internalMetricsListener:
     enabled: false
     port: 8444
+  # #81 fix parallel backoffice listener (Prom v3 rejects Host via http_headers).
+  # Toggle in lockstep with internalMetricsListener.enabled.
+  internalMetricsListenerBackoffice:
+    enabled: false
+    port: 8445
 
 # ---------------------------------------------------------------------------
 # Optional Agent Bundles (v0.8.0)

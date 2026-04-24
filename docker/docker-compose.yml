@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-23T13:28:36+01:00
+# Last updated: 2026-04-24T13:47:12+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -49,6 +49,13 @@ services:
     ports:
       - "${YASHIGANI_HTTP_PORT:-80}:80"
       - "${YASHIGANI_HTTPS_PORT:-443}:443"
+    # Mesh-internal SPIFFE-gated metrics listeners — NEVER host-mapped.
+    # 8444 = gateway upstream, 8445 = backoffice upstream (#81 fix).
+    # `expose:` is documentation only on bridge networks, but it is the
+    # canonical place to record which internal ports a service opens.
+    expose:
+      - "8444"
+      - "8445"
     environment:
       YASHIGANI_TLS_DOMAIN: ${YASHIGANI_TLS_DOMAIN:?set YASHIGANI_TLS_DOMAIN}
       CADDY_ACME_EMAIL: ${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}
@@ -482,8 +489,10 @@ services:
       - ../config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../config/prometheus_alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
-      # v2.23.1 EX-231-08: Prometheus presents its leaf cert to Caddy's :8444
-      # listener for SPIFFE-URI-gated scrapes of /internal/metrics.
+      # v2.23.1 EX-231-08 (+ #81): Prometheus presents its leaf cert to Caddy's
+      # :8444 (gateway) + :8445 (backoffice) listeners for SPIFFE-URI-gated
+      # scrapes of /internal/metrics. Split-listener design replaced the prior
+      # Host-header matcher (Prom v3 forbids setting Host via http_headers).
       - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]

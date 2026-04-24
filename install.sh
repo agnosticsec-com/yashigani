@@ -1955,6 +1955,55 @@ compose_up() {
   fi
 
   log_success "Services started"
+
+  # ---------------------------------------------------------------------------
+  # Retro #81-c: prometheus config smoke check.
+  #
+  # Bug f52123c shipped a broken scrape config (http_headers.Host is on the
+  # Prom v3 forbidden list) that survived `docker compose up` because the
+  # container stays "running" even when /-/ready is 503 from a bad config.
+  # The prom healthcheck is /-/healthy (process-up), NOT /-/ready
+  # (config-loaded-and-scraping). A clean-slate installer run would therefore
+  # report green while /targets was empty.
+  #
+  # Fix: after compose up, (1) syntactically validate the on-disk config with
+  # promtool via a throw-away prometheus:v3.0.1 exec, and (2) poll /-/ready on
+  # the running instance. promtool failure is BLOCKING (the config is broken
+  # — pretending otherwise is the exact failure mode this retro item fixes).
+  # /-/ready failure is a warn (first-boot scrape pool setup can run long on
+  # slow hosts; we don't want to fail-close on a timing race).
+  # ---------------------------------------------------------------------------
+  local prom_cfg="${WORK_DIR}/config/prometheus.yml"
+  if [[ -f "$prom_cfg" ]]; then
+    log_info "Validating prometheus config with promtool..."
+    if "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T prometheus promtool check config /etc/prometheus/prometheus.yml >/dev/null 2>&1; then
+      log_success "promtool check config OK"
+    else
+      local _promtool_out
+      _promtool_out="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T prometheus promtool check config /etc/prometheus/prometheus.yml 2>&1 || true)"
+      log_error "promtool rejected ${prom_cfg}:"
+      printf '%s
+' "$_promtool_out" >&2
+      log_error "Prometheus will not scrape. Fix config and re-run. See retro #81-c."
+      return 1
+    fi
+
+    log_info "Waiting for prometheus /-/ready..."
+    local _ready_host="127.0.0.1"
+    local _ready_port="9090"
+    local _ready_ok=0
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T prometheus wget -qO- "http://localhost:9090/-/ready" 2>/dev/null | grep -q "Ready"; then
+        _ready_ok=1; break
+      fi
+      sleep 2
+    done
+    if [[ "$_ready_ok" -eq 1 ]]; then
+      log_success "prometheus /-/ready OK"
+    else
+      log_warn "prometheus /-/ready not green after 20s — check 'docker compose logs prometheus' if /targets is empty"
+    fi
+  fi
 }
 
 # =============================================================================

@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-23T23:32:19+01:00 */ -}}
+{{- /* Last updated: 2026-04-24T13:47:12+01:00 */ -}}
 {{- if .Values.prometheus.enabled }}
 ---
 apiVersion: v1
@@ -11,12 +11,16 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     {{- include "yashigani.labels" . | nindent 4 }}
 data:
-  # v2.23.1 EX-231-08: when caddy.internalMetricsListener.enabled=true AND the
-  # mesh mTLS secrets are mounted into both caddy and prometheus, Prometheus
-  # scrapes go through Caddy's :8444 listener with mTLS + SPIFFE URI ACL.
-  # Otherwise (default off state of the Helm chart today) Prometheus hits
-  # the pods directly — same behaviour as pre-v2.23.1. Parity with docker
-  # compose is tracked as a v2.23.2 Helm-plane work item.
+  # v2.23.1 EX-231-08 (+ #81): when caddy.internalMetricsListener.enabled=true
+  # AND internalMetricsListenerBackoffice.enabled=true AND the mesh mTLS
+  # secrets are mounted into both caddy and prometheus, Prometheus scrapes
+  # go through Caddy's :8444 (gateway) + :8445 (backoffice) listeners with
+  # mTLS + SPIFFE URI ACL. Otherwise (default off state of the Helm chart
+  # today) Prometheus hits the pods directly — same behaviour as pre-v2.23.1.
+  #
+  # Prometheus v3.x rejects setting Host via http_headers, so the previous
+  # single-port Host-matcher design was split into two listeners. Each
+  # upstream has its own port; both enforce the identical SPIFFE URI gate.
   prometheus.yml: |
     global:
       scrape_interval: 15s
@@ -38,27 +42,26 @@ data:
           cert_file: /run/secrets/prometheus_client.crt
           key_file:  /run/secrets/prometheus_client.key
           server_name: yashigani-caddy
-        http_headers:
-          Host:
-            values: ["gateway"]
+    {{- end }}
+    {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
       - job_name: backoffice
         scheme: https
         static_configs:
-          - targets: ["yashigani-caddy:{{ .Values.caddy.internalMetricsListener.port }}"]
+          - targets: ["yashigani-caddy:{{ .Values.caddy.internalMetricsListenerBackoffice.port }}"]
         metrics_path: /internal/metrics
         tls_config:
           ca_file:   /run/secrets/ca_root.crt
           cert_file: /run/secrets/prometheus_client.crt
           key_file:  /run/secrets/prometheus_client.key
           server_name: yashigani-caddy
-        http_headers:
-          Host:
-            values: ["backoffice"]
-    {{- else }}
+    {{- end }}
+    {{- if not .Values.caddy.internalMetricsListener.enabled }}
       - job_name: gateway
         static_configs:
           - targets: ["yashigani-gateway:8080"]
         metrics_path: /internal/metrics
+    {{- end }}
+    {{- if not .Values.caddy.internalMetricsListenerBackoffice.enabled }}
       - job_name: backoffice
         static_configs:
           - targets: ["yashigani-backoffice:8443"]

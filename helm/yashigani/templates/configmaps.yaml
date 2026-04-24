@@ -199,10 +199,21 @@ data:
     }
     {{- if .Values.caddy.internalMetricsListener.enabled }}
     # ────────────────────────────────────────────────────────────────────────
-    # EX-231-08 — SPIFFE-gated internal observability listener.
-    # Last updated: 2026-04-23T23:32:19+01:00
+    # EX-231-08 (+ #81) — SPIFFE-gated internal observability listeners.
+    # Last updated: 2026-04-24T13:47:12+01:00
     # See docker/Caddyfile.acme for the full comment block.
     # Requires ca_root.crt + caddy_client.{crt,key} mounted at /run/secrets.
+    #
+    # NOTE (retro #81-b): this Helm ConfigMap hand-codes a stripped Caddyfile
+    # that is deliberately NOT full-parity with docker/Caddyfile.acme. Full
+    # parity is a separate v2.23.2 work item (#76) — do not merge the two
+    # files until that item lands.
+    #
+    # Split-listener design (was: single :8444 with Host-header matcher):
+    #   :8444 -> yashigani-gateway:8080
+    #   :8445 -> yashigani-backoffice:8443
+    # Prometheus v3.x rejects setting Host via http_headers, so each upstream
+    # gets its own port. Both listeners enforce the identical SPIFFE URI gate.
     # ────────────────────────────────────────────────────────────────────────
     :{{ .Values.caddy.internalMetricsListener.port }} {
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
@@ -216,23 +227,39 @@ data:
       handle @metrics {
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
-        @to_backoffice header Host backoffice*
-        handle @to_backoffice {
-          reverse_proxy https://yashigani-backoffice:8443 {
-            transport http {
-              tls
-              tls_trusted_ca_certs /run/secrets/ca_root.crt
-              tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
-            }
+        reverse_proxy https://yashigani-gateway:8080 {
+          transport http {
+            tls
+            tls_trusted_ca_certs /run/secrets/ca_root.crt
+            tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
           }
         }
-        handle {
-          reverse_proxy https://yashigani-gateway:8080 {
-            transport http {
-              tls
-              tls_trusted_ca_certs /run/secrets/ca_root.crt
-              tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
-            }
+      }
+      handle {
+        respond "Not Found" 404
+      }
+    }
+    {{- end }}
+    {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+    # Parallel listener for the backoffice upstream — identical SPIFFE gate,
+    # identical strip-before-set header discipline. #81 split-listener design.
+    :{{ .Values.caddy.internalMetricsListenerBackoffice.port }} {
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        client_auth {
+          mode require_and_verify
+          trust_pool file /run/secrets/ca_root.crt
+        }
+        protocols tls1.2 tls1.3
+      }
+      @metrics path /internal/metrics
+      handle @metrics {
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        reverse_proxy https://yashigani-backoffice:8443 {
+          transport http {
+            tls
+            tls_trusted_ca_certs /run/secrets/ca_root.crt
+            tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
           }
         }
       }

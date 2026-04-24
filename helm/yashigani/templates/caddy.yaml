@@ -41,6 +41,16 @@ spec:
             - name: https
               containerPort: 443
               protocol: TCP
+            {{- if .Values.caddy.internalMetricsListener.enabled }}
+            - name: metrics-gw
+              containerPort: {{ .Values.caddy.internalMetricsListener.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+            - name: metrics-bo
+              containerPort: {{ .Values.caddy.internalMetricsListenerBackoffice.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
