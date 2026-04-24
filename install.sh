@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-24T13:45:00+01:00
+# last-updated: 2026-04-24T16:15:00+01:00
 set -euo pipefail
 
 # =============================================================================
@@ -2332,6 +2332,31 @@ PY
   fi
 }
 
+_urlencode_userinfo() {
+  # Percent-encode a Postgres URI userinfo (user or password) so it round-trips
+  # through psycopg2 / SQLAlchemy / libpq URI parsers regardless of which
+  # sub-delims they choke on. psycopg2 truncates at ',' in URI-style DSNs
+  # even though RFC 3986 permits it in userinfo — so we encode everything
+  # except the RFC 3986 "unreserved" set (A-Z a-z 0-9 - . _ ~).
+  local _s="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$_s" <<'PY'
+import sys, urllib.parse
+print(urllib.parse.quote(sys.argv[1], safe=""), end="")
+PY
+  else
+    local _i _c _out=""
+    for (( _i=0; _i<${#_s}; _i++ )); do
+      _c="${_s:_i:1}"
+      case "$_c" in
+        [A-Za-z0-9._~-]) _out+="$_c" ;;
+        *) _out+=$(printf '%%%02X' "'$_c") ;;
+      esac
+    done
+    printf "%s" "$_out"
+  fi
+}
+
 _gen_totp_secret() {
   # 20-byte (160-bit) TOTP secret, base32-encoded (RFC 4226 / RFC 6238)
   if command -v python3 >/dev/null 2>&1; then
@@ -2428,6 +2453,21 @@ generate_secrets() {
         fi
       fi
     done
+    # v2.23.1 fix: URL-encoded Postgres password for URI-style DSNs (psycopg2
+    # mis-parses unreserved sub-delims like ',' in userinfo). Compose templates
+    # must reference POSTGRES_PASSWORD_URLENC for postgresql:// DSNs; raw
+    # POSTGRES_PASSWORD remains for non-URI env (pgbouncer auth, libpq kwargs).
+    if [[ "$GEN_POSTGRES_PASSWORD" != "[preserved]" && -n "$GEN_POSTGRES_PASSWORD" ]]; then
+      local _pgurlenc
+      _pgurlenc="$(_urlencode_userinfo "$GEN_POSTGRES_PASSWORD")"
+      if grep -q "^POSTGRES_PASSWORD_URLENC=" "$env_file" 2>/dev/null; then
+        local tmp_env; tmp_env="$(mktemp)"
+        sed "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${_pgurlenc}|" "$env_file" > "$tmp_env"
+        mv "$tmp_env" "$env_file"
+      else
+        echo "POSTGRES_PASSWORD_URLENC=${_pgurlenc}" >> "$env_file"
+      fi
+    fi
     # Ensure OpenClaw gateway token exists
     if ! grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
       local openclaw_token
@@ -2538,6 +2578,15 @@ generate_secrets() {
     mv "$tmp_env" "$env_file"
   else
     echo "POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}" >> "$env_file"
+  fi
+  # v2.23.1 fix: URL-encoded variant for URI-style DSNs (see _urlencode_userinfo).
+  GEN_POSTGRES_PASSWORD_URLENC="$(_urlencode_userinfo "$GEN_POSTGRES_PASSWORD")"
+  if grep -q "^POSTGRES_PASSWORD_URLENC=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${GEN_POSTGRES_PASSWORD_URLENC}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "POSTGRES_PASSWORD_URLENC=${GEN_POSTGRES_PASSWORD_URLENC}" >> "$env_file"
   fi
 
   # --- Redis ---
