@@ -3223,7 +3223,7 @@ _pki_run_issuer() {
 # present). Retro v2.23.1 root cause: pgbouncer (UID 70) crashed because
 # keys were owned by UID 1001 from the issuer image and chown was never
 # called on skip path.
-# Last updated: 2026-04-23T00:00:00+00:00
+# Last updated: 2026-04-24T20:55:16+01:00
 # ---------------------------------------------------------------------------
 _pki_chown_client_keys() {
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" || "${YSG_RUNTIME:-}" == "docker" ]]; then
@@ -3233,6 +3233,13 @@ _pki_chown_client_keys() {
       "redis:999"
       "budget-redis:999"
       "pgbouncer:70"
+      # postgres (UID 999) needs to read its own key inside the read-only
+      # /run/secrets bind-mount so that 05-enable-ssl.sh can `install` it
+      # into PGDATA. Without this chown the `install` call fails with
+      # "Permission denied" and postgres starts with ssl=off, causing
+      # pgbouncer verify-ca to refuse the plaintext upstream.
+      # Retro #3ad — v2.23.1.
+      "postgres:999"
     )
     local _chown_mode="direct"
     if [[ "$(id -u)" != "0" ]]; then
