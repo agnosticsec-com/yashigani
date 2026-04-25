@@ -1,9 +1,10 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
+# Last updated: 2026-04-25T21:43:38+01:00
 
 global:
   imageRegistry: "ghcr.io"
-  imageOwner: "yashigani"
+  imageOwner: "agnosticsec-com"
   # REQUIRED: Replace with your actual domain before deployment
   tlsDomain: "yashigani.example.com"
   # tlsMode: caddy | nginx (cert-manager + nginx-ingress)

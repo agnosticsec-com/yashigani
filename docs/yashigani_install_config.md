@@ -1,7 +1,7 @@
 # Yashigani — Installation and Configuration Guide
 
 **Version:** 2.23.1
-**Last updated:** 2026-04-23
+**Last updated:** 2026-04-25T21:43:38+01:00
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -2304,24 +2304,24 @@ Images are signed with cosign using keyless signing (Sigstore Fulcio CA + Rekor 
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
 ```
 
 **Verify backoffice image:**
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-backoffice:2.2
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
 ```
 
 A successful verification prints:
 
 ```
-Verification for ghcr.io/agnosticsec/yashigani-gateway:2.2 --
+Verification for ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - Existence of the claims in the transparency log was verified offline
@@ -2335,9 +2335,9 @@ The SBOM is attached as a cosign attestation with predicate type `cyclonedx`. Re
 ```bash
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
   | jq '.[0].payload | @base64d | fromjson'
 ```
 
@@ -2346,9 +2346,9 @@ To extract just the component list:
 ```bash
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
   | jq '.[0].payload | @base64d | fromjson | .predicate.components[] | {name,version,purl}'
 ```
 
@@ -2357,21 +2357,21 @@ cosign verify-attestation \
 The SBOM and CryptoBoM are also attached directly to each GitHub release:
 
 ```bash
-# Download SBOM for v2.2.0
-gh release download v2.2.0 \
-  --repo agnosticsec/yashigani \
+# Download SBOM for v2.23.1
+gh release download v2.23.1 \
+  --repo agnosticsec-com/yashigani \
   --pattern 'sbom-yashigani-*.cdx.json' \
   --dir ./dist
 
-# Download CryptoBoM for v2.2.0
-gh release download v2.2.0 \
-  --repo agnosticsec/yashigani \
+# Download CryptoBoM for v2.23.1
+gh release download v2.23.1 \
+  --repo agnosticsec-com/yashigani \
   --pattern 'cryptobom-yashigani-*.json' \
   --dir ./dist
 ```
 
 Or download from the GitHub releases page at:
-`https://github.com/agnosticsec/yashigani/releases`
+`https://github.com/agnosticsec-com/yashigani/releases`
 
 ### 27.6 CryptoBoM — Cryptographic Algorithm Inventory
 
@@ -2386,7 +2386,7 @@ The CryptoBoM (`cryptobom-yashigani-<version>.json`) lists every cryptographic a
 To query which algorithms are not post-quantum resistant:
 
 ```bash
-cat dist/cryptobom-yashigani-2.2.0.json \
+cat dist/cryptobom-yashigani-2.23.1.json \
   | jq '.algorithms[] | select(.pq_status == "not_resistant") | {id, name, usage}'
 ```
 
@@ -2400,11 +2400,11 @@ cosign generate-key-pair
 
 # Sign with local key
 COSIGN_PASSWORD=<passphrase> bash scripts/sign_image.sh \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
-  ghcr.io/agnosticsec/yashigani-backoffice:2.2
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
 
 # Verify with public key
-cosign verify --key cosign.pub ghcr.io/agnosticsec/yashigani-gateway:2.2
+cosign verify --key cosign.pub ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
 ```
 
 The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVATE_KEY` is set or `cosign.key` is present it uses local-key mode; otherwise it falls back to keyless.
@@ -2413,4 +2413,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.23.1 — Installation and Configuration Guide — 2026-04-23*
+*Yashigani v2.23.1 — Installation and Configuration Guide — 2026-04-25T21:43:38+01:00*

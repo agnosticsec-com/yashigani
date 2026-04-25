@@ -1,6 +1,6 @@
 # Yashigani — Kubernetes Deployment Guide
 
-Version: v2.23.1 | Chart version: 2.23.1 | Last updated: 2026-04-23
+Version: v2.23.1 | Chart version: 2.23.1 | Last updated: 2026-04-25T21:43:38+01:00
 
 ---
 
@@ -98,7 +98,7 @@ helm test yashigani -n yashigani --logs
 | Key | Default | Description |
 |-----|---------|-------------|
 | `global.imageRegistry` | `ghcr.io` | Container registry prefix |
-| `global.imageOwner` | `yashigani` | Registry namespace/org |
+| `global.imageOwner` | `agnosticsec-com` | Registry namespace/org |
 | `global.tlsDomain` | `yashigani.example.com` | **REQUIRED** — your public domain |
 | `global.tlsMode` | `nginx` | `nginx` (cert-manager) or `caddy` (edge proxy) |
 | `global.certManagerIssuer` | `letsencrypt-prod` | ClusterIssuer name for TLS |
