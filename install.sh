@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-24T16:15:00+01:00
+# last-updated: 2026-04-24T22:55:00+00:00
 set -euo pipefail
 
 # =============================================================================
@@ -3197,6 +3197,14 @@ _pki_run_issuer() {
     # mkdir -p above may have created it as root when install runs via sudo.
     # Retro v2.23.1 item #3ad (Docker path).
     chown 1001:1001 "$secrets_in" 2>/dev/null || true
+    # Retro #3ah (v2.23.1): the issuer also writes back to
+    # service_identities.yaml (bootstrap_token_sha256 fields) via the
+    # /manifest.yaml bind mount. Without ownership match the write fails
+    # with PermissionError and the whole PKI bootstrap aborts. Podman's
+    # :U handles this automatically, but Docker doesn't, so chown the
+    # manifest to UID 1001 too. Restored after the run by _pki_persist_env's
+    # callers (manifest is regenerated on rotation).
+    chown 1001:1001 "$manifest_in" 2>/dev/null || true
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -3223,7 +3231,7 @@ _pki_run_issuer() {
 # present). Retro v2.23.1 root cause: pgbouncer (UID 70) crashed because
 # keys were owned by UID 1001 from the issuer image and chown was never
 # called on skip path.
-# Last updated: 2026-04-24T20:55:16+01:00
+# Last updated: 2026-04-24T22:55:00+00:00
 # ---------------------------------------------------------------------------
 _pki_chown_client_keys() {
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" || "${YSG_RUNTIME:-}" == "docker" ]]; then
