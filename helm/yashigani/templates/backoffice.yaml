@@ -46,7 +46,26 @@ spec:
           # image surface small.
           image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
           imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy | default "IfNotPresent" }}
-          command: ["sh","-c","cp -L /pki-ro/* /secrets-rw/ && chmod 0400 /secrets-rw/*"]
+          # Retro #3ap — also seed admin1/admin2 bootstrap material so
+          # _bootstrap_admin_accounts in src/yashigani/backoffice/app.py can
+          # find admin1_username, admin_initial_password, admin1_totp_secret,
+          # admin2_username, admin2_password, admin2_totp_secret.
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp -L /pki-ro/* /secrets-rw/
+              if [ -d /admin-bootstrap-ro ]; then
+                # tolerate empty admin-bootstrap mount (existingSecretName=empty
+                # placeholder pattern OR adminBootstrap.enabled=false at upgrade
+                # time on a release that already seeded admins).
+                for f in /admin-bootstrap-ro/*; do
+                  [ -e "$f" ] || continue
+                  cp -L "$f" /secrets-rw/
+                done
+              fi
+              chmod 0400 /secrets-rw/*
           securityContext:
             runAsUser: 1001
             runAsGroup: 1001
@@ -58,6 +77,11 @@ spec:
             - name: pki-ro
               mountPath: /pki-ro
               readOnly: true
+            {{- if .Values.adminBootstrap.enabled }}
+            - name: admin-bootstrap-ro
+              mountPath: /admin-bootstrap-ro
+              readOnly: true
+            {{- end }}
             - name: secrets
               mountPath: /secrets-rw
       {{- end }}
@@ -83,6 +107,19 @@ spec:
               value: "docker"
             - name: YASHIGANI_SERVICE_NAME
               value: "backoffice"
+            {{- if .Values.adminBootstrap.enabled }}
+            # Retro #3ap — pull the generated admin1 username out of the
+            # adminBootstrap Secret. _bootstrap_admin_accounts in app.py uses
+            # this as the username it creates the admin1 row with. Compose
+            # parity: install.sh rewrites .env's YASHIGANI_ADMIN_USERNAME on
+            # generate; we get the same effect here without a writable .env.
+            - name: YASHIGANI_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.adminBootstrap.existingSecretName | default .Values.adminBootstrap.secretName }}
+                  key: admin1_username
+                  optional: true
+            {{- end }}
             - name: REDIS_HOST
               value: "yashigani-redis"
             - name: REDIS_PORT
@@ -204,6 +241,13 @@ spec:
           secret:
             secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
             defaultMode: 0440
+        {{- if .Values.adminBootstrap.enabled }}
+        - name: admin-bootstrap-ro
+          secret:
+            secretName: {{ .Values.adminBootstrap.existingSecretName | default .Values.adminBootstrap.secretName }}
+            defaultMode: 0400
+            optional: true
+        {{- end }}
         - name: service-manifest
           configMap:
             name: yashigani-pki-manifest
