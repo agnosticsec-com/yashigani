@@ -42,12 +42,16 @@ metadata:
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation
 rules:
-  # Single rule — get/update/patch on the specific pki-certs Secret only.
-  # No `create` verb is needed because the empty placeholder Secret is
-  # pre-created by the -9-weighted hook below. No wildcard rules.
+  # Single rule — get/update/patch on the two PKI Secrets only.
+  # Retro #3aj: leaves and CA private keys are split into two Secrets;
+  # both are pre-seeded as empty placeholders by the -9-weighted hooks
+  # below so the applier never needs the unrestricted `create` verb on
+  # the secrets resource.
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ .Values.mtls.secretName | quote }}]
+    resourceNames:
+      - {{ .Values.mtls.secretName | quote }}
+      - {{ .Values.mtls.caKeysSecretName | quote }}
     verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -91,6 +95,26 @@ metadata:
     # Once created, never deleted on subsequent upgrades — we don't want
     # to wipe live certs between `helm upgrade` runs. `hook-succeeded`
     # intentionally omitted.
+    "helm.sh/resource-policy": keep
+type: Opaque
+data: {}
+---
+# Retro #3aj — placeholder Secret for the CA private keys. Same pattern as
+# the leaves Secret (pre-install, keep), but workload pods MUST NOT be able
+# to project this volume. Only the bootstrap Job and rotation CronJob
+# (running under ServiceAccount yashigani-pki) reference it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.mtls.caKeysSecretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-pki
+    app.kubernetes.io/component: pki
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-9"
     "helm.sh/resource-policy": keep
 type: Opaque
 data: {}
