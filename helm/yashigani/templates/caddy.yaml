@@ -54,18 +54,23 @@ spec:
           env:
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
+          # Retro #3al — probe the public :80 listener instead of the admin
+          # endpoint at :2019. Caddy's admin API is bound to localhost only;
+          # exposing it on 0.0.0.0 to satisfy the kubelet would expose the
+          # entire config-mutation surface. Use the dedicated /healthz on
+          # :80 introduced in the configmaps.yaml :80 block (returns 204).
           readinessProbe:
             httpGet:
-              path: /config/
-              port: 2019
+              path: /healthz
+              port: 80
             initialDelaySeconds: 5
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /config/
-              port: 2019
+              path: /healthz
+              port: 80
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
