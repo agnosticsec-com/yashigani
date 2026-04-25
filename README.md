@@ -1,3 +1,4 @@
+<!-- last-updated: 2026-04-25T19:00:00+01:00 -->
 # Yashigani
 ---
 
@@ -20,7 +21,7 @@
 ---
 **Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, and agent bundles are optional compose profiles. The internal CA (step-ca) is now a base-stack component because core-plane mTLS is default-on.
 ---
-**Document Date:** 2026-04-23
+**Document Date:** 2026-04-25
 ---
 **Classification:** ***Public — Product Overview***
 ---
