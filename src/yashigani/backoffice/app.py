@@ -2,6 +2,8 @@
 Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
+
+Last updated: 2026-04-26T21:15:00+01:00
 """
 from __future__ import annotations
 
@@ -209,10 +211,19 @@ async def lifespan(app: FastAPI):
             backoffice_state.anomaly_detector = AnomalyDetector(redis_client=anomaly_client)
             _log.info("Backoffice: DB pool + inference logger + anomaly detector ready (lifespan)")
         except Exception as exc:
-            _log.warning(
-                "Backoffice DB/inference lifespan init failed (%s) — Postgres features disabled",
-                exc,
+            # Retro #3ar — fail-closed on lifespan init failure (CLAUDE.md §3).
+            # The previous behaviour was to log a warning and continue with
+            # auth_service=None, which left the container in a "healthy"
+            # but unauthenticatable zombie state — every /auth/login returned
+            # HTTP 500 with `AttributeError: 'NoneType' object has no attribute
+            # 'authenticate'`. Caught only by gate #58a restore test.
+            # Log the full traceback so the failing dependency is identifiable,
+            # then re-raise so the container exits non-zero and orchestrator
+            # surfaces the real fault instead of the secondary 500.
+            _log.exception(
+                "Backoffice lifespan init FAILED — refusing to start with auth_service=None"
             )
+            raise
 
     # Startup — schedule daily licence expiry check (v0.7.1)
     scheduler = None
