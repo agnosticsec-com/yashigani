@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-26T18:30:00Z (RC-6 fix — cert chmod 0644 post-restore)
+# Last updated: 2026-04-26T19:00:00Z (RC-6 fix — secrets dir chmod 751 + cert chmod 0644 post-restore)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -287,9 +287,14 @@ restore_backup() {
   if [[ -d "${backup_dir}/secrets" ]]; then
     log_info "Restoring secrets..."
     mkdir -p "${WORK_DIR}/docker/secrets"
-    chmod 700 "${WORK_DIR}/docker/secrets"
-    # cp -p preserves source mode/ownership timestamps; no blanket widen.
-    # Pre-existing install.sh-written perms are preserved (container compat).
+    # RC-6 (v2.23.1): secrets directory must be world-traversable (0751) so
+    # container processes running as non-root UIDs (pgbouncer=70, redis=999,
+    # etc.) can access individual files within it. restore.sh runs with
+    # umask 077, which would create the directory as 0700 — override explicitly.
+    # The outer home directory (/home/max) provides the primary access control;
+    # making the inner secrets/ directory traversable is intentional and safe.
+    chmod 751 "${WORK_DIR}/docker/secrets"
+    # cp -p preserves source mode/ownership timestamps.
     if ! cp -rp "${backup_dir}/secrets/"* "${WORK_DIR}/docker/secrets/"; then
       log_error "Failed to copy secrets from backup"
       return 1
@@ -305,8 +310,8 @@ restore_backup() {
     # RC-6 (v2.23.1): cert files must be world-readable so container processes
     # running as non-root UIDs (pgbouncer=70, redis=999, etc.) can read them.
     # Certificates are public material — 0644 is correct and intentional.
-    # cp -rp above preserves backup perms (0600); override here to guarantee
-    # container readability regardless of backup origin.
+    # The backup's chmod -R 600 in _backup_existing_data (install.sh:1296)
+    # overwrites the issuer's 0444 certs with 0600; restore must undo this.
     find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
       \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
       -exec chmod 0644 {} \; 2>/dev/null || true
