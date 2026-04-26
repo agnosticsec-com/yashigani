@@ -3226,12 +3226,19 @@ _pki_run_issuer() {
 
 # ---------------------------------------------------------------------------
 # _pki_chown_client_keys — re-own each service's private key to the UID of
-# the consuming container. Called on both fresh install and skip paths so
-# keys are always readable even when PKI bootstrap is skipped (certs already
-# present). Retro v2.23.1 root cause: pgbouncer (UID 70) crashed because
-# keys were owned by UID 1001 from the issuer image and chown was never
-# called on skip path.
-# Last updated: 2026-04-24T22:55:00+00:00
+# the consuming container, and chmod all certificate files to 0644.
+# Called on both fresh install and skip paths so keys and certs are always
+# accessible even when PKI bootstrap is skipped (certs already present).
+#
+# Retro v2.23.1 root cause: pgbouncer (UID 70) crashed because keys were
+# owned by UID 1001 from the issuer image and chown was never called on
+# the skip path.
+# Retro v2.23.1 RC-6: pgbouncer_client.crt was 0600 owned by UID 1001 —
+# pgbouncer runs as UID 70 and could not read it. Fix: chmod 0644 all
+# *_client.crt and ca_*.crt files. Certificates are public material
+# (distributed to peers for verification) and require no secrecy; 0644 is
+# correct. Private keys remain 0600, chowned to the container's UID.
+# Last updated: 2026-04-26T18:30:00+00:00
 # ---------------------------------------------------------------------------
 _pki_chown_client_keys() {
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" || "${YSG_RUNTIME:-}" == "docker" ]]; then
@@ -3267,6 +3274,15 @@ _pki_chown_client_keys() {
         fi
       fi
     done
+
+    # Chmod all certificate files to 0644. Certs are public material and must
+    # be readable by every container that verifies peer identity (pgbouncer,
+    # gateway, backoffice, postgres, redis, etc.). Keys remain 0600.
+    log_info "Chmod'ing client certs + CA certs to 0644 (public material)"
+    local _secrets_dir="${WORK_DIR}/docker/secrets"
+    find "${_secrets_dir}" -maxdepth 1 -type f \
+      \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
+      -exec chmod 0644 {} \; 2>/dev/null || true
   fi
 }
 

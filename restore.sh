@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-24T00:00:00Z (v2.23.1 P0 fixes — #77/#78/#79)
+# Last updated: 2026-04-26T18:30:00Z (RC-6 fix — cert chmod 0644 post-restore)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -302,9 +302,17 @@ restore_backup() {
         chmod 600 "${WORK_DIR}/docker/secrets/${ca_key}"
       fi
     done
+    # RC-6 (v2.23.1): cert files must be world-readable so container processes
+    # running as non-root UIDs (pgbouncer=70, redis=999, etc.) can read them.
+    # Certificates are public material — 0644 is correct and intentional.
+    # cp -rp above preserves backup perms (0600); override here to guarantee
+    # container readability regardless of backup origin.
+    find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
+      \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
+      -exec chmod 0644 {} \; 2>/dev/null || true
     local secret_count
     secret_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f | wc -l | tr -d ' ')
-    log_success "Secrets restored (${secret_count} files; CA keys forced 0600)"
+    log_success "Secrets restored (${secret_count} files; CA keys forced 0600; certs chmod 0644)"
   else
     log_warn "No secrets directory in backup — skipping"
   fi
