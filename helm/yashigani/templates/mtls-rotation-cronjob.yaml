@@ -62,10 +62,21 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  # Seed the existing CA material into the in-memory secrets-dir
-                  # so rotate-leaves doesn't mint a fresh root.
+                  # Seed existing CA material into the in-memory secrets-dir so
+                  # rotate-leaves doesn't mint a fresh root. After retro #3aj
+                  # the CA private keys live in a dedicated Secret mounted at
+                  # /existing-cakeys; certs (incl. ca_root.crt, ca_intermediate.crt
+                  # and prior leaf certs) live at /existing-secrets. Copy both.
                   cp /existing-secrets/*.crt /secrets/
-                  cp /existing-secrets/*.key /secrets/
+                  # Older deployments may still have leaf .key files in the
+                  # leaves Secret — preserve them but never overwrite a CA key
+                  # we are about to seed from the CA-keys Secret below.
+                  for f in /existing-secrets/*_client.key; do
+                    [ -e "$f" ] || continue
+                    cp -- "$f" /secrets/
+                  done
+                  cp /existing-cakeys/ca_root.key /secrets/ca_root.key
+                  cp /existing-cakeys/ca_intermediate.key /secrets/ca_intermediate.key
                   # Copy manifest to a writable path — the issuer writes
                   # bootstrap_token_sha256 back into it; ConfigMap mounts are
                   # read-only. Same rationale as the bootstrap Job.
@@ -80,6 +91,9 @@ spec:
                   mountPath: /secrets
                 - name: existing-secrets
                   mountPath: /existing-secrets
+                  readOnly: true
+                - name: existing-cakeys
+                  mountPath: /existing-cakeys
                   readOnly: true
                 - name: manifest
                   mountPath: /manifest-ro
@@ -117,11 +131,41 @@ spec:
                     echo "[rotate] crt=$crt_count key=$key_count — aborting" >&2
                     exit 1
                   fi
+                  # Retro #3aj — leaves and CA-keys live in different Secrets.
+                  # rotate-leaves only re-issues per-service leaves; CA keys
+                  # are unchanged. Still re-apply both Secrets so any drift
+                  # converges (e.g. someone manually edited the leaves Secret).
+                  mkdir -p /tmp/leaves /tmp/cakeys
+                  for f in *.crt; do
+                    [ -f "$f" ] || continue
+                    cp -- "$f" /tmp/leaves/
+                  done
+                  for f in *_client.key; do
+                    [ -f "$f" ] || continue
+                    cp -- "$f" /tmp/leaves/
+                  done
+                  for f in ca_root.key ca_intermediate.key; do
+                    [ -f "$f" ] || continue
+                    cp -- "$f" /tmp/cakeys/
+                  done
+                  if ls /tmp/leaves/ca_root.key /tmp/leaves/ca_intermediate.key 2>/dev/null; then
+                    echo "[rotate] FATAL: CA private key leaked into leaves payload" >&2
+                    exit 1
+                  fi
+                  cd /tmp/leaves
                   kubectl create secret generic {{ .Values.mtls.secretName }} \
                     --namespace {{ .Release.Namespace }} \
                     $(for f in *.crt *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
                     --dry-run=client -o yaml \
                   | kubectl apply -n {{ .Release.Namespace }} -f -
+                  cd /tmp/cakeys
+                  if ls *.key 2>/dev/null | grep -q .; then
+                    kubectl create secret generic {{ .Values.mtls.caKeysSecretName }} \
+                      --namespace {{ .Release.Namespace }} \
+                      $(for f in *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
+                      --dry-run=client -o yaml \
+                    | kubectl apply -n {{ .Release.Namespace }} -f -
+                  fi
                   echo "[rotate] Leaf rotation complete."
               volumeMounts:
                 - name: pki-certs
@@ -139,6 +183,9 @@ spec:
             - name: existing-secrets
               secret:
                 secretName: {{ .Values.mtls.secretName }}
+            - name: existing-cakeys
+              secret:
+                secretName: {{ .Values.mtls.caKeysSecretName }}
             - name: manifest
               configMap:
                 name: yashigani-pki-manifest

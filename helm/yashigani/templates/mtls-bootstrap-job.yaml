@@ -69,13 +69,24 @@ spec:
             - |
               set -euo pipefail
               cp /manifest-ro/service_identities.yaml /manifest-rw/service_identities.yaml
-              exec python -m yashigani.pki.issuer \
+              python -m yashigani.pki.issuer \
                 --secrets-dir /secrets \
                 --manifest /manifest-rw/service_identities.yaml \
                 bootstrap \
                 --root-lifetime-years {{ .Values.mtls.rootLifetimeYears }} \
                 --intermediate-lifetime-days {{ .Values.mtls.intermediateLifetimeDays }} \
                 --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
+              # Retro #3am — fail-closed verification that SPIFFE URI SAN
+              # made it onto every leaf. If issuer.build_leaf silently
+              # skipped the URI SAN (manifest path bug, schema regression,
+              # cryptography library mismatch) the SPIFFE gate becomes a
+              # rubber stamp. Reject the bootstrap before the applier ever
+              # writes the Secret. Emit the script via base64 so YAML block
+              # indent does not bleed into the Python source.
+              echo "aW1wb3J0IHN5cywgcGF0aGxpYgpmcm9tIGNyeXB0b2dyYXBoeSBpbXBvcnQgeDUwOQpzZWNyZXRzID0gcGF0aGxpYi5QYXRoKCIvc2VjcmV0cyIpCm1pc3NpbmcgPSBbXQpmb3IgY3J0IGluIHNvcnRlZChzZWNyZXRzLmdsb2IoIipfY2xpZW50LmNydCIpKToKICAgIHNlcnZpY2UgPSBjcnQuc3RlbS5yZW1vdmVzdWZmaXgoIl9jbGllbnQiKQogICAgY2VydCA9IHg1MDkubG9hZF9wZW1feDUwOV9jZXJ0aWZpY2F0ZShjcnQucmVhZF9ieXRlcygpKQogICAgdHJ5OgogICAgICAgIHNhbiA9IGNlcnQuZXh0ZW5zaW9ucy5nZXRfZXh0ZW5zaW9uX2Zvcl9jbGFzcyh4NTA5LlN1YmplY3RBbHRlcm5hdGl2ZU5hbWUpLnZhbHVlCiAgICBleGNlcHQgeDUwOS5FeHRlbnNpb25Ob3RGb3VuZDoKICAgICAgICBtaXNzaW5nLmFwcGVuZCgoc2VydmljZSwgIm5vIFNBTiBleHRlbnNpb24iKSk7IGNvbnRpbnVlCiAgICB1cmlzID0gc2FuLmdldF92YWx1ZXNfZm9yX3R5cGUoeDUwOS5Vbmlmb3JtUmVzb3VyY2VJZGVudGlmaWVyKQogICAgZXhwZWN0ZWQgPSBmInNwaWZmZTovL3lhc2hpZ2FuaS5pbnRlcm5hbC97c2VydmljZX0iCiAgICBpZiBleHBlY3RlZCBub3QgaW4gdXJpczoKICAgICAgICBtaXNzaW5nLmFwcGVuZCgoc2VydmljZSwgZiJleHBlY3RlZCB7ZXhwZWN0ZWR9LCBnb3Qge3VyaXMhcn0iKSkKaWYgbWlzc2luZzoKICAgIHByaW50KCJGQVRBTDogbGVhdmVzIG1pc3NpbmcgU1BJRkZFIFVSSSBTQU46IiwgZmlsZT1zeXMuc3RkZXJyKQogICAgZm9yIHN2YywgX3doeSBpbiBtaXNzaW5nOgogICAgICAgIHByaW50KGYiICB7c3ZjfToge193aHl9IiwgZmlsZT1zeXMuc3RkZXJyKQogICAgc3lzLmV4aXQoMSkKbiA9IGxlbihsaXN0KHNlY3JldHMuZ2xvYigiKl9jbGllbnQuY3J0IikpKQpwcmludChmIltpc3N1ZXJdIFNQSUZGRSBVUkkgU0FOIHZlcmlmaWVkIG9uIHtufSBsZWF2ZXMiKQo=" \
+                | base64 -d > /tmp/verify_spiffe.py
+              python /tmp/verify_spiffe.py
+
           volumeMounts:
             - name: pki-certs
               mountPath: /secrets
@@ -120,14 +131,56 @@ spec:
                 echo "[applier] avoid clobbering existing Secret." >&2
                 exit 1
               fi
-              # --dry-run=client + apply -f - gives us an idempotent upsert
+              # Retro #3aj — split materials into two Secrets:
+              #   * leaves Secret (.Values.mtls.secretName, mounted by every
+              #     workload pod): all *_client.{crt,key} + ca_root.crt +
+              #     ca_intermediate.crt. NO ca_*.key.
+              #   * CA-keys Secret (.Values.mtls.caKeysSecretName, mounted
+              #     only by the bootstrap Job + rotation CronJob): the two
+              #     CA private keys ca_root.key and ca_intermediate.key.
+              # Workload pods can therefore never read CA private material
+              # even if the SA-token mount is misconfigured.
+              #
+              # --dry-run=client + apply -f - gives an idempotent upsert
               # that works for both fresh install and upgrade.
+              mkdir -p /tmp/leaves /tmp/cakeys
+              for f in *.crt; do
+                [ -f "$f" ] || continue
+                cp -- "$f" /tmp/leaves/
+              done
+              for f in *_client.key; do
+                [ -f "$f" ] || continue
+                cp -- "$f" /tmp/leaves/
+              done
+              # CA private keys: ca_root.key + ca_intermediate.key only.
+              # Anything matching ca_*.key (literal underscore, not glob).
+              for f in ca_root.key ca_intermediate.key; do
+                [ -f "$f" ] || continue
+                cp -- "$f" /tmp/cakeys/
+              done
+              echo "[applier] Workload-bound Secret payload:"
+              ls -l /tmp/leaves
+              echo "[applier] CA-keys Secret payload:"
+              ls -l /tmp/cakeys
+              # Sanity guard: a leaves Secret must NEVER contain ca_*.key.
+              if ls /tmp/leaves/ca_root.key /tmp/leaves/ca_intermediate.key 2>/dev/null; then
+                echo "[applier] FATAL: CA private key leaked into leaves Secret payload" >&2
+                exit 1
+              fi
+              cd /tmp/leaves
               kubectl create secret generic {{ .Values.mtls.secretName }} \
                 --namespace {{ .Release.Namespace }} \
                 $(for f in *.crt *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
                 --dry-run=client -o yaml \
               | kubectl apply -n {{ .Release.Namespace }} -f -
-              echo "[applier] Secret {{ .Values.mtls.secretName }} applied."
+              echo "[applier] Secret {{ .Values.mtls.secretName }} applied (leaves + CA pubs)."
+              cd /tmp/cakeys
+              kubectl create secret generic {{ .Values.mtls.caKeysSecretName }} \
+                --namespace {{ .Release.Namespace }} \
+                $(for f in *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
+                --dry-run=client -o yaml \
+              | kubectl apply -n {{ .Release.Namespace }} -f -
+              echo "[applier] Secret {{ .Values.mtls.caKeysSecretName }} applied (CA private keys)."
           volumeMounts:
             - name: pki-certs
               mountPath: /secrets

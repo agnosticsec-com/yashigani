@@ -22,8 +22,22 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # Retro #3ak — runAsNonRoot:true alone causes CrashLoopBackOff because
+      # the upstream open-webui image's USER directive is root. The image
+      # supports running as a non-root uid when WEBUI_USER_UID is honoured,
+      # but a simpler+more portable fix is to:
+      #   1. set runAsUser explicitly to 1000 (POSIX uid for unprivileged
+      #      services in our convention) — kubelet then runs the container
+      #      as uid 1000 regardless of the USER directive.
+      #   2. set fsGroup so the PVC at /app/backend/data is writable by 1000.
+      # Pentagon-posture requirement: still runAsNonRoot:true; we just give
+      # the kubelet enough information to enforce it without the image
+      # running as root for one frame and crashing.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:

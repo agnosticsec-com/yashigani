@@ -86,12 +86,25 @@ mtls:
     # Backoff before the rotation CronJob gives up on a failing run.
     backoffLimit: 2
 
-  # Name of the Secret the bootstrap job writes into. Every core-plane
-  # Deployment/StatefulSet mounts this at /run/secrets.
+  # Name of the leaves-Secret the bootstrap job writes into. Every core-plane
+  # Deployment/StatefulSet mounts this at /run/secrets. After retro #3aj this
+  # Secret contains LEAF material only:
+  #   * <service>_client.crt + <service>_client.key (the per-service leaves)
+  #   * ca_root.crt + ca_intermediate.crt (trust anchors — public certs only)
+  # It deliberately does NOT contain the CA private keys — those live in
+  # caKeysSecretName below and are mounted only by the bootstrap Job and
+  # rotation CronJob. Name retained as `yashigani-pki-certs` for upgrade
+  # compatibility (the bootstrap-job applier rewrites the contents in place).
   # Do NOT set existingSecretName unless you're running the issuer
   # out-of-band and materialising the Secret yourself.
   secretName: "yashigani-pki-certs"
   existingSecretName: ""
+
+  # Retro #3aj — separate Secret for the CA private keys (root + intermediate).
+  # Mounted ONLY by the PKI bootstrap Job and rotation CronJob; workload pods
+  # never see ca_root.key or ca_intermediate.key. RBAC restricts mutation of
+  # this Secret to the yashigani-pki ServiceAccount used by those Jobs only.
+  caKeysSecretName: "yashigani-pki-ca-keys"
 
   # Bootstrap job resources — small, single-shot, short-lived.
   bootstrapResources:
@@ -101,6 +114,44 @@ mtls:
     limits:
       cpu: "500m"
       memory: "256Mi"
+
+# ---------------------------------------------------------------------------
+# Admin Bootstrap (retro #3ap) — primary + backup admin + dual TOTP.
+#
+# Mirrors install.sh _gen_admin_credentials in compose: produces admin1 and
+# admin2 usernames, passwords, and TOTP secrets, and stores them in a Secret
+# that the backoffice mounts into /run/secrets. This is the K8s parity for
+# feedback_admin_bootstrap_both_admins.md — every install must yield TWO
+# admin accounts with TOTP pre-provisioned, never a single-admin install.
+#
+# Disable ONLY if you intend to seed admins out-of-band by pre-creating
+# `existingSecretName` with the same key schema (admin1_username,
+# admin1_initial_password, admin1_totp_secret, admin2_username,
+# admin2_password, admin2_totp_secret).
+# ---------------------------------------------------------------------------
+adminBootstrap:
+  enabled: true
+  # Name of the Secret the bootstrap Job writes into and the backoffice
+  # mounts at /run/secrets (alongside the PKI leaves).
+  secretName: "yashigani-admin-bootstrap"
+  # Skip the chart-managed Job and use a Secret you have pre-created out of
+  # band. Must contain the six keys listed above.
+  existingSecretName: ""
+  # Image used to mint passwords + TOTP secrets. The gateway image already
+  # bundles python3 + pyotp + secrets which is everything we need; reusing
+  # it avoids another image pull.
+  image:
+    # Resolves to global.imageRegistry/global.imageOwner/<repo>:<tag>.
+    repository: yashigani-gateway
+    tag: "2.23.1"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
 
 # ---------------------------------------------------------------------------
 # Gateway — MCP reverse proxy (data plane)

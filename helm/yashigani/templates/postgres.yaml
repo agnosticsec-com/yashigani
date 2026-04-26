@@ -49,6 +49,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
+            # Retro #3ao — point PGDATA at a subdirectory of the PV root.
+            # local-path / many CSI drivers leave a non-empty PV root
+            # (lost+found, .snapshot, mountpoint marker file). The postgres
+            # entrypoint then sees a "non-empty data dir" and prints
+            # "PostgreSQL Database directory appears to contain a database;
+            # Skipping initialization" — but the dir doesn't actually contain
+            # a database, so role yashigani_app is never created and every
+            # consumer hits "role does not exist". Using a subdir we own
+            # avoids the collision entirely.
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
           {{- if .Values.mtls.enabled }}
           # mTLS mode: pg_hba.conf rewrites to hostssl+clientcert=verify-ca
           # for anything non-local, which pg_isready cannot satisfy without
@@ -94,9 +105,14 @@ spec:
             - name: pki-certs
               mountPath: /run/secrets
               readOnly: true
+            # Retro #3an — mount the WHOLE ConfigMap as a directory, not via
+            # subPath. With subPath the postgres entrypoint occasionally sees
+            # the wrong file mode (depending on CSI driver) and silently
+            # skips the SSL init step, which is exactly what we hit on the
+            # previous K8s gate (pg_hba.conf had zero hostssl rows). A full
+            # directory mount keeps defaultMode honoured everywhere.
             - name: init-scripts
-              mountPath: /docker-entrypoint-initdb.d/05-enable-ssl.sh
-              subPath: 05-enable-ssl.sh
+              mountPath: /docker-entrypoint-initdb.d
               readOnly: true
             {{- end }}
       {{- if .Values.mtls.enabled }}
