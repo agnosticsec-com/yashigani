@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-25T21:43:38+01:00
+# Last updated: 2026-04-26T20:53:11+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -584,13 +584,20 @@ openWebui:
     tag: "main"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # Retro #3ar — open-webui OOMKilled (exit 137) with 512Mi limit on K8s.
+  # The bundled SvelteKit + Python embedding + LangChain stack consistently
+  # peaks at ~1.2-1.5 GiB on first boot. 512Mi was guesswork carried over
+  # from the docker-compose default; insufficient for the K8s pod where
+  # there is no host page cache to lean on. 1.5Gi requests / 2Gi limit
+  # gives steady headroom without monopolising a single-node Docker
+  # Desktop cluster.
   resources:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
+      cpu: "200m"
+      memory: "1536Mi"
     limits:
-      cpu: "500m"
-      memory: "512Mi"
+      cpu: "1000m"
+      memory: "2048Mi"
   service:
     port: 8080
     type: ClusterIP
