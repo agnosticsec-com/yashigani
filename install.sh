@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-27T18:00:00Z
+# last-updated: 2026-04-27T20:30:00Z (BUG-58B-01: fail-closed on secrets_dir chown; BUG-58B-04a: selective backup chmod, no blanket 0600)
 set -euo pipefail
 
 # =============================================================================
@@ -1298,7 +1298,32 @@ _backup_existing_data() {
     log_info "  Postgres dump skipped (not accessible)"
   fi
 
-  chmod -R 600 "$backup_dir"
+  # BUG-58B-04a (v2.23.1): do NOT use 'chmod -R 600' on the backup dir.
+  # That clobbers intentionally-0644 public secret files (admin passwords,
+  # bootstrap tokens, service passwords that non-root containers must read).
+  # When restore.sh copies these back, the 0600 mode on files that were 0644
+  # causes service containers (pgbouncer=UID70, redis=UID999, etc.) to get
+  # EACCES on startup. Fix: tighten private keys to 0400, leave everything
+  # else at its source mode (already ≤0644 per install.sh canonical assignment).
+  # CA private keys and service private keys are the only secret material that
+  # must be inaccessible to processes other than their owner; everything else
+  # (passwords, certs, tokens) is intentionally readable by the service UIDs.
+  find "${backup_dir}/secrets" -maxdepth 1 -type f \
+    \( -name '*.key' \) -exec chmod 0400 {} \; 2>/dev/null || true
+  # Lock down the backup dir itself and non-secrets files (e.g. postgres_dump.sql,
+  # .env) to owner-read-only; the secrets sub-dir mode is controlled above.
+  chmod 0700 "$backup_dir"
+  if [[ -f "${backup_dir}/.env" ]]; then
+    chmod 0600 "${backup_dir}/.env"
+  fi
+  if [[ -f "${backup_dir}/postgres_dump.sql" ]]; then
+    chmod 0600 "${backup_dir}/postgres_dump.sql"
+  fi
+  # Defensive assertion: no world/group-readable private keys in backup (S1).
+  if find "${backup_dir}/secrets" -type f -name '*.key' \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
+    log_error "CWE-732: group/world-readable key file(s) in backup ${backup_dir}/secrets"
+    exit 1
+  fi
   log_success "Backup saved to ${backup_dir}"
 }
 
@@ -1907,7 +1932,33 @@ compose_up() {
   # owned by root:root 0755 by default, which makes the issuer's writes fail with
   # PermissionError. Retro v2.23.1 item #3ad: chown secrets dir to UID 1001 so the
   # PKI issuer container can write without needing root inside the container.
-  chown 1001:1001 "$secrets_dir" 2>/dev/null || true
+  #
+  # BUG-58B-01 (v2.23.1): drop '|| true' — fail-closed so the PKI issuer
+  # container does not silently fail to write certs into a root-owned dir.
+  # Non-root installs (e.g. Docker non-root path) require elevated privilege
+  # for this chown; if it fails, surface the error rather than continuing with
+  # a permissions mismatch that breaks the PKI bootstrap step downstream.
+  if ! chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+    # Try via sudo if available (operator running install as non-root but with
+    # sudo rights). If sudo is not available or not granted, fail-closed:
+    # the operator must fix permissions before PKI bootstrap will succeed.
+    if command -v sudo &>/dev/null && sudo -n chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+      log_info "secrets_dir chown 1001:1001 completed via sudo"
+    else
+      log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
+      log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
+      log_error "Fix: run install.sh as root (sudo bash install.sh) or grant write access:"
+      log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
+      exit 1
+    fi
+  fi
+  # Defensive assertion: secrets dir must be owned by UID 1001 before proceeding.
+  # shellcheck disable=SC2012
+  _actual_uid=$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')
+  if [[ "$_actual_uid" != "1001" ]]; then
+    log_error "secrets_dir UID is ${_actual_uid}, expected 1001. Aborting PKI bootstrap."
+    exit 1
+  fi
   mkdir -p "${data_dir}/audit"
   mkdir -p "${WORK_DIR}/docker/tls"
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-27T18:00:00Z (BUG-3: preserve ownership in pre-restore snapshot; BUG-4: refresh PGDATA CA after PKI restore)
+# Last updated: 2026-04-27T20:00:00Z (BUG-58B-04a/b/d: canonical secret modes, service key chown, role password update)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -303,7 +303,7 @@ restore_backup() {
     log_success "Pre-restore snapshot saved"
   fi
 
-  # 1. Restore secrets (preserve source mode; explicitly tighten CA private keys)
+  # 1. Restore secrets (preserve source mode; reapply canonical modes after copy)
   if [[ -d "${backup_dir}/secrets" ]]; then
     log_info "Restoring secrets..."
     mkdir -p "${WORK_DIR}/docker/secrets"
@@ -319,25 +319,17 @@ restore_backup() {
       log_error "Failed to copy secrets from backup"
       return 1
     fi
-    # CA issuer private keys must NEVER be group/world readable (CWE-732).
-    # They are only consumed by install.sh to sign leaves, never by containers
-    # at runtime — so tighter-than-leaf perms are safe.
-    for ca_key in ca_root.key ca_intermediate.key; do
-      if [[ -f "${WORK_DIR}/docker/secrets/${ca_key}" ]]; then
-        chmod 600 "${WORK_DIR}/docker/secrets/${ca_key}"
-      fi
-    done
-    # RC-6 (v2.23.1): cert files must be world-readable so container processes
-    # running as non-root UIDs (pgbouncer=70, redis=999, etc.) can read them.
-    # Certificates are public material — 0644 is correct and intentional.
-    # The backup's chmod -R 600 in _backup_existing_data (install.sh:1296)
-    # overwrites the issuer's 0444 certs with 0600; restore must undo this.
-    find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
-      \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
-      -exec chmod 0644 {} \; 2>/dev/null || true
     local secret_count
     secret_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f | wc -l | tr -d ' ')
-    log_success "Secrets restored (${secret_count} files; CA keys forced 0600; certs chmod 0644)"
+    log_success "Secrets copied from backup (${secret_count} files)"
+
+    # BUG-58B-04a + BUG-58B-04b (v2.23.1): reapply canonical file modes and
+    # re-own service private keys to the container UIDs that must read them.
+    # Old backups (pre-fix) used 'chmod -R 600' which clobbered intentionally-
+    # 0644 public secrets. New backups only tighten *.key to 0400. Either way,
+    # calling _pki_chown_client_keys here normalises modes and ownership so that
+    # every service container can read exactly the files it needs to.
+    _pki_chown_client_keys
   else
     log_warn "No secrets directory in backup — skipping"
   fi
@@ -351,10 +343,10 @@ restore_backup() {
     log_warn "No .env file in backup — skipping"
   fi
 
-  # 3. BUG-4 (v2.23.1): refresh PGDATA-cached CA + server cert BEFORE the
-  #    Postgres dump replay. The replay reconnects through pgbouncer; without
-  #    this refresh the restored secrets/ CA differs from the in-PGDATA CA and
-  #    every reconnect fails mTLS handshake.
+  # 3. BUG-4 / BUG-58B-04c (v2.23.1): refresh PGDATA-cached CA + server cert
+  #    BEFORE the Postgres dump replay. The replay reconnects through pgbouncer;
+  #    without this refresh the restored secrets/ CA differs from the in-PGDATA
+  #    CA and every reconnect fails mTLS handshake.
   _refresh_pgdata_ca || log_warn "PGDATA CA refresh failed -- postgres mTLS may be broken until manual fix"
 
   # 4. Restore Postgres dump
@@ -364,7 +356,14 @@ restore_backup() {
     log_info "No Postgres dump in backup — skipping database restore"
   fi
 
-  # 5. For K8s: update secrets in the cluster
+  # 5. BUG-58B-04d (v2.23.1): update the live yashigani_app role password to
+  #    match the restored secret. After a restore, docker/secrets/postgres_password
+  #    now contains the backup's password but the cluster was initialised with the
+  #    fresh-install password. Every subsequent DB connection from the app fails
+  #    with "password authentication failed". Fix: ALTER ROLE idempotently.
+  _restore_pg_role_password
+
+  # 6. For K8s: update secrets in the cluster
   if [[ "$K8S_MODE" == "true" && -d "${backup_dir}/secrets" ]]; then
     _restore_k8s_secrets "${backup_dir}/secrets"
   fi
@@ -398,6 +397,128 @@ restore_backup() {
   printf "\n"
   printf "  Pre-restore backup saved at: ${pre_restore_dir}\n"
   printf "  If something went wrong, restore from there.\n\n"
+}
+
+# ---------------------------------------------------------------------------
+# BUG-58B-04b (v2.23.1): Re-own service private keys to container UIDs after
+# PKI restore. install.sh's _backup_existing_data now only sets *.key to 0400
+# (not a blanket chmod -R 600), but the backup still carries root:root ownership
+# from the initial cp -rp. When restore.sh extracts keys, they land as root:root
+# 0400; service containers (pgbouncer=UID70, redis=UID999, gateway/backoffice=
+# UID1001) get EACCES on their own key.
+#
+# Same service→UID map as install.sh:_pki_chown_client_keys.
+# Runs after secrets are restored on every supported runtime.
+# ---------------------------------------------------------------------------
+_pki_chown_client_keys() {
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Canonical UID map: service name → container UID.
+  local _uid_mapped_services=(
+    "gateway:1001"
+    "backoffice:1001"
+    "redis:999"
+    "budget-redis:999"
+    "pgbouncer:70"
+    "postgres:999"
+  )
+
+  # Determine chown mode: root can chown directly; non-root uses podman unshare
+  # (Podman rootless user-namespace). Docker non-root users need sudo — if sudo
+  # is unavailable, warn but do not abort (service may already own the key if
+  # the backup was taken from a correctly-owned install).
+  local _chown_mode="direct"
+  if [[ "$(id -u)" != "0" ]]; then
+    if [[ "${RUNTIME}" == "podman" ]]; then
+      _chown_mode="unshare"
+    else
+      # Docker non-root: attempt sudo -n; degrade to warn-only if unavailable.
+      _chown_mode="sudo"
+    fi
+  fi
+
+  log_info "Re-owning service private keys to container UIDs (mode: ${_chown_mode})"
+
+  for _svc_uid in "${_uid_mapped_services[@]}"; do
+    local _svc="${_svc_uid%%:*}"
+    local _uid="${_svc_uid#*:}"
+    local _keyfile="${_secrets_dir}/${_svc}_client.key"
+    if [[ ! -f "$_keyfile" ]]; then
+      continue
+    fi
+    case "$_chown_mode" in
+      direct)
+        chown "${_uid}:${_uid}" "$_keyfile" \
+          || log_warn "chown failed on ${_svc} key — container may fail to start"
+        ;;
+      unshare)
+        podman unshare chown "${_uid}:${_uid}" "$_keyfile" \
+          || log_warn "podman unshare chown failed on ${_svc} key — container may fail to start"
+        ;;
+      sudo)
+        if command -v sudo &>/dev/null; then
+          sudo -n chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
+            || log_warn "sudo chown failed on ${_svc} key — container may fail to start"
+        else
+          log_warn "Non-root install without sudo: cannot chown ${_svc} key to UID ${_uid}."
+          log_warn "  If ${_svc} fails to start, run: sudo chown ${_uid}:${_uid} \"${_keyfile}\""
+        fi
+        ;;
+    esac
+  done
+
+  # Reapply canonical cert modes: certs are public material (0644); keys are 0600.
+  find "${_secrets_dir}" -maxdepth 1 -type f \
+    \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
+    -exec chmod 0644 {} \;
+  find "${_secrets_dir}" -maxdepth 1 -type f -name '*.key' \
+    -exec chmod 0600 {} \;
+  # CA private keys are even tighter — only the PKI issuer (root/UID1001) reads
+  # them. 0400 prevents accidental overwrite even by the owning UID.
+  for _ca_key in ca_root.key ca_intermediate.key; do
+    if [[ -f "${_secrets_dir}/${_ca_key}" ]]; then
+      chmod 0400 "${_secrets_dir}/${_ca_key}"
+    fi
+  done
+
+  # BUG-58B-04a: reapply 0644 to public password/token files that the backup's
+  # per-file chmod may have tightened to 0400 (as of the BUG-58B-04a fix above,
+  # backup only tightens *.key; but pre-fix backups on disk tightened everything
+  # to 0600 via chmod -R 600). Reapply explicitly so restore is idempotent
+  # against both old and new backup formats.
+  local _public_secrets=(
+    "admin_initial_password"
+    "admin1_password"
+    "admin1_username"
+    "admin1_totp_secret"
+    "admin2_password"
+    "admin2_username"
+    "admin2_totp_secret"
+    "postgres_password"
+    "redis_password"
+    "grafana_admin_password"
+    "openclaw_gateway_token"
+    "wazuh_indexer_password"
+    "wazuh_api_password"
+    "wazuh_dashboard_password"
+  )
+  for _f in "${_public_secrets[@]}"; do
+    if [[ -f "${_secrets_dir}/${_f}" ]]; then
+      chmod 0644 "${_secrets_dir}/${_f}"
+    fi
+  done
+  # bootstrap_token files (glob — one per service registered in manifest)
+  find "${_secrets_dir}" -maxdepth 1 -type f -name '*_bootstrap_token' \
+    -exec chmod 0644 {} \;
+
+  log_success "Service key ownership + canonical file modes reapplied"
+
+  # Defensive assertion: no world/group-readable private key files (S1 / CWE-732).
+  if find "${_secrets_dir}" -maxdepth 1 -type f -name '*.key' \
+        \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
+    log_error "CWE-732: group/world-readable *.key file(s) under ${_secrets_dir} after chown step"
+    exit 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -455,6 +576,93 @@ _refresh_pgdata_ca() {
   fi
 
   log_success "PGDATA CA + server cert refreshed; postgres reloaded TLS material"
+}
+
+# ---------------------------------------------------------------------------
+# BUG-58B-04d (v2.23.1): Update the live yashigani_app role password to match
+# the restored postgres_password secret.
+#
+# Why this is needed:
+#   * Fresh install creates the cluster with password A (random, generated).
+#   * The cluster persists the SCRAM hash of A in pg_authid; the file
+#     POSTGRES_PASSWORD_FILE is only consulted at initdb time.
+#   * Restore overwrites docker/secrets/postgres_password with backup's
+#     password B. pgbouncer's auto-generated userlist.txt regenerates with B
+#     on its next container start; the app reads B from the same secret.
+#   * But the live cluster still authenticates against A → every TCP
+#     connection from pgbouncer/app fails with "password authentication
+#     failed for user yashigani_app".
+#
+# Fix: ALTER ROLE on the live cluster, idempotently, via the local Unix
+# socket inside the postgres container. pg_hba.conf entry installed by
+# docker/postgres/05-enable-ssl.sh is 'local all all trust' so password-
+# less auth is permitted there (and only there).
+#
+# SQL is fed via stdin so the password never appears in process args (ps).
+# Single quotes inside the password are escaped by doubling
+# (standard_conforming_strings is on by default in modern postgres).
+# ---------------------------------------------------------------------------
+_restore_pg_role_password() {
+  local _secret_file="${WORK_DIR}/docker/secrets/postgres_password"
+  if [[ ! -f "$_secret_file" ]]; then
+    log_warn "postgres_password secret missing — skipping role password update"
+    return 0
+  fi
+  local _new_pw
+  _new_pw=$(<"$_secret_file")
+  if [[ -z "$_new_pw" ]]; then
+    log_warn "postgres_password is empty — skipping role password update"
+    return 0
+  fi
+
+  local _pg_container
+  _pg_container=$(find_pg_container)
+  if [[ -z "$_pg_container" ]]; then
+    log_warn "Postgres not running -- role password update deferred."
+    log_warn "  After bringing postgres up, run inside the postgres container:"
+    log_warn "    psql -U yashigani_app -d postgres"
+    log_warn "    ALTER ROLE \"yashigani_app\" WITH PASSWORD '<contents of docker/secrets/postgres_password>';"
+    return 0
+  fi
+
+  # Determine the DB role from the restored .env (default yashigani_app —
+  # the same default install.sh writes).
+  local _db_user="yashigani_app"
+  if [[ -f "${WORK_DIR}/docker/.env" ]]; then
+    local _dsn
+    _dsn=$(grep "^YASHIGANI_DB_DSN=" "${WORK_DIR}/docker/.env" 2>/dev/null | head -1 || true)
+    if [[ -n "$_dsn" ]]; then
+      local _parsed
+      _parsed=$(echo "$_dsn" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+      [[ -n "$_parsed" ]] && _db_user="$_parsed"
+    fi
+  fi
+
+  # Escape single quotes in the password for SQL string literal.
+  local _pw_escaped="${_new_pw//\'/\'\'}"
+
+  log_info "Updating live ${_db_user} role password to match restored secret..."
+
+  # Pipe SQL via stdin so the password never appears in process args.
+  # Connect via local Unix socket → trust auth (per pg_hba.conf line 1
+  # installed by docker/postgres/05-enable-ssl.sh).
+  if ! printf '%s\n' "ALTER ROLE \"${_db_user}\" WITH PASSWORD '${_pw_escaped}';" \
+        | pg_exec "$_pg_container" psql -U "$_db_user" -d postgres \
+            -v ON_ERROR_STOP=1 -q --no-psqlrc >/dev/null; then
+    log_error "Failed to update ${_db_user} role password on live cluster."
+    log_error "  Manual recovery (run on host):"
+    log_error "    ${RUNTIME} exec -it ${_pg_container} psql -U ${_db_user} -d postgres"
+    log_error "    ALTER ROLE \"${_db_user}\" WITH PASSWORD '<contents of docker/secrets/postgres_password>';"
+    return 1
+  fi
+  log_success "Role ${_db_user} password updated on live cluster"
+  # Note: ALTER ROLE on a missing role would have errored out via
+  # ON_ERROR_STOP=1 above. A loopback verify (psql -h 127.0.0.1) would NOT
+  # actually validate the new password because pg_hba.conf has
+  # 'host all all 127.0.0.1/32 trust'. A meaningful TCP verify requires
+  # an SSL+client-cert handshake — out of scope for this helper. Operators
+  # can verify by restarting pgbouncer + the app and confirming successful
+  # connections in the logs.
 }
 
 # ---------------------------------------------------------------------------
