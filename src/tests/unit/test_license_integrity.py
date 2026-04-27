@@ -9,7 +9,8 @@ Covers:
   - integrity check detects modified verifier.py source (VERIFIER_HASH mismatch)
   - integrity check passes with correct hash
   - integrity violation forces COMMUNITY tier on all verify_license() calls
-  - placeholder VERIFIER_HASH skips integrity check (fail-open)
+  - placeholder VERIFIER_HASH in dev → skip (fail-open permitted)
+  - placeholder VERIFIER_HASH in prod → violation flag set (fail-closed, #104)
   - placeholder COUNTER_PUBLIC_KEY_PEM skips counter-sig check (fail-open)
   - domain-bound license with matching YASHIGANI_TLS_DOMAIN → accepted (#102)
   - domain-bound license with mismatched YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
@@ -408,12 +409,14 @@ class TestSelfIntegrity:
 
     def test_placeholder_verifier_hash_skips_integrity_check(self, monkeypatch):
         """
-        When VERIFIER_HASH is a placeholder, the self-integrity check is
-        skipped and _integrity_violated must remain False.
+        When VERIFIER_HASH is a placeholder AND YASHIGANI_ENV=dev, the
+        self-integrity check is skipped and _integrity_violated must stay False.
+        (#104: in prod mode placeholder sets the violation flag — see test below.)
         """
         import yashigani.licensing.verifier as verifier_mod
         import yashigani.licensing._integrity as integrity_mod
 
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")  # #104: only permit skip in dev
         monkeypatch.setattr(
             integrity_mod,
             "VERIFIER_HASH",
@@ -424,6 +427,29 @@ class TestSelfIntegrity:
         verifier_mod._check_self_integrity()
 
         assert verifier_mod._integrity_violated is False
+
+    def test_placeholder_verifier_hash_sets_violation_in_prod(self, monkeypatch):
+        """
+        #104 (LICENSE-2024-002 / CVSS 9.1): In non-dev environments, a
+        placeholder VERIFIER_HASH means the build pipeline did not embed the
+        real hash.  This is treated as a tamper event: _integrity_violated must
+        be set to True (fail-closed), ensuring verify_license() returns COMMUNITY
+        tier for all subsequent calls.
+        """
+        import yashigani.licensing.verifier as verifier_mod
+        import yashigani.licensing._integrity as integrity_mod
+
+        monkeypatch.delenv("YASHIGANI_ENV", raising=False)  # simulate prod
+        monkeypatch.setattr(
+            integrity_mod,
+            "VERIFIER_HASH",
+            integrity_mod._PLACEHOLDER_INTEGRITY + "_VERIFIER_HASH",
+        )
+        monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
+
+        verifier_mod._check_self_integrity()
+
+        assert verifier_mod._integrity_violated is True
 
 
 # ---------------------------------------------------------------------------

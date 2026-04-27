@@ -1,6 +1,8 @@
 """
 Offline license verifier — ECDSA P-256 (migrating to ML-DSA-65 when cryptography ships FIPS 204).
 
+Last updated: 2026-04-27T20:43:24+01:00
+
 License file format:
     v3 (legacy):  {base64url(utf8(json_payload))}.{base64url(primary_signature)}
     v4 (current): {base64url(utf8(json_payload))}.{base64url(primary_signature)}.{base64url(counter_signature)}
@@ -83,7 +85,18 @@ def _check_self_integrity() -> None:
     global _integrity_violated
 
     if _integrity.is_verifier_hash_placeholder():
-        return  # build-time hash not set; skip check (dev / CI mode)
+        # #104 (LICENSE-2024-002 / CVSS 9.1) — placeholder skip is only
+        # permitted in dev/CI builds (YASHIGANI_ENV=dev).  In any other
+        # environment a placeholder hash means the build pipeline failed to
+        # embed the real hash; treat that as a tamper event (fail-closed).
+        if os.environ.get("YASHIGANI_ENV") != "dev":
+            _integrity_violated = True
+            logger.critical(
+                "LICENSE INTEGRITY VIOLATION: VERIFIER_HASH is still a placeholder "
+                "in a non-dev environment — build pipeline did not embed hash; "
+                "forcing COMMUNITY tier (LICENSE-2024-002)"
+            )
+        return
 
     try:
         source_path = Path(__file__)
