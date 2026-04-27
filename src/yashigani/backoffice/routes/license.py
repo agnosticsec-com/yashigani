@@ -8,6 +8,7 @@ Routes:
   POST   /admin/license/activate — activate a new license key
   DELETE /admin/license          — revert to community license
 """
+# Last updated: 2026-04-27T12:54:12+01:00
 from __future__ import annotations
 
 import logging
@@ -87,7 +88,7 @@ async def get_license_status(session=Depends(require_admin_session)):
     current_admin_seats = 0
     if auth is not None:
         try:
-            current_admin_seats = auth.total_admin_count()
+            current_admin_seats = await auth.total_admin_count()
         except Exception:
             current_admin_seats = 0
 
