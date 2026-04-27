@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-26T19:00:00Z (RC-6 fix — secrets dir chmod 751 + cert chmod 0644 post-restore)
+# Last updated: 2026-04-27T10:00:00Z (RC-7 fix — honour YSG_RUNTIME env var in detect_runtime)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -68,6 +68,24 @@ log_warn()    { printf "    ${C_YELLOW}!!  WARNING: %s${C_RESET}\n" "$*"; }
 detect_runtime() {
   if [[ "$K8S_MODE" == "true" ]]; then
     RUNTIME="k8s"
+    return
+  fi
+
+  # Honour explicit override — same env var as install.sh uses.
+  # Prevents auto-detection from picking Docker when Podman containers are
+  # running (both daemons present on the same host, e.g. CI / test VMs).
+  if [[ "${YSG_RUNTIME:-}" == "podman" ]]; then
+    RUNTIME="podman"
+    if command -v docker-compose &>/dev/null; then
+      COMPOSE_CMD=("docker-compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
+    else
+      COMPOSE_CMD=("podman" "compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
+    fi
+    return
+  fi
+  if [[ "${YSG_RUNTIME:-}" == "docker" ]]; then
+    RUNTIME="docker"
+    COMPOSE_CMD=("docker" "compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
     return
   fi
 
