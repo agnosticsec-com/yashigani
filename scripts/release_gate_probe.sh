@@ -10,7 +10,7 @@
 #   * The verdict line "RESTORE TEST GREEN" MUST NOT be emitted by callers unless
 #     this script exits 0 AND both 200 lines are in the same log file.
 #
-# Last-Updated: 2026-04-27T00:00:00Z
+# Last-Updated: 2026-04-27T10:00:00Z
 
 set -euo pipefail
 
@@ -71,7 +71,7 @@ read_secret() {
 probe_admin() {
   local label="$1" user="$2" pass="$3" totp_secret="$4"
   local totp_code resp status
-  totp_code=$(python3 -c "import pyotp,sys; print(pyotp.TOTP('${totp_secret}').now())" 2>/dev/null) || {
+  totp_code=$(python3 -c "import pyotp,hashlib,sys; print(pyotp.TOTP('${totp_secret}',digest=hashlib.sha256).now())" 2>/dev/null) || {
     echo "${label} login HTTP: TOTP_ERR"
     return 4
   }
@@ -82,7 +82,7 @@ ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 body = json.dumps({"username": user, "password": pw, "totp_code": code}).encode()
-req = urllib.request.Request(f"{base}/api/v1/auth/login", data=body,
+req = urllib.request.Request(f"{base}/auth/login", data=body,
                               headers={"Content-Type": "application/json"}, method="POST")
 try:
     r = urllib.request.urlopen(req, context=ctx, timeout=15)
