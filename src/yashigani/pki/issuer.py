@@ -1,7 +1,7 @@
 """
 Yashigani internal PKI issuer — generates root, intermediate, and leaf certs.
 
-Last updated: 2026-04-23T23:32:19+01:00
+Last updated: 2026-04-27T21:40:00Z
 
 Invoked by:
   * install.sh bootstrap_internal_pki()  — first-install cert generation
@@ -131,7 +131,7 @@ def _write_secret(path: Path, data: bytes, mode: int) -> None:
     if path.exists():
         try:
             path.chmod(0o600)
-        except PermissionError:  # pragma: no cover
+        except (PermissionError, FileNotFoundError):  # pragma: no cover
             pass
         path.unlink()
     path.write_bytes(data)
@@ -139,6 +139,16 @@ def _write_secret(path: Path, data: bytes, mode: int) -> None:
         path.chmod(mode)
     except PermissionError:  # pragma: no cover
         logger.warning("chmod failed on %s — permission denied", path)
+    except FileNotFoundError:  # pragma: no cover
+        # Podman rootless + :U bind-mount: os.chmod() (via fchmodat) can
+        # return ENOENT on a file that was just written, due to kernel
+        # user-namespace inode visibility lag on some aarch64 kernels
+        # (observed with Podman 4.9.3 / Ubuntu 24.04 / Linux 6.8 aarch64).
+        # The file IS present on the host; this is a spurious ENOENT from
+        # the namespace bridge. Log and continue — mode is advisory for the
+        # issuer; the _pki_chown_client_keys step applies correct perms
+        # on the host side after the container exits.
+        logger.warning("chmod ENOENT on %s — Podman rootless namespace lag, continuing", path)
 
 
 def _gen_keypair() -> ec.EllipticCurvePrivateKey:
