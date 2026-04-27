@@ -8,7 +8,7 @@ Routes:
   POST   /admin/license/activate — activate a new license key
   DELETE /admin/license          — revert to community license
 """
-# Last updated: 2026-04-27T12:54:12+01:00
+# Last updated: 2026-04-27T21:53:12+01:00
 from __future__ import annotations
 
 import logging
@@ -140,7 +140,24 @@ async def activate_license(
             detail={"error": "MISSING_LICENSE_CONTENT", "detail": "Provide license_content or license_file"},
         )
 
-    new_lic = verify_license(content)
+    # M-05 / LAURA-V231-002 follow-on: verify_license() is guarded here so that
+    # a crafted malformed license file (null seat fields, garbage bytes, truncated
+    # content, malformed JSON) cannot crash the backoffice worker with an
+    # unhandled exception → 500 (DoS on admin plane, authenticated session required).
+    # The route responds with a clean 4xx to the admin, logs the rejection, and
+    # does NOT re-raise.
+    try:
+        new_lic = verify_license(content)
+    except Exception as exc:
+        logger.warning(
+            "License activation rejected — verify_license raised unexpectedly "
+            "(M-05 / LAURA-V231-002): %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "INVALID_LICENSE", "detail": "malformed_license_content"},
+        )
 
     if not new_lic.valid:
         raise HTTPException(
