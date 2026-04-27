@@ -2956,6 +2956,7 @@ k8s_helm_dep_update() {
 }
 
 # STEP 8 (k8s): helm upgrade --install
+# Last updated (k8s_helm_install): 2026-04-27T06:05:04Z
 k8s_helm_install() {
   set_step "8" "helm upgrade --install"
   log_step "8/${TOTAL_STEPS}" "Deploying via Helm..."
@@ -2974,10 +2975,37 @@ k8s_helm_install() {
     return 0
   fi
 
+  # v2.23.1 task #94 — flag set tuned for the umbrella chart's ~97 rendered
+  # resources + slow-booting open-webui pod:
+  #   --wait              block until all Deployments/StatefulSets Available so
+  #                       the next install step (rollout status) doesn't race.
+  #   --wait-for-jobs     pre-install hooks (admin-bootstrap, mtls-bootstrap)
+  #                       must finish before main resources, otherwise the
+  #                       backoffice starts without the bootstrap secret.
+  #   --timeout 20m       cold pull of open-webui:main (~2 GiB) + first-boot
+  #                       SvelteKit migration + qwen2.5:3b ollama warm-up can
+  #                       collectively take 12-15 min on Docker Desktop /
+  #                       laptop hardware. 5m default is too tight.
+  #   --atomic            on failure, helm rolls back; avoids leaving the
+  #                       release in pending-install state which then blocks
+  #                       a subsequent helm install with "cannot re-use a
+  #                       name that is still in use".
+  #   --burst-limit 1000  raise client-side throttling above the default 100
+  #   --qps 500           so that helm's internal poll loop (which iterates
+  #                       all 97 resources every 2s) does not saturate the
+  #                       client-go rate limiter and spuriously raise
+  #                       "client rate limiter Wait returned an error:
+  #                       context deadline exceeded".
   local helm_args=(
     upgrade --install yashigani "$chart_dir"
     --namespace "$NAMESPACE"
     --create-namespace
+    --wait
+    --wait-for-jobs
+    --timeout 20m
+    --atomic
+    --burst-limit 1000
+    --qps 500
   )
 
   if [[ -f "$helm_values" ]]; then

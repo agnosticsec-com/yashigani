@@ -1,3 +1,8 @@
+{{- /*
+  Last updated: 2026-04-27T06:05:04Z
+  v2.23.1 task #94 — startupProbe + tightened liveness/readiness so
+  helm install --wait does not stall on slow first-boot of upstream image.
+*/ -}}
 {{- if .Values.openWebui.enabled }}
 ---
 apiVersion: apps/v1
@@ -78,20 +83,40 @@ spec:
               value: {{ .Values.openWebui.env.defaultModels | quote }}
             - name: WEBUI_NAME
               value: {{ .Values.openWebui.env.webuiName | quote }}
+          # Retro #3ag (v2.23.1 task #94) — startupProbe gates liveness/readiness
+          # so cold-boot of the upstream open-webui image (SvelteKit + Python +
+          # LangChain stack, regularly 90-180s on Docker Desktop) does not get
+          # killed by liveness before /health ever opens. Without this gate,
+          # helm install --wait sat polling Available=0 until the 15m timeout
+          # elapsed and then surfaced "client rate limiter Wait returned an
+          # error: context deadline exceeded" — a misleading symptom whose
+          # real cause is the readiness loop never converging. See:
+          # /Users/max/Documents/Claude/Internal/Compliance/yashigani/v2.23.1/
+          #   restore-test-evidence/k8s/restore_20260426T195713Z_run.log
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            # Allow up to 60 * 5s = 300s for first-boot. Once startupProbe
+            # passes, livenessProbe starts policing in the normal way.
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 10
-            periodSeconds: 15
+            initialDelaySeconds: 0
+            periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 15
+            initialDelaySeconds: 0
+            periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 5
           resources:
