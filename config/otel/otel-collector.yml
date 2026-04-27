@@ -1,10 +1,27 @@
+# Last updated: 2026-04-27T21:59:11+01:00
+# M-01 fix: OTLP receivers upgraded to mTLS (Pattern B).
+# Trust anchor: ca_intermediate.crt (never ca_root.crt — Pattern B rule).
+# Server cert: otel-collector_client.crt / otel-collector_client.key
+#   (issued by install.sh PKI bootstrap against the intermediate CA).
+# Clients (gateway, backoffice) must present a valid leaf cert signed by
+# the same intermediate. Unauthenticated connections are refused (client_ca_file
+# + require_client_auth implicitly enabled when client_ca_file is set).
+
 receivers:
   otlp:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+        tls:
+          cert_file: /run/secrets/otel-collector_client.crt
+          key_file: /run/secrets/otel-collector_client.key
+          client_ca_file: /run/secrets/ca_intermediate.crt
       http:
         endpoint: 0.0.0.0:4318
+        tls:
+          cert_file: /run/secrets/otel-collector_client.crt
+          key_file: /run/secrets/otel-collector_client.key
+          client_ca_file: /run/secrets/ca_intermediate.crt
 
 processors:
   batch:

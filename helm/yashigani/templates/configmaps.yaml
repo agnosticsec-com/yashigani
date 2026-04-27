@@ -41,13 +41,30 @@ metadata:
     {{- include "yashigani.labels" . | nindent 4 }}
 data:
   otel-collector.yml: |
+    # M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS (Pattern B).
+    # Trust anchor: ca_intermediate.crt. Clients must present leaf certs.
+    {{- if .Values.mtls.enabled }}
+    # mTLS enabled: receivers require client cert auth (Pattern B).
+    {{- end }}
     receivers:
       otlp:
         protocols:
           grpc:
             endpoint: "0.0.0.0:4317"
+            {{- if .Values.mtls.enabled }}
+            tls:
+              cert_file: /run/secrets/otel-collector_client.crt
+              key_file: /run/secrets/otel-collector_client.key
+              client_ca_file: /run/secrets/ca_intermediate.crt
+            {{- end }}
           http:
             endpoint: "0.0.0.0:4318"
+            {{- if .Values.mtls.enabled }}
+            tls:
+              cert_file: /run/secrets/otel-collector_client.crt
+              key_file: /run/secrets/otel-collector_client.key
+              client_ca_file: /run/secrets/ca_intermediate.crt
+            {{- end }}
     processors:
       memory_limiter:
         check_interval: 1s

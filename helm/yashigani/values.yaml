@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-27T15:00:00+01:00
+# Last updated: 2026-04-27T21:59:11+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -194,6 +194,8 @@ gateway:
     agentTokenMinLength: "64"
     # v0.5.0
     deploymentStream: "opensource"
+    # M-01 fix: overridden to grpcs:// by gateway.yaml when mtls.enabled=true.
+    # This value applies only when mTLS is disabled (non-default, testing only).
     otelEndpoint: "http://otel-collector:4317"
     fasttextModelPath: "/app/models/fasttext_classifier.bin"
 

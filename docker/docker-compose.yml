@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-27T00:00:00+00:00
+# Last updated: 2026-04-27T21:59:11+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -150,7 +150,13 @@ services:
       # Postgres via PgBouncer — TLS verify-ca + client cert.
       YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      # M-01 fix: switched from http:// (plaintext) to grpcs:// (mTLS).
+      # Collector now requires a client cert (ca_intermediate.crt trust anchor,
+      # Pattern B). Gateway presents its leaf cert from /run/secrets.
+      OTEL_EXPORTER_OTLP_ENDPOINT: grpcs://otel-collector:4317
+      OTEL_EXPORTER_OTLP_CERTIFICATE: /run/secrets/ca_intermediate.crt
+      OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: /run/secrets/gateway_client.crt
+      OTEL_EXPORTER_OTLP_CLIENT_KEY: /run/secrets/gateway_client.key
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
       # Agent auth tokens for upstream calls
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
@@ -266,6 +272,12 @@ services:
       YASHIGANI_IDP_2_CLIENT_SECRET: ${YASHIGANI_IDP_2_CLIENT_SECRET:-}
       YASHIGANI_IDP_2_EMAIL_DOMAINS: ${YASHIGANI_IDP_2_EMAIL_DOMAINS:-}
       YASHIGANI_IDP_2_REDIRECT_URI: ${YASHIGANI_IDP_2_REDIRECT_URI:-}
+      # M-01 fix: backoffice also exports OTLP traces to the collector via mTLS.
+      # Pattern B trust anchor: ca_intermediate.crt (never ca_root.crt).
+      OTEL_EXPORTER_OTLP_ENDPOINT: grpcs://otel-collector:4317
+      OTEL_EXPORTER_OTLP_CERTIFICATE: /run/secrets/ca_intermediate.crt
+      OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: /run/secrets/backoffice_client.crt
+      OTEL_EXPORTER_OTLP_CLIENT_KEY: /run/secrets/backoffice_client.key
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
@@ -724,6 +736,11 @@ services:
 
   # ---------------------------------------------------------------------------
   # OpenTelemetry Collector — OTLP receiver, Jaeger exporter
+  # M-01 fix (2026-04-27): receivers upgraded to mTLS.
+  # Cert: otel-collector_client.crt (issued by install.sh PKI bootstrap).
+  # Trust anchor: ca_intermediate.crt (Pattern B — never ca_root.crt).
+  # Clients (gateway, backoffice) must present valid leaf certs signed by
+  # the same intermediate. See config/otel/otel-collector.yml for TLS config.
   # ---------------------------------------------------------------------------
   otel-collector:
     dns_search: ["."]
@@ -732,6 +749,9 @@ services:
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
       - ../config/otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
+      # PKI certs: collector presents otel-collector leaf cert to clients;
+      # trusts ca_intermediate.crt as the client-cert verification CA.
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "/otelcol-contrib", "components"]
       interval: 30s
