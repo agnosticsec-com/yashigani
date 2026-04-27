@@ -11,7 +11,8 @@ Covers:
   - integrity violation forces COMMUNITY tier on all verify_license() calls
   - placeholder VERIFIER_HASH in dev → skip (fail-open permitted)
   - placeholder VERIFIER_HASH in prod → violation flag set (fail-closed, #104)
-  - placeholder COUNTER_PUBLIC_KEY_PEM skips counter-sig check (fail-open)
+  - placeholder COUNTER_PUBLIC_KEY_PEM in dev → skip (fail-open permitted)
+  - placeholder COUNTER_PUBLIC_KEY_PEM in prod → counter-sig fails (fail-closed, #103)
   - domain-bound license with matching YASHIGANI_TLS_DOMAIN → accepted (#102)
   - domain-bound license with mismatched YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
   - domain-bound license with unset YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
@@ -301,8 +302,9 @@ class TestV3BackwardsCompat:
 class TestCounterKeyPlaceholder:
     def test_v4_accepted_when_counter_key_is_placeholder(self, primary_keys, monkeypatch):
         """
-        If COUNTER_PUBLIC_KEY_PEM is still a placeholder, counter-sig check is
-        skipped and v4 licenses are accepted (fail-open for dev / CI builds).
+        If COUNTER_PUBLIC_KEY_PEM is still a placeholder AND YASHIGANI_ENV=dev,
+        counter-sig check is skipped and v4 licenses are accepted (dev/CI builds).
+        (#103: in prod mode placeholder is fail-closed — see test below.)
         """
         primary_priv_pem, primary_pub_pem = primary_keys
         _, counter_priv_pem, _ = _make_keypair()
@@ -310,6 +312,7 @@ class TestCounterKeyPlaceholder:
         import yashigani.licensing.verifier as verifier_mod
         import yashigani.licensing._integrity as integrity_mod
 
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")  # #103: permit placeholder skip in dev
         monkeypatch.setattr(verifier_mod, "_PUBLIC_KEY_PEM", primary_pub_pem)
         monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
         monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
@@ -335,6 +338,44 @@ class TestCounterKeyPlaceholder:
         result = verify_license(lic_str)
         assert result.valid is True
         assert result.tier == LicenseTier.PROFESSIONAL
+
+    def test_v4_counter_key_placeholder_fails_closed_in_prod(self, primary_keys, monkeypatch):
+        """
+        #103 (LICENSE-2024-001 / CVSS 9.1): In non-dev environments, a
+        placeholder COUNTER_PUBLIC_KEY_PEM must NOT skip the counter-sig check.
+        The verification must fail (counter_signature_invalid), not accept the
+        license, because a placeholder means the build pipeline failed to embed
+        the real counter key.
+        """
+        primary_priv_pem, primary_pub_pem = primary_keys
+        _, counter_priv_pem, _ = _make_keypair()
+
+        import yashigani.licensing.verifier as verifier_mod
+        import yashigani.licensing._integrity as integrity_mod
+
+        # Explicitly unset YASHIGANI_ENV to simulate prod
+        monkeypatch.delenv("YASHIGANI_ENV", raising=False)
+        monkeypatch.setattr(verifier_mod, "_PUBLIC_KEY_PEM", primary_pub_pem)
+        monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
+        monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
+        monkeypatch.setattr(
+            integrity_mod,
+            "COUNTER_PUBLIC_KEY_PEM",
+            integrity_mod._PLACEHOLDER_INTEGRITY + "_COUNTER_KEY",
+        )
+        # VERIFIER_HASH is real (non-placeholder) so integrity doesn't interfere
+        monkeypatch.setattr(integrity_mod, "VERIFIER_HASH", "a" * 64)
+
+        # The verifier will try to load the placeholder PEM as a real key, which
+        # will fail, so the counter_sig check returns False → counter_signature_invalid.
+        from yashigani.licensing.verifier import verify_license
+
+        payload = _make_payload()
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+
+        result = verify_license(lic_str)
+        assert result.valid is False
+        assert result.error == "counter_signature_invalid"
 
 
 # ---------------------------------------------------------------------------
