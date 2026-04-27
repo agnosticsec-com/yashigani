@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-27T20:00:00Z (BUG-58B-04a/b/d: canonical secret modes, service key chown, role password update)
+# Last updated: 2026-04-27T21:30:00Z (gate #58c: pg_ctl root fix for K8s — use gosu postgres pg_ctl reload)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -565,7 +565,15 @@ _refresh_pgdata_ca() {
     install -m 0644 -o postgres -g postgres /run/secrets/ca_root.crt         "${PGDATA}/root.crt"
     install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt "${PGDATA}/server.crt"
     install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDATA}/server.key"
-    pg_ctl -D "${PGDATA}" reload
+    # pg_ctl cannot run as root. Use gosu if available (official postgres image),
+    # fall back to su -s /bin/sh postgres for other distros. Both drop to the
+    # postgres UID before invoking pg_ctl. Compose/VM paths exec as the postgres
+    # user natively; only K8s kubectl exec arrives as root.
+    if command -v gosu >/dev/null 2>&1; then
+      gosu postgres pg_ctl -D "${PGDATA}" reload
+    else
+      su -s /bin/sh postgres -c "pg_ctl -D \"${PGDATA}\" reload"
+    fi
   '; then
     log_error "PGDATA CA refresh failed. mTLS between pgbouncer and postgres may be broken."
     log_error "  Manual recovery: exec into postgres, copy"
