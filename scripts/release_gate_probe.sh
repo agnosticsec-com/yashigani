@@ -12,7 +12,7 @@
 #   * For K8s / mTLS deployments, supply --client-cert and --client-key for
 #     mutual TLS — the backoffice requires a valid client cert.
 #
-# Last-Updated: 2026-04-27T12:00:00Z (add --client-cert/--client-key for K8s mTLS)
+# Last-Updated: 2026-04-27T12:00:00Z (surface ERR exception string for forensics)
 
 set -euo pipefail
 
@@ -109,7 +109,12 @@ except Exception as ex:
 PYEOF
 )
   status=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('status','unknown'))" "$resp" 2>/dev/null || echo "unknown")
-  echo "${label} login HTTP: ${status}"
+  err=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('err',''))" "$resp" 2>/dev/null || echo "")
+  if [[ "$status" == "ERR" && -n "$err" ]]; then
+    echo "${label} login HTTP: ${status} (${err})"
+  else
+    echo "${label} login HTTP: ${status}"
+  fi
   [[ "$status" == "200" ]]
 }
 
