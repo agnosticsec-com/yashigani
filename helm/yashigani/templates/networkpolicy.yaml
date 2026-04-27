@@ -1,3 +1,4 @@
+# Last updated: 2026-04-27T17:36:05+01:00
 # NetworkPolicy — default-deny with explicit allow rules per service.
 # Enforces the principle of least privilege for intra-cluster traffic.
 #
@@ -843,3 +844,55 @@ spec:
         - protocol: TCP
           port: 80
 {{- end }}
+
+---
+# Caddy egress — Caddy is the K8s public TLS edge (Option B parity with
+# Docker/Podman compose). Under default-deny-egress, Caddy must be granted
+# explicit egress to every upstream it reverse_proxies to; otherwise the
+# kernel drops every connection and the front door 502s.
+#
+# Upstreams (mirrors helm/yashigani/templates/configmaps.yaml :443 site):
+#   - yashigani-gateway:8080      (mTLS, /v1/* + /health)
+#   - yashigani-backoffice:8443   (mTLS, /admin/* + /api/admin/*)
+#   - open-webui:8080             (plain, only when openWebui.enabled)
+#
+# DNS (UDP/TCP 53) is already covered by allow-dns-egress for all pods.
+# The :8444 / :8445 SPIFFE-gated metrics listeners are *ingress* on Caddy
+# (Prometheus dials Caddy), so they don't appear in this egress list.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-caddy-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-caddy
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
+      ports:
+        - protocol: TCP
+          port: 8443
+    {{- if .Values.openWebui.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: open-webui
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
