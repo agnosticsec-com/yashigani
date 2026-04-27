@@ -3,7 +3,7 @@ Tests for license anti-tampering: counter-signature (v4) and self-integrity chec
 
 Covers:
   - valid v4 license with correct counter-signature → accepted
-  - valid v3 license (no counter-sig) → accepted (backwards compatibility)
+  - v3 license (2-segment, no counter-sig) → REJECTED: license_format_too_old (LAURA-V231-003)
   - v4 license with wrong counter-signature → rejected (counter_signature_invalid)
   - v4 license with replaced primary public key → counter-sig fails
   - integrity check detects modified verifier.py source (VERIFIER_HASH mismatch)
@@ -18,7 +18,7 @@ Covers:
   - domain-bound license with unset YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
   - wildcard org_domain ("*") → no domain check (#102)
 
-Last updated: 2026-04-27T20:43:24+01:00
+Last updated: 2026-04-27T21:53:12+01:00
 """
 from __future__ import annotations
 
@@ -266,33 +266,48 @@ class TestV4License:
 
 
 # ---------------------------------------------------------------------------
-# v3 backwards compatibility
+# v3 format rejection (LAURA-V231-003)
+# Counter-signature is now mandatory; v3 (2-segment) licenses are rejected.
 # ---------------------------------------------------------------------------
 
 class TestV3BackwardsCompat:
-    def test_valid_v3_license_accepted(self, patched_verifier):
+    """
+    LAURA-V231-003: v3 format (2-segment, no counter-signature) must be rejected.
+
+    These tests were previously named "backwards compatibility" and asserted that
+    v3 was accepted.  They have been updated to assert rejection.  The class name
+    is preserved to maintain continuity with the test history.
+    """
+
+    def test_valid_v3_license_rejected_format_too_old(self, patched_verifier):
+        """A validly-signed 2-segment license is rejected: license_format_too_old."""
         primary_priv_pem, _, _, _ = patched_verifier
         from yashigani.licensing.verifier import verify_license
         from yashigani.licensing.model import LicenseTier
 
         payload = _make_payload()
         lic_str = _build_v3_license(payload, primary_priv_pem)
+        assert len(lic_str.split(".")) == 2, "v3 builder must produce 2-segment string"
 
         result = verify_license(lic_str)
-        assert result.valid is True
-        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.valid is False
+        assert result.error == "license_format_too_old"
+        # Must fall back to COMMUNITY tier — not the payload's claimed tier
+        assert result.tier == LicenseTier.COMMUNITY
 
-    def test_v3_invalid_primary_sig_rejected(self, patched_verifier):
+    def test_v3_rejected_even_with_valid_primary_sig(self, patched_verifier):
+        """Primary-sig validity is irrelevant — v3 is always rejected before sig check."""
         primary_priv_pem, _, _, _ = patched_verifier
         from yashigani.licensing.verifier import verify_license
 
         payload = _make_payload()
         lic_str = _build_v3_license(payload, primary_priv_pem)
-        parts = lic_str.split(".")
-        corrupted = parts[0] + ".AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        result = verify_license(corrupted)
-        assert result.valid is False
-        assert result.error == "invalid_signature"
+        # Both the valid-sig and corrupted-sig 2-segment licenses return the same error
+        result_valid = verify_license(lic_str)
+        corrupted = lic_str.split(".")[0] + ".AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        result_corrupt = verify_license(corrupted)
+        assert result_valid.error == "license_format_too_old"
+        assert result_corrupt.error == "license_format_too_old"
 
 
 # ---------------------------------------------------------------------------
