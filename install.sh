@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-27T20:30:00Z (BUG-58B-01: fail-closed on secrets_dir chown; BUG-58B-04a: selective backup chmod, no blanket 0600)
+# last-updated: 2026-04-27T21:30:00Z (BUG-58B-01: fail-closed on secrets_dir chown; BUG-58B-04a: selective backup chmod; retro #59: Podman rootless chown uses unshare)
 set -euo pipefail
 
 # =============================================================================
@@ -1938,26 +1938,45 @@ compose_up() {
   # Non-root installs (e.g. Docker non-root path) require elevated privilege
   # for this chown; if it fails, surface the error rather than continuing with
   # a permissions mismatch that breaks the PKI bootstrap step downstream.
-  if ! chown 1001:1001 "$secrets_dir" 2>/dev/null; then
-    # Try via sudo if available (operator running install as non-root but with
-    # sudo rights). If sudo is not available or not granted, fail-closed:
-    # the operator must fix permissions before PKI bootstrap will succeed.
-    if command -v sudo &>/dev/null && sudo -n chown 1001:1001 "$secrets_dir" 2>/dev/null; then
-      log_info "secrets_dir chown 1001:1001 completed via sudo"
+  #
+  # Podman rootless (v2.23.1 gate #59): container UID 1001 remaps to a
+  # high host UID (base + 1000) via /etc/subuid. Plain `chown 1001:1001`
+  # will fail because the host user does not own UID 1001. Use
+  # `podman unshare chown 1001:1001` so Podman applies the namespace
+  # mapping — then the host sees the remapped UID. The assertion must
+  # accept either the raw UID 1001 (Docker / root Podman) or the
+  # subuid-remapped value (rootless Podman non-root install).
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    if podman unshare chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+      log_info "secrets_dir chown 1001:1001 applied via podman unshare (rootless)"
+    elif command -v sudo &>/dev/null && sudo -S bash -c "chown 1001:1001 '${secrets_dir}'" <<< "${SUDO_PASS:-}" 2>/dev/null; then
+      log_info "secrets_dir chown 1001:1001 completed via sudo (rootless fallback)"
     else
-      log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
-      log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
-      log_error "Fix: run install.sh as root (sudo bash install.sh) or grant write access:"
-      log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
+      log_warn "Could not chown ${secrets_dir} — PKI issuer will use :U remapping"
+    fi
+  else
+    if ! chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+      # Try via sudo if available (operator running install as non-root but with
+      # sudo rights). If sudo is not available or not granted, fail-closed:
+      # the operator must fix permissions before PKI bootstrap will succeed.
+      if command -v sudo &>/dev/null && sudo -n chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+        log_info "secrets_dir chown 1001:1001 completed via sudo"
+      else
+        log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
+        log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
+        log_error "Fix: run install.sh as root (sudo bash install.sh) or grant write access:"
+        log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
+        exit 1
+      fi
+    fi
+    # Defensive assertion: secrets dir must be owned by UID 1001 before proceeding.
+    # (Skipped for Podman rootless — subuid remapping means host UID != 1001.)
+    # shellcheck disable=SC2012
+    _actual_uid=$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')
+    if [[ "$_actual_uid" != "1001" ]]; then
+      log_error "secrets_dir UID is ${_actual_uid}, expected 1001. Aborting PKI bootstrap."
       exit 1
     fi
-  fi
-  # Defensive assertion: secrets dir must be owned by UID 1001 before proceeding.
-  # shellcheck disable=SC2012
-  _actual_uid=$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')
-  if [[ "$_actual_uid" != "1001" ]]; then
-    log_error "secrets_dir UID is ${_actual_uid}, expected 1001. Aborting PKI bootstrap."
-    exit 1
   fi
   mkdir -p "${data_dir}/audit"
   mkdir -p "${WORK_DIR}/docker/tls"
