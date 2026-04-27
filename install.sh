@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-27T21:30:00Z (BUG-58B-01: fail-closed on secrets_dir chown; BUG-58B-04a: selective backup chmod; retro #59: Podman rootless chown uses unshare)
+# last-updated: 2026-04-27T22:00:00Z (BUG-58B-01: fail-closed on secrets_dir chown; BUG-58B-04a: selective backup chmod; retro #59: Podman rootless chown/rm use unshare)
 set -euo pipefail
 
 # =============================================================================
@@ -3493,6 +3493,9 @@ bootstrap_internal_pki() {
     log_info "Root CA already present — checking renewal status"
     local needs_rotation=false
     # Su Review Finding: no /tmp — keep scratch inside WORK_DIR.
+    # Podman rootless: status_file written by container (UID 363144) cannot
+    # be removed by host user via plain rm. Use podman unshare rm when runtime
+    # is Podman rootless (non-root); fall back to direct rm otherwise.
     local status_file="${WORK_DIR}/docker/secrets/.pki-status"
     if _pki_run_issuer status >"$status_file" 2>&1; then
       if grep -q "'status': 'renew'" "$status_file" 2>/dev/null; then
@@ -3500,7 +3503,11 @@ bootstrap_internal_pki() {
         needs_rotation=true
       fi
     fi
-    rm -f "$status_file"
+    if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" ]]; then
+      podman unshare rm -f "$status_file" 2>/dev/null || rm -f "$status_file" 2>/dev/null || true
+    else
+      rm -f "$status_file"
+    fi
 
     # Manifest-aware drift check — v2.23.1 retro #82. Rotates leaves even if
     # they are still time-valid when the URI SAN doesn't match the manifest.
