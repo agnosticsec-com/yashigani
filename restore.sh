@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-27T21:30:00Z (gate #58c: pg_ctl root fix for K8s — use gosu postgres pg_ctl reload)
+# Last updated: 2026-04-27T22:00:00Z (gate #58c: pg_ctl root fix + macOS cp 0400 overwrite fix)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -314,6 +314,13 @@ restore_backup() {
     # The outer home directory (/home/max) provides the primary access control;
     # making the inner secrets/ directory traversable is intentional and safe.
     chmod 751 "${WORK_DIR}/docker/secrets"
+    # Ensure any pre-existing read-only keys in the destination are writable
+    # before we overwrite them. On macOS (BSD cp), cp -rp fails to overwrite
+    # a 0400 file even when you own it — unlike GNU cp which can force-overwrite
+    # owner-writable-by-permission. This is idempotent: we restore canonical
+    # permissions in _pki_chown_client_keys immediately after the copy.
+    find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \( -name '*.key' -o -name '*.pem' \) \
+      -exec chmod u+w {} \; 2>/dev/null || true
     # cp -p preserves source mode/ownership timestamps.
     if ! cp -rp "${backup_dir}/secrets/"* "${WORK_DIR}/docker/secrets/"; then
       log_error "Failed to copy secrets from backup"
