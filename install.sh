@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-24T22:55:00+00:00
+# last-updated: 2026-04-27T18:00:00Z
 set -euo pipefail
 
 # =============================================================================
@@ -1266,8 +1266,13 @@ _backup_existing_data() {
 
   # Backup secrets (passwords, TOTP secrets, tokens)
   if [[ -d "${WORK_DIR}/docker/secrets" ]]; then
-    cp -r "${WORK_DIR}/docker/secrets" "${backup_dir}/secrets"
-    log_info "  secrets/ backed up"
+    # BUG-3 (v2.23.1): cp -rp preserves ownership + mode + timestamps so the
+    # subsequent restore (cp -rp on the backup) lands files with the SAME uids
+    # the running containers expect (pgbouncer=70, redis=999, postgres=999,
+    # grafana=472, gateway/backoffice=1001). cp -r without -p was losing the
+    # uids during backup, then restore preserved root:root and broke services.
+    cp -rp "${WORK_DIR}/docker/secrets" "${backup_dir}/secrets"
+    log_info "  secrets/ backed up (ownership/mode preserved)"
   fi
 
   # Backup .env (contains passwords as env vars)

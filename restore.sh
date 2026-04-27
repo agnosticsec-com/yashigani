@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-27T10:00:00Z (RC-7 fix — honour YSG_RUNTIME env var in detect_runtime)
+# Last updated: 2026-04-27T18:00:00Z (BUG-3: preserve ownership in pre-restore snapshot; BUG-4: refresh PGDATA CA after PKI restore)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -296,7 +296,9 @@ restore_backup() {
   if [[ -d "${WORK_DIR}/docker/secrets" ]]; then
     log_info "Saving current state to ${pre_restore_dir}..."
     mkdir -p "${pre_restore_dir}"
-    cp -r "${WORK_DIR}/docker/secrets" "${pre_restore_dir}/secrets" 2>/dev/null || true
+    # BUG-3 (v2.23.1): preserve ownership/mode in pre-restore snapshot so a
+    # rollback restores the original uids the containers expect, not root:root.
+    cp -rp "${WORK_DIR}/docker/secrets" "${pre_restore_dir}/secrets" 2>/dev/null || true
     cp "${WORK_DIR}/docker/.env" "${pre_restore_dir}/.env" 2>/dev/null || true
     log_success "Pre-restore snapshot saved"
   fi
@@ -349,14 +351,20 @@ restore_backup() {
     log_warn "No .env file in backup — skipping"
   fi
 
-  # 3. Restore Postgres dump
+  # 3. BUG-4 (v2.23.1): refresh PGDATA-cached CA + server cert BEFORE the
+  #    Postgres dump replay. The replay reconnects through pgbouncer; without
+  #    this refresh the restored secrets/ CA differs from the in-PGDATA CA and
+  #    every reconnect fails mTLS handshake.
+  _refresh_pgdata_ca || log_warn "PGDATA CA refresh failed -- postgres mTLS may be broken until manual fix"
+
+  # 4. Restore Postgres dump
   if [[ -f "${backup_dir}/postgres_dump.sql" ]]; then
     _restore_postgres "${backup_dir}/postgres_dump.sql"
   else
     log_info "No Postgres dump in backup — skipping database restore"
   fi
 
-  # 4. For K8s: update secrets in the cluster
+  # 5. For K8s: update secrets in the cluster
   if [[ "$K8S_MODE" == "true" && -d "${backup_dir}/secrets" ]]; then
     _restore_k8s_secrets "${backup_dir}/secrets"
   fi
@@ -390,6 +398,63 @@ restore_backup() {
   printf "\n"
   printf "  Pre-restore backup saved at: ${pre_restore_dir}\n"
   printf "  If something went wrong, restore from there.\n\n"
+}
+
+# ---------------------------------------------------------------------------
+# BUG-4 (v2.23.1): Refresh PGDATA-cached CA + server cert after PKI restore
+# ---------------------------------------------------------------------------
+# Postgres caches the CA root + server leaf inside PGDATA at first initdb
+# (docker/postgres/05-enable-ssl.sh installs ca_root.crt -> ${PGDATA}/root.crt,
+# postgres_client.crt -> server.crt, postgres_client.key -> server.key). On a
+# fresh install the CA in PGDATA and the CA in /run/secrets/ca_root.crt are
+# the same. After a restore, /run/secrets/ now carries the BACKUPs CA but
+# PGDATA still has the in-place install CA -- every mTLS handshake against
+# pgbouncer fails because pgbouncer presents a leaf signed by the restored CA
+# while PGDATA root.crt only trusts the in-place CA.
+#
+# Fix: copy the restored CA + restored postgres leaf from /run/secrets into
+# PGDATA, then pg_ctl reload (no restart needed -- TLS material is reloadable).
+#
+# Pattern-sweep result: ONLY postgres caches CA-in-volume. redis, pgbouncer,
+# gateway, backoffice, caddy, grafana all read /run/secrets/ca_root.crt or
+# bind-mounts at runtime and pick up the new CA on a normal compose restart.
+# Helm chart equivalent runs the same 05-enable-ssl.sh logic in the postgres
+# init job, so the K8s path uses the same install + reload sequence via
+# kubectl exec.
+# ---------------------------------------------------------------------------
+_refresh_pgdata_ca() {
+  local pg_target=""
+  pg_target=$(find_pg_container)
+
+  if [[ -z "$pg_target" ]]; then
+    log_warn "Postgres not running -- PGDATA CA refresh deferred."
+    log_warn "  After bringing postgres up, manually install"
+    log_warn "  /run/secrets/ca_root.crt into \${PGDATA}/root.crt and the"
+    log_warn "  postgres_client.{crt,key} into \${PGDATA}/server.{crt,key},"
+    log_warn "  then pg_ctl reload."
+    return 0
+  fi
+
+  log_info "Refreshing PGDATA-cached CA + server cert in ${pg_target}..."
+
+  if ! pg_exec "$pg_target" sh -c '
+    set -e
+    PGDATA="${PGDATA:-/var/lib/postgresql/data/pgdata}"
+    : "${PGDATA:?PGDATA env var unset in postgres container}"
+    install -m 0644 -o postgres -g postgres /run/secrets/ca_root.crt         "${PGDATA}/root.crt"
+    install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt "${PGDATA}/server.crt"
+    install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDATA}/server.key"
+    pg_ctl -D "${PGDATA}" reload
+  '; then
+    log_error "PGDATA CA refresh failed. mTLS between pgbouncer and postgres may be broken."
+    log_error "  Manual recovery: exec into postgres, copy"
+    log_error "  /run/secrets/{ca_root.crt,postgres_client.crt,postgres_client.key} into"
+    log_error "  \${PGDATA}/{root.crt,server.crt,server.key} (chown postgres:postgres),"
+    log_error "  then run: pg_ctl -D \${PGDATA} reload"
+    return 1
+  fi
+
+  log_success "PGDATA CA + server cert refreshed; postgres reloaded TLS material"
 }
 
 # ---------------------------------------------------------------------------
