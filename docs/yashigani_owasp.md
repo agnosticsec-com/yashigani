@@ -1,7 +1,8 @@
 # Yashigani Security Gateway -- OWASP Compliance Mapping
 
 **Document Version:** 2.23.1
-**Date:** 2026-04-23
+**Date:** 2026-04-27
+<!-- Last updated: 2026-04-27T21:59:11+01:00 -->
 **Codebase version:** v2.23.1
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
@@ -310,8 +311,8 @@ Yashigani captures the following environmental factors in audit events:
 | V9.1.4 | Verify that HSTS is enabled with appropriate directives | L2 | Strict-Transport-Security: max-age=31536000; includeSubDomains served by Caddy and backoffice middleware | PASS |
 | V9.1.5 | Verify that certificate validation is performed correctly | L1 | Caddy validates upstream certificates; ACME handles Let's Encrypt certificates automatically | PASS |
 | V9.1.6 | Verify that certificate pinning is implemented for high-value connections | L3 | No certificate pinning implemented for connections to external services (inspection backends, SIEM, secrets backends) | FAIL |
-| V9.2.1 | Verify that internal service communications are encrypted | L2 | Internal comms (gateway-to-OPA, gateway-to-PostgreSQL, gateway-to-Redis) use network isolation; TLS available but not enforced by default on all internal paths | PARTIAL |
-| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | mTLS not implemented for internal service mesh; relies on Docker network isolation | FAIL |
+| V9.2.1 | Verify that internal service communications are encrypted | L2 | Core data-plane fully mTLS as of v2.23.1 (gateway↔backoffice↔postgres↔pgbouncer↔redis↔budget-redis↔Caddy); OTEL collector upgraded to mTLS gRPC (M-01 closed 2026-04-27); OPA plaintext HTTP is the only remaining exception (tracked as task #54, v2.23.2) | PARTIAL |
+| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | Two-tier PKI (root→intermediate→per-service leaves) with SPIFFE URI SANs on all core-plane services; two remaining exceptions: OPA plaintext (task #54) and Ollama (no TLS support upstream, bearer token + bridge isolation) | PARTIAL |
 | V9.3.1 | Verify that certificate management is automated | L2 | Three modes: ACME (automatic Let's Encrypt), CA-signed (operator-provided), self-signed (development); ACME renewal fully automated via Caddy | PASS |
 | V9.3.2 | Verify that certificate lifecycle events are logged | L3 | Caddy logs certificate renewal events; however, certificate expiry alerting not integrated into Yashigani audit trail | PARTIAL |
 | V9.4.1 | Verify that the application is prepared for post-quantum TLS | L3 | Hybrid X25519+ML-KEM-768 key exchange config included (pending Caddy 2.10 release) | PARTIAL |
@@ -330,7 +331,7 @@ Yashigani captures the following environmental factors in audit events:
 | V10.2.1 | Verify that the application does not request unnecessary permissions | L1 | Container runs as UID 1001 (non-root); no privilege escalation (allowPrivilegeEscalation: false); no new privileges flag | PASS |
 | V10.2.2 | Verify that the application uses OS-level sandboxing | L2 | seccomp allowlist restricts syscalls; AppArmor profile provides MAC; readOnlyRootFilesystem: true; tmpfs for writable paths | PASS |
 | V10.2.3 | Verify that system call filtering is applied | L3 | seccomp allowlist restricts to required syscalls only; AppArmor mandatory access control at kernel level | PASS |
-| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; digest-pinned; no mutable tags (:latest) in production | PASS |
+| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; all 25 upstream images digest-pinned to sha256 at release time in `docker/docker-compose.release.yml` (H-02 Iris finding closed 2026-04-27); Helm parity in `helm/yashigani/values.release.yaml`; no mutable tags in production overlay. Mirror to registry.agnosticsec.com tracked as RETRO-H02-MIRROR (v2.23.2 P0). | PASS |
 | V10.3.2 | Verify that container images are scanned before deployment | L2 | Trivy scanning integrated in CI/CD; images failing scan threshold not promoted to production | PASS |
 | V10.3.3 | Verify that container runtime security is enforced | L3 | seccomp + AppArmor + non-root + read-only filesystem + no privilege escalation; cgroup v2 resource limits | PASS |
 | V10.4.1 | Verify that software composition analysis (SCA) is performed | L2 | Trivy SCA in CI; GitHub Dependabot for dependency monitoring; hashed requirements in pyproject.toml | PASS |
