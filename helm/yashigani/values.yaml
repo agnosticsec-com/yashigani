@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-26T20:53:11+01:00
+# Last updated: 2026-04-27T15:00:00+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -8,7 +8,7 @@ global:
   # REQUIRED: Replace with your actual domain before deployment
   tlsDomain: "yashigani.example.com"
   # tlsMode: caddy | nginx (cert-manager + nginx-ingress)
-  tlsMode: "nginx"
+  tlsMode: "caddy"
   certManagerIssuer: "letsencrypt-prod"
   acmeEmail: "admin@example.com"
   environment: "production"
@@ -466,12 +466,21 @@ otelCollector:
     type: ClusterIP
 
 # ---------------------------------------------------------------------------
-# Caddy — TLS edge proxy (optional in K8s — prefer nginx-ingress + cert-manager)
+# Caddy — TLS edge proxy (K8s front door, Option B parity with Docker/Podman)
+# ---------------------------------------------------------------------------
+# Caddy is the K8s front door for Yashigani. It terminates the public TLS
+# session and speaks mTLS upstream to gateway/backoffice/policy — exact
+# parity with Docker/Podman compose. Cluster operators MAY layer
+# nginx-ingress + cert-manager (or any L7) in front of Caddy at the cluster
+# edge for ACME automation, WAF, or multi-tenant routing — Caddy stays.
+#
+# Disabling caddy here will break the in-cluster mTLS plane: gateway and
+# backoffice both terminate mTLS internally, so a plaintext upstream from
+# any other reverse proxy will be refused at the TLS handshake. Use the
+# layered-edge pattern instead.
 # ---------------------------------------------------------------------------
 caddy:
-  enabled: false
-  # note: "In Kubernetes, consider using nginx-ingress + cert-manager instead of Caddy.
-  #        Set caddy.enabled=false and configure an Ingress resource."
+  enabled: true
   image:
     repository: caddy
     tag: "2-alpine"
@@ -496,12 +505,12 @@ caddy:
   # Requires the mesh mTLS plane (caddy_client.{crt,key} + ca_root.crt) to
   # be mounted into the caddy pod — parity with docker-compose is tracked.
   internalMetricsListener:
-    enabled: false
+    enabled: true
     port: 8444
   # #81 fix parallel backoffice listener (Prom v3 rejects Host via http_headers).
   # Toggle in lockstep with internalMetricsListener.enabled.
   internalMetricsListenerBackoffice:
-    enabled: false
+    enabled: true
     port: 8445
 
 # ---------------------------------------------------------------------------

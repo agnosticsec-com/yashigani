@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-04-27T15:00:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -173,7 +174,39 @@ data:
         redir https://{host}{uri} permanent
       }
     }
-    https://{{ .Values.global.tlsDomain }}:443 {
+    # ────────────────────────────────────────────────────────────────────────
+    # Internal mTLS snippet — used by every reverse_proxy that targets a
+    # service terminating mTLS (gateway:8080, backoffice:8443). Caddy
+    # presents caddy_client.{crt,key} and verifies the upstream against
+    # ca_root.crt. Mirrors docker/Caddyfile.selfsigned (internal-mtls).
+    # ────────────────────────────────────────────────────────────────────────
+    {{- if .Values.mtls.enabled }}
+    # K8s service names (yashigani-gateway / yashigani-backoffice) don't
+    # match the cert SANs (gateway / backoffice — sourced from
+    # service_identities.yaml). Override SNI via tls_server_name so the
+    # handshake validates against the right SAN. Two snippets, one per
+    # upstream, since Caddy snippets can't take parameters in v2.
+    (internal-mtls-gateway) {
+      transport http {
+        tls
+        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+        tls_server_name gateway
+      }
+    }
+    (internal-mtls-backoffice) {
+      transport http {
+        tls
+        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+        tls_server_name backoffice
+      }
+    }
+    {{- end }}
+    # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
+    # work regardless of how the cluster operator routes the public domain.
+    # Caddy still issues a self-signed leaf for tlsDomain via tls internal.
+    :443 {
       tls internal
       header {
         X-Content-Type-Options    "nosniff"
@@ -184,28 +217,60 @@ data:
         -Server
       }
       handle /healthz {
-        reverse_proxy yashigani-gateway:8080
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+        }
       }
       handle /v1/* {
-        reverse_proxy yashigani-gateway:8080
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+        }
       }
       handle /agents/* {
-        reverse_proxy yashigani-gateway:8080
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+        }
       }
       handle /mcp/* {
-        reverse_proxy yashigani-gateway:8080
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+        }
       }
       handle /admin/* {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+        }
       }
       handle /auth/* {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+        }
       }
       handle /static/* {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+        }
       }
       handle /login {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+        }
       }
       handle {
         reverse_proxy open-webui:8080
@@ -246,6 +311,7 @@ data:
             tls
             tls_trusted_ca_certs /run/secrets/ca_root.crt
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+            tls_server_name gateway
           }
         }
       }
@@ -274,6 +340,7 @@ data:
             tls
             tls_trusted_ca_certs /run/secrets/ca_root.crt
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+            tls_server_name backoffice
           }
         }
       }

@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-04-27T15:00:00+01:00 */ -}}
 {{- if .Values.caddy.enabled }}
 ---
 apiVersion: apps/v1
@@ -86,6 +87,22 @@ spec:
               mountPath: /etc/caddy/Caddyfile
               subPath: Caddyfile
               readOnly: true
+            {{- if .Values.mtls.enabled }}
+            # Mesh mTLS — Caddy presents caddy_client.{crt,key} to gateway/
+            # backoffice/policy upstreams and validates them against ca_root.
+            # Required for the public :443 listener (Option B parity with
+            # Docker/Podman) AND for the SPIFFE-gated :8444/:8445 metrics
+            # listeners. Read-only, mode 0440 so UID 65532 (caddy) can read.
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      # /run/secrets PKI mount collides with SA-token at
+      # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+      # Caddy doesn't talk to the K8s API, so dropping the SA token is fine.
+      automountServiceAccountToken: false
+      {{- end }}
       volumes:
         - name: caddy-data
           emptyDir: {}
@@ -94,6 +111,12 @@ spec:
         - name: caddyfile
           configMap:
             name: yashigani-caddy-config
+        {{- if .Values.mtls.enabled }}
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

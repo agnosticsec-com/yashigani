@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-24T13:47:12+01:00 */ -}}
+{{- /* Last updated: 2026-04-27T15:00:00+01:00 */ -}}
 {{- if .Values.prometheus.enabled }}
 ---
 apiVersion: v1
@@ -143,10 +143,29 @@ spec:
               readOnly: true
             - name: data
               mountPath: /prometheus
+            {{- if .Values.mtls.enabled }}
+            # mTLS leaves: prometheus_client.{crt,key} + ca_root.crt for
+            # scraping Caddy's :8444 / :8445 SPIFFE-gated listeners.
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      # /run/secrets PKI mount collides with SA-token at
+      # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+      # Prometheus doesn't talk to the K8s API in this chart.
+      automountServiceAccountToken: false
+      {{- end }}
       volumes:
         - name: config
           configMap:
             name: yashigani-prometheus-config
+        {{- if .Values.mtls.enabled }}
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        {{- end }}
   {{- if .Values.prometheus.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
