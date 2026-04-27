@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-24T23:45:00+00:00
+# Last updated: 2026-04-27T00:00:00+00:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -148,7 +148,7 @@ services:
       YASHIGANI_AGENT_PATH_PREFIX: "/agents"
       YASHIGANI_AGENT_TOKEN_MIN_LENGTH: "64"
       # Postgres via PgBouncer — TLS verify-ca + client cert.
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
@@ -197,8 +197,8 @@ services:
         condition: service_started
     healthcheck:
       # mTLS port now used — healthcheck uses the client cert inside the
-      # container. Requires ca_root.crt present in /run/secrets.
-      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)\""]
+      # container. Pattern B: trust anchor is ca_intermediate.crt (root never in workloads).
+      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -235,7 +235,7 @@ services:
       # can set this var; ensure YASHIGANI_PII_MODE=redact or block first.
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,fail_closed}
       # Postgres via PgBouncer — TLS verify-ca + client cert.
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_API_URL: http://open-webui:8080
       # OWUI_SECRET_KEY is required — install.sh generates a fresh random
@@ -285,8 +285,8 @@ services:
       # surface). A dedicated yashigani-backoffice profile may ship later.
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
     healthcheck:
-      # mTLS — same pattern as gateway healthcheck.
-      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""]
+      # mTLS — Pattern B: trust anchor is ca_intermediate.crt (root never in workloads).
+      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -361,7 +361,7 @@ services:
           --tls-port 6380 \
           --tls-cert-file /run/secrets/budget-redis_client.crt \
           --tls-key-file /run/secrets/budget-redis_client.key \
-          --tls-ca-cert-file /run/secrets/ca_root.crt \
+          --tls-ca-cert-file /run/secrets/ca_intermediate.crt \
           --tls-auth-clients yes \
           --tls-protocols "TLSv1.2 TLSv1.3" \
           --maxmemory-policy noeviction \
@@ -372,7 +372,7 @@ services:
       - budget_redis_data:/data
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --tls --cert /run/secrets/budget-redis_client.crt --key /run/secrets/budget-redis_client.key --cacert /run/secrets/ca_root.crt -p 6380 -a \"$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli --tls --cert /run/secrets/budget-redis_client.crt --key /run/secrets/budget-redis_client.key --cacert /run/secrets/ca_intermediate.crt -p 6380 -a \"$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -429,7 +429,7 @@ services:
       --tls-port 6380
       --tls-cert-file /run/secrets/redis_client.crt
       --tls-key-file /run/secrets/redis_client.key
-      --tls-ca-cert-file /run/secrets/ca_root.crt
+      --tls-ca-cert-file /run/secrets/ca_intermediate.crt
       --tls-auth-clients yes
       --tls-protocols "TLSv1.2 TLSv1.3"
       --save ""
@@ -444,7 +444,7 @@ services:
       # redis-cli over TLS with our client cert.
       test: >
         sh -c 'redis-cli --tls --cert /run/secrets/redis_client.crt
-        --key /run/secrets/redis_client.key --cacert /run/secrets/ca_root.crt
+        --key /run/secrets/redis_client.key --cacert /run/secrets/ca_intermediate.crt
         -p 6380 -a "$$(cat /run/secrets/redis_password)" ping'
       interval: 10s
       timeout: 3s

@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (CA-signed certificate mode)
-# Last updated: 2026-04-24T13:47:12+01:00
+# Last updated: 2026-04-27T00:00:00+00:00
 # Use this for enterprise / on-prem deployments with an internal CA.
 #
 # Before starting:
@@ -31,7 +31,7 @@
 (internal-mtls) {
     transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
     }
 }
@@ -290,7 +290,7 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
     tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
             mode require_and_verify
-            trust_pool file /run/secrets/ca_root.crt
+            trust_pool file /run/secrets/ca_intermediate.crt
         }
         protocols tls1.2 tls1.3
     }
@@ -321,7 +321,7 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
     tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
             mode require_and_verify
-            trust_pool file /run/secrets/ca_root.crt
+            trust_pool file /run/secrets/ca_intermediate.crt
         }
         protocols tls1.2 tls1.3
     }

@@ -199,7 +199,7 @@ async def lifespan(app: FastAPI):
             if redis_use_tls:
                 anomaly_redis_url = (
                     f"rediss://:{_q}@{redis_host}:{redis_port}/2"
-                    f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
+                    f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_intermediate.crt"
                     f"&ssl_certfile={secrets_dir}/backoffice_client.crt"
                     f"&ssl_keyfile={secrets_dir}/backoffice_client.key"
                 )

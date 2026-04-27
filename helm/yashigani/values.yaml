@@ -90,7 +90,7 @@ mtls:
   # Deployment/StatefulSet mounts this at /run/secrets. After retro #3aj this
   # Secret contains LEAF material only:
   #   * <service>_client.crt + <service>_client.key (the per-service leaves)
-  #   * ca_root.crt + ca_intermediate.crt (trust anchors — public certs only)
+  #   * ca_root.crt + ca_intermediate.crt (public certs — workloads use intermediate only, Pattern B)
   # It deliberately does NOT contain the CA private keys — those live in
   # caKeysSecretName below and are mounted only by the bootstrap Job and
   # rotation CronJob. Name retained as `yashigani-pki-certs` for upgrade
@@ -502,8 +502,8 @@ caddy:
   # :8444 that requires peer-cert auth, validates the URI SAN, and forwards
   # it as X-SPIFFE-ID to the gateway/backoffice upstream. Prometheus scrapes
   # go through this listener instead of hitting the pods directly.
-  # Requires the mesh mTLS plane (caddy_client.{crt,key} + ca_root.crt) to
-  # be mounted into the caddy pod — parity with docker-compose is tracked.
+  # Requires the mesh mTLS plane (caddy_client.{crt,key} + ca_intermediate.crt) to
+  # be mounted into the caddy pod — Pattern B: intermediate only, not root.
   internalMetricsListener:
     enabled: true
     port: 8444

@@ -59,7 +59,7 @@ spec:
             echo "Testing ${SVC} over TLS..."
             RESULT=$(redis-cli --tls \
               --cert "$CERT" --key "$KEY" \
-              --cacert /run/secrets/ca_root.crt \
+              --cacert /run/secrets/ca_intermediate.crt \
               -h "${SVC}" -p 6380 PING 2>&1 || true)
             if echo "${RESULT}" | grep -q "PONG"; then
               echo "${SVC}: PONG (no auth)"

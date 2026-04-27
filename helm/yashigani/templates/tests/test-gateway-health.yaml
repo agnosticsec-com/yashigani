@@ -60,15 +60,10 @@ spec:
           # not "yashigani-gateway" (K8s service name). Use server_hostname
           # override so SNI + cert-hostname match the SAN while we connect to
           # the K8s service IP.
-          # Trust store loads root + intermediate explicitly: even though the
-          # server sends a leaf+intermediate bundle in the TLS handshake,
-          # Python's ssl in this restricted SSLContext does not use the
-          # server-presented intermediate to satisfy peer verification — the
-          # client must load it into its own verify locations.
+          # Pattern B: trust anchor is ca_intermediate.crt only. Root never in workloads.
           python3 -c "
           import ssl, socket, sys
-          ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-          ctx.load_verify_locations(cafile='/run/secrets/ca_intermediate.crt')
+          ctx = ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt')
           ctx.load_cert_chain('/run/secrets/gateway_client.crt', '/run/secrets/gateway_client.key')
           ip = socket.gethostbyname('yashigani-gateway')
           sock = socket.create_connection((ip, {{ .Values.gateway.service.port }}), timeout=10)

@@ -38,7 +38,7 @@ data:
           - targets: ["yashigani-caddy:{{ .Values.caddy.internalMetricsListener.port }}"]
         metrics_path: /internal/metrics
         tls_config:
-          ca_file:   /run/secrets/ca_root.crt
+          ca_file:   /run/secrets/ca_intermediate.crt
           cert_file: /run/secrets/prometheus_client.crt
           key_file:  /run/secrets/prometheus_client.key
           server_name: yashigani-caddy
@@ -50,7 +50,7 @@ data:
           - targets: ["yashigani-caddy:{{ .Values.caddy.internalMetricsListenerBackoffice.port }}"]
         metrics_path: /internal/metrics
         tls_config:
-          ca_file:   /run/secrets/ca_root.crt
+          ca_file:   /run/secrets/ca_intermediate.crt
           cert_file: /run/secrets/prometheus_client.crt
           key_file:  /run/secrets/prometheus_client.key
           server_name: yashigani-caddy
@@ -144,8 +144,8 @@ spec:
             - name: data
               mountPath: /prometheus
             {{- if .Values.mtls.enabled }}
-            # mTLS leaves: prometheus_client.{crt,key} + ca_root.crt for
-            # scraping Caddy's :8444 / :8445 SPIFFE-gated listeners.
+            # mTLS leaves: prometheus_client.{crt,key} + ca_intermediate.crt for
+            # scraping Caddy's :8444 / :8445 SPIFFE-gated listeners (Pattern B).
             - name: pki-certs
               mountPath: /run/secrets
               readOnly: true

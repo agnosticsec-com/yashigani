@@ -178,7 +178,7 @@ data:
     # Internal mTLS snippet — used by every reverse_proxy that targets a
     # service terminating mTLS (gateway:8080, backoffice:8443). Caddy
     # presents caddy_client.{crt,key} and verifies the upstream against
-    # ca_root.crt. Mirrors docker/Caddyfile.selfsigned (internal-mtls).
+    # ca_intermediate.crt (Pattern B). Mirrors docker/Caddyfile.selfsigned (internal-mtls).
     # ────────────────────────────────────────────────────────────────────────
     {{- if .Values.mtls.enabled }}
     # K8s service names (yashigani-gateway / yashigani-backoffice) don't
@@ -189,7 +189,7 @@ data:
     (internal-mtls-gateway) {
       transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         tls_server_name gateway
       }
@@ -197,7 +197,7 @@ data:
     (internal-mtls-backoffice) {
       transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         tls_server_name backoffice
       }
@@ -281,7 +281,7 @@ data:
     # EX-231-08 (+ #81) — SPIFFE-gated internal observability listeners.
     # Last updated: 2026-04-24T13:47:12+01:00
     # See docker/Caddyfile.acme for the full comment block.
-    # Requires ca_root.crt + caddy_client.{crt,key} mounted at /run/secrets.
+    # Requires ca_intermediate.crt + caddy_client.{crt,key} mounted at /run/secrets.
     #
     # NOTE (retro #81-b): this Helm ConfigMap hand-codes a stripped Caddyfile
     # that is deliberately NOT full-parity with docker/Caddyfile.acme. Full
@@ -298,7 +298,7 @@ data:
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
           mode require_and_verify
-          trust_pool file /run/secrets/ca_root.crt
+          trust_pool file /run/secrets/ca_intermediate.crt
         }
         protocols tls1.2 tls1.3
       }
@@ -309,7 +309,7 @@ data:
         reverse_proxy https://yashigani-gateway:8080 {
           transport http {
             tls
-            tls_trusted_ca_certs /run/secrets/ca_root.crt
+            tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
             tls_server_name gateway
           }
@@ -327,7 +327,7 @@ data:
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
           mode require_and_verify
-          trust_pool file /run/secrets/ca_root.crt
+          trust_pool file /run/secrets/ca_intermediate.crt
         }
         protocols tls1.2 tls1.3
       }
@@ -338,7 +338,7 @@ data:
         reverse_proxy https://yashigani-backoffice:8443 {
           transport http {
             tls
-            tls_trusted_ca_certs /run/secrets/ca_root.crt
+            tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
             tls_server_name backoffice
           }

@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-24T13:47:12+01:00
+# Last updated: 2026-04-27T00:00:00+00:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -33,13 +33,13 @@
 # Internal mTLS snippet — imported by every reverse_proxy / forward_auth block
 # that targets a service terminating mTLS (gateway:8080, backoffice:8443).
 # Caddy presents its own client cert and verifies the peer against the
-# internal CA root. The caddy_client.{crt,key} are minted by install.sh via
-# yashigani.pki.issuer.
+# internal intermediate CA (Pattern B). The caddy_client.{crt,key} are minted
+# by install.sh via yashigani.pki.issuer.
 # ─────────────────────────────────────────────────────────────────────────────
 (internal-mtls) {
     transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_root.crt
+        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
     }
 }
@@ -307,7 +307,7 @@ http://{env.YASHIGANI_TLS_DOMAIN}:80 {
     tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
             mode require_and_verify
-            trust_pool file /run/secrets/ca_root.crt
+            trust_pool file /run/secrets/ca_intermediate.crt
         }
         protocols tls1.2 tls1.3
     }
@@ -338,7 +338,7 @@ http://{env.YASHIGANI_TLS_DOMAIN}:80 {
     tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
             mode require_and_verify
-            trust_pool file /run/secrets/ca_root.crt
+            trust_pool file /run/secrets/ca_intermediate.crt
         }
         protocols tls1.2 tls1.3
     }

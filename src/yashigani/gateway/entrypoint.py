@@ -2,6 +2,8 @@
 Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
+
+Last updated: 2026-04-27T21:53:12+01:00
 """
 from __future__ import annotations
 
@@ -114,11 +116,11 @@ def _build_app():
     if redis_use_tls:
         # redis-py reads ssl_* params from the URL query string when scheme
         # is rediss://. Client cert is gateway_client.{crt,key}; trust anchor
-        # is ca_root.crt.
+        # is ca_intermediate.crt (Pattern B — root never in workloads).
         # IMPORTANT: redis_base must NOT include the query string — each
         # call site appends `/{db}` which must precede the `?`. Keep the
         # query portion separate and format as f"{redis_base}/{db}{redis_query}".
-        _ca = f"{secrets_dir}/ca_root.crt"
+        _ca = f"{secrets_dir}/ca_intermediate.crt"
         _crt = f"{secrets_dir}/gateway_client.crt"
         _key = f"{secrets_dir}/gateway_client.key"
         redis_base = (
@@ -206,10 +208,17 @@ def _build_app():
         logger.warning("JWT inspector unavailable (%s) — JWT validation disabled", exc)
 
     # PostgreSQL pool + inference logger + anomaly detector — Phases 1, 2
+    # M-02 (SOP 1 fail-closed): if YASHIGANI_DB_DSN is configured and DB init
+    # fails, re-raise so the container exits non-zero.  A warn-and-continue here
+    # produces a healthy-looking zombie: container reports healthy but every
+    # request that touches inference/audit/anomaly fails with AttributeError.
+    # Not having a DSN set is legitimate (community / dev deploy without DB) and
+    # does not raise — only a configured-but-broken DB is fatal.
     db_pool = None
     inference_logger = None
     anomaly_detector = None
     content_relay_detector = None
+    _db_dsn_configured = False
     try:
         from yashigani.db import create_pool, run_migrations
         from yashigani.inference import InferencePayloadLogger, AnomalyDetector
@@ -225,6 +234,7 @@ def _build_app():
             except OSError:
                 logger.warning("postgres_password secret not found — DB DSN unresolved")
         if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
+            _db_dsn_configured = True
             run_migrations()
             # Pool creation deferred to _db_startup() — called from lifespan
             os.environ["_YASHIGANI_DB_READY"] = "1"
@@ -242,6 +252,17 @@ def _build_app():
         else:
             logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled")
     except Exception as exc:
+        if _db_dsn_configured:
+            # DB DSN was set but init failed — this is a fatal misconfiguration,
+            # not a graceful degradation.  Re-raise so the process exits non-zero
+            # and the orchestrator surfaces the real fault (M-02 / SOP 1).
+            logger.exception(
+                "Gateway DB/inference init FAILED with YASHIGANI_DB_DSN configured "
+                "— refusing to start in degraded mode (M-02). "
+                "Fix the DB connection before restarting."
+            )
+            raise
+        # No DSN configured: DB features simply unavailable, not a fatal error.
         logger.warning("DB/inference init failed (%s) — Postgres features disabled", exc)
 
     # ── v1.0: Unified Identity Registry (Redis DB 3, same as agents) ────────
@@ -285,7 +306,7 @@ def _build_app():
         if redis_use_tls:
             budget_url = (
                 f"rediss://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0"
-                f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
+                f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_intermediate.crt"
                 f"&ssl_certfile={secrets_dir}/gateway_client.crt"
                 f"&ssl_keyfile={secrets_dir}/gateway_client.key"
             )

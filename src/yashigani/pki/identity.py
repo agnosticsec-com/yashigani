@@ -1,7 +1,7 @@
 """
 Service identity + manifest loader for Yashigani internal PKI.
 
-Last updated: 2026-04-23T23:32:19+01:00
+Last updated: 2026-04-27T00:00:00+00:00
 
 This module is import-safe from any service entrypoint. It does no network
 I/O, no cryptographic operations beyond SHA-256 (stdlib hashlib), and does
@@ -9,9 +9,12 @@ not depend on the heavier ``cryptography`` package. The cryptography package
 is only required by :mod:`yashigani.pki.issuer` which runs inside install.sh
 and admin-API rotation endpoints.
 
+Pattern B PKI: workload trust stores reference the intermediate CA, never root.
+The root CA stays 0400 on the host and is never mounted into any workload container.
+
 Environment inputs at runtime:
     YASHIGANI_SERVICE_NAME          — e.g. "gateway", "backoffice" (required)
-    YASHIGANI_INTERNAL_CA_DIR       — where ca_root.crt + <svc>_client.{crt,key}
+    YASHIGANI_INTERNAL_CA_DIR       — where ca_intermediate.crt + <svc>_client.{crt,key}
                                        + <svc>_bootstrap_token live.
                                        Default: /run/secrets
     YASHIGANI_SERVICE_MANIFEST_PATH — path to service_identities.yaml.
@@ -419,7 +422,8 @@ def current_service(
     secrets_dir_path = Path(secrets_dir or os.getenv("YASHIGANI_INTERNAL_CA_DIR", _DEFAULT_SECRETS_DIR))
     cert_path = secrets_dir_path / f"{name}_client.crt"
     key_path = secrets_dir_path / f"{name}_client.key"
-    ca_root = secrets_dir_path / "ca_root.crt"
+    # Pattern B: workloads trust the intermediate CA only. Root never in containers.
+    ca_intermediate = secrets_dir_path / "ca_intermediate.crt"
     bootstrap_token_path = secrets_dir_path / f"{name}_bootstrap_token"
 
     if verify_token:
@@ -435,7 +439,7 @@ def current_service(
         spiffe_id=identity.spiffe_id,
         cert_path=cert_path,
         key_path=key_path,
-        ca_root_path=ca_root,
+        ca_root_path=ca_intermediate,  # Pattern B: field name kept for compat; value is intermediate
     )
 
 

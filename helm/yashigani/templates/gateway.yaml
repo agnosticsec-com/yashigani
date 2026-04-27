@@ -101,7 +101,7 @@ spec:
             {{- if .Values.mtls.enabled }}
             # mTLS DSN — verify-ca + client cert, via pgbouncer.
             - name: YASHIGANI_DB_DSN
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
             {{- else }}
             - name: YASHIGANI_DB_DSN
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani"
@@ -133,7 +133,7 @@ spec:
               command:
                 - python3
                 - -c
-                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
@@ -142,7 +142,7 @@ spec:
               command:
                 - python3
                 - -c
-                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
