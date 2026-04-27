@@ -1,11 +1,14 @@
 """
 Offline license verifier — ECDSA P-256 (migrating to ML-DSA-65 when cryptography ships FIPS 204).
 
-Last updated: 2026-04-27T21:08:49+01:00
+Last updated: 2026-04-27T21:53:12+01:00
 
 License file format:
-    v3 (legacy):  {base64url(utf8(json_payload))}.{base64url(primary_signature)}
     v4 (current): {base64url(utf8(json_payload))}.{base64url(primary_signature)}.{base64url(counter_signature)}
+
+v3 format (2-segment, primary signature only) is NO LONGER ACCEPTED.
+LAURA-V231-003: dropping v3 support makes the counter-signature mandatory — an
+attacker with primary-key compromise cannot issue accepted licenses.
 
 Current key algorithm: ECDSA P-256 (SHA-256).
 Future: ML-DSA-65 (FIPS 204 / CRYSTALS-Dilithium Level 3) — pending cryptography library support.
@@ -18,10 +21,11 @@ Payload versions:
 
 Backwards compat: v1/v2 payloads missing new fields fall back to
 TIER_DEFAULTS[tier] so existing customer license files keep working.
+(These are payload versions, distinct from the license-file format version above.)
 
 Fail-open on corrupt/unparseable licenses; fail-closed on invalid signatures.
-v3 licenses (no counter-signature) are accepted for backwards compatibility.
-v4 licenses with a counter-signature mismatch are always rejected.
+All licenses must be in v4 format (3-segment). 2-segment licenses are rejected
+with error "license_format_too_old".
 
 Self-integrity check
 --------------------
@@ -458,19 +462,22 @@ def verify_license(content: str) -> LicenseState:
     Verify a license string and return a LicenseState.
 
     Format detection:
-        3 dot-separated segments → v4 (payload + primary sig + counter sig)
-        2 dot-separated segments → v3 (payload + primary sig, backwards compat)
+        3 dot-separated segments → v4 (payload + primary sig + counter sig) — ONLY accepted format
+        2 dot-separated segments → rejected: "license_format_too_old" (LAURA-V231-003)
         Anything else            → fail-open (COMMUNITY_LICENSE)
 
     Security behaviour:
         - v4 licenses: both primary and counter-signature must pass.
           A counter-signature failure returns LicenseState(valid=False,
           error="counter_signature_invalid") — never falls back to v3.
-        - v3 licenses: accepted without counter-signature check.
+        - 2-segment (v3) licenses are always rejected — counter-signature is mandatory.
+          This closes the LAURA-V231-003 bypass: primary-key compromise alone is not
+          sufficient to issue accepted licenses.
         - Tampered verifier (integrity violation at module load): all licenses
           are downgraded to COMMUNITY tier regardless of signature validity.
 
     Returns COMMUNITY_LICENSE if the public key is a placeholder.
+    Returns LicenseState(valid=False, error="license_format_too_old") for 2-segment licenses.
     Returns LicenseState(valid=False, error="invalid_signature") for bad primary sigs.
     Returns LicenseState(valid=False, error="counter_signature_invalid") for bad counter sigs.
     Returns LicenseState(valid=False, error="license_expired") for expired licenses.
@@ -493,38 +500,17 @@ def verify_license(content: str) -> LicenseState:
     if len(segments) == 3:
         return _verify_v4(segments[0], segments[1], segments[2])
     elif len(segments) == 2:
-        return _verify_v3(segments[0], segments[1])
+        # LAURA-V231-003: v3 format (2-segment, no counter-signature) is no longer
+        # accepted. Counter-signature is mandatory; reject clearly so tooling can
+        # report a useful error to the admin.
+        logger.warning(
+            "License verifier: rejected 2-segment license — v3 format is no longer "
+            "supported; re-issue license in v4 format (LAURA-V231-003)"
+        )
+        return _community_invalid("license_format_too_old")
     else:
         logger.warning("License verifier: unexpected segment count (%d) in license content", len(segments))
         return COMMUNITY_LICENSE
-
-
-def _verify_v3(payload_b64: str, sig_b64: str) -> LicenseState:
-    """Verify a v3 license (primary signature only)."""
-    try:
-        payload_bytes = base64url_decode(payload_b64)
-        sig_bytes = base64url_decode(sig_b64)
-    except Exception as exc:
-        logger.warning("License verifier: base64url decode failed: %s", exc)
-        return COMMUNITY_LICENSE
-
-    try:
-        from cryptography.exceptions import InvalidSignature  # noqa: F401
-
-        valid_sig = _verify_primary_signature(payload_bytes, sig_bytes)
-    except Exception as exc:
-        logger.warning("License verifier: unexpected error during verification: %s", exc)
-        return COMMUNITY_LICENSE
-
-    if not valid_sig:
-        logger.warning("License verifier: primary signature verification failed (v3)")
-        try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
-            return _build_license_state(payload, valid=False, error="invalid_signature")
-        except Exception:
-            return _community_invalid("invalid_signature")
-
-    return _parse_and_finalise(payload_bytes)
 
 
 def _verify_v4(payload_b64: str, sig_b64: str, counter_sig_b64: str) -> LicenseState:
