@@ -9,18 +9,22 @@
 #   * Uses TOTP secrets from --secrets-dir (admin1_totp_secret, admin2_totp_secret).
 #   * The verdict line "RESTORE TEST GREEN" MUST NOT be emitted by callers unless
 #     this script exits 0 AND both 200 lines are in the same log file.
+#   * For K8s / mTLS deployments, supply --client-cert and --client-key for
+#     mutual TLS — the backoffice requires a valid client cert.
 #
-# Last-Updated: 2026-04-27T10:00:00Z
+# Last-Updated: 2026-04-27T12:00:00Z (add --client-cert/--client-key for K8s mTLS)
 
 set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: $0 --base-url URL --secrets-dir DIR [--ssh-prefix CMD] [--cat-prefix CMD]
+Usage: $0 --base-url URL --secrets-dir DIR [--client-cert FILE] [--client-key FILE] [--ssh-prefix CMD] [--cat-prefix CMD]
 
   --base-url     Backoffice base URL (e.g. https://localhost or https://127.0.0.1)
   --secrets-dir  Directory containing admin1_username, admin1_password,
                  admin1_totp_secret, admin2_* (mode 0400 expected)
+  --client-cert  Path to client cert PEM for mTLS (K8s deployments require this)
+  --client-key   Path to client key PEM for mTLS
   --ssh-prefix   Optional command prefix to wrap probe (e.g. "ssh max@vm")
   --cat-prefix   Optional command prefix for reading secret files
                  (default: "cat"; use "sudo -S cat" for root-owned post-restore)
@@ -39,11 +43,15 @@ BASE_URL=""
 SECRETS_DIR=""
 SSH_PREFIX=""
 CAT_PREFIX="cat"
+CLIENT_CERT=""
+CLIENT_KEY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base-url) BASE_URL="$2"; shift 2 ;;
     --secrets-dir) SECRETS_DIR="$2"; shift 2 ;;
+    --client-cert) CLIENT_CERT="$2"; shift 2 ;;
+    --client-key) CLIENT_KEY="$2"; shift 2 ;;
     --ssh-prefix) SSH_PREFIX="$2"; shift 2 ;;
     --cat-prefix) CAT_PREFIX="$2"; shift 2 ;;
     -h|--help) usage ;;
@@ -75,12 +83,19 @@ probe_admin() {
     echo "${label} login HTTP: TOTP_ERR"
     return 4
   }
-  resp=$(python3 - "$BASE_URL" "$user" "$pass" "$totp_code" <<'PYEOF'
+  resp=$(python3 - "$BASE_URL" "$user" "$pass" "$totp_code" "${CLIENT_CERT}" "${CLIENT_KEY}" <<'PYEOF'
 import json, ssl, sys, urllib.request, urllib.error
-base, user, pw, code = sys.argv[1:5]
+base, user, pw, code, client_cert, client_key = sys.argv[1:7]
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
+# Load client cert/key if provided (required for mTLS deployments)
+if client_cert and client_key:
+    try:
+        ctx.load_cert_chain(certfile=client_cert, keyfile=client_key)
+    except Exception as ex:
+        print(json.dumps({"status": "ERR", "err": f"client cert load failed: {ex}"}))
+        sys.exit(0)
 body = json.dumps({"username": user, "password": pw, "totp_code": code}).encode()
 req = urllib.request.Request(f"{base}/auth/login", data=body,
                               headers={"Content-Type": "application/json"}, method="POST")
