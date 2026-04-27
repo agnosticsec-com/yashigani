@@ -46,6 +46,7 @@ spec:
           {{- if .Values.mtls.enabled }}
           # v2.23.1 — plaintext 6379 disabled, TLS-only on 6380 with
           # client-cert auth. Mirrors docker-compose.yml redis service.
+          # trust anchor: ca_root.crt — libssl strict-mode (error:0A000086 with intermediate)
           command:
             - "sh"
             - "-c"
@@ -55,7 +56,7 @@ spec:
                 --tls-port 6380 \
                 --tls-cert-file /run/secrets/redis_client.crt \
                 --tls-key-file /run/secrets/redis_client.key \
-                --tls-ca-cert-file /run/secrets/ca_intermediate.crt \
+                --tls-ca-cert-file /run/secrets/ca_root.crt \
                 --tls-auth-clients yes \
                 --tls-protocols "TLSv1.2 TLSv1.3" \
                 --save "" \
@@ -98,7 +99,7 @@ spec:
                 - |
                   redis-cli --tls --cert /run/secrets/redis_client.crt \
                     --key /run/secrets/redis_client.key \
-                    --cacert /run/secrets/ca_intermediate.crt \
+                    --cacert /run/secrets/ca_root.crt \
                     -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -112,7 +113,7 @@ spec:
                 - |
                   redis-cli --tls --cert /run/secrets/redis_client.crt \
                     --key /run/secrets/redis_client.key \
-                    --cacert /run/secrets/ca_intermediate.crt \
+                    --cacert /run/secrets/ca_root.crt \
                     -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
             initialDelaySeconds: 15
             periodSeconds: 10

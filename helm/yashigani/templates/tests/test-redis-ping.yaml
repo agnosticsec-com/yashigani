@@ -53,13 +53,14 @@ spec:
           # We reach it with our own client cert (the "redis" service leaf is
           # the nearest match; we could issue a dedicated test identity but
           # that's overkill for helm test).
+          # trust anchor: ca_root.crt — libssl strict-mode (error:0A000086 with intermediate)
           for SVC in yashigani-redis yashigani-budget-redis; do
             CERT=/run/secrets/${SVC##yashigani-}_client.crt
             KEY=/run/secrets/${SVC##yashigani-}_client.key
             echo "Testing ${SVC} over TLS..."
             RESULT=$(redis-cli --tls \
               --cert "$CERT" --key "$KEY" \
-              --cacert /run/secrets/ca_intermediate.crt \
+              --cacert /run/secrets/ca_root.crt \
               -h "${SVC}" -p 6380 PING 2>&1 || true)
             if echo "${RESULT}" | grep -q "PONG"; then
               echo "${SVC}: PONG (no auth)"
