@@ -14,6 +14,11 @@ Covers:
   - enforcer: -1 (unlimited) bypasses limit checks
   - enforcer: HTTP response helpers
   - enforcer: upgrade URL points to agnosticsec.com
+  - _safe_int: null/None/empty/non-numeric/float/sentinel coverage (LAURA-V231-002)
+  - verify_license(): null seat fields → fail-closed, no TypeError (LAURA-V231-002)
+  - load_license(): corrupt/null-field license → COMMUNITY, no crash (LAURA-V231-002)
+
+Last updated: 2026-04-27T21:08:49+01:00
 """
 from __future__ import annotations
 
@@ -615,3 +620,190 @@ class TestResponseHelpers:
             resp = license_limit_exceeded_response(exc)
             assert resp["message"]  # message must not be empty
             assert resp["limit"] == name
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LAURA-V231-002: _safe_int unit tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSafeInt:
+    """
+    Unit tests for verifier._safe_int().
+
+    Prevents regression of LAURA-V231-002: null seat fields in a license
+    payload previously caused int(None) → TypeError → DoS on boot.
+    """
+
+    @pytest.fixture(autouse=True)
+    def import_safe_int(self):
+        from yashigani.licensing.verifier import _safe_int
+        self._safe_int = _safe_int
+
+    def _si(self, value, default=100):
+        return self._safe_int(value, default)
+
+    def test_int_passthrough(self):
+        assert self._si(42) == 42
+
+    def test_string_int(self):
+        assert self._si("42") == 42
+
+    def test_none_returns_default(self):
+        assert self._si(None) == 100
+
+    def test_empty_string_returns_default(self):
+        assert self._si("") == 100
+
+    def test_whitespace_string_returns_default(self):
+        assert self._si("   ") == 100
+
+    def test_non_numeric_string_returns_default(self):
+        assert self._si("abc") == 100
+
+    def test_null_string_returns_default(self):
+        assert self._si("null") == 100
+
+    def test_float_truncated(self):
+        assert self._si(3.9) == 3
+
+    def test_negative_non_sentinel_returned(self):
+        # Values like -2, -42 pass through (enforcer decides meaning)
+        assert self._si(-2) == -2
+
+    def test_unlimited_sentinel_preserved(self):
+        # -1 is the documented unlimited sentinel — must never be clamped
+        assert self._si(-1) == -1
+
+    def test_zero_passthrough(self):
+        assert self._si(0) == 0
+
+    def test_above_ceiling_returns_default(self):
+        from yashigani.licensing.verifier import _SEAT_CEILING
+        assert self._si(_SEAT_CEILING + 1) == 100
+
+    def test_at_ceiling_passthrough(self):
+        from yashigani.licensing.verifier import _SEAT_CEILING
+        assert self._si(_SEAT_CEILING) == _SEAT_CEILING
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LAURA-V231-002: null seat fields → fail-closed integration tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNullSeatFieldsFailClosed:
+    """
+    Integration tests: a license payload with null / missing seat fields must
+    not raise TypeError and must return a fail-closed COMMUNITY LicenseState.
+
+    Verifies fix for LAURA-V231-002: int(None) DoS-on-boot.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_keypair(self, monkeypatch):
+        keys = _make_test_keypair()
+        self.private_key, self.public_key, self.private_pem, self.public_pem = keys
+        _patch_verifier_key(self.public_pem, monkeypatch)
+
+    def test_null_max_end_users_no_typeerror(self):
+        """max_end_users: null in JSON must not raise TypeError."""
+        payload = _make_payload()
+        payload["max_end_users"] = None
+        license_str = _sign_payload(payload, self.private_pem)
+        # Must not raise; result must be fail-closed
+        result = verify_license(license_str)
+        assert isinstance(result, __import__("yashigani.licensing.model", fromlist=["LicenseState"]).LicenseState)
+
+    def test_null_max_end_users_uses_tier_default(self):
+        """max_end_users: null falls back to tier default, not crash."""
+        payload = _make_payload(tier="professional")
+        payload["max_end_users"] = None
+        license_str = _sign_payload(payload, self.private_pem)
+        result = verify_license(license_str)
+        # Should get tier default for professional
+        assert result.max_end_users == TIER_DEFAULTS["professional"]["max_end_users"]
+
+    def test_null_max_agents_uses_tier_default(self):
+        """max_agents: null falls back to tier default."""
+        payload = _make_payload(tier="professional")
+        payload["max_agents"] = None
+        license_str = _sign_payload(payload, self.private_pem)
+        result = verify_license(license_str)
+        assert result.max_agents == TIER_DEFAULTS["professional"]["max_agents"]
+
+    def test_null_max_admin_seats_uses_tier_default(self):
+        """max_admin_seats: null falls back to tier default."""
+        payload = _make_payload(tier="professional")
+        payload["max_admin_seats"] = None
+        license_str = _sign_payload(payload, self.private_pem)
+        result = verify_license(license_str)
+        assert result.max_admin_seats == TIER_DEFAULTS["professional"]["max_admin_seats"]
+
+    def test_all_seat_fields_null_no_crash(self):
+        """All seat fields null at once: no crash, defaults applied."""
+        payload = _make_payload(tier="professional")
+        payload["max_end_users"] = None
+        payload["max_agents"] = None
+        payload["max_admin_seats"] = None
+        payload["max_orgs"] = None
+        license_str = _sign_payload(payload, self.private_pem)
+        result = verify_license(license_str)
+        d = TIER_DEFAULTS["professional"]
+        assert result.max_agents == d["max_agents"]
+        assert result.max_end_users == d["max_end_users"]
+        assert result.max_admin_seats == d["max_admin_seats"]
+        assert result.max_orgs == d["max_orgs"]
+
+    def test_valid_flag_preserved_with_null_fields(self):
+        """Signature is valid; null fields must not flip valid=False."""
+        payload = _make_payload(tier="professional")
+        payload["max_end_users"] = None
+        license_str = _sign_payload(payload, self.private_pem)
+        result = verify_license(license_str)
+        assert result.valid is True
+
+    def test_string_null_seat_field_uses_tier_default(self):
+        """String 'null' in a seat field (malformed JSON output) is handled."""
+        payload = _make_payload(tier="professional")
+        payload["max_end_users"] = "null"
+        license_str = _sign_payload(payload, self.private_pem)
+        result = verify_license(license_str)
+        assert result.max_end_users == TIER_DEFAULTS["professional"]["max_end_users"]
+
+
+class TestLoadLicenseCorruptPayloadFailClosed:
+    """
+    load_license() must return COMMUNITY_LICENSE without raising when the
+    license file contains corrupt / unparseable / null-field content.
+
+    Verifies LAURA-V231-002 defensive wrapper in loader.py.
+    """
+
+    def test_load_license_random_garbage_returns_community(self, tmp_path, monkeypatch):
+        """Random bytes in license file → COMMUNITY, no crash."""
+        lic_path = tmp_path / "license.ysg"
+        lic_path.write_text("NOTVALIDBASE64!!!.GARBAGE", encoding="utf-8")
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", str(lic_path))
+
+        from yashigani.licensing.loader import load_license
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY
+
+    def test_load_license_truncated_content_returns_community(self, tmp_path, monkeypatch):
+        """Truncated license (single segment, no dot) → COMMUNITY."""
+        lic_path = tmp_path / "license.ysg"
+        lic_path.write_text("eyJ0aWVyIjogImVudGVycHJpc2UifQ", encoding="utf-8")
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", str(lic_path))
+
+        from yashigani.licensing.loader import load_license
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY
+
+    def test_load_license_empty_file_returns_community(self, tmp_path, monkeypatch):
+        """Empty license file → COMMUNITY."""
+        lic_path = tmp_path / "license.ysg"
+        lic_path.write_text("", encoding="utf-8")
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", str(lic_path))
+
+        from yashigani.licensing.loader import load_license
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY

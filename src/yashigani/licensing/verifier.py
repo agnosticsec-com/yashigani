@@ -1,7 +1,7 @@
 """
 Offline license verifier — ECDSA P-256 (migrating to ML-DSA-65 when cryptography ships FIPS 204).
 
-Last updated: 2026-04-27T20:43:24+01:00
+Last updated: 2026-04-27T21:08:49+01:00
 
 License file format:
     v3 (legacy):  {base64url(utf8(json_payload))}.{base64url(primary_signature)}
@@ -194,6 +194,58 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(value)
 
 
+# Sentinel used by enterprise tier to signal "unlimited".  -1 is the documented
+# value; we preserve it through _safe_int so enforcer can treat it specially.
+_UNLIMITED_SENTINEL = -1
+
+# Sanity ceiling: no license should grant more than 10 million seats of any type.
+# A value above this (other than the -1 unlimited sentinel) indicates a corrupt
+# or adversarially crafted payload and is clamped to COMMUNITY defaults.
+_SEAT_CEILING = 10_000_000
+
+
+def _safe_int(value: object, default: int) -> int:
+    """
+    Coerce *value* to int; return *default* on any failure.
+
+    Handles:
+      - None / missing field
+      - Empty string or whitespace-only string
+      - Non-numeric strings ("abc", "null", etc.)
+      - Float (truncated to int via int())
+      - Negative values other than the documented -1 unlimited sentinel
+        → returned as-is so the caller can decide (enforcer treats -1 as unlimited)
+      - Values above _SEAT_CEILING that are not -1 → clamp to *default*
+
+    Never raises. Prevents LAURA-V231-002 DoS-on-boot via null seat fields.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return default
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return default
+
+    # Preserve the -1 unlimited sentinel without clamping.
+    if result == _UNLIMITED_SENTINEL:
+        return result
+
+    # Reject implausibly large values (corrupt / adversarial payload).
+    if result > _SEAT_CEILING:
+        logger.warning(
+            "License verifier: seat field value %d exceeds ceiling %d — "
+            "using tier default %d",
+            result, _SEAT_CEILING, default,
+        )
+        return default
+
+    return result
+
+
 def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None) -> LicenseState:
     tier_str = payload.get("tier", "community")
     try:
@@ -219,12 +271,14 @@ def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None
     issued_at = _parse_datetime(payload.get("issued_at")) or datetime(2020, 1, 1, tzinfo=timezone.utc)
     expires_at = _parse_datetime(payload.get("expires_at"))
 
-    # Resolve limits with backwards-compat fallback to tier defaults
+    # Resolve limits with backwards-compat fallback to tier defaults.
+    # _safe_int guards against null/None/empty/non-numeric values in any field
+    # (LAURA-V231-002: null seat fields previously caused TypeError → DoS on boot).
     defaults = TIER_DEFAULTS.get(tier_str, TIER_DEFAULTS["community"])
-    max_agents      = int(payload.get("max_agents",      defaults["max_agents"]))
-    max_end_users   = int(payload.get("max_end_users",   payload.get("max_users", defaults["max_end_users"])))
-    max_admin_seats = int(payload.get("max_admin_seats", defaults["max_admin_seats"]))
-    max_orgs        = int(payload.get("max_orgs",        defaults["max_orgs"]))
+    max_agents      = _safe_int(payload.get("max_agents"),                                       defaults["max_agents"])       # line 270
+    max_end_users   = _safe_int(payload.get("max_end_users", payload.get("max_users")),          defaults["max_end_users"])    # line 271
+    max_admin_seats = _safe_int(payload.get("max_admin_seats"),                                  defaults["max_admin_seats"])  # line 272
+    max_orgs        = _safe_int(payload.get("max_orgs"),                                         defaults["max_orgs"])         # line 273
 
     return LicenseState(
         tier=tier,
@@ -517,7 +571,17 @@ def _parse_and_finalise(payload_bytes: bytes) -> LicenseState:
         logger.warning("License verifier: JSON parse error after valid signature: %s", exc)
         return COMMUNITY_LICENSE
 
-    license_state = _build_license_state(payload, valid=True)
+    try:
+        license_state = _build_license_state(payload, valid=True)
+    except Exception as exc:
+        # Defensive catch: _build_license_state should not raise with _safe_int in place,
+        # but guard against any future field additions or model changes (LAURA-V231-002).
+        logger.warning(
+            "License verifier: unexpected error building license state after valid signature: %s "
+            "— failing to COMMUNITY tier",
+            exc,
+        )
+        return COMMUNITY_LICENSE
 
     if license_state.is_expired():
         return LicenseState(
