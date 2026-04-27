@@ -6,6 +6,8 @@ Resolution order:
 2. /run/secrets/license_key
 3. ./license.ysg in CWD
 4. Not found → COMMUNITY_LICENSE (no error, no warning about absence)
+
+Last updated: 2026-04-27T20:43:24+01:00
 """
 from __future__ import annotations
 
@@ -47,6 +49,23 @@ def load_license() -> LicenseState:
             return COMMUNITY_LICENSE
 
         lic = verify_license(content)
+
+        # #102 (LICENSE-2024-003 / CVSS 9.3) — org_domain enforcement.
+        # A domain-bound license (org_domain != "*") is only valid when the
+        # runtime's YASHIGANI_TLS_DOMAIN env matches.  If the env is unset or
+        # mismatches, downgrade to COMMUNITY tier and log CRITICAL so that
+        # stolen license files cannot be silently replayed across tenants.
+        if lic.valid and lic.org_domain != "*":
+            runtime_domain = os.environ.get("YASHIGANI_TLS_DOMAIN", "")
+            if not runtime_domain or runtime_domain != lic.org_domain:
+                logger.critical(
+                    "License loader: domain mismatch — license binds to '%s' but "
+                    "YASHIGANI_TLS_DOMAIN='%s'; falling back to COMMUNITY tier "
+                    "(LICENSE-2024-003)",
+                    lic.org_domain,
+                    runtime_domain,
+                )
+                return COMMUNITY_LICENSE
 
         if not lic.valid:
             logger.warning(

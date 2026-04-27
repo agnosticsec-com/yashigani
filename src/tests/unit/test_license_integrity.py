@@ -11,6 +11,12 @@ Covers:
   - integrity violation forces COMMUNITY tier on all verify_license() calls
   - placeholder VERIFIER_HASH skips integrity check (fail-open)
   - placeholder COUNTER_PUBLIC_KEY_PEM skips counter-sig check (fail-open)
+  - domain-bound license with matching YASHIGANI_TLS_DOMAIN → accepted (#102)
+  - domain-bound license with mismatched YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
+  - domain-bound license with unset YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
+  - wildcard org_domain ("*") → no domain check (#102)
+
+Last updated: 2026-04-27T20:43:24+01:00
 """
 from __future__ import annotations
 
@@ -444,6 +450,132 @@ class TestIntegrityModule:
         monkeypatch.setattr(integrity_mod, "COUNTER_PUBLIC_KEY_PEM",
                             "-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----\n")
         assert integrity_mod.is_counter_key_placeholder() is False
+
+
+# ---------------------------------------------------------------------------
+# Domain binding tests (#102 / LICENSE-2024-003 / CVSS 9.3)
+# ---------------------------------------------------------------------------
+
+class TestDomainBinding:
+    """
+    loader.load_license() must enforce org_domain binding.
+
+    A license with org_domain != "*" is only accepted when YASHIGANI_TLS_DOMAIN
+    matches exactly.  Mismatch or absence of the env var must downgrade to
+    COMMUNITY tier (fail-closed) regardless of signature validity.
+    """
+
+    def _write_license_file(self, tmp_path, content: str) -> str:
+        """Write license content to a temp file and return its path."""
+        p = tmp_path / "license.ysg"
+        p.write_text(content, encoding="utf-8")
+        return str(p)
+
+    def _setup_verifier(self, monkeypatch):
+        """Patch verifier to use ephemeral test keys."""
+        _, primary_priv_pem, primary_pub_pem = _make_keypair()
+        _, counter_priv_pem, counter_pub_pem = _make_keypair()
+
+        import yashigani.licensing.verifier as verifier_mod
+        import yashigani.licensing._integrity as integrity_mod
+
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")
+        monkeypatch.setattr(verifier_mod, "_PUBLIC_KEY_PEM", primary_pub_pem)
+        monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
+        monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
+        monkeypatch.setattr(integrity_mod, "COUNTER_PUBLIC_KEY_PEM", counter_pub_pem)
+        monkeypatch.setattr(
+            integrity_mod, "VERIFIER_HASH",
+            integrity_mod._PLACEHOLDER_INTEGRITY + "_VERIFIER_HASH",
+        )
+        return primary_priv_pem, primary_pub_pem, counter_priv_pem
+
+    def test_domain_bound_license_accepted_when_domain_matches(self, tmp_path, monkeypatch):
+        """
+        A domain-bound license (org_domain = "acme.example.com") is accepted
+        when YASHIGANI_TLS_DOMAIN="acme.example.com".
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "acme.example.com"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.setenv("YASHIGANI_TLS_DOMAIN", "acme.example.com")
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.valid is True
+        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.org_domain == "acme.example.com"
+
+    def test_domain_bound_license_rejected_when_domain_mismatches(self, tmp_path, monkeypatch):
+        """
+        #102: A license bound to "acme.example.com" must be rejected (→ COMMUNITY)
+        when YASHIGANI_TLS_DOMAIN="other.example.com".
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "acme.example.com"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.setenv("YASHIGANI_TLS_DOMAIN", "other.example.com")
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY
+
+    def test_domain_bound_license_rejected_when_domain_env_unset(self, tmp_path, monkeypatch):
+        """
+        #102: A domain-bound license must be rejected (→ COMMUNITY) when
+        YASHIGANI_TLS_DOMAIN is not set in the environment.
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "acme.example.com"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY
+
+    def test_wildcard_org_domain_skips_domain_check(self, tmp_path, monkeypatch):
+        """
+        A license with org_domain="*" is accepted regardless of
+        YASHIGANI_TLS_DOMAIN (wildcard = not domain-bound).
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "*"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)  # unset — must still work
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.valid is True
+        assert result.tier == LicenseTier.PROFESSIONAL
 
 
 # ---------------------------------------------------------------------------
