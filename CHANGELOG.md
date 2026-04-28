@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-04-28T17:45:00+00:00 -->
+<!-- last-updated: 2026-04-28T19:45:00+00:00 -->
 
 # Changelog
 
@@ -43,6 +43,19 @@ Active branch: `v2.23.1-mtls`. Theme: **Core-Plane mTLS + Two-Tier PKI + Release
 ### Security
 - PCI-compliant password expiry profile (≤90 days) selectable via `YASHIGANI_PASSWORD_MAX_AGE_DAYS=pci`
 - Auth-throttle admin self-visibility — authenticated admins see own + all throttled/blocked IPs at `/admin → Security → Blocked IPs` (backed by `/auth/blocked-ips`). Unauthenticated locked-out operator path (RFC 6585 `Retry-After` on login) deferred to v2.23.2.
+- **YSG-RISK-001 (CWE-89, HIGH)** — replaced SQL f-string interpolation in `scripts/partition_maintenance.py` with safe identifier quoting + parameter binding. ACS v3 dogfood scan finding `acs-v3-sql-string-concat-exec`. Closing commit `75536a5`.
+- **YSG-RISK-002 (CWE-89, MEDIUM)** — replaced `op.execute(f"DROP TABLE IF EXISTS {name}")` in Alembic migration `0003_prepartition_audit_2026_2027.py` with `op.drop_table()` native API. Closing commit `9d867be`.
+- **YSG-RISK-003 (CWE-601, MEDIUM)** — OIDC discovery validator now rejects `authorization_endpoint`, `token_endpoint`, and `jwks_uri` whose scheme is not `https` or whose host does not match the registered `discovery_url` host. Closes the post-admin-compromise open-redirect class (TA-3 insider). Closing commit `c5839e4`.
+- **YSG-RISK-004 (CWE-400, MEDIUM)** — Docker Compose `mem_limit` and `cpus` now set on every service across `docker-compose.yml` (21 services) + `docker-compose.wazuh.yml` (3 services). Defaults documented in `docker/.env.example`; env-overridable via `YASHIGANI_<SERVICE>_MEM_LIMIT` / `YASHIGANI_<SERVICE>_CPU_LIMIT`. Closing commit `0143fb4`.
+- **YSG-RISK-005 (CWE-400, MEDIUM)** — Helm chart `resources.limits.{memory,cpu}` AND `resources.requests.{memory,cpu}` set on every container in the chart; surfaced as tunables in `values.yaml`. Requests = 50% of limits to satisfy the K8s scheduler. Closing commit `6c35d28`.
+- **YSG-RISK-006 (CWE-668, MEDIUM)** — OpenClaw host port binding moved from `0.0.0.0:18789` to `127.0.0.1:18789`. OpenClaw remains reachable from the gateway over the internal Docker bridge by service name; the host-side binding is loopback-only. OTEL collector `0.0.0.0:*` listeners confirmed bridge-only (no host `ports:` mapping). Closing commit `33f7318`.
+- **YSG-RISK-007 (CWE-918, HIGH worst-case)** — SSRF allowlists added at every flagged call site:
+  - **7-A** `agents.py:218,245` — `OWUI_API_URL` validated against `YASHIGANI_OWUI_HOSTNAMES` allowlist (default `open-webui,127.0.0.1,localhost`). Commit `84aab78`.
+  - **7-B** `oidc.py:160,169` — discovery URL validated against `YASHIGANI_OIDC_DISCOVERY_HOSTS` allowlist; `jwks_uri` host MUST equal `discovery_url` host (case-insensitive) and MUST be `https`; re-asserted in `_get_jwks()` as defence-in-depth. Commit `64ec325`.
+  - **7-C** `audit/writer.py:285` + `backoffice/routes/audit.py:326` — Pydantic v2 `field_validator` on `SiemTargetRequest.url` enforces `https` scheme and rejects RFC 1918 / loopback / link-local / multicast hosts at register-time AND test-fire-time. `YASHIGANI_TEST_MODE=1` skips DNS resolution but keeps the HTTPS requirement. Commit `1209055`.
+
+### Deferred (accepted-risk, carried to v2.23.2 P1)
+- **YSG-RISK-008 (CWE-732/CWE-250, LOW-MEDIUM batch)** — container-hardening absent-key gaps (no `read_only: true` in compose, no `readOnlyRootFilesystem: true` in Helm `securityContext`, no `security_opt: ["no-new-privileges:true"]`). Tiago accepted the deferral on 2026-04-28 with the rationale that adding YAML keys without OPA/Conftest/Kyverno admission control would be half-measure hardening; v2.23.2 P1 will ship both YAML keys AND admission policies together as proper end-to-end enforcement.
 
 ---
 
