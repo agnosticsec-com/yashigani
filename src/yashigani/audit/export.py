@@ -3,6 +3,7 @@ Yashigani Audit — Streaming log exporter.
 Reads from volume sink log files and streams JSON or CSV output.
 Never buffers the full result set in memory.
 """
+# Last updated: 2026-04-28T00:00:00+01:00
 from __future__ import annotations
 
 import csv
@@ -13,6 +14,33 @@ from pathlib import Path
 from typing import Optional
 
 from yashigani.audit.config import AuditConfig
+
+
+# ---------------------------------------------------------------------------
+# V1.2.10 — CSV formula injection prevention (CWE-1236)
+# Excel / LibreOffice interpret fields starting with = + - @ \t \r as formulas.
+# Prefix any such field with a single quote so the spreadsheet treats it as text.
+# Also handles BOM-prefixed variants (﻿= ﻿+ ﻿- ﻿@).
+# ---------------------------------------------------------------------------
+
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "﻿=", "﻿+", "﻿-", "﻿@")
+
+
+def escape_csv_cell(v: object) -> str:
+    """
+    Sanitise a single CSV cell value.
+
+    - Replaces \\n and \\r with a space (prevents row-splitting injection).
+    - Prefixes formula-trigger characters with a single quote so spreadsheet
+      applications (Excel, LibreOffice) do not execute the cell as a formula.
+
+    Safe for all non-trigger values: they are returned unchanged (after newline
+    normalisation).
+    """
+    s = str(v).replace("\n", " ").replace("\r", " ")
+    if any(s.startswith(trigger) for trigger in _FORMULA_TRIGGERS):
+        return "'" + s
+    return s
 
 
 class AuditLogExporter:
@@ -106,11 +134,8 @@ class AuditLogExporter:
                 header_written = True
                 yield buf.getvalue().encode("utf-8")
 
-            # Sanitise values: replace newlines to prevent CSV injection
-            clean = {
-                k: str(v).replace("\n", " ").replace("\r", " ")
-                for k, v in record.items()
-            }
+            # Sanitise values: escape formula triggers + strip newlines (V1.2.10)
+            clean = {k: escape_csv_cell(v) for k, v in record.items()}
             buf = io.StringIO()
             writer = csv.DictWriter(
                 buf,
