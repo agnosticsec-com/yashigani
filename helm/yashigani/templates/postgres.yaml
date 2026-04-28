@@ -66,17 +66,36 @@ spec:
           # cert flags. Hit the local unix socket instead (pg_hba keeps
           # `local all all trust` so the probe just checks the process is
           # accepting connections).
+          #
+          # Captain #58c #3bs evidence (2026-04-28): without a startupProbe,
+          # the liveness probe kicks in 70s after pod start. initdb + the
+          # init scripts in /docker-entrypoint-initdb.d (including
+          # 05-enable-ssl.sh which copies certs into PGDATA + appends ssl=on
+          # to postgresql.conf) can take 60-90s on Docker Desktop K8s, so
+          # liveness fires mid-init, K8s restarts the pod, second start sees
+          # non-empty PGDATA -> init scripts skipped -> ssl=off ->
+          # pgbouncer→postgres TLS handshake never establishes ->
+          # backoffice CrashLoopBackOff. The startupProbe holds liveness +
+          # readiness back until postgres has accepted at least one
+          # connection, giving init scripts up to 300s to complete.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             exec:
               command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
-            initialDelaySeconds: 10
+            initialDelaySeconds: 0
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
           livenessProbe:
             exec:
               command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
-            initialDelaySeconds: 20
+            initialDelaySeconds: 0
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5

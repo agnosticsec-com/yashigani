@@ -224,7 +224,21 @@ data:
     # work regardless of how the cluster operator routes the public domain.
     # Caddy still issues a self-signed leaf for tlsDomain via tls internal.
     :443 {
+      {{- if .Values.mtls.enabled }}
+      # Site-level mTLS (Caddy v2 requires `client_auth` at the server block,
+      # not inside `handle`). `verify_if_given` accepts non-mTLS browser
+      # connections AND extracts SPIFFE URI from a presented client cert when
+      # one is given. Per-path SPIFFE forwarding stays in `handle` blocks.
+      # Captain #58c #3br evidence (2026-04-28).
+      tls internal {
+        client_auth {
+          mode verify_if_given
+          trust_pool file /run/secrets/ca_intermediate.crt
+        }
+      }
+      {{- else }}
       tls internal
+      {{- end }}
       header {
         X-Content-Type-Options    "nosniff"
         X-Frame-Options           "DENY"
@@ -240,15 +254,11 @@ data:
           {{- end }}
         }
       }
-      # V10.3.5 sender-constrained tokens: verify client cert if presented.
+      # V10.3.5 sender-constrained tokens: client cert is verified at the
+      # site-level `tls` block (above). Per-path: extract SPIFFE URI from the
+      # validated peer cert and forward it as a header to the gateway.
       handle /v1/* {
         {{- if .Values.mtls.enabled }}
-        tls {
-          client_auth {
-            mode verify_if_given
-            trust_pool file /run/secrets/ca_intermediate.crt
-          }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         {{- end }}
@@ -260,12 +270,6 @@ data:
       }
       handle /agents/* {
         {{- if .Values.mtls.enabled }}
-        tls {
-          client_auth {
-            mode verify_if_given
-            trust_pool file /run/secrets/ca_intermediate.crt
-          }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         {{- end }}

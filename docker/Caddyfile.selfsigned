@@ -50,6 +50,16 @@ https://{env.YASHIGANI_TLS_DOMAIN}:443 {
         protocols tls1.2 tls1.3
         # Hybrid post-quantum key exchange (HNDL protection)
         curves x25519mlkem768 x25519
+        # V10.3.5 sender-constrained tokens: verify client cert if presented.
+        # `verify_if_given` accepts non-mTLS browser connections AND extracts
+        # SPIFFE URI from a presented client cert when one is given. Per-path
+        # SPIFFE forwarding stays in handle blocks. Caddy v2 requires
+        # client_auth at the server-block tls directive, not inside handle —
+        # Captain #58c #3br evidence (2026-04-28).
+        client_auth {
+            mode verify_if_given
+            trust_pool file /run/secrets/ca_intermediate.crt
+        }
     }
 
     # Browser security features expected by Yashigani:
@@ -101,14 +111,9 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Agent routing — /agents/* ──────────────────────────────────────────
-    # V10.3.5 sender-constrained tokens: verify client cert if presented.
+    # Site-level `tls internal { client_auth { ... } }` does the verify;
+    # this handle just forwards SPIFFE URI from validated peer cert.
     handle /agents/* {
-        tls {
-            client_auth {
-                mode verify_if_given
-                trust_pool file /run/secrets/ca_intermediate.crt
-            }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
@@ -119,14 +124,8 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
-    # V10.3.5 same optional mTLS gate as /agents/*.
+    # Same as /agents/* — site-level client_auth, per-path SPIFFE forwarding.
     handle /v1/* {
-        tls {
-            client_auth {
-                mode verify_if_given
-                trust_pool file /run/secrets/ca_intermediate.crt
-            }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {

@@ -61,6 +61,16 @@
         # X25519 fallback for clients that don't support ML-KEM.
         # Protects against "Harvest Now, Decrypt Later" (HNDL) attacks.
         curves x25519mlkem768 x25519
+        # V10.3.5 sender-constrained tokens: site-level optional client cert
+        # verification. `verify_if_given` accepts non-mTLS browser connections
+        # AND extracts SPIFFE URI from validated client cert. Per-path SPIFFE
+        # forwarding stays in handle blocks. Caddy v2 requires client_auth at
+        # the server-block tls directive, not inside handle — Captain #58c
+        # #3br evidence (2026-04-28).
+        client_auth {
+            mode verify_if_given
+            trust_pool file /run/secrets/ca_intermediate.crt
+        }
     }
 
     # ── Security headers ────────────────────────────────────────────────────
@@ -129,12 +139,8 @@ Hiring: https://agnosticsec.com/careers
     # (no binding set) continue to work without a cert.  Paid-tier agents with
     # a bound_spiffe_uri MUST present the matching cert or the gateway returns 401.
     handle /agents/* {
-        tls {
-            client_auth {
-                mode verify_if_given
-                trust_pool file /run/secrets/ca_intermediate.crt
-            }
-        }
+        # Site-level `tls { client_auth { ... } }` does the verify; this
+        # handle just forwards SPIFFE URI from validated peer cert.
         # Spoof-prevention: strip any inbound X-SPIFFE-ID; only Caddy may set it.
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
@@ -146,14 +152,8 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
-    # Same V10.3.5 optional mTLS gate as /agents/*.
+    # Same as /agents/* — site-level client_auth, per-path SPIFFE forwarding.
     handle /v1/* {
-        tls {
-            client_auth {
-                mode verify_if_given
-                trust_pool file /run/secrets/ca_intermediate.crt
-            }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
