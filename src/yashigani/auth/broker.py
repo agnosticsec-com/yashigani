@@ -1,7 +1,7 @@
 """
 Yashigani Auth — Multi-IdP Identity Broker.
 
-Last updated: 2026-04-28T00:00:00+01:00
+Last updated: 2026-04-28T23:58:36+01:00
 
 Yashigani IS the identity broker (Decision 11). Supports OIDC and SAML v2
 with multiple IdPs per deployment. Caddy delegates auth to the backoffice,
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 from yashigani.sso.oidc import OIDCConfig, OIDCProvider, OIDCUserInfo
 from yashigani.sso.saml import SAMLConfig, SAMLProvider, SAMLUserInfo
@@ -57,6 +57,24 @@ class IdPConfig:
     # A non-None value must be a fully-qualified hostname or a *.example.com-style
     # suffix glob (matched via fnmatch, case-insensitive).
     allowed_auth_endpoint_pattern: Optional[str] = None
+
+    # V6.8.4 — acr/amr allowlist validation (ASVS V6.3.3).
+    # Both fields are Optional[List[str]] with None meaning "no enforcement".
+    # Purpose: catch HONEST IdP misconfiguration loudly at deploy time.
+    # NOT a security boundary — a compromised IdP can lie about these claims.
+    #
+    # required_acr_values: the ID token `acr` claim (or SAML
+    #   AuthnContextClassRef) must be IN this list. If None, no check.
+    #   e.g. ["urn:mace:incommon:iap:silver", "urn:mace:incommon:iap:gold"]
+    #
+    # required_amr_values: every element of this list must be present in the
+    #   ID token `amr` claim (set-subset semantics). If None, no check.
+    #   e.g. ["mfa"]  — require at least one multi-factor method
+    #
+    # For SAML, AuthnContextClassRef maps to required_acr_values.
+    # SAML has no direct amr equivalent; the ClassRef allowlist is sufficient.
+    required_acr_values: Optional[List[str]] = None
+    required_amr_values: Optional[List[str]] = None
 
 
 @dataclass
@@ -302,9 +320,18 @@ class IdentityBroker:
         mapped_groups = self.map_groups(idp_id, raw_groups)
 
         logger.info(
-            "SAML callback success: idp=%s subject=%s email=%s groups=%s",
+            "SAML callback success: idp=%s subject=%s email=%s groups=%s acr=%r",
             idp.name, user_info.subject, user_info.email, mapped_groups,
+            user_info.authn_context_class_ref,
         )
+        # V6.8.4 — populate raw_claims with SAML auth-context fields so the
+        # ACS route can extract them for acr validation and audit logging,
+        # mirroring how OIDC raw_claims carries acr/amr/auth_time/iss.
+        saml_raw_claims = {
+            "authn_context_class_ref": user_info.authn_context_class_ref,
+            "authn_instant": user_info.authn_instant,
+            "iss": idp.entity_id,  # SAML issuer = IdP entity ID
+        }
         return SSOResult(
             success=True,
             identity_id=user_info.subject,
@@ -312,6 +339,7 @@ class IdentityBroker:
             name=attrs.get("firstName", attrs.get("displayName", "")),
             groups=mapped_groups,
             idp_name=idp.name,
+            raw_claims=saml_raw_claims,
         )
 
     def map_groups(self, idp_id: str, idp_groups: list[str]) -> list[str]:
