@@ -9,12 +9,18 @@ Every outbound internal call should build a :func:`client_ssl_context`.
 
 Both contexts enforce:
   * TLS 1.2 minimum (same floor as the edge TLS policy)
-  * Internal intermediate CA is the ONLY trusted issuer (Pattern B — root never
-    in workloads; no system roots fall back)
+  * Root CA is the trust anchor for Python ssl consumers.  Python 3.12 /
+    OpenSSL 3.0 does NOT auto-set X509_V_FLAG_PARTIAL_CHAIN on
+    SSLContext.load_verify_locations(), so intermediate-only anchors fail
+    with "unable to get issuer certificate" on Ubuntu 24.04 aarch64 (gate
+    #58a evidence, 2026-04-28).  We therefore use ca_root.crt for all
+    Python ssl load_verify_locations() calls (Pattern A for Python ssl).
+    Caddy/Go/postgres/pgbouncer remain on Pattern B (partial-chain capable).
   * Server context requires client cert on every handshake
   * Hostname verification ON for clients (matches cert SANs)
+  * System roots are never loaded — internal mesh only.
 
-Last updated: 2026-04-27T00:00:00+00:00
+Last updated: 2026-04-28T00:00:00+00:00
 """
 
 from __future__ import annotations
@@ -33,22 +39,23 @@ def server_ssl_context(identity: Optional[ServiceIdentity] = None) -> ssl.SSLCon
     """Build an :class:`ssl.SSLContext` for inbound mTLS.
 
     * Loads this service's cert + private key.
-    * Trusts only the internal intermediate CA (Pattern B — root never in workloads).
+    * Trust anchor: ca_root.crt (Pattern A for Python ssl — OpenSSL 3.0 on
+      Ubuntu 24.04 does not support partial-chain without X509_V_FLAG_PARTIAL_CHAIN).
     * Requires every connecting client to present a cert signed by the
-      same CA (mutual TLS).
+      internal CA chain (mutual TLS).
     """
     ident = identity or current_service()
-    cert_path, key_path, ca_intermediate = ident.expect_cert_files()
+    cert_path, key_path, ca_root = ident.expect_cert_files()
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
-    ctx.load_verify_locations(cafile=str(ca_intermediate))
+    ctx.load_verify_locations(cafile=str(ca_root))
     ctx.verify_mode = ssl.CERT_REQUIRED
     # We explicitly DO NOT load_default_certs() — system trust roots must
     # not bridge into the internal mesh.
     logger.info(
-        "internal-pki: server SSLContext built for %s (client auth REQUIRED, intermediate anchor)",
+        "internal-pki: server SSLContext built for %s (client auth REQUIRED, root anchor)",
         ident.name,
     )
     return ctx
@@ -58,35 +65,38 @@ def client_ssl_context(identity: Optional[ServiceIdentity] = None) -> ssl.SSLCon
     """Build an :class:`ssl.SSLContext` for outbound internal mTLS.
 
     Presents this service's client cert to peers and verifies the peer
-    cert chains to the internal intermediate CA (Pattern B).
+    cert chain against ca_root.crt (Pattern A for Python ssl).
     """
     ident = identity or current_service()
-    cert_path, key_path, ca_intermediate = ident.expect_cert_files()
+    cert_path, key_path, ca_root = ident.expect_cert_files()
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
-    ctx.load_verify_locations(cafile=str(ca_intermediate))
+    ctx.load_verify_locations(cafile=str(ca_root))
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
     logger.info(
-        "internal-pki: client SSLContext built for %s (peer verify REQUIRED, intermediate anchor)",
+        "internal-pki: client SSLContext built for %s (peer verify REQUIRED, root anchor)",
         ident.name,
     )
     return ctx
 
 
-def ca_trust_only_context(ca_intermediate_path: str | Path) -> ssl.SSLContext:
-    """Client context that trusts ONLY the internal intermediate CA, no client cert.
+def ca_trust_only_context(ca_root_path: str | Path) -> ssl.SSLContext:
+    """Client context that trusts the internal root CA, no client cert.
 
-    Pattern B: anchor is the intermediate CA, not the root.
+    Pattern A for Python ssl: anchor is ca_root.crt, not the intermediate.
+    Python 3.12 / OpenSSL 3.0 (Ubuntu 24.04) does not auto-set
+    X509_V_FLAG_PARTIAL_CHAIN, so intermediate-only anchors fail.
+
     Used by components that can't present a client cert but still need to
     verify peers — e.g. the install.sh cert-extract step contacting Caddy
     admin before a client cert exists.
     """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.load_verify_locations(cafile=str(ca_intermediate_path))
+    ctx.load_verify_locations(cafile=str(ca_root_path))
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
     return ctx

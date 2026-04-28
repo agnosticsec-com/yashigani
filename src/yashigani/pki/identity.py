@@ -1,7 +1,7 @@
 """
 Service identity + manifest loader for Yashigani internal PKI.
 
-Last updated: 2026-04-27T00:00:00+00:00
+Last updated: 2026-04-28T20:30:00+00:00
 
 This module is import-safe from any service entrypoint. It does no network
 I/O, no cryptographic operations beyond SHA-256 (stdlib hashlib), and does
@@ -9,13 +9,23 @@ not depend on the heavier ``cryptography`` package. The cryptography package
 is only required by :mod:`yashigani.pki.issuer` which runs inside install.sh
 and admin-API rotation endpoints.
 
-Pattern B PKI: workload trust stores reference the intermediate CA, never root.
-The root CA stays 0400 on the host and is never mounted into any workload container.
+Refined PKI trust pattern (2026-04-28, post gate #58a evidence):
+  * Python ssl consumers      → trust anchor = ca_root.crt (Pattern A).
+                                  Python 3.12 / OpenSSL 3.0 / Ubuntu 24.04 does
+                                  not auto-set X509_V_FLAG_PARTIAL_CHAIN, so an
+                                  intermediate-only anchor fails strict chain
+                                  validation. The PUBLIC ca_root.crt is loaded
+                                  into the workload container; the PRIVATE
+                                  ca_root.key never leaves the host (0400).
+  * postgres / libpq          → sslrootcert = ca_intermediate.crt (Pattern B,
+                                  partial-chain capable).
+  * Caddy / Go crypto/tls     → ca_intermediate.crt (Pattern B).
+  * pgbouncer / Redis libssl  → ca_root.crt (Pattern A; libssl-direct strict).
 
 Environment inputs at runtime:
     YASHIGANI_SERVICE_NAME          — e.g. "gateway", "backoffice" (required)
-    YASHIGANI_INTERNAL_CA_DIR       — where ca_intermediate.crt + <svc>_client.{crt,key}
-                                       + <svc>_bootstrap_token live.
+    YASHIGANI_INTERNAL_CA_DIR       — where ca_root.crt + ca_intermediate.crt +
+                                       <svc>_client.{crt,key} + <svc>_bootstrap_token live.
                                        Default: /run/secrets
     YASHIGANI_SERVICE_MANIFEST_PATH — path to service_identities.yaml.
                                        Default: /etc/yashigani/service_identities.yaml
@@ -422,8 +432,14 @@ def current_service(
     secrets_dir_path = Path(secrets_dir or os.getenv("YASHIGANI_INTERNAL_CA_DIR", _DEFAULT_SECRETS_DIR))
     cert_path = secrets_dir_path / f"{name}_client.crt"
     key_path = secrets_dir_path / f"{name}_client.key"
-    # Pattern B: workloads trust the intermediate CA only. Root never in containers.
-    ca_intermediate = secrets_dir_path / "ca_intermediate.crt"
+    # Pattern A for Python ssl: trust anchor is the public root cert (NOT the
+    # private root key). Python 3.12 / OpenSSL 3.0 on Ubuntu 24.04 does not
+    # auto-set X509_V_FLAG_PARTIAL_CHAIN on SSLContext.load_verify_locations(),
+    # so an intermediate-only anchor fails with "unable to get issuer
+    # certificate" (gate #58a evidence, 2026-04-28). Caddy/Go/postgres remain
+    # on Pattern B (partial-chain capable). Root PRIVATE key never enters a
+    # workload container — only the public ca_root.crt does.
+    ca_root = secrets_dir_path / "ca_root.crt"
     bootstrap_token_path = secrets_dir_path / f"{name}_bootstrap_token"
 
     if verify_token:
@@ -439,7 +455,7 @@ def current_service(
         spiffe_id=identity.spiffe_id,
         cert_path=cert_path,
         key_path=key_path,
-        ca_root_path=ca_intermediate,  # Pattern B: field name kept for compat; value is intermediate
+        ca_root_path=ca_root,
     )
 
 

@@ -116,11 +116,15 @@ def _build_app():
     if redis_use_tls:
         # redis-py reads ssl_* params from the URL query string when scheme
         # is rediss://. Client cert is gateway_client.{crt,key}; trust anchor
-        # is ca_intermediate.crt (Pattern B — root never in workloads).
+        # is ca_root.crt — redis-py goes through Python ssl which on
+        # Python 3.12 / OpenSSL 3.0 / Ubuntu 24.04 does not auto-set
+        # X509_V_FLAG_PARTIAL_CHAIN, so the intermediate-only anchor fails
+        # (gate #58a evidence, 2026-04-28). Public ca_root.crt is in the
+        # workload trust store; the private ca_root.key never leaves the host.
         # IMPORTANT: redis_base must NOT include the query string — each
         # call site appends `/{db}` which must precede the `?`. Keep the
         # query portion separate and format as f"{redis_base}/{db}{redis_query}".
-        _ca = f"{secrets_dir}/ca_intermediate.crt"
+        _ca = f"{secrets_dir}/ca_root.crt"
         _crt = f"{secrets_dir}/gateway_client.crt"
         _key = f"{secrets_dir}/gateway_client.key"
         redis_base = (
@@ -306,7 +310,7 @@ def _build_app():
         if redis_use_tls:
             budget_url = (
                 f"rediss://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0"
-                f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_intermediate.crt"
+                f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
                 f"&ssl_certfile={secrets_dir}/gateway_client.crt"
                 f"&ssl_keyfile={secrets_dir}/gateway_client.key"
             )

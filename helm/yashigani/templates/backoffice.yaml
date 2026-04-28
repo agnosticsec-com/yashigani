@@ -146,11 +146,13 @@ spec:
             - name: YASHIGANI_DEPLOYMENT_STREAM
               value: {{ .Values.gateway.env.deploymentStream | quote }}
             {{- if .Values.mtls.enabled }}
-            # M-01 fix: backoffice exports OTLP traces via mTLS (Pattern B).
+            # M-01 fix: backoffice exports OTLP traces via mTLS. Python OTEL
+            # exporter uses Python ssl — Pattern A (ca_root.crt) per gate #58a
+            # evidence (Python 3.12/OpenSSL 3.0/Ubuntu 24.04 strict chain).
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "grpcs://otel-collector:4317"
             - name: OTEL_EXPORTER_OTLP_CERTIFICATE
-              value: "/run/secrets/ca_intermediate.crt"
+              value: "/run/secrets/ca_root.crt"
             - name: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE
               value: "/run/secrets/backoffice_client.crt"
             - name: OTEL_EXPORTER_OTLP_CLIENT_KEY
@@ -186,7 +188,7 @@ spec:
               command:
                 - python3
                 - -c
-                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
@@ -195,7 +197,7 @@ spec:
               command:
                 - python3
                 - -c
-                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5

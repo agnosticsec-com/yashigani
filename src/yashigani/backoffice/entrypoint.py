@@ -107,7 +107,7 @@ def _bootstrap():
         if redis_use_tls:
             return (
                 f"rediss://:{_q}@{redis_host}:{redis_port}/{db}"
-                f"?ssl_cert_reqs=required&ssl_ca_certs={_secrets_dir}/ca_intermediate.crt"
+                f"?ssl_cert_reqs=required&ssl_ca_certs={_secrets_dir}/ca_root.crt"
                 f"&ssl_certfile={_secrets_dir}/backoffice_client.crt"
                 f"&ssl_keyfile={_secrets_dir}/backoffice_client.key"
             )

@@ -22,26 +22,30 @@ import httpx
 # ---------------------------------------------------------------------------
 # TLS trust anchor — M-04 (CLAUDE.md §3: no verify=False ever)
 # ---------------------------------------------------------------------------
-# Pattern B trust anchor: workloads trust ca_intermediate.crt only.
+# Pattern A for Python ssl: workloads trust ca_root.crt (refined post gate
+# #58a evidence — Python 3.12/OpenSSL 3.0/Ubuntu 24.04 strict-chain validation
+# rejects intermediate-only anchors). httpx + the test harness use Python ssl,
+# so they get ca_root.crt. Caddy/postgres/Go consumers stay on Pattern B
+# elsewhere in the codebase.
 # Resolution order:
 #   1. YASHIGANI_CA_CERT env var (explicit override for custom deploys / CI)
-#   2. docker/secrets/ca_intermediate.crt  (macOS local deploy)
-#   3. /run/secrets/ca_intermediate.crt    (container / linux deploy)
+#   2. docker/secrets/ca_root.crt          (macOS local deploy)
+#   3. /run/secrets/ca_root.crt            (container / linux deploy)
 #
 # If none of the candidates exist the probe falls through to a socket error
 # (httpx raises on missing CA file), which causes _stack_running() to return
 # False — the test suite skips correctly.  TLS misconfiguration is no longer
 # silently hidden (M-04).
 def _resolve_ca_cert() -> Optional[str]:
-    """Return path to the CA intermediate cert, or None if not found."""
+    """Return path to the public root CA cert, or None if not found."""
     explicit = os.getenv("YASHIGANI_CA_CERT")
     if explicit:
         return explicit
     candidates = [
         # macOS local deploy: docker/secrets relative to repo root
-        Path(__file__).parents[4] / "docker" / "secrets" / "ca_intermediate.crt",
+        Path(__file__).parents[4] / "docker" / "secrets" / "ca_root.crt",
         # Linux container or VM deploy
-        Path("/run/secrets/ca_intermediate.crt"),
+        Path("/run/secrets/ca_root.crt"),
     ]
     for p in candidates:
         if p.exists():

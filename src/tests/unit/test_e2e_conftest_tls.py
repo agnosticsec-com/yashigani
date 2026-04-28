@@ -50,11 +50,11 @@ class TestResolveCaCert:
         assert result is None
 
     def test_docker_secrets_path_used_when_exists(self, tmp_path, monkeypatch):
-        """docker/secrets/ca_intermediate.crt is used when it exists."""
+        """docker/secrets/ca_root.crt is used when it exists."""
         monkeypatch.delenv("YASHIGANI_CA_CERT", raising=False)
-        # Create a fake ca_intermediate.crt at the expected repo-relative location
+        # Create a fake ca_root.crt at the expected repo-relative location
         # We patch Path.exists to return True only for the docker/secrets path
-        docker_secrets_path = Path(__file__).parents[4] / "docker" / "secrets" / "ca_intermediate.crt"
+        docker_secrets_path = Path(__file__).parents[4] / "docker" / "secrets" / "ca_root.crt"
 
         def _exists(self) -> bool:
             return str(self) == str(docker_secrets_path)
@@ -78,7 +78,7 @@ class TestStackRunningVerify:
     def test_https_probe_uses_ca_cert_not_false(self, monkeypatch):
         """httpx.get() for https:// URL receives verify=<path>, not verify=False."""
         # Patch _CA_CERT_PATH to a known value
-        fake_ca = "/fake/ca_intermediate.crt"
+        fake_ca = "/fake/ca_root.crt"
         import src.tests.e2e.conftest as conftest_mod
         monkeypatch.setattr(conftest_mod, "_CA_CERT_PATH", fake_ca)
 
@@ -105,7 +105,7 @@ class TestStackRunningVerify:
 
     def test_http_probe_does_not_use_ca_cert(self, monkeypatch):
         """httpx.get() for http:// URL uses verify=False (no TLS to verify)."""
-        fake_ca = "/fake/ca_intermediate.crt"
+        fake_ca = "/fake/ca_root.crt"
         import src.tests.e2e.conftest as conftest_mod
         monkeypatch.setattr(conftest_mod, "_CA_CERT_PATH", fake_ca)
 

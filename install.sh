@@ -2101,7 +2101,7 @@ bootstrap_postgres() {
   resolve_compose_cmd
   log_info "Waiting for backoffice to be ready..."
   for i in $(seq 1 $retries); do
-    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)" >/dev/null 2>&1; then
+    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)" >/dev/null 2>&1; then
       break
     fi
     if [[ "$i" -eq "$retries" ]]; then
@@ -2192,8 +2192,11 @@ def read_secret(name):
 
 # v2.23.1: backoffice serves mTLS on :8443. Present the client cert on every
 # call (same chain used by the Dockerfile HEALTHCHECK).
-# Pattern B: trust anchor is ca_intermediate.crt (root never in workloads).
-_ctx = ssl.create_default_context(cafile=os.path.join(secrets, "ca_intermediate.crt"))
+# Pattern A for Python ssl: trust anchor is the PUBLIC ca_root.crt. Python
+# 3.12/OpenSSL 3.0/Ubuntu 24.04 strict chain validation rejects intermediate-
+# only anchors (gate #58a evidence, 2026-04-28). Private ca_root.key never
+# enters a workload container.
+_ctx = ssl.create_default_context(cafile=os.path.join(secrets, "ca_root.crt"))
 _ctx.load_cert_chain(
     os.path.join(secrets, "backoffice_client.crt"),
     os.path.join(secrets, "backoffice_client.key"),

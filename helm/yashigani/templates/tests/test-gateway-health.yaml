@@ -60,10 +60,12 @@ spec:
           # not "yashigani-gateway" (K8s service name). Use server_hostname
           # override so SNI + cert-hostname match the SAN while we connect to
           # the K8s service IP.
-          # Pattern B: trust anchor is ca_intermediate.crt only. Root never in workloads.
+          # Pattern A for Python ssl: trust anchor is the public ca_root.crt.
+          # Python 3.12/OpenSSL 3.0/Ubuntu 24.04 strict-chain validation rejects
+          # intermediate-only anchors (gate #58a evidence, 2026-04-28).
           python3 -c "
           import ssl, socket, sys
-          ctx = ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt')
+          ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
           ctx.load_cert_chain('/run/secrets/gateway_client.crt', '/run/secrets/gateway_client.key')
           ip = socket.gethostbyname('yashigani-gateway')
           sock = socket.create_connection((ip, {{ .Values.gateway.service.port }}), timeout=10)
