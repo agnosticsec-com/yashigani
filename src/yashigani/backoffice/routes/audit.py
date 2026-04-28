@@ -13,6 +13,8 @@ GET    /audit/siem                   — list SIEM targets
 POST   /audit/siem                   — add a SIEM target
 DELETE /audit/siem/{name}            — remove a SIEM target
 POST   /audit/siem/{name}/test       — send a test event to a SIEM target
+
+Last updated: 2026-04-28T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -20,8 +22,9 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from yashigani.audit.writer import validate_siem_url
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
@@ -61,6 +64,12 @@ class SiemTargetRequest(BaseModel):
     auth_header: str = Field(default="Authorization", max_length=64)
     auth_value: str = Field(min_length=1, max_length=512)
     enabled: bool = True
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        """Enforce SSRF-safe URL on registration (YSG-RISK-007.C #3ax, CWE-918)."""
+        return validate_siem_url(v)
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +320,16 @@ async def test_siem_target(name: str, session: AdminSession):
     })
 
     body_str, content_type = state.audit_writer._format_for_target(test_payload, target)
+
+    # Re-validate target URL at test-fire time — defence-in-depth against a
+    # stored target whose URL pre-dates the SSRF validator (YSG-RISK-007.C #3ax).
+    try:
+        validate_siem_url(target.url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "siem_url_blocked", "message": str(exc)},
+        )
 
     req = urllib.request.Request(
         url=target.url,
