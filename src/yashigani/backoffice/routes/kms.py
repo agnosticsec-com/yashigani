@@ -1,17 +1,20 @@
 """
-Yashigani Backoffice — KSM management routes.
+Yashigani Backoffice — KMS management routes.
 GET  /kms/status          — provider info + health check
 GET  /kms/schedule        — current rotation schedule
-POST /kms/schedule        — update rotation schedule (cron)
-POST /kms/rotate-now      — manual out-of-band rotation trigger
+POST /kms/schedule        — update rotation schedule (cron) [step-up required]
+POST /kms/rotate-now      — manual out-of-band rotation trigger [step-up required]
 GET  /kms/secrets         — list tracked secret keys (names only, no values)
+
+Mutating KMS operations require step-up TOTP (ASVS V6.8.4).
 """
+# Last updated: 2026-04-27T00:00:00+01:00
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 
 router = APIRouter()
@@ -70,7 +73,7 @@ async def get_schedule(session: AdminSession):
 
 
 @router.post("/schedule")
-async def update_schedule(body: ScheduleUpdateRequest, session: AdminSession):
+async def update_schedule(body: ScheduleUpdateRequest, session: StepUpAdminSession):
     """Update the rotation cron schedule. Validates 1-hour minimum interval."""
     from yashigani.kms.rotation import _validate_cron
 
@@ -104,7 +107,7 @@ async def update_schedule(body: ScheduleUpdateRequest, session: AdminSession):
 
 
 @router.post("/rotate-now")
-async def rotate_now(session: AdminSession):
+async def rotate_now(session: StepUpAdminSession):
     """Trigger an immediate out-of-band rotation."""
     state = backoffice_state
     scheduler = state.rotation_scheduler

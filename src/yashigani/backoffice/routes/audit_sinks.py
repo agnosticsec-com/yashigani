@@ -3,10 +3,13 @@ Admin API for audit sink configuration.
 
 GET  /admin/audit/sinks         — list all sinks + last write timestamp
 GET  /admin/audit/siem          — get current SIEM config
-PUT  /admin/audit/siem          — update SIEM config
+PUT  /admin/audit/siem          — update SIEM config [step-up required]
 POST /admin/audit/siem/test     — send a test event
 DELETE /admin/audit/sinks/queue — drain the audit queue (admin flush)
+
+SIEM endpoint URL changes require step-up TOTP (ASVS V6.8.4).
 """
+# Last updated: 2026-04-27T00:00:00+01:00
 from __future__ import annotations
 
 import logging
@@ -15,7 +18,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 
-from yashigani.backoffice.middleware import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session, require_stepup_admin_session
 
 logger = logging.getLogger(__name__)
 audit_sinks_router = APIRouter(tags=["audit-sinks"])
@@ -59,7 +62,7 @@ async def get_siem_config(session=Depends(require_admin_session)):
 @audit_sinks_router.put("/admin/audit/siem")
 async def update_siem_config(
     body: SiemConfigRequest,
-    session=Depends(require_admin_session),
+    session=Depends(require_stepup_admin_session),
 ):
     from yashigani.backoffice.state import backoffice_state
 

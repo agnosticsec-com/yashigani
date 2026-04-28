@@ -1,14 +1,16 @@
 """
 Yashigani Backoffice — Admin account management routes.
 Enforces: min 2 total (delete guard), min 2 active (disable guard).
+High-value mutating actions (delete, disable, force-reset) require
+step-up TOTP re-verification (ASVS V6.8.4).
 """
-# Last updated: 2026-04-23T11:36:14+01:00
+# Last updated: 2026-04-27T00:00:00+01:00
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 
 router = APIRouter()
@@ -107,7 +109,7 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
 
 
 @router.delete("/{username}")
-async def delete_admin(username: str, session: AdminSession):
+async def delete_admin(username: str, session: StepUpAdminSession):
     """Delete an admin account. Blocked if total would drop below 2."""
     state = backoffice_state
     record = await state.auth_service.get_account(username)
@@ -133,7 +135,7 @@ async def delete_admin(username: str, session: AdminSession):
 
 
 @router.post("/{username}/disable")
-async def disable_admin(username: str, session: AdminSession):
+async def disable_admin(username: str, session: StepUpAdminSession):
     """Disable account. Blocked if active count would drop below 2."""
     state = backoffice_state
     record = await state.auth_service.get_account(username)
@@ -174,7 +176,7 @@ async def enable_admin(username: str, session: AdminSession):
 
 
 @router.post("/{username}/force-reset")
-async def force_reset(username: str, body: ForceResetRequest, session: AdminSession):
+async def force_reset(username: str, body: ForceResetRequest, session: StepUpAdminSession):
     """Force password reset or TOTP reprovision for an admin account."""
     state = backoffice_state
     record = await state.auth_service.get_account(username)

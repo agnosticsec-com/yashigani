@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl
 
-from yashigani.backoffice.middleware import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import require_admin_session, AdminSession, require_stepup_admin_session, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -472,7 +472,7 @@ async def update_agent(
 async def deactivate_agent(
     agent_id: str,
     body: AgentDeactivateRequest = None,
-    session: AdminSession = require_admin_session,
+    session: StepUpAdminSession = require_stepup_admin_session,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
@@ -504,7 +504,7 @@ async def deactivate_agent(
 @router.post("/admin/agents/{agent_id}/token/rotate", response_model=AgentRotateResponse)
 async def rotate_agent_token(
     agent_id: str,
-    session: AdminSession = require_admin_session,
+    session: StepUpAdminSession = require_stepup_admin_session,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer

@@ -339,6 +339,7 @@ def create_backoffice_app() -> FastAPI:
         ("/auth/password/change",       8 * 1024),
         ("/auth/password/self-reset",   4 * 1024),
         ("/auth/totp/provision",        4 * 1024),    # start + confirm variants
+        ("/auth/stepup",                4 * 1024),    # 6-digit TOTP code only
         # /v1/chat/completions is intentionally not limited here — LLM prompts
         # can legitimately be large; the global 4 MB limit still applies.
     ]

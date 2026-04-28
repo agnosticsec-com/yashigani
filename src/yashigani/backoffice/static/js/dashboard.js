@@ -1,4 +1,4 @@
-// last-updated: 2026-04-28T00:00:00+01:00
+// last-updated: 2026-04-27T00:00:00+01:00
 // V1.2.1 — HTML output encoding helper (CWE-79 stored XSS prevention).
 // Every user-controlled value rendered into innerHTML MUST pass through
 // escapeHtml().  Stage B audit (§4.1) identified 10 sinks; all are fixed below.
@@ -38,6 +38,118 @@ async function api(path) {
         return null;
     }
 }
+
+// ---------------------------------------------------------------------------
+// V6.8.4 Step-up TOTP interceptor
+//
+// apiMutate() wraps high-value fetch calls.  When the server returns
+// HTTP 401 with detail.error === "step_up_required", the interceptor:
+//   1. Shows a TOTP modal prompting the admin to enter their current code.
+//   2. POSTs the code to /auth/stepup.
+//   3. On 200, retries the original request automatically.
+//   4. On failure, shows an error inside the modal.
+//
+// Usage: var resp = await apiMutate(path, options);
+// Returns the final Response object (or null on abort/error).
+// ---------------------------------------------------------------------------
+
+var _stepupQueue = null;  // Pending {resolve, reject, path, options} while modal is open
+
+async function apiMutate(path, options) {
+    options = Object.assign({ credentials: 'same-origin' }, options || {});
+    try {
+        var resp = await fetch(path, options);
+        if (resp.status === 401) {
+            var body = null;
+            try { body = await resp.clone().json(); } catch(e) {}
+            if (body && body.detail && body.detail.error === 'step_up_required') {
+                // Show step-up modal; resolve/reject from the modal confirm handler.
+                return new Promise(function(resolve, reject) {
+                    _stepupQueue = { resolve: resolve, reject: reject, path: path, options: options };
+                    _showStepUpModal();
+                });
+            }
+            // Generic 401 — redirect to login
+            window.location.href = '/admin/login';
+            return null;
+        }
+        return resp;
+    } catch(err) {
+        console.error('apiMutate failed: ' + path + ' — ' + err.message);
+        return null;
+    }
+}
+
+function _showStepUpModal() {
+    var modal = document.getElementById('stepup-modal');
+    if (!modal) return;
+    document.getElementById('stepup-code').value = '';
+    document.getElementById('stepup-error').textContent = '';
+    modal.style.display = 'flex';
+    document.getElementById('stepup-code').focus();
+}
+
+function _hideStepUpModal() {
+    var modal = document.getElementById('stepup-modal');
+    if (modal) modal.style.display = 'none';
+    _stepupQueue = null;
+}
+
+async function submitStepUp() {
+    var code = (document.getElementById('stepup-code').value || '').trim();
+    var errEl = document.getElementById('stepup-error');
+    if (!/^\d{6}$/.test(code)) {
+        errEl.textContent = 'Enter a 6-digit TOTP code.';
+        return;
+    }
+    errEl.textContent = '';
+    document.getElementById('stepup-submit').disabled = true;
+    try {
+        var r = await fetch('/auth/stepup', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ totp_code: code })
+        });
+        if (r.ok) {
+            // Step-up accepted — retry the original request
+            var pending = _stepupQueue;
+            _hideStepUpModal();
+            if (pending) {
+                var retry = await fetch(pending.path, pending.options);
+                pending.resolve(retry);
+            }
+        } else {
+            var err = await r.json().catch(function() { return {}; });
+            if (r.status === 429) {
+                errEl.textContent = 'Too many failed attempts. Please log out and log in again.';
+            } else {
+                errEl.textContent = 'Invalid code. Try again.';
+            }
+            document.getElementById('stepup-submit').disabled = false;
+        }
+    } catch(e) {
+        errEl.textContent = 'Network error. Try again.';
+        document.getElementById('stepup-submit').disabled = false;
+    }
+}
+
+function cancelStepUp() {
+    if (_stepupQueue) {
+        _stepupQueue.reject(new Error('step_up_cancelled'));
+    }
+    _hideStepUpModal();
+}
+
+// Allow Enter key in the TOTP input to submit
+document.addEventListener('DOMContentLoaded', function() {
+    var codeEl = document.getElementById('stepup-code');
+    if (codeEl) {
+        codeEl.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); submitStepUp(); }
+        });
+    }
+});
 
 // Dashboard
 async function loadDashboard() {
@@ -129,26 +241,26 @@ async function registerAgent() {
 
 async function rotateAgentToken(agentId, name) {
     if (!confirm('Rotate token for "' + name + '"? The old token will stop working immediately.')) return;
-    var resp = await fetch('/admin/agents/' + agentId + '/token/rotate', {
-        method: 'POST', credentials: 'same-origin'
-    });
-    if (resp.ok) {
+    var resp = await apiMutate('/admin/agents/' + agentId + '/token/rotate', {
+        method: 'POST'
+    }).catch(function() { return null; });
+    if (resp && resp.ok) {
         var data = await resp.json();
         document.getElementById('agent-token-name').textContent = name;
         document.getElementById('agent-token-value').textContent = data.token;
         document.getElementById('agent-token-panel').style.display = 'block';
-    } else {
+    } else if (resp) {
         alert('Token rotation failed: ' + resp.status);
     }
 }
 
 async function deactivateAgent(agentId) {
     if (!confirm('Deactivate this agent? It will no longer accept requests.')) return;
-    var resp = await fetch('/admin/agents/' + agentId, {
-        method: 'DELETE', credentials: 'same-origin'
-    });
-    if (resp.ok) { loadAgents(); }
-    else { alert('Deactivation failed: ' + resp.status); }
+    var resp = await apiMutate('/admin/agents/' + agentId, {
+        method: 'DELETE'
+    }).catch(function() { return null; });
+    if (resp && (resp.ok || resp.status === 204)) { loadAgents(); }
+    else if (resp) { alert('Deactivation failed: ' + resp.status); }
 }
 
 // Accounts
@@ -268,9 +380,11 @@ async function createUser() {
 
 async function toggleAccount(type, username, action) {
     var path = type === 'admin' ? '/admin/accounts/' : '/admin/users/';
-    var resp = await fetch(path + encodeURIComponent(username) + '/' + action, {
-        method: 'POST', credentials: 'same-origin'
-    });
+    var fetchFn = (action === 'disable') ? apiMutate : fetch;
+    var opts = { method: 'POST', credentials: 'same-origin' };
+    var resp = await fetchFn(path + encodeURIComponent(username) + '/' + action, opts)
+        .catch(function() { return null; });
+    if (!resp) return;
     if (resp.ok) {
         loadAccounts();
     } else {
@@ -282,9 +396,10 @@ async function toggleAccount(type, username, action) {
 async function deleteAccount(type, username) {
     if (!confirm('Delete account "' + username + '"? This cannot be undone.')) return;
     var path = type === 'admin' ? '/admin/accounts/' : '/admin/users/';
-    var resp = await fetch(path + encodeURIComponent(username), {
-        method: 'DELETE', credentials: 'same-origin'
-    });
+    var resp = await apiMutate(path + encodeURIComponent(username), {
+        method: 'DELETE'
+    }).catch(function() { return null; });
+    if (!resp) return;
     if (resp.ok) {
         loadAccounts();
     } else {

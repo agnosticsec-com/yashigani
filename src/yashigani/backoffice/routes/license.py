@@ -18,7 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from yashigani.backoffice.middleware import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session, require_stepup_admin_session
 
 logger = logging.getLogger(__name__)
 license_router = APIRouter(tags=["license"])
@@ -122,7 +122,7 @@ async def get_license_status(session=Depends(require_admin_session)):
 async def activate_license(
     license_content: Optional[str] = Form(default=None),
     license_file: Optional[UploadFile] = File(default=None),
-    session=Depends(require_admin_session),
+    session=Depends(require_stepup_admin_session),
 ):
     from yashigani.licensing import set_license
     from yashigani.licensing.verifier import verify_license
@@ -200,7 +200,7 @@ async def activate_license(
 
 
 @license_router.delete("")
-async def revert_license(body: RevertRequest, session=Depends(require_admin_session)):
+async def revert_license(body: RevertRequest, session=Depends(require_stepup_admin_session)):
     from yashigani.licensing import COMMUNITY_LICENSE, set_license
 
     if not body.confirm:

@@ -1,3 +1,4 @@
+<!-- last-updated: 2026-04-27T00:00:00+01:00 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -544,6 +545,33 @@
             </div>
         </div>
     </main>
+
+    <!-- V6.8.4 Step-up TOTP modal — shown when a high-value action requires fresh TOTP -->
+    <div id="stepup-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:8px;padding:32px;width:320px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+            <h3 style="margin:0 0 8px;font-size:1.1rem;color:#1e293b;">Additional verification required</h3>
+            <p style="font-size:0.85rem;color:#475569;margin:0 0 20px;">
+                This action requires re-verification.
+                Enter your current 6-digit TOTP code.
+            </p>
+            <label style="font-size:0.8rem;font-weight:600;color:#334155;display:block;margin-bottom:6px;">TOTP Code</label>
+            <input id="stepup-code" type="text" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" pattern="[0-9]{6}"
+                   placeholder="000000"
+                   style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #cbd5e1;border-radius:6px;font-size:1.1rem;letter-spacing:0.15em;text-align:center;outline:none;margin-bottom:8px;">
+            <p id="stepup-error" style="color:#dc2626;font-size:0.8rem;min-height:1.2em;margin:0 0 16px;"></p>
+            <div style="display:flex;gap:10px;">
+                <button id="stepup-submit" onclick="submitStepUp()"
+                        style="flex:1;padding:10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.9rem;font-weight:600;">
+                    Verify
+                </button>
+                <button onclick="cancelStepUp()"
+                        style="flex:1;padding:10px;background:#f1f5f9;color:#334155;border:none;border-radius:6px;cursor:pointer;font-size:0.9rem;">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
 
     <script src="/static/js/dashboard.js"></script>
 </body>

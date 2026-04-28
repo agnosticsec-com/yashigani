@@ -556,8 +556,14 @@ async def oidc_callback(
             detail={"error": "identity_resolution_failed"},
         )
 
-    # Check if 2FA is required after SSO
-    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "false").lower() == "true"
+    # Check if 2FA is required after SSO.
+    # Default: true — YASHIGANI_SSO_2FA_REQUIRED=false to disable.
+    # Reconciliation (V6.8.4 fix 2026-04-27): Lu's Stage B report noted this
+    # was default-OFF ("false"). Tiago's stated baseline is 2FA always-on.
+    # The control is "force Yashigani TOTP on top of IdP-mediated SSO session"
+    # — separate from admin local login which always requires TOTP unconditionally.
+    # Flipped to default-ON per Tiago's instruction.
+    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "true").lower() == "true"
 
     if sso_2fa_required:
         # Create a pending-2FA token instead of a full session.

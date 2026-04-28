@@ -33,6 +33,8 @@ def _load_agents_module():
     # Add minimal attributes needed by the module-level imports
     _stubs["yashigani.backoffice.middleware"].require_admin_session = lambda *a, **kw: None
     _stubs["yashigani.backoffice.middleware"].AdminSession = object
+    _stubs["yashigani.backoffice.middleware"].require_stepup_admin_session = lambda *a, **kw: None
+    _stubs["yashigani.backoffice.middleware"].StepUpAdminSession = object
     _stubs["yashigani.backoffice.state"].backoffice_state = None
     _stubs["yashigani.licensing.enforcer"].require_feature = lambda *a, **kw: None
 

@@ -1,9 +1,10 @@
 """
 Yashigani Backoffice — User/Operator account management routes.
 Full reset requires admin TOTP re-verification (ASVS V2.8).
+Delete/disable/full-reset require step-up TOTP (ASVS V6.8.4).
 Delete blocked if last user (USER_MINIMUM_VIOLATION).
 """
-# Last updated: 2026-04-28T00:00:00+01:00
+# Last updated: 2026-04-27T00:00:00+01:00
 from __future__ import annotations
 
 from typing import Optional
@@ -11,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.auth.totp import verify_totp, generate_provisioning
 
@@ -109,7 +110,7 @@ async def create_user(body: CreateUserRequest, session: AdminSession):
 
 
 @router.delete("/{username}")
-async def delete_user(username: str, session: AdminSession):
+async def delete_user(username: str, session: StepUpAdminSession):
     """Delete a user. Blocked if last user (USER_MINIMUM_VIOLATION)."""
     state = backoffice_state
     record = await state.auth_service.get_account(username)
@@ -138,7 +139,7 @@ async def delete_user(username: str, session: AdminSession):
 async def full_reset_user(
     username: str,
     body: FullResetRequest,
-    session: AdminSession,
+    session: StepUpAdminSession,
 ):
     """
     Full reset a user account. Requires admin TOTP re-verification.
@@ -186,7 +187,7 @@ async def full_reset_user(
 
 
 @router.post("/{username}/disable")
-async def disable_user(username: str, session: AdminSession):
+async def disable_user(username: str, session: StepUpAdminSession):
     # V8.3.2 — authz change propagation: fetch record before disabling so we
     # can immediately invalidate all live sessions for the affected account.
     # Mirrors disable_admin in accounts.py:156-157.
