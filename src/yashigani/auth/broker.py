@@ -1,6 +1,8 @@
 """
 Yashigani Auth — Multi-IdP Identity Broker.
 
+Last updated: 2026-04-28T00:00:00+01:00
+
 Yashigani IS the identity broker (Decision 11). Supports OIDC and SAML v2
 with multiple IdPs per deployment. Caddy delegates auth to the backoffice,
 which resolves identity and sets session cookies.
@@ -50,6 +52,11 @@ class IdPConfig:
     default_sensitivity: str = "INTERNAL"
     email_domains: list[str] = field(default_factory=list)  # For auto-detection
     enabled: bool = True
+    # YSG-RISK-003 #3at: optional override for OIDC endpoint host validation.
+    # None (default) = the endpoint hostname must match the discovery_url hostname.
+    # A non-None value must be a fully-qualified hostname or a *.example.com-style
+    # suffix glob (matched via fnmatch, case-insensitive).
+    allowed_auth_endpoint_pattern: Optional[str] = None
 
 
 @dataclass
@@ -114,6 +121,9 @@ class IdentityBroker:
                 discovery_url=config.metadata_url,
                 redirect_uri=redirect_uri,
                 scopes=["openid", "email", "profile", "groups"],
+                # YSG-RISK-003 #3at: thread the endpoint pattern through
+                # so OIDCProvider can validate discovery endpoints.
+                allowed_auth_endpoint_pattern=config.allowed_auth_endpoint_pattern,
             )
             self._oidc_providers[config.id] = OIDCProvider(oidc_cfg)
 
@@ -166,6 +176,8 @@ class IdentityBroker:
                 discovery_url=idp.metadata_url,
                 redirect_uri=redirect_uri,
                 scopes=["openid", "email", "profile", "groups"],
+                # YSG-RISK-003 #3at: thread the endpoint pattern through.
+                allowed_auth_endpoint_pattern=idp.allowed_auth_endpoint_pattern,
             )
             provider = OIDCProvider(oidc_cfg)
             self._oidc_providers[idp_id] = provider
