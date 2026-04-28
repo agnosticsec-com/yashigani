@@ -62,12 +62,7 @@ spec:
                       name: {{ include "yashigani.fullname" . }}-db-credentials
                       key: url
               resources:
-                requests:
-                  cpu: "100m"
-                  memory: "128Mi"
-                limits:
-                  cpu: "500m"
-                  memory: "256Mi"
+                {{- toYaml .Values.partitionCronjob.resources | nindent 16 }}
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

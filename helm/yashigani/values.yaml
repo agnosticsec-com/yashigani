@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-27T21:59:11+01:00
+# Last updated: 2026-04-28T16:59:30+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -163,13 +163,15 @@ gateway:
     tag: "2.23.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit (scheduler sizing).
+  # Limits match compose sizing baseline (retro #3au / risk register).
   resources:
     requests:
-      cpu: "250m"
-      memory: "256Mi"
-    limits:
-      cpu: "1"
+      cpu: "500m"
       memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1024Mi"
   service:
     port: 8080
     type: ClusterIP
@@ -209,13 +211,14 @@ backoffice:
     tag: "2.23.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
       cpu: "500m"
-      memory: "256Mi"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1024Mi"
   service:
     port: 8443
     type: ClusterIP
@@ -240,12 +243,13 @@ policy:
     tag: "1.15.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
+      cpu: "125m"
       memory: "128Mi"
     limits:
-      cpu: "500m"
+      cpu: "250m"
       memory: "256Mi"
   service:
     port: 8181
@@ -269,13 +273,14 @@ redis:
     tag: "7-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
+      cpu: "125m"
       memory: "128Mi"
     limits:
-      cpu: "500m"
-      memory: "512Mi"
+      cpu: "250m"
+      memory: "256Mi"
   service:
     port: 6379
     type: ClusterIP
@@ -298,13 +303,16 @@ ollama:
     tag: "0.6.2"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit.
+  # LLM inference — high memory requirement, 2 CPUs to keep inference
+  # from starving other services. Increase on GPU hosts.
   resources:
     requests:
-      cpu: "500m"
-      memory: "2Gi"
+      cpu: "1000m"
+      memory: "2048Mi"
     limits:
-      cpu: "4"
-      memory: "8Gi"
+      cpu: "2000m"
+      memory: "4096Mi"
   service:
     port: 11434
     type: ClusterIP
@@ -330,13 +338,14 @@ prometheus:
     tag: "v3.2.1"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
       cpu: "250m"
       memory: "512Mi"
     limits:
-      cpu: "1"
-      memory: "2Gi"
+      cpu: "500m"
+      memory: "1024Mi"
   service:
     port: 9090
     type: ClusterIP
@@ -356,12 +365,13 @@ grafana:
     tag: "11.5.2"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
+      cpu: "125m"
+      memory: "256Mi"
     limits:
-      cpu: "500m"
+      cpu: "250m"
       memory: "512Mi"
   service:
     port: 3000
@@ -383,10 +393,11 @@ alertmanager:
     tag: "v0.27.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
+      cpu: "125m"
+      memory: "128Mi"
     limits:
       cpu: "250m"
       memory: "256Mi"
@@ -408,13 +419,14 @@ loki:
     tag: "3.0.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
+      cpu: "125m"
       memory: "256Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "250m"
+      memory: "512Mi"
   service:
     port: 3100
     type: ClusterIP
@@ -433,10 +445,11 @@ jaeger:
     tag: "1.57"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
+      cpu: "250m"
+      memory: "256Mi"
     limits:
       cpu: "500m"
       memory: "512Mi"
@@ -454,10 +467,11 @@ otelCollector:
     tag: "0.100.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
+      cpu: "250m"
+      memory: "256Mi"
     limits:
       cpu: "500m"
       memory: "512Mi"
@@ -488,13 +502,14 @@ caddy:
     tag: "2-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
-    limits:
       cpu: "250m"
       memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
   service:
     port: 443
     httpPort: 80
@@ -538,13 +553,14 @@ agentBundles:
     replicaCount: 1
     env:
       LANGGRAPH_YASHIGANI_URL: "http://yashigani-gateway:8080"
+    # YSG-RISK-005 #3av: requests = 50% of limit.
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
         cpu: "500m"
         memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1024Mi"
     # Secret name that holds the agent registration token
     tokenSecretName: "yashigani-langgraph-token"
     tokenSecretKey: "token"
@@ -574,13 +590,14 @@ agentBundles:
       # Expose OpenClaw's own gateway port for incoming messaging webhooks
       port: 18789
       type: ClusterIP
+    # YSG-RISK-005 #3av: requests = 50% of limit.
     resources:
       requests:
-        cpu: "200m"
+        cpu: "500m"
         memory: "512Mi"
       limits:
         cpu: "1000m"
-        memory: "1Gi"
+        memory: "1024Mi"
     tokenSecretName: "yashigani-openclaw-token"
     tokenSecretKey: "token"
 
@@ -602,10 +619,11 @@ openWebui:
   # there is no host page cache to lean on. 1.5Gi requests / 2Gi limit
   # gives steady headroom without monopolising a single-node Docker
   # Desktop cluster.
+  # YSG-RISK-005 #3av: requests = 50% of limit (risk register sizing: 2048m/1.0).
   resources:
     requests:
-      cpu: "200m"
-      memory: "1536Mi"
+      cpu: "500m"
+      memory: "1024Mi"
     limits:
       cpu: "1000m"
       memory: "2048Mi"
@@ -641,13 +659,14 @@ budgetRedis:
     tag: "7-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
+      cpu: "125m"
+      memory: "128Mi"
     limits:
       cpu: "250m"
-      memory: "384Mi"
+      memory: "256Mi"
   service:
     port: 6379
     type: ClusterIP
@@ -667,13 +686,14 @@ postgres:
     tag: "16-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "250m"
-      memory: "256Mi"
+      cpu: "500m"
+      memory: "512Mi"
     limits:
-      cpu: "1"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "1024Mi"
   service:
     port: 5432
     type: ClusterIP
@@ -693,13 +713,14 @@ pgbouncer:
     tag: "v1.23.1-p0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
+      cpu: "125m"
+      memory: "128Mi"
     limits:
       cpu: "250m"
-      memory: "128Mi"
+      memory: "256Mi"
   service:
     port: 5432
     type: ClusterIP
@@ -707,6 +728,19 @@ pgbouncer:
     poolMode: transaction
     maxClientConn: "100"
     defaultPoolSize: "20"
+
+# ---------------------------------------------------------------------------
+# Partition maintenance CronJob — DB partition pre-creation (runs monthly)
+# ---------------------------------------------------------------------------
+partitionCronjob:
+  # YSG-RISK-005 #3av: requests = 50% of limit. Single-shot job, low resource.
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
 
 # ---------------------------------------------------------------------------
 # v2.2 Feature Flags
