@@ -2,7 +2,7 @@
 SPIFFE URI ACL gate — application-layer identity check for service-to-service
 callers.
 
-Last updated: 2026-04-23T23:32:19+01:00
+Last updated: 2026-04-27T00:00:00+01:00
 
 Threat model and trust boundary
 -------------------------------
@@ -35,71 +35,138 @@ the cert that carries the URI SAN, reviewed under git.
 
 Fail-closed semantics
 ---------------------
-If the manifest is missing, malformed, or unreadable, the ACL cache is an
-empty dict — every gated path returns 403. There is no silent open mode.
+If the manifest is missing or unreadable at initial load, the ACL cache is an
+empty dict — every gated path returns 403.  There is no silent open mode.
 
-Cache
------
-The manifest is loaded lazily on first call and cached. Admin rotations that
-edit service_identities.yaml must trigger a process restart for the new ACLs
-to take effect — same invariant as the bootstrap_token_sha256 field.
+On TTL-triggered refresh, a parse or I/O failure retains the **previous** good
+cache (retain-on-parse-failure). This prevents a transient manifest edit or
+mid-write file state from turning into an outage.  The failure is logged at
+CRITICAL so operators are alerted without a service interruption.
+
+Cache + TTL
+-----------
+The manifest is loaded lazily on the first gate call. After loading it is
+cached for ``YASHIGANI_SPIFFE_ACL_TTL_SECONDS`` seconds (default 60). On
+every gate call the cached age is checked; if stale, a reload is attempted.
+SVID revocation therefore propagates within one TTL window — satisfying ASVS
+v5 V8.3.3 (permission propagation across services within defined TTL).
+
+Closes: ASVS v5 V8.3.3
+Stage B report: /Users/max/Documents/Claude/Internal/ACS/v3/asvs-stage-b-class3-2026-04-28.md §8.1
 """
 from __future__ import annotations
 
 import logging
 import os
+import time
 from threading import Lock
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
 
-_ACL_CACHE: Optional[dict[str, frozenset[str]]] = None
+# Cache state: (loaded_at_monotonic, acl_dict)
+# None means "not yet loaded".
+_CACHE: Optional[Tuple[float, dict[str, frozenset[str]]]] = None
 _CACHE_LOCK = Lock()
 
 _DEFAULT_MANIFEST_PATH = "/etc/yashigani/service_identities.yaml"
 _HEADER_NAME = "x-spiffe-id"  # FastAPI lower-cases headers on lookup
+_DEFAULT_TTL_SECONDS = 60
+
+
+def _get_ttl() -> float:
+    """Return the configured TTL in seconds (env-tunable, default 60)."""
+    raw = os.getenv("YASHIGANI_SPIFFE_ACL_TTL_SECONDS", str(_DEFAULT_TTL_SECONDS))
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "spiffe-gate: invalid YASHIGANI_SPIFFE_ACL_TTL_SECONDS=%r — using default %s",
+            raw,
+            _DEFAULT_TTL_SECONDS,
+        )
+        return float(_DEFAULT_TTL_SECONDS)
+
+
+def _read_manifest() -> dict[str, frozenset[str]]:
+    """Read and parse the manifest from disk. Raises on any failure."""
+    manifest_path = os.getenv(
+        "YASHIGANI_SERVICE_MANIFEST_PATH", _DEFAULT_MANIFEST_PATH
+    )
+    # Local import so tests can monkeypatch load_manifest on the identity
+    # module without racing this module's import.
+    from yashigani.pki.identity import load_manifest
+
+    manifest = load_manifest(manifest_path)
+    return dict(manifest.endpoint_acls)
 
 
 def _load_acls() -> dict[str, frozenset[str]]:
-    """Load endpoint_acls from the manifest. Returns {} on any failure.
+    """Return the current ACL dict, refreshing if the TTL has expired.
 
-    Fail-closed: a missing or malformed manifest means every gated endpoint
-    returns 403, never 200.
+    First call: loads from disk; on failure returns {} (fail-closed).
+    Subsequent calls within TTL: returns cached value.
+    TTL-expired calls: attempts reload; on failure retains previous cache
+    and logs CRITICAL (retain-on-parse-failure — avoids outage during
+    transient manifest edits).
     """
-    global _ACL_CACHE
-    if _ACL_CACHE is not None:
-        return _ACL_CACHE
-    with _CACHE_LOCK:
-        if _ACL_CACHE is not None:
-            return _ACL_CACHE
-        manifest_path = os.getenv(
-            "YASHIGANI_SERVICE_MANIFEST_PATH", _DEFAULT_MANIFEST_PATH
-        )
-        try:
-            # Local import so tests can monkeypatch load_manifest on the
-            # identity module without racing this module's import.
-            from yashigani.pki.identity import load_manifest
+    global _CACHE
+    ttl = _get_ttl()
+    now = time.monotonic()
 
-            manifest = load_manifest(manifest_path)
-            _ACL_CACHE = dict(manifest.endpoint_acls)
-        except Exception as exc:  # pragma: no cover — defensive
-            logger.error(
-                "spiffe-gate: failed to load manifest from %s — "
-                "every gated endpoint will 403: %s",
-                manifest_path,
-                exc,
-            )
-            _ACL_CACHE = {}
-        return _ACL_CACHE
+    # Fast path — check without the lock first (double-checked locking).
+    cache = _CACHE
+    if cache is not None:
+        loaded_at, acls = cache
+        if (now - loaded_at) <= ttl:
+            return acls
+
+    with _CACHE_LOCK:
+        # Re-read under lock to avoid stampede.
+        cache = _CACHE
+        now = time.monotonic()
+        if cache is not None:
+            loaded_at, acls = cache
+            if (now - loaded_at) <= ttl:
+                return acls
+
+        # Reload is due (either first load or TTL expired).
+        try:
+            fresh = _read_manifest()
+            _CACHE = (time.monotonic(), fresh)
+            return fresh
+        except Exception as exc:
+            if cache is None:
+                # First load failed — fail-closed with empty ACL.
+                logger.error(
+                    "spiffe-gate: initial manifest load failed — "
+                    "every gated endpoint will 403: %s",
+                    exc,
+                )
+                _CACHE = (time.monotonic(), {})
+                return {}
+            else:
+                # TTL refresh failed — retain previous cache, alert loudly.
+                _, prev_acls = cache
+                logger.critical(
+                    "spiffe-gate: TTL refresh failed — retaining previous ACL cache "
+                    "(retain-on-parse-failure). Resolve manifest error immediately. "
+                    "Error: %s",
+                    exc,
+                )
+                # Bump the timestamp so we don't re-attempt on every request
+                # while the manifest is broken (back-off by one full TTL).
+                _CACHE = (time.monotonic(), prev_acls)
+                return prev_acls
 
 
 def _reset_cache_for_tests() -> None:
-    """Test helper — clear the lazy ACL cache."""
-    global _ACL_CACHE
+    """Test helper — clear the TTL ACL cache entirely."""
+    global _CACHE
     with _CACHE_LOCK:
-        _ACL_CACHE = None
+        _CACHE = None
 
 
 def require_spiffe_id(path: str) -> Callable[[Request], str]:
