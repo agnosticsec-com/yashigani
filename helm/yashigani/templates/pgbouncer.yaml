@@ -42,6 +42,17 @@ spec:
               containerPort: 5432
               protocol: TCP
           env:
+            # K8s $(VAR) interpolation only resolves FORWARD references — any var
+            # that uses $(POSTGRES_PASSWORD) MUST be declared after it. The
+            # edoburu/pgbouncer entrypoint extracts the password from
+            # DATABASE_URL into userlist.txt; if the literal "$(POSTGRES_PASSWORD)"
+            # leaks in, password auth fails on every connect (Captain #58c #3bf
+            # evidence, 2026-04-28).
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
+                  key: postgres_password
             - name: DATABASE_URL
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani"
             - name: AUTH_TYPE
@@ -52,11 +63,6 @@ spec:
               value: {{ .Values.pgbouncer.env.maxClientConn | quote }}
             - name: DEFAULT_POOL_SIZE
               value: {{ .Values.pgbouncer.env.defaultPoolSize | quote }}
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
-                  key: postgres_password
           {{- if .Values.mtls.enabled }}
           # mTLS mode: pg_isready cannot negotiate client-cert TLS. Fall back
           # to a plain TCP connect against 127.0.0.1 — proves the listener is
