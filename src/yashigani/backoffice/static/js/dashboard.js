@@ -1,3 +1,12 @@
+// last-updated: 2026-04-28T00:00:00+01:00
+// V1.2.1 — HTML output encoding helper (CWE-79 stored XSS prevention).
+// Every user-controlled value rendered into innerHTML MUST pass through
+// escapeHtml().  Stage B audit (§4.1) identified 10 sinks; all are fixed below.
+var HTML_ESCAPES = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return HTML_ESCAPES[c]; });
+}
+
 // Navigation
 function showPage(name, triggerEl) {
     document.querySelectorAll('.page').forEach(function(p) { p.className = 'page'; });
@@ -72,11 +81,11 @@ async function loadAgents() {
         for (var i = 0; i < agents.length; i++) {
             var a = agents[i];
             var statusBadge = a.status === 'active' ? 'badge-green' : 'badge-red';
-            var actions = '<button data-action="rotateAgentToken" data-agent-id="' + a.agent_id + '" data-agent-name="' + a.name + '" style="padding:2px 8px;background:#2563eb;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Rotate Token</button>';
+            var actions = '<button data-action="rotateAgentToken" data-agent-id="' + escapeHtml(a.agent_id) + '" data-agent-name="' + escapeHtml(a.name) + '" style="padding:2px 8px;background:#2563eb;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Rotate Token</button>';
             if (a.status === 'active') {
-                actions += ' <button data-action="deactivateAgent" data-agent-id="' + a.agent_id + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Deactivate</button>';
+                actions += ' <button data-action="deactivateAgent" data-agent-id="' + escapeHtml(a.agent_id) + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Deactivate</button>';
             }
-            html += '<tr><td>' + a.name + '</td><td style="font-family:monospace;font-size:0.8rem;">' + a.agent_id + '</td><td style="font-size:0.8rem;">' + a.upstream_url + '</td><td><span class="badge ' + statusBadge + '">' + a.status + '</span></td><td style="font-size:0.8rem;">' + (a.last_seen_at || 'Never') + '</td><td>' + actions + '</td></tr>';
+            html += '<tr><td>' + escapeHtml(a.name) + '</td><td style="font-family:monospace;font-size:0.8rem;">' + escapeHtml(a.agent_id) + '</td><td style="font-size:0.8rem;">' + escapeHtml(a.upstream_url) + '</td><td><span class="badge ' + statusBadge + '">' + escapeHtml(a.status) + '</span></td><td style="font-size:0.8rem;">' + escapeHtml(a.last_seen_at || 'Never') + '</td><td>' + actions + '</td></tr>';
         }
         tbody.innerHTML = html;
     } else {
@@ -158,10 +167,10 @@ async function loadAccounts() {
             var totpBadge = acc.force_totp_provision ? 'badge-yellow' : 'badge-green';
             var totpText = acc.force_totp_provision ? 'Not provisioned' : 'Active';
             var toggleBtn = acc.disabled
-                ? '<button data-action="toggleAccount" data-account-type="admin" data-username="' + acc.username + '" data-toggle-action="enable" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Enable</button>'
-                : '<button data-action="toggleAccount" data-account-type="admin" data-username="' + acc.username + '" data-toggle-action="disable" style="padding:2px 8px;background:#f59e0b;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Disable</button>';
-            var deleteBtn = '<button data-action="deleteAccount" data-account-type="admin" data-username="' + acc.username + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Delete</button>';
-            html += '<tr><td><strong>' + acc.username + '</strong></td><td><span class="badge ' + statusBadge + '">' + statusText + '</span></td><td><span class="badge ' + pwBadge + '">' + pwText + '</span></td><td><span class="badge ' + totpBadge + '">' + totpText + '</span></td><td>' + toggleBtn + deleteBtn + '</td></tr>';
+                ? '<button data-action="toggleAccount" data-account-type="admin" data-username="' + escapeHtml(acc.username) + '" data-toggle-action="enable" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Enable</button>'
+                : '<button data-action="toggleAccount" data-account-type="admin" data-username="' + escapeHtml(acc.username) + '" data-toggle-action="disable" style="padding:2px 8px;background:#f59e0b;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Disable</button>';
+            var deleteBtn = '<button data-action="deleteAccount" data-account-type="admin" data-username="' + escapeHtml(acc.username) + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Delete</button>';
+            html += '<tr><td><strong>' + escapeHtml(acc.username) + '</strong></td><td><span class="badge ' + statusBadge + '">' + statusText + '</span></td><td><span class="badge ' + pwBadge + '">' + pwText + '</span></td><td><span class="badge ' + totpBadge + '">' + totpText + '</span></td><td>' + toggleBtn + deleteBtn + '</td></tr>';
         }
         tbody.innerHTML = html;
     } else {
@@ -182,10 +191,10 @@ async function loadAccounts() {
             var tb = u.force_totp_provision ? 'badge-yellow' : 'badge-green';
             var tt = u.force_totp_provision ? 'Not provisioned' : 'Active';
             var toggleBtn = u.disabled
-                ? '<button data-action="toggleAccount" data-account-type="user" data-username="' + u.username + '" data-toggle-action="enable" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Enable</button>'
-                : '<button data-action="toggleAccount" data-account-type="user" data-username="' + u.username + '" data-toggle-action="disable" style="padding:2px 8px;background:#f59e0b;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Disable</button>';
-            var deleteBtn = '<button data-action="deleteAccount" data-account-type="user" data-username="' + u.username + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Delete</button>';
-            html += '<tr><td><strong>' + u.username + '</strong></td><td><span class="badge ' + sb + '">' + st + '</span></td><td><span class="badge ' + pb + '">' + pt + '</span></td><td><span class="badge ' + tb + '">' + tt + '</span></td><td>' + toggleBtn + deleteBtn + '</td></tr>';
+                ? '<button data-action="toggleAccount" data-account-type="user" data-username="' + escapeHtml(u.username) + '" data-toggle-action="enable" style="padding:2px 8px;background:#16a34a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Enable</button>'
+                : '<button data-action="toggleAccount" data-account-type="user" data-username="' + escapeHtml(u.username) + '" data-toggle-action="disable" style="padding:2px 8px;background:#f59e0b;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Disable</button>';
+            var deleteBtn = '<button data-action="deleteAccount" data-account-type="user" data-username="' + escapeHtml(u.username) + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem;margin-left:4px">Delete</button>';
+            html += '<tr><td><strong>' + escapeHtml(u.username) + '</strong></td><td><span class="badge ' + sb + '">' + st + '</span></td><td><span class="badge ' + pb + '">' + pt + '</span></td><td><span class="badge ' + tb + '">' + tt + '</span></td><td>' + toggleBtn + deleteBtn + '</td></tr>';
         }
         utbody.innerHTML = html;
     } else {
@@ -292,7 +301,7 @@ async function loadBudgets() {
         var html = '';
         for (var i = 0; i < caps.org_caps.length; i++) {
             var c = caps.org_caps[i];
-            html += '<tr><td>' + (c.provider || '*') + '</td><td>' + (c.token_cap || 0).toLocaleString() + '</td><td>' + (c.period || 'monthly') + '</td></tr>';
+            html += '<tr><td>' + escapeHtml(c.provider || '*') + '</td><td>' + (c.token_cap || 0).toLocaleString() + '</td><td>' + escapeHtml(c.period || 'monthly') + '</td></tr>';
         }
         tbody.innerHTML = html;
         document.getElementById('stat-org-caps').textContent = caps.org_caps.length;
@@ -307,7 +316,7 @@ async function loadBudgets() {
         var html = '';
         for (var i = 0; i < groups.group_budgets.length; i++) {
             var g = groups.group_budgets[i];
-            html += '<tr><td>' + g.group_id + '</td><td>' + (g.provider || '*') + '</td><td>' + (g.token_budget || 0).toLocaleString() + '</td><td>' + (g.period || 'monthly') + '</td></tr>';
+            html += '<tr><td>' + escapeHtml(g.group_id) + '</td><td>' + escapeHtml(g.provider || '*') + '</td><td>' + (g.token_budget || 0).toLocaleString() + '</td><td>' + escapeHtml(g.period || 'monthly') + '</td></tr>';
         }
         gtbody.innerHTML = html;
         document.getElementById('stat-group-budgets').textContent = groups.group_budgets.length;
@@ -322,7 +331,7 @@ async function loadBudgets() {
         var html = '';
         for (var i = 0; i < indiv.individual_budgets.length; i++) {
             var ind = indiv.individual_budgets[i];
-            html += '<tr><td>' + ind.identity_id + '</td><td>' + (ind.provider || '*') + '</td><td>' + (ind.token_budget || 0).toLocaleString() + '</td><td>' + (ind.period || 'monthly') + '</td></tr>';
+            html += '<tr><td>' + escapeHtml(ind.identity_id) + '</td><td>' + escapeHtml(ind.provider || '*') + '</td><td>' + (ind.token_budget || 0).toLocaleString() + '</td><td>' + escapeHtml(ind.period || 'monthly') + '</td></tr>';
         }
         itbody.innerHTML = html;
         document.getElementById('stat-individual-budgets').textContent = indiv.individual_budgets.length;
@@ -396,7 +405,7 @@ async function loadModels() {
             var m = data.models[i];
             var size = m.size ? (m.size / (1024*1024*1024)).toFixed(1) + ' GB' : '-';
             var modified = m.modified_at ? new Date(m.modified_at).toLocaleDateString() : '-';
-            html += '<tr><td style="font-family:monospace">' + m.name + '</td><td>' + size + '</td><td>' + modified + '</td></tr>';
+            html += '<tr><td style="font-family:monospace">' + escapeHtml(m.name) + '</td><td>' + escapeHtml(size) + '</td><td>' + escapeHtml(modified) + '</td></tr>';
         }
         tbody.innerHTML = html;
     } else {
@@ -411,7 +420,7 @@ async function loadModels() {
         for (var i = 0; i < aliases.aliases.length; i++) {
             var a = aliases.aliases[i];
             var localBadge = a.force_local ? '<span class="badge badge-green">Yes</span>' : '<span class="badge" style="background:#f1f5f9;color:#64748b">No</span>';
-            html += '<tr><td style="font-family:monospace">' + a.alias + '</td><td>' + a.provider + '</td><td>' + a.model + '</td><td>' + localBadge + '</td><td><button data-action="deleteAlias" data-alias="' + a.alias + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Delete</button></td></tr>';
+            html += '<tr><td style="font-family:monospace">' + escapeHtml(a.alias) + '</td><td>' + escapeHtml(a.provider) + '</td><td>' + escapeHtml(a.model) + '</td><td>' + localBadge + '</td><td><button data-action="deleteAlias" data-alias="' + escapeHtml(a.alias) + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Delete</button></td></tr>';
         }
         atbody.innerHTML = html;
     } else {
@@ -425,7 +434,7 @@ async function loadModels() {
         var html = '';
         for (var i = 0; i < allocs.allocations.length; i++) {
             var al = allocs.allocations[i];
-            html += '<tr><td style="font-family:monospace">' + al.model_alias + '</td><td>' + al.target_type + '</td><td>' + al.target_id + '</td><td><button data-action="deleteAllocation" data-allocation-id="' + al.id + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Remove</button></td></tr>';
+            html += '<tr><td style="font-family:monospace">' + escapeHtml(al.model_alias) + '</td><td>' + escapeHtml(al.target_type) + '</td><td>' + escapeHtml(al.target_id) + '</td><td><button data-action="deleteAllocation" data-allocation-id="' + escapeHtml(al.id) + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Remove</button></td></tr>';
         }
         altbody.innerHTML = html;
     } else {
@@ -502,7 +511,7 @@ async function loadSensitivity() {
         for (var i = 0; i < patterns.patterns.length; i++) {
             var p = patterns.patterns[i];
             var cb = classBadge[p.classification] || 'badge-blue';
-            html += '<tr><td><span class="badge ' + cb + '">' + p.classification + '</span></td><td>' + p.type + '</td><td style="font-family:monospace;font-size:0.75rem">' + p.pattern.replace(/</g,'&lt;') + '</td><td>' + p.description + '</td><td><button data-action="deletePattern" data-pattern-id="' + p.id + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Delete</button></td></tr>';
+            html += '<tr><td><span class="badge ' + cb + '">' + escapeHtml(p.classification) + '</span></td><td>' + escapeHtml(p.type) + '</td><td style="font-family:monospace;font-size:0.75rem">' + escapeHtml(p.pattern) + '</td><td>' + escapeHtml(p.description) + '</td><td><button data-action="deletePattern" data-pattern-id="' + escapeHtml(p.id) + '" style="padding:2px 8px;background:#dc2626;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:0.75rem">Delete</button></td></tr>';
         }
         tbody.innerHTML = html;
     } else {
@@ -700,11 +709,11 @@ async function searchAudit(cursor) {
     }
     document.getElementById('audit-count').textContent = 'Events (' + data.events.length + (data.has_more ? '+' : '') + ')';
     tbody.innerHTML = data.events.map(function(e) {
-        return '<tr><td style="font-size:0.75rem">' + (e.timestamp || e.created_at || '') + '</td>' +
-            '<td>' + (e.event_type || '') + '</td>' +
-            '<td>' + (e.user || e.agent_id || '') + '</td>' +
-            '<td><span class="badge ' + (e.verdict === 'BLOCKED' ? 'badge-red' : 'badge-green') + '">' + (e.verdict || '-') + '</span></td>' +
-            '<td style="font-size:0.75rem;max-width:300px;overflow:hidden;text-overflow:ellipsis">' + (e.detail || e.summary || '') + '</td></tr>';
+        return '<tr><td style="font-size:0.75rem">' + escapeHtml(e.timestamp || e.created_at || '') + '</td>' +
+            '<td>' + escapeHtml(e.event_type || '') + '</td>' +
+            '<td>' + escapeHtml(e.user || e.agent_id || '') + '</td>' +
+            '<td><span class="badge ' + (e.verdict === 'BLOCKED' ? 'badge-red' : 'badge-green') + '">' + escapeHtml(e.verdict || '-') + '</span></td>' +
+            '<td style="font-size:0.75rem;max-width:300px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(e.detail || e.summary || '') + '</td></tr>';
     }).join('');
     auditCursor = data.next_cursor || '';
     var pag = document.getElementById('audit-pagination');
@@ -737,8 +746,8 @@ async function loadIpAccess() {
         for (var ip in blocked.blocked_ips) {
             var info = blocked.blocked_ips[ip];
             var ts = info.blocked_at ? new Date(info.blocked_at * 1000).toLocaleString() : '-';
-            html += '<tr><td>' + ip + '</td><td style="font-size:0.75rem">' + ts + '</td><td style="font-size:0.75rem">' + (info.reason || '-') + '</td>';
-            html += '<td><button data-action="unblockIp" data-ip="' + ip + '" style="padding:2px 8px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem">Unblock</button></td></tr>';
+            html += '<tr><td>' + escapeHtml(ip) + '</td><td style="font-size:0.75rem">' + escapeHtml(ts) + '</td><td style="font-size:0.75rem">' + escapeHtml(info.reason || '-') + '</td>';
+            html += '<td><button data-action="unblockIp" data-ip="' + escapeHtml(ip) + '" style="padding:2px 8px;background:#ef4444;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.75rem">Unblock</button></td></tr>';
         }
         html += '</tbody></table>';
         el.innerHTML = html;
@@ -751,7 +760,7 @@ async function loadIpAccess() {
     if (allowed && allowed.total > 0) {
         var html2 = '';
         allowed.allowed_ips.forEach(function(ip) {
-            html2 += '<span style="display:inline-flex;align-items:center;gap:4px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:2px 8px;margin:2px;font-size:0.8rem;">' + ip + ' <button data-action="removeAllowedIp" data-ip="' + ip + '" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:0.7rem;">x</button></span>';
+            html2 += '<span style="display:inline-flex;align-items:center;gap:4px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:2px 8px;margin:2px;font-size:0.8rem;">' + escapeHtml(ip) + ' <button data-action="removeAllowedIp" data-ip="' + escapeHtml(ip) + '" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:0.7rem;">x</button></span>';
         });
         el2.innerHTML = html2;
     } else {
