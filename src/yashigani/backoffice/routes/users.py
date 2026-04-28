@@ -3,7 +3,7 @@ Yashigani Backoffice — User/Operator account management routes.
 Full reset requires admin TOTP re-verification (ASVS V2.8).
 Delete blocked if last user (USER_MINIMUM_VIOLATION).
 """
-# Last updated: 2026-04-23T11:36:14+01:00
+# Last updated: 2026-04-28T00:00:00+01:00
 from __future__ import annotations
 
 from typing import Optional
@@ -187,10 +187,18 @@ async def full_reset_user(
 
 @router.post("/{username}/disable")
 async def disable_user(username: str, session: AdminSession):
+    # V8.3.2 — authz change propagation: fetch record before disabling so we
+    # can immediately invalidate all live sessions for the affected account.
+    # Mirrors disable_admin in accounts.py:156-157.
     state = backoffice_state
-    if not await state.auth_service.disable(username):
+    record = await state.auth_service.get_account(username)
+    if record is None or record.account_tier != "user":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
+    if record.disabled:
+        return {"status": "ok", "message": "already_disabled"}
+    await state.auth_service.disable(username)
+    state.session_store.invalidate_all_for_account(record.account_id)
     state.audit_writer.write(_config_event(
         session.account_id, "user_account_disabled", username, "disabled"
     ))
