@@ -16,11 +16,15 @@ Routes:
   PUT    /admin/agents/{agent_id}               — update agent fields
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
+
+Last updated: 2026-04-28T00:00:00+01:00
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl
@@ -29,6 +33,47 @@ from yashigani.backoffice.middleware import require_admin_session, AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# SSRF allowlist helper for Open WebUI outbound calls (YSG-RISK-007.A #3ax)
+# ---------------------------------------------------------------------------
+
+def _assert_safe_owui_url(url: str) -> str:
+    """Assert that ``url`` is safe for outbound Open WebUI API calls.
+
+    Allowed:
+      - Scheme: http or https only.
+      - Hostname: must be in the YASHIGANI_OWUI_HOSTNAMES allowlist
+        (comma-separated, case-insensitive; default: open-webui,127.0.0.1,localhost).
+
+    Raises ``RuntimeError`` on any violation so the caller never issues an
+    outbound request to an operator-misconfigured or attacker-substituted URL.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+
+    if scheme not in ("http", "https"):
+        raise RuntimeError(
+            f"owui_url_blocked: scheme {scheme!r} not in {{http, https}} — "
+            f"OWUI_API_URL must use http:// or https:// (got {url!r})"
+        )
+
+    raw_allowlist = os.getenv(
+        "YASHIGANI_OWUI_HOSTNAMES",
+        "open-webui,127.0.0.1,localhost",
+    )
+    allowed = {h.strip().lower() for h in raw_allowlist.split(",") if h.strip()}
+
+    if host not in allowed:
+        raise RuntimeError(
+            f"owui_url_blocked: hostname {host!r} not in YASHIGANI_OWUI_HOSTNAMES "
+            f"allowlist ({sorted(allowed)!r}) — set YASHIGANI_OWUI_HOSTNAMES to "
+            "override (CWE-918, YSG-RISK-007.A)"
+        )
+
+    return url
 
 router = APIRouter()
 
@@ -166,11 +211,12 @@ def _push_openwebui_model(agent_name: str, upstream_url: str) -> None:
     """
     try:
         import json
-        import os
         import urllib.request
         import urllib.error
 
-        owui_url = os.getenv("OWUI_API_URL", "http://open-webui:8080")
+        owui_url = _assert_safe_owui_url(
+            os.getenv("OWUI_API_URL", "http://open-webui:8080")
+        )
         owui_secret = os.getenv("OWUI_SECRET_KEY")
         if not owui_secret:
             # Fail-closed: OWUI integration requires an explicit secret. The
