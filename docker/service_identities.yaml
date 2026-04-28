@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Yashigani — Service Identity Manifest (IaC-declared ecosystem allowlist)
-# Last updated: 2026-04-23T23:32:19+01:00
+# Last updated: 2026-04-28T22:00:00+01:00
 #
 # Every container that speaks inside the Yashigani mesh MUST have an entry
 # here. Services not in this file cannot obtain an internal-CA-signed client
@@ -46,7 +46,7 @@ schema_version: 1
 services:
 
   - name: caddy
-    dns_sans: [caddy, caddy.internal]
+    dns_sans: [caddy, caddy.internal, yashigani-caddy]
     spiffe_id: spiffe://yashigani.internal/caddy
     purpose: "TLS edge + internal CA root"
     mtls_capable: true
@@ -54,7 +54,7 @@ services:
     revoked: false
 
   - name: gateway
-    dns_sans: [gateway, gateway.internal]
+    dns_sans: [gateway, gateway.internal, yashigani-gateway]
     spiffe_id: spiffe://yashigani.internal/gateway
     purpose: "MCP reverse proxy (data plane)"
     mtls_capable: true
@@ -62,7 +62,7 @@ services:
     revoked: false
 
   - name: backoffice
-    dns_sans: [backoffice, backoffice.internal]
+    dns_sans: [backoffice, backoffice.internal, yashigani-backoffice]
     spiffe_id: spiffe://yashigani.internal/backoffice
     purpose: "Admin control plane (SSO, RBAC, audit, billing)"
     mtls_capable: true
@@ -70,7 +70,7 @@ services:
     revoked: false
 
   - name: policy
-    dns_sans: [policy, policy.internal, opa, opa.internal]
+    dns_sans: [policy, policy.internal, opa, opa.internal, yashigani-policy]
     spiffe_id: spiffe://yashigani.internal/policy
     purpose: "Open Policy Agent (policy decisions)"
     # v2.23.1: mtls_capable flipped to false — OPA retains plaintext HTTP in
@@ -85,7 +85,7 @@ services:
 
   # ── Data stores ───────────────────────────────────────────────────────────
   - name: postgres
-    dns_sans: [postgres, postgres.internal]
+    dns_sans: [postgres, postgres.internal, yashigani-postgres]
     spiffe_id: spiffe://yashigani.internal/postgres
     purpose: "PostgreSQL 16 (tenants, audit, RBAC, inference)"
     mtls_capable: true
@@ -93,7 +93,7 @@ services:
     revoked: false
 
   - name: pgbouncer
-    dns_sans: [pgbouncer, pgbouncer.internal]
+    dns_sans: [pgbouncer, pgbouncer.internal, yashigani-pgbouncer]
     spiffe_id: spiffe://yashigani.internal/pgbouncer
     purpose: "Transaction-mode PostgreSQL pooler"
     mtls_capable: true
@@ -101,7 +101,7 @@ services:
     revoked: false
 
   - name: redis
-    dns_sans: [redis, redis.internal]
+    dns_sans: [redis, redis.internal, yashigani-redis]
     spiffe_id: spiffe://yashigani.internal/redis
     purpose: "Session store, TOTP provisioning, rate-limit counters"
     mtls_capable: true
@@ -109,7 +109,7 @@ services:
     revoked: false
 
   - name: budget-redis
-    dns_sans: [budget-redis, budget-redis.internal]
+    dns_sans: [budget-redis, budget-redis.internal, yashigani-budget-redis]
     spiffe_id: spiffe://yashigani.internal/budget-redis
     purpose: "Budget counter store (noeviction)"
     mtls_capable: true
@@ -118,7 +118,7 @@ services:
 
   # ── Observability ─────────────────────────────────────────────────────────
   - name: prometheus
-    dns_sans: [prometheus, prometheus.internal]
+    dns_sans: [prometheus, prometheus.internal, yashigani-prometheus]
     spiffe_id: spiffe://yashigani.internal/prometheus
     purpose: "Metrics collection + federation"
     mtls_capable: true
@@ -126,7 +126,7 @@ services:
     revoked: false
 
   - name: grafana
-    dns_sans: [grafana, grafana.internal]
+    dns_sans: [grafana, grafana.internal, yashigani-grafana]
     spiffe_id: spiffe://yashigani.internal/grafana
     purpose: "Dashboards + alerting"
     mtls_capable: true
@@ -134,7 +134,7 @@ services:
     revoked: false
 
   - name: alertmanager
-    dns_sans: [alertmanager, alertmanager.internal]
+    dns_sans: [alertmanager, alertmanager.internal, yashigani-alertmanager]
     spiffe_id: spiffe://yashigani.internal/alertmanager
     purpose: "Alert routing"
     mtls_capable: true
@@ -142,7 +142,7 @@ services:
     revoked: false
 
   - name: loki
-    dns_sans: [loki, loki.internal]
+    dns_sans: [loki, loki.internal, yashigani-loki]
     spiffe_id: spiffe://yashigani.internal/loki
     purpose: "Log aggregation backend"
     mtls_capable: true
@@ -150,7 +150,7 @@ services:
     revoked: false
 
   - name: promtail
-    dns_sans: [promtail, promtail.internal]
+    dns_sans: [promtail, promtail.internal, yashigani-promtail]
     spiffe_id: spiffe://yashigani.internal/promtail
     purpose: "Docker container log shipper → Loki"
     mtls_capable: false       # promtail is a client of Loki, no inbound TLS
@@ -158,7 +158,7 @@ services:
     revoked: false
 
   - name: otel-collector
-    dns_sans: [otel-collector, otel-collector.internal]
+    dns_sans: [otel-collector, otel-collector.internal, yashigani-otel-collector]
     spiffe_id: spiffe://yashigani.internal/otel-collector
     purpose: "OTLP receiver, Jaeger exporter"
     mtls_capable: true
@@ -166,7 +166,7 @@ services:
     revoked: false
 
   - name: jaeger
-    dns_sans: [jaeger, jaeger.internal]
+    dns_sans: [jaeger, jaeger.internal, yashigani-jaeger]
     spiffe_id: spiffe://yashigani.internal/jaeger
     purpose: "Distributed trace UI"
     mtls_capable: true
@@ -175,7 +175,7 @@ services:
 
   # ── AI / inference ────────────────────────────────────────────────────────
   - name: ollama
-    dns_sans: [ollama, ollama.internal]
+    dns_sans: [ollama, ollama.internal, yashigani-ollama]
     spiffe_id: spiffe://yashigani.internal/ollama
     purpose: "Local LLM inference (classifier + user models)"
     # Ollama does not support server TLS. Protection = internal bridge-only +
@@ -186,7 +186,7 @@ services:
 
   # ── Optional / profile-gated services ─────────────────────────────────────
   - name: open-webui
-    dns_sans: [open-webui, open-webui.internal]
+    dns_sans: [open-webui, open-webui.internal, yashigani-open-webui]
     spiffe_id: spiffe://yashigani.internal/open-webui
     purpose: "User-facing chat UI (profile: openwebui)"
     mtls_capable: true
@@ -194,7 +194,7 @@ services:
     revoked: false
 
   - name: langflow
-    dns_sans: [langflow, langflow.internal]
+    dns_sans: [langflow, langflow.internal, yashigani-langflow]
     spiffe_id: spiffe://yashigani.internal/langflow
     purpose: "Visual agent workflow builder (profile: langflow)"
     mtls_capable: false       # upstream image, no TLS. Uses CA as client.
@@ -202,7 +202,7 @@ services:
     revoked: false
 
   - name: letta
-    dns_sans: [letta, letta.internal]
+    dns_sans: [letta, letta.internal, yashigani-letta]
     spiffe_id: spiffe://yashigani.internal/letta
     purpose: "Stateful agent with persistent memory (profile: letta)"
     mtls_capable: false       # upstream image, no TLS. Uses CA as client.
@@ -210,7 +210,7 @@ services:
     revoked: false
 
   - name: openclaw
-    dns_sans: [openclaw, openclaw.internal]
+    dns_sans: [openclaw, openclaw.internal, yashigani-openclaw]
     spiffe_id: spiffe://yashigani.internal/openclaw
     purpose: "Personal AI w/ messaging channel integrations (profile: openclaw)"
     mtls_capable: false       # upstream image. Uses CA as client.
@@ -218,7 +218,7 @@ services:
     revoked: false
 
   - name: keycloak
-    dns_sans: [keycloak, keycloak.internal]
+    dns_sans: [keycloak, keycloak.internal, yashigani-keycloak]
     spiffe_id: spiffe://yashigani.internal/keycloak
     purpose: "Upstream test IdP for OIDC/SAML federation (profile: test-idp)"
     mtls_capable: true
@@ -226,7 +226,7 @@ services:
     revoked: false
 
   - name: vault
-    dns_sans: [vault, vault.internal]
+    dns_sans: [vault, vault.internal, yashigani-vault]
     spiffe_id: spiffe://yashigani.internal/vault
     purpose: "HashiCorp Vault dev-mode KMS (profile: vault)"
     mtls_capable: true
@@ -234,7 +234,7 @@ services:
     revoked: false
 
   - name: step-ca
-    dns_sans: [step-ca, step-ca.internal]
+    dns_sans: [step-ca, step-ca.internal, yashigani-step-ca]
     spiffe_id: spiffe://yashigani.internal/step-ca
     purpose: "Smallstep CA — legacy, kept for --with-internal-ca profile only"
     mtls_capable: true
@@ -242,7 +242,7 @@ services:
     revoked: false
 
   - name: wazuh-manager
-    dns_sans: [wazuh-manager, wazuh-manager.internal]
+    dns_sans: [wazuh-manager, wazuh-manager.internal, yashigani-wazuh-manager]
     spiffe_id: spiffe://yashigani.internal/wazuh-manager
     purpose: "Wazuh SIEM event ingest (profile: wazuh)"
     mtls_capable: true
@@ -250,7 +250,7 @@ services:
     revoked: false
 
   - name: wazuh-indexer
-    dns_sans: [wazuh-indexer, wazuh-indexer.internal]
+    dns_sans: [wazuh-indexer, wazuh-indexer.internal, yashigani-wazuh-indexer]
     spiffe_id: spiffe://yashigani.internal/wazuh-indexer
     purpose: "Wazuh SIEM OpenSearch backend (profile: wazuh)"
     mtls_capable: true
@@ -258,7 +258,7 @@ services:
     revoked: false
 
   - name: wazuh-dashboard
-    dns_sans: [wazuh-dashboard, wazuh-dashboard.internal]
+    dns_sans: [wazuh-dashboard, wazuh-dashboard.internal, yashigani-wazuh-dashboard]
     spiffe_id: spiffe://yashigani.internal/wazuh-dashboard
     purpose: "Wazuh SIEM UI (profile: wazuh)"
     mtls_capable: true

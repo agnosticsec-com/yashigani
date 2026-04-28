@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-28T16:59:30+01:00
+# Last updated: 2026-04-28T22:00:00+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -152,13 +152,14 @@ services:
       YASHIGANI_AGENT_PATH_PREFIX: "/agents"
       YASHIGANI_AGENT_TOKEN_MIN_LENGTH: "64"
       # Postgres via PgBouncer — TLS verify-ca + client cert.
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       # M-01 fix: switched from http:// (plaintext) to grpcs:// (mTLS).
-      # Collector now requires a client cert (ca_intermediate.crt trust anchor,
-      # Pattern B). Gateway presents its leaf cert from /run/secrets.
+      # Pattern A for Python ssl: opentelemetry-exporter-otlp uses Python ssl,
+      # so trust anchor is the PUBLIC ca_root.crt (Py 3.12/OpenSSL 3.0 strict
+      # chain — gate #58a evidence). Gateway presents its leaf from /run/secrets.
       OTEL_EXPORTER_OTLP_ENDPOINT: grpcs://otel-collector:4317
-      OTEL_EXPORTER_OTLP_CERTIFICATE: /run/secrets/ca_intermediate.crt
+      OTEL_EXPORTER_OTLP_CERTIFICATE: /run/secrets/ca_root.crt
       OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: /run/secrets/gateway_client.crt
       OTEL_EXPORTER_OTLP_CLIENT_KEY: /run/secrets/gateway_client.key
       FASTTEXT_MODEL_PATH: /app/models/fasttext_classifier.bin
@@ -207,8 +208,9 @@ services:
         condition: service_started
     healthcheck:
       # mTLS port now used — healthcheck uses the client cert inside the
-      # container. Pattern B: trust anchor is ca_intermediate.crt (root never in workloads).
-      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)\""]
+      # container. Pattern A for Python ssl: trust anchor is the public ca_root.crt
+      # (Py 3.12/OpenSSL 3.0 strict-chain rejects intermediate-only — gate #58a).
+      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)\""]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -247,7 +249,7 @@ services:
       # can set this var; ensure YASHIGANI_PII_MODE=redact or block first.
       YASHIGANI_INSPECTION_FALLBACK_CHAIN: ${YASHIGANI_INSPECTION_FALLBACK_CHAIN:-ollama,fail_closed}
       # Postgres via PgBouncer — TLS verify-ca + client cert.
-      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
+      YASHIGANI_DB_DSN: postgresql://yashigani_app:${POSTGRES_PASSWORD_URLENC}@pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key
       YASHIGANI_DEPLOYMENT_STREAM: ${YASHIGANI_DEPLOYMENT_STREAM:-opensource}
       OWUI_API_URL: http://open-webui:8080
       # OWUI_SECRET_KEY is required — install.sh generates a fresh random
@@ -279,9 +281,10 @@ services:
       YASHIGANI_IDP_2_EMAIL_DOMAINS: ${YASHIGANI_IDP_2_EMAIL_DOMAINS:-}
       YASHIGANI_IDP_2_REDIRECT_URI: ${YASHIGANI_IDP_2_REDIRECT_URI:-}
       # M-01 fix: backoffice also exports OTLP traces to the collector via mTLS.
-      # Pattern B trust anchor: ca_intermediate.crt (never ca_root.crt).
+      # Pattern A for Python ssl: anchor on the public ca_root.crt — Python OTEL
+      # exporter goes through Python ssl (gate #58a evidence, 2026-04-28).
       OTEL_EXPORTER_OTLP_ENDPOINT: grpcs://otel-collector:4317
-      OTEL_EXPORTER_OTLP_CERTIFICATE: /run/secrets/ca_intermediate.crt
+      OTEL_EXPORTER_OTLP_CERTIFICATE: /run/secrets/ca_root.crt
       OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: /run/secrets/backoffice_client.crt
       OTEL_EXPORTER_OTLP_CLIENT_KEY: /run/secrets/backoffice_client.key
     volumes:
@@ -303,8 +306,9 @@ services:
       # surface). A dedicated yashigani-backoffice profile may ship later.
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
     healthcheck:
-      # mTLS — Pattern B: trust anchor is ca_intermediate.crt (root never in workloads).
-      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""]
+      # mTLS — Pattern A for Python ssl: trust anchor is the public ca_root.crt
+      # (Py 3.12/OpenSSL 3.0 strict-chain rejects intermediate-only — gate #58a).
+      test: ["CMD-SHELL", "python3 -c \"import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)\""]
       interval: 15s
       timeout: 5s
       retries: 5

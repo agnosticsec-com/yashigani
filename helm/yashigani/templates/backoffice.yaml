@@ -137,7 +137,10 @@ spec:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
             - name: YASHIGANI_DB_DSN
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_intermediate.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
+              # Pattern A for Python ssl: asyncpg consumes this DSN via Python
+              # ssl, not libpq binary — sslrootcert anchor is the public
+              # ca_root.crt (Py 3.12/OpenSSL 3.0 strict-chain — gate #58a/#3bc).
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
             {{- end }}
             - name: YASHIGANI_OPA_URL
               value: "http://yashigani-policy:8181"

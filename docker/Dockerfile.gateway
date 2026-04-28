@@ -88,9 +88,11 @@ EXPOSE 8080
 
 # Image-level healthcheck — talks through the mTLS port using the container's
 # own client cert (same material the service presents for inbound mTLS).
-# Pattern B: trust anchor is ca_intermediate.crt (never root in workloads).
+# Pattern A for Python ssl: trust anchor is the public ca_root.crt. Python
+# 3.12/OpenSSL 3.0 strict-chain validation rejects intermediate-only anchors
+# (gate #58a evidence, 2026-04-28). Private ca_root.key never enters workload.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)"
+    CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -101,12 +103,14 @@ ENV PYTHONUNBUFFERED=1 \
 # to present a cert signed by our internal CA. Certs land in /run/secrets via
 # a bind-mount configured by docker-compose.
 #   --ssl-cert-reqs=2  → ssl.CERT_REQUIRED (stdlib constant, mutual TLS)
-#   --ssl-ca-certs      → Pattern B: intermediate CA is the trust anchor (root never in workloads)
+#   --ssl-ca-certs     → Pattern A for Python ssl: anchor on the PUBLIC ca_root.crt.
+#                         uvicorn is Python ssl, so partial-chain rejection on
+#                         intermediate-only anchors applies (gate #58a evidence).
 CMD ["uvicorn", "yashigani.gateway.entrypoint:app", \
      "--host", "0.0.0.0", \
      "--port", "8080", \
      "--ssl-keyfile", "/run/secrets/gateway_client.key", \
      "--ssl-certfile", "/run/secrets/gateway_client.crt", \
-     "--ssl-ca-certs", "/run/secrets/ca_intermediate.crt", \
+     "--ssl-ca-certs", "/run/secrets/ca_root.crt", \
      "--ssl-cert-reqs", "2", \
      "--no-access-log"]

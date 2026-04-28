@@ -59,21 +59,24 @@ USER yashigani
 
 EXPOSE 8443
 
-# mTLS healthcheck — Pattern B: intermediate CA is the trust anchor (root never in workloads).
+# mTLS healthcheck — Pattern A for Python ssl: trust anchor is the PUBLIC
+# ca_root.crt. Python 3.12/OpenSSL 3.0 strict-chain validation rejects
+# intermediate-only anchors (gate #58a evidence, 2026-04-28).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_intermediate.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)"
+    CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     YASHIGANI_SERVICE_NAME=backoffice
 
 # Internal mTLS (v2.23.1) — mutual TLS terminated by uvicorn.
-# Pattern B: ca_intermediate.crt is the trust anchor — root never in workloads.
+# Pattern A for Python ssl: ca_root.crt is the trust anchor; private root key
+# never enters this image (root.key is host-only 0400).
 CMD ["uvicorn", "yashigani.backoffice.entrypoint:app", \
      "--host", "0.0.0.0", \
      "--port", "8443", \
      "--ssl-keyfile", "/run/secrets/backoffice_client.key", \
      "--ssl-certfile", "/run/secrets/backoffice_client.crt", \
-     "--ssl-ca-certs", "/run/secrets/ca_intermediate.crt", \
+     "--ssl-ca-certs", "/run/secrets/ca_root.crt", \
      "--ssl-cert-reqs", "2", \
      "--no-access-log"]
