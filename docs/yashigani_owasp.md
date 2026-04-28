@@ -40,7 +40,7 @@ This assessment targets **ASVS v5 Level 3**, the highest assurance tier intended
 
 ### Summary Coverage (ASVS v5 Level 3)
 
-**Automated pre-release gate:** `python3 scripts/owasp_prerelease_check.py` runs 398 checks (345 ASVS v5 all chapters + 38 API + 10 Agentic AI + 7 Infrastructure) with a **97.7% pass rate**.
+**Coverage scope:** OWASP ASVS v5 (all 17 chapters), OWASP API Security, OWASP Agentic AI / LLM Top 10, plus infrastructure controls. Per-control assessment with PASS / PARTIAL / FAIL / N/A verdicts and file:line evidence.
 
 | Verdict | Count | Percentage |
 |---|---|---|
@@ -866,7 +866,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 | Gap | ASVS Req | Verdict | Risk Level | Priority | Mitigation Type |
 |---|---|---|---|---|---|
-| Internal mTLS | V9.2.2 | FAIL | High | HIGH | Engineering (service mesh) |
+| Internal mTLS | V9.2.2 | PARTIAL | Medium | MEDIUM | Engineering (close OPA #54 + Ollama upstream TLS) |
 | Certificate pinning | V9.1.6 | FAIL | Medium | MEDIUM | Engineering |
 | Hardware attestation | V10.5.2 | FAIL | Medium | MEDIUM | Deployment (confidential computing) |
 | Memory zeroing | V8.2.3 | FAIL | Low-Med | LOW-MED | Engineering (C extension) or deployment |
@@ -964,7 +964,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Caddy header hygiene (strip Server, remove stale alt-svc) | ASVS V14.3.2, API9 | Reduces version fingerprinting on Shodan / banner-grab |
 | PCI-compliant password expiry profile (≤90 days) | ASVS V2.1.1, PCI-DSS 8.3.9 | Optional tighter expiry profile for PCI-scope deployments |
 | TOTP enrolment split provision/confirm | ASVS V2.5.4, V2.5.5 | Secret is never active without a confirmation round-trip; defeats provision-and-abandon attacks |
-| Auth-throttle operator self-visibility | ASVS V7.2.1 | Operators can see their own lockout status without bypassing the control |
+| Auth-throttle admin self-visibility | ASVS V7.2.1 | Authenticated admins can see their own + all throttled/blocked IPs at /admin → Security → Blocked IPs (backed by /auth/blocked-ips). Unauthenticated locked-out operator path (RFC 6585 Retry-After) tracked as v2.23.2 follow-up. |
 | Agent tier-limit returns 402 (was 500) with correct body | ASVS V14.2, API8 | Correct HTTP semantics; 500 no longer leaks that tier enforcement is a caught exception |
 | AGENT_REGISTERED audit events persisted | ASVS V7.1.1, V7.1.3 | Registration events land in audit log; previously fired only to in-memory channel |
 | `/.well-known/security.txt` (RFC 9116) | ASVS V1.14.1 | Coordinated-disclosure contact discoverable via standard path |
@@ -994,7 +994,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Self-service password reset (TOTP-verified) | ASVS V2.1.5, V2.1.6 | Users can reset their own password after TOTP verification |
 | Crypto inventory API + admin UI | ASVS V6.2.2, V1.4.1 | Complete inventory of all cryptographic algorithms in use, accessible via API and admin panel |
 | Podman SDK (podman-py) for container isolation | ASVS V14.2 | Native Podman API access for container management; macOS socket detection |
-| Pre-release gate: 398 OWASP checks (97.7% pass rate) | ASVS V1.6.1, V14.1 | Automated compliance validation: 345 ASVS v5 + 38 API + 10 Agentic AI + 7 Infra |
+| Pre-release OWASP gate | ASVS V1.6.1, V14.1 | Pre-release compliance review covering OWASP ASVS v5, API Security, and Agentic AI controls |
 | 523 unit + 25 e2e tests | ASVS V1.6.1, V14.1 | Expanded test coverage including all v2.23 security controls |
 
 #### v0.7.0 / v0.7.1 Changes
