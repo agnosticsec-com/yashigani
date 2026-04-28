@@ -159,13 +159,16 @@ async def lifespan(app: FastAPI):
     if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
         try:
             from yashigani.db import create_pool, get_pool, run_migrations
+            from yashigani.db import _BOOTSTRAP_ADVISORY_LOCK_KEY
             from yashigani.inference import InferencePayloadLogger, AnomalyDetector
             from yashigani.backoffice.state import backoffice_state
 
             # v2.23.1 P0-2: alembic must run BEFORE the pool opens so the
             # admin_accounts + used_totp_codes tables exist when the auth
             # service first reads/writes. run_migrations() is sync and uses
-            # its own psycopg2 connection, so it is safe here.
+            # its own psycopg2 connection. Multi-replica safety: alembic
+            # acquires a postgres advisory lock internally — see
+            # yashigani/db/__init__.py:run_migrations() (Captain #58c #3bv).
             run_migrations()
 
             await create_pool()
@@ -175,10 +178,28 @@ async def lifespan(app: FastAPI):
             # zero admins. Previously the guard was `if not auth_service._accounts`
             # (in-memory dict); now we consult the durable store so restarts
             # never clobber rotated passwords / re-enrolled TOTP.
+            #
+            # K8s multi-replica race: replicas 1 and 2 both check
+            # total_admin_count() concurrently before either commits the
+            # admin1 row -> both pass the != 0 guard -> second insert hits a
+            # unique-constraint violation and the pod CrashLoopBackOff's.
+            # Hold the same advisory lock as run_migrations() across the
+            # bootstrap so replica 2 only enters the bootstrap block AFTER
+            # replica 1 has committed the admin rows; replica 2 then sees
+            # count != 0 and skips. Captain #58c #3bv evidence (2026-04-29).
             from yashigani.auth.pg_auth import PostgresLocalAuthService
             auth_service = PostgresLocalAuthService(pool=get_pool())
             backoffice_state.auth_service = auth_service
-            await _bootstrap_admin_accounts(auth_service, backoffice_state)
+            async with get_pool().acquire() as _bootstrap_conn:
+                await _bootstrap_conn.execute(
+                    "SELECT pg_advisory_lock($1)", _BOOTSTRAP_ADVISORY_LOCK_KEY
+                )
+                try:
+                    await _bootstrap_admin_accounts(auth_service, backoffice_state)
+                finally:
+                    await _bootstrap_conn.execute(
+                        "SELECT pg_advisory_unlock($1)", _BOOTSTRAP_ADVISORY_LOCK_KEY
+                    )
 
             inference_logger = InferencePayloadLogger()
             inference_logger.start()
