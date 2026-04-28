@@ -82,6 +82,8 @@ services:
     dns_search: ["."]
     image: docker.io/library/caddy:2-alpine
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_CADDY_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_CADDY_CPU_LIMIT:-0.5}
     ports:
       - "${YASHIGANI_HTTP_PORT:-80}:80"
       - "${YASHIGANI_HTTPS_PORT:-443}:443"
@@ -133,6 +135,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.gateway
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_GATEWAY_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_GATEWAY_CPU_LIMIT:-1.0}
     environment:
       <<: *common-env
       YASHIGANI_SERVICE_NAME: gateway
@@ -222,6 +226,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.backoffice
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_BACKOFFICE_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_BACKOFFICE_CPU_LIMIT:-1.0}
     environment:
       <<: *common-env
       YASHIGANI_SERVICE_NAME: backoffice
@@ -320,6 +326,8 @@ services:
     dns_search: ["."]
     image: ghcr.io/open-webui/open-webui:v0.9.1
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_OPENWEBUI_MEM_LIMIT:-2048m}
+    cpus: ${YASHIGANI_OPENWEBUI_CPU_LIMIT:-1.0}
     environment:
       # Disable Open WebUI's own auth — Caddy/Yashigani handles identity
       WEBUI_AUTH: "false"
@@ -364,6 +372,8 @@ services:
     dns_search: ["."]
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_BUDGET_REDIS_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_BUDGET_REDIS_CPU_LIMIT:-0.25}
     entrypoint: ["sh", "-c"]
     # v2.23.1 — TLS-only port 6380 with client-cert auth; plaintext disabled.
     # trust anchor: ca_root.crt — libssl strict-mode (error:0A000086 with intermediate)
@@ -403,6 +413,8 @@ services:
     dns_search: ["."]
     image: docker.io/openpolicyagent/opa:1.15.1
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_POLICY_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_POLICY_CPU_LIMIT:-0.25}
     # v2.23.1 NOTE: OPA retains plaintext HTTP on the internal bridge network
     # pending the mTLS migration of the gateway's ~6 direct httpx client
     # call sites to OPA (proxy.py, agent_router.py, openai_router.py).
@@ -435,6 +447,8 @@ services:
     dns_search: ["."]
     image: docker.io/library/redis:7-alpine
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_REDIS_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_REDIS_CPU_LIMIT:-0.25}
     # v2.23.1 — plaintext 6379 disabled (port 0), TLS-only on 6380 with
     # client-cert auth (tls-auth-clients yes). Clients connect via rediss://.
     # trust anchor: ca_root.crt — libssl strict-mode (error:0A000086 with intermediate)
@@ -477,6 +491,8 @@ services:
     dns_search: ["."]
     image: docker.io/ollama/ollama:0.6.2
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_OLLAMA_MEM_LIMIT:-4096m}
+    cpus: ${YASHIGANI_OLLAMA_CPU_LIMIT:-2.0}
     volumes:
       - ollama_data:/root/.ollama
     environment:
@@ -505,6 +521,8 @@ services:
     dns_search: ["."]
     image: docker.io/ollama/ollama:0.6.2
     restart: on-failure:3
+    mem_limit: ${YASHIGANI_OLLAMA_INIT_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_OLLAMA_INIT_CPU_LIMIT:-0.25}
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
@@ -540,6 +558,8 @@ services:
     dns_search: ["."]
     image: docker.io/prom/prometheus:v3.2.1
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_PROMETHEUS_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_PROMETHEUS_CPU_LIMIT:-0.5}
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -571,6 +591,8 @@ services:
     dns_search: ["."]
     image: docker.io/grafana/grafana:11.5.2
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_GRAFANA_MEM_LIMIT:-512m}
+    cpus: ${YASHIGANI_GRAFANA_CPU_LIMIT:-0.25}
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-grafana-admin}
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
@@ -605,6 +627,8 @@ services:
     dns_search: ["."]
     image: docker.io/pgvector/pgvector:pg16
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_POSTGRES_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_POSTGRES_CPU_LIMIT:-1.0}
     environment:
       POSTGRES_DB: yashigani
       POSTGRES_USER: yashigani_app
@@ -636,6 +660,8 @@ services:
   pgbouncer:
     image: docker.io/edoburu/pgbouncer:v1.23.1-p0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_PGBOUNCER_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_PGBOUNCER_CPU_LIMIT:-0.25}
     # Retro #3ah (v2.23.1): c-ares fail-fatal on host-leaked search domains.
     # Originator of the dns_search hardening — see top-of-file block for
     # the full rationale now that every service inherits the same setting.
@@ -679,6 +705,8 @@ services:
     dns_search: ["."]
     image: docker.io/prom/alertmanager:v0.27.0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_ALERTMANAGER_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_ALERTMANAGER_CPU_LIMIT:-0.25}
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
@@ -704,6 +732,8 @@ services:
     dns_search: ["."]
     image: docker.io/grafana/loki:3.0.0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_LOKI_MEM_LIMIT:-512m}
+    cpus: ${YASHIGANI_LOKI_CPU_LIMIT:-0.25}
     command: -config.file=/etc/loki/loki.yml
     volumes:
       - ../config/loki/loki.yml:/etc/loki/loki.yml:ro
@@ -723,6 +753,8 @@ services:
     dns_search: ["."]
     image: docker.io/grafana/promtail:3.0.0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_PROMTAIL_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_PROMTAIL_CPU_LIMIT:-0.25}
     command: -config.file=/etc/promtail/promtail.yml
     volumes:
       - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
@@ -750,6 +782,8 @@ services:
     dns_search: ["."]
     image: docker.io/otel/opentelemetry-collector-contrib:0.100.0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_OTEL_COLLECTOR_MEM_LIMIT:-512m}
+    cpus: ${YASHIGANI_OTEL_COLLECTOR_CPU_LIMIT:-0.5}
     command: ["--config=/etc/otel/otel-collector.yml"]
     volumes:
       - ../config/otel/otel-collector.yml:/etc/otel/otel-collector.yml:ro
@@ -773,6 +807,8 @@ services:
     dns_search: ["."]
     image: docker.io/jaegertracing/all-in-one:1.57
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_JAEGER_MEM_LIMIT:-512m}
+    cpus: ${YASHIGANI_JAEGER_CPU_LIMIT:-0.5}
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
       SPAN_STORAGE_TYPE: memory   # dev/demo only — production must use persistent storage (e.g. Elasticsearch or Cassandra)
@@ -794,6 +830,8 @@ services:
     dns_search: ["."]
     image: quay.io/keycloak/keycloak:26.0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_KEYCLOAK_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_KEYCLOAK_CPU_LIMIT:-1.0}
     command:
       - "start-dev"
       - "--import-realm"
@@ -830,6 +868,8 @@ services:
     dns_search: ["."]
     image: docker.io/hashicorp/vault:1.16
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_VAULT_MEM_LIMIT:-512m}
+    cpus: ${YASHIGANI_VAULT_CPU_LIMIT:-0.5}
     cap_add:
       - IPC_LOCK
     environment:
@@ -868,6 +908,8 @@ services:
     dns_search: ["."]
     image: docker.io/langflowai/langflow:1.9.0
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_LANGFLOW_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_LANGFLOW_CPU_LIMIT:-1.0}
     environment:
       # Route all LLM calls through Yashigani gateway (OpenAI-compatible)
       OPENAI_API_BASE: http://gateway:8080/v1
@@ -903,6 +945,8 @@ services:
     dns_search: ["."]
     image: docker.io/letta/letta:0.16.7
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_LETTA_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_LETTA_CPU_LIMIT:-1.0}
     environment:
       # Route LLM calls through Yashigani gateway
       OPENAI_API_BASE: http://gateway:8080/v1
@@ -945,6 +989,8 @@ services:
     dns_search: ["."]
     image: ghcr.io/openclaw/openclaw:2026.3.1
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_OPENCLAW_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_OPENCLAW_CPU_LIMIT:-1.0}
     ports:
       # YSG-RISK-006 #3aw: loopback-bind only. OpenClaw is behind the gateway;
       # external clients must never bypass the gateway to reach OpenClaw directly.
@@ -991,6 +1037,8 @@ services:
     dns_search: ["."]
     image: docker.io/wazuh/wazuh-manager:4.9.2
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
     environment:
       INDEXER_URL: https://wazuh-indexer:9200
       INDEXER_USERNAME: admin
@@ -1028,6 +1076,8 @@ services:
     dns_search: ["."]
     image: docker.io/wazuh/wazuh-indexer:4.9.2
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
     environment:
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     volumes:
@@ -1047,6 +1097,8 @@ services:
     dns_search: ["."]
     image: docker.io/wazuh/wazuh-dashboard:4.9.2
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}
     environment:
       INDEXER_USERNAME: admin
       INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:-}
@@ -1084,6 +1136,8 @@ services:
     dns_search: ["."]
     image: docker.io/smallstep/step-ca:0.30.2
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_STEP_CA_MEM_LIMIT:-256m}
+    cpus: ${YASHIGANI_STEP_CA_CPU_LIMIT:-0.25}
     environment:
       DOCKER_STEPCA_INIT_NAME: "Yashigani Internal CA"
       DOCKER_STEPCA_INIT_DNS_NAMES: "step-ca,localhost"
