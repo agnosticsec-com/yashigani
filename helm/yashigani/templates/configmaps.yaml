@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-27T15:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-28T00:00:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -240,7 +240,18 @@ data:
           {{- end }}
         }
       }
+      # V10.3.5 sender-constrained tokens: verify client cert if presented.
       handle /v1/* {
+        {{- if .Values.mtls.enabled }}
+        tls {
+          client_auth {
+            mode verify_if_given
+            trust_pool file /run/secrets/ca_intermediate.crt
+          }
+        }
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        {{- end }}
         reverse_proxy https://yashigani-gateway:8080 {
           {{- if .Values.mtls.enabled }}
           import internal-mtls-gateway
@@ -248,6 +259,16 @@ data:
         }
       }
       handle /agents/* {
+        {{- if .Values.mtls.enabled }}
+        tls {
+          client_auth {
+            mode verify_if_given
+            trust_pool file /run/secrets/ca_intermediate.crt
+          }
+        }
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        {{- end }}
         reverse_proxy https://yashigani-gateway:8080 {
           {{- if .Values.mtls.enabled }}
           import internal-mtls-gateway

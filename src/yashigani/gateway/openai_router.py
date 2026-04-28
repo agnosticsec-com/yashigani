@@ -1059,7 +1059,31 @@ def _resolve_identity(request: Request) -> Optional[dict]:
             return {"identity_id": "internal", "status": "active", "kind": "service",
                     "groups": [], "allowed_models": [], "sensitivity_ceiling": "RESTRICTED"}
         if key:
-            return _state.identity_registry.get_by_api_key(key)
+            identity = _state.identity_registry.get_by_api_key(key)
+            if identity is None:
+                return None
+            # V10.3.5 — sender-constrained token check.
+            # When the identity has a bound_spiffe_uri set, the bearer key is
+            # SPIFFE-URI-bound: the request MUST arrive with a matching
+            # X-SPIFFE-ID header (set by Caddy from the client cert's URI SAN).
+            # Caddy strips any inbound X-SPIFFE-ID before setting its own value
+            # (see Caddyfile comment at :8444 block), so this header is
+            # trustworthy when it arrives at the gateway.
+            # If no binding is set (empty string) the check is skipped —
+            # community agents and Open WebUI internal traffic are unaffected.
+            bound_uri = identity.get("bound_spiffe_uri", "")
+            if bound_uri:
+                presented_uri = request.headers.get("X-SPIFFE-ID", "")
+                if presented_uri != bound_uri:
+                    # Fail-closed: stolen/replayed token without matching cert.
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "V10.3.5: SPIFFE-URI mismatch for identity %s — "
+                        "bound=%r presented=%r — rejecting",
+                        identity.get("identity_id"), bound_uri, presented_uri,
+                    )
+                    return None
+            return identity
 
     return None
 

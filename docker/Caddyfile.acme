@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
-# Last updated: 2026-04-27T00:00:00+00:00
+# Last updated: 2026-04-28T00:00:00+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -122,7 +122,22 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Agent routing — /agents/* ──────────────────────────────────────────
+    # V10.3.5 sender-constrained tokens: verify client cert if presented.
+    # mode=verify_if_given: TLS handshake succeeds with or without a client
+    # cert.  When a cert IS presented, Caddy sets X-SPIFFE-ID from its URI SAN
+    # so the gateway can enforce the bound_spiffe_uri binding.  Community agents
+    # (no binding set) continue to work without a cert.  Paid-tier agents with
+    # a bound_spiffe_uri MUST present the matching cert or the gateway returns 401.
     handle /agents/* {
+        tls {
+            client_auth {
+                mode verify_if_given
+                trust_pool file /run/secrets/ca_intermediate.crt
+            }
+        }
+        # Spoof-prevention: strip any inbound X-SPIFFE-ID; only Caddy may set it.
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
             header_up X-Forwarded-Proto https
@@ -131,7 +146,16 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
+    # Same V10.3.5 optional mTLS gate as /agents/*.
     handle /v1/* {
+        tls {
+            client_auth {
+                mode verify_if_given
+                trust_pool file /run/secrets/ca_intermediate.crt
+            }
+        }
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
             header_up X-Forwarded-Proto https

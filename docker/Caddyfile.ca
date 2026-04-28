@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (CA-signed certificate mode)
-# Last updated: 2026-04-27T00:00:00+00:00
+# Last updated: 2026-04-28T00:00:00+01:00
 # Use this for enterprise / on-prem deployments with an internal CA.
 #
 # Before starting:
@@ -95,7 +95,16 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Agent routing — /agents/* ──────────────────────────────────────────
+    # V10.3.5 sender-constrained tokens: verify client cert if presented.
     handle /agents/* {
+        tls {
+            client_auth {
+                mode verify_if_given
+                trust_pool file /run/secrets/ca_intermediate.crt
+            }
+        }
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
             header_up X-Forwarded-Proto https
@@ -104,7 +113,16 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
+    # V10.3.5 same optional mTLS gate as /agents/*.
     handle /v1/* {
+        tls {
+            client_auth {
+                mode verify_if_given
+                trust_pool file /run/secrets/ca_intermediate.crt
+            }
+        }
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
             header_up X-Forwarded-Proto https
