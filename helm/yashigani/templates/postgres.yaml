@@ -26,7 +26,20 @@ spec:
       # /run/secrets mount collision — see redis.yaml note.
       automountServiceAccountToken: false
       securityContext:
-        fsGroup: 999
+        # Captain #58c #3bt evidence (2026-04-29): postgres:16-alpine runs as
+        # UID/GID 70 (Alpine convention). The previous fsGroup: 999 was
+        # carried over from when the image was the Debian-based postgres
+        # (UID/GID 999). With Alpine, mounted Secret volumes (default mode
+        # 0440 root:fsGroup) ended up as `r--r----- root:ping(999)`, and
+        # postgres dropped to UID 70 GID 70 before initdb scripts ran —
+        # neither in root(0) nor in ping(999), so /run/secrets/* read as
+        # `Permission denied`, 05-enable-ssl.sh exited non-zero, postgres
+        # restarted, second start saw partial PGDATA → init scripts skipped
+        # → ssl=off → pgbouncer→postgres handshake failed.
+        # fsGroup: 70 chowns Secret + PVC volumes to GID 70 (postgres),
+        # giving the postgres user read access via group membership without
+        # broadening permissions beyond the pod.
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
