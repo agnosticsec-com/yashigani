@@ -318,6 +318,27 @@ def create_backoffice_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE backoffice leg (Lu F-1B
+    # EX-231-10, 2026-04-29). Extracts the TLS peer cert URI SAN from the ASGI
+    # handshake scope and injects it as X-SPIFFE-ID-Peer-Cert. This is a
+    # server-controlled header that cannot be forged by the client.
+    #
+    # Why backoffice needs this: backoffice listens on 0.0.0.0:8443 with
+    # `--ssl-cert-reqs 2` (mutual TLS required). Any internal-mesh peer holding
+    # a CA-minted client cert can connect direct to https://backoffice:8443/
+    # internal/metrics, present its own cert, and forge `X-SPIFFE-ID:
+    # spiffe://yashigani.internal/prometheus` to bypass the SPIFFE allowlist
+    # on Prometheus metrics. Same bypass shape as the gateway leg that was
+    # closed at a054877 — the fix here is the same middleware on the
+    # backoffice ASGI app, written deliberately as the OUTERMOST middleware
+    # so it sets the trustworthy header BEFORE any application code reads
+    # x-spiffe-id (auth/spiffe.py:73).
+    #
+    # Must run outermost (added last = executed first in starlette middleware
+    # stack), matching gateway/entrypoint.py:423 placement.
+    from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+    app.add_middleware(SpiffePeerCertMiddleware)
+
     # CORS: backoffice serves its own frontend — no cross-origin needed
     app.add_middleware(
         CORSMiddleware,

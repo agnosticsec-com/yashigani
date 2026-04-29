@@ -72,7 +72,26 @@ _CACHE: Optional[Tuple[float, dict[str, frozenset[str]]]] = None
 _CACHE_LOCK = Lock()
 
 _DEFAULT_MANIFEST_PATH = "/etc/yashigani/service_identities.yaml"
-_HEADER_NAME = "x-spiffe-id"  # FastAPI lower-cases headers on lookup
+
+# Two header names — both lower-case (FastAPI lowercases on lookup):
+#
+# `x-spiffe-id-peer-cert` is the SERVER-CONTROLLED header injected by
+# `SpiffePeerCertMiddleware` from the validated TLS peer cert URI SAN.
+# It cannot be forged by the HTTP client. Used on the direct-mesh path
+# (peer connects straight to gateway:8080 / backoffice:8443).
+#
+# `x-spiffe-id` is the CADDY-SET header on the Caddy-proxied path
+# (Caddy validates the peer cert and re-emits the URI SAN here).
+# Caddy strips any inbound `x-spiffe-id` before setting its own value,
+# so on the Caddy-proxied path this is also trustworthy.
+#
+# Resolution rule (same as gateway/openai_router.py:_resolve_identity at
+# `a054877` — Lu F-1B EX-231-10 closure 2026-04-29 for the backoffice leg):
+# prefer the peer-cert header when present, fall back to the Caddy-set
+# header. This closes the LF-SPIFFE-FORGE bypass uniformly across both
+# `/internal/metrics` consumers (gateway proxy.py:166 + backoffice app.py:488).
+_HEADER_NAME_PEER_CERT = "x-spiffe-id-peer-cert"
+_HEADER_NAME = "x-spiffe-id"
 _DEFAULT_TTL_SECONDS = 60
 
 # LF-SPIFFE-RETAIN: maximum time a stale ACL cache is retained after a
@@ -246,7 +265,13 @@ def require_spiffe_id(path: str) -> Callable[[Request], str]:
                 detail="no_acl_for_path",
             )
 
-        caller = request.headers.get(_HEADER_NAME)
+        # Prefer the server-controlled peer-cert header (direct-mesh path,
+        # set by SpiffePeerCertMiddleware from the validated TLS handshake).
+        # Fall back to the Caddy-set header (Caddy-proxied path; Caddy strips
+        # inbound x-spiffe-id and re-sets from {http.request.tls.client.san.uris.0}).
+        # Lu F-1B EX-231-10 (2026-04-29).
+        caller = request.headers.get(_HEADER_NAME_PEER_CERT) \
+                 or request.headers.get(_HEADER_NAME)
         if not caller:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
