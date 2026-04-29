@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-29T16:04:58+01:00 (EX-231-10 Layer B: caddy_internal_hmac generation; Prometheus cert perms fix)
+# last-updated: 2026-04-29T16:56:34+01:00 (fix #58a-chown: bifurcate _pki_chown_client_keys by YSG_RUNTIME)
 set -euo pipefail
 
 # =============================================================================
@@ -3624,72 +3624,162 @@ _pki_run_issuer() {
 # *_client.crt and ca_*.crt files. Certificates are public material
 # (distributed to peers for verification) and require no secrecy; 0644 is
 # correct. Private keys remain 0600, chowned to the container's UID.
-# Last updated: 2026-04-26T18:30:00+00:00
+#
+# fix #58a-chown (2026-04-29): bifurcate chown strategy by YSG_RUNTIME.
+#
+#   Previous bug: _chown_mode was set to "unshare" purely on `id -u != 0`.
+#   When YSG_RUNTIME=docker AND Podman is also installed AND the caller is
+#   non-root, `podman unshare chown` maps service UIDs (e.g. 70) through
+#   Podman's /etc/subuid range (typically 165536+70 = 165605). Docker
+#   containers run their service as the bare UID (70), so the host file at
+#   165605 is inaccessible → TLS key read fails → pgbouncer/postgres/redis
+#   crash at startup → full stack cascades. (Laura EX-231-10 AUDIT-NEEDED.)
+#
+#   Correct per-runtime strategy:
+#     k8s    → skip entirely; mtls-bootstrap-job.yaml handles ownership.
+#     podman + root    → direct chown (root can chown to any UID).
+#     podman + non-root → podman unshare chown (correct namespace mapping).
+#     docker (root or non-root) → docker run --rm with alpine:3 image;
+#       the Docker daemon runs as root and can chown inside the container to
+#       any UID. This works for both root and non-root callers.
+#       Image pinned to digest to prevent supply-chain substitution.
+#       alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#       (amd64/arm64 manifest list — 2026-04-29; rotate on next release cycle)
+#
+#   Error discipline (SOP 1 fail-closed): any chown failure is log_error +
+#   return 1. The previous log_warn + continue masked a 6-day live bug.
+#
+# Last updated: 2026-04-29T16:56:34+01:00
 # ---------------------------------------------------------------------------
 _pki_chown_client_keys() {
-  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" || "${YSG_RUNTIME:-}" == "docker" ]]; then
-    local _uid_mapped_services=(
-      "gateway:1001"
-      "backoffice:1001"
-      "redis:999"
-      "budget-redis:999"
-      "pgbouncer:70"
-      # postgres (UID 999) needs to read its own key inside the read-only
-      # /run/secrets bind-mount so that 05-enable-ssl.sh can `install` it
-      # into PGDATA. Without this chown the `install` call fails with
-      # "Permission denied" and postgres starts with ssl=off, causing
-      # pgbouncer verify-ca to refuse the plaintext upstream.
-      # Retro #3ad — v2.23.1.
-      "postgres:999"
-    )
-    local _chown_mode="direct"
-    if [[ "$(id -u)" != "0" ]]; then
-      _chown_mode="unshare"
-    fi
-    log_info "Chown'ing client keys to container UIDs (mode: ${_chown_mode})"
-    for _svc_uid in "${_uid_mapped_services[@]}"; do
-      local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
-      local _keyfile="${WORK_DIR}/docker/secrets/${_svc}_client.key"
-      if [[ -f "$_keyfile" ]]; then
-        if [[ "$_chown_mode" == "direct" ]]; then
-          chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
-            || log_warn "chown failed on ${_svc} key — continuing"
-        else
-          podman unshare chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
-            || log_warn "podman unshare chown failed on ${_svc} key — continuing"
+  local _effective_runtime="${YSG_RUNTIME:-}"
+  # Normalise: YSG_PODMAN_RUNTIME=true overrides YSG_RUNTIME for legacy callers.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    _effective_runtime="podman"
+  fi
+
+  # K8s: ownership is handled by mtls-bootstrap-job.yaml initContainer.
+  # Nothing to do here — skip silently.
+  if [[ "$_effective_runtime" == "k8s" ]]; then
+    log_info "_pki_chown_client_keys: K8s runtime — skipping (mtls-bootstrap-job owns this step)"
+    return 0
+  fi
+
+  # Only act for docker and podman runtimes.
+  if [[ "$_effective_runtime" != "podman" && "$_effective_runtime" != "docker" ]]; then
+    log_info "_pki_chown_client_keys: unknown runtime '${_effective_runtime}' — skipping"
+    return 0
+  fi
+
+  local _uid_mapped_services=(
+    "gateway:1001"
+    "backoffice:1001"
+    "redis:999"
+    "budget-redis:999"
+    "pgbouncer:70"
+    # postgres (UID 999) needs to read its own key inside the read-only
+    # /run/secrets bind-mount so that 05-enable-ssl.sh can `install` it
+    # into PGDATA. Without this chown the `install` call fails with
+    # "Permission denied" and postgres starts with ssl=off, causing
+    # pgbouncer verify-ca to refuse the plaintext upstream.
+    # Retro #3ad — v2.23.1.
+    "postgres:999"
+  )
+
+  # Determine chown strategy for this runtime.
+  # "direct"  — plain chown(1); works when caller is root or runtime is Docker
+  #             (Docker daemon runs as root and can map any UID).
+  # "unshare" — podman unshare chown; maps UIDs through the user-namespace
+  #             for the rootless Podman caller. MUST NOT be used on the Docker
+  #             path even when Podman is co-installed.
+  # "docker"  — ephemeral docker run --rm; mounts the secrets dir, runs chown
+  #             inside the container where Docker daemon provides root privs.
+  #             Works regardless of whether the host caller is root or not.
+  local _chown_mode
+  if [[ "$_effective_runtime" == "docker" ]]; then
+    _chown_mode="docker"
+  elif [[ "$(id -u)" == "0" ]]; then
+    _chown_mode="direct"
+  else
+    # Podman non-root → user-namespace-aware chown
+    _chown_mode="unshare"
+  fi
+
+  log_info "Chown'ing client keys to container UIDs (runtime: ${_effective_runtime}, mode: ${_chown_mode})"
+
+  # Alpine:3 image pinned to digest (manifest list — covers amd64+arm64).
+  # digest captured 2026-04-29; rotate on next release cycle via:
+  #   docker pull alpine:3 && docker inspect alpine:3 --format='{{index .RepoDigests 0}}'
+  local _alpine_image="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Helper: chown a single file to <uid>:<uid> using the active strategy.
+  # On error: log_error + propagate non-zero (fail-closed, SOP 1).
+  _do_chown() {
+    local _uid="$1" _file="$2" _label="$3"
+    case "$_chown_mode" in
+      direct)
+        if ! chown "${_uid}:${_uid}" "$_file"; then
+          log_error "chown ${_uid}:${_uid} failed on ${_label} — aborting (fix file ownership manually)"
+          return 1
         fi
-      fi
-    done
+        ;;
+      unshare)
+        if ! podman unshare chown "${_uid}:${_uid}" "$_file"; then
+          log_error "podman unshare chown ${_uid}:${_uid} failed on ${_label} — aborting"
+          return 1
+        fi
+        ;;
+      docker)
+        # Bind-mount the secrets dir into a minimal container; chown the
+        # specific file path relative to the mount root /s.
+        # The container is rm'd immediately; no persistent state.
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        if ! docker run --rm \
+               --volume "${_secrets_dir}:/s:rw" \
+               "$_alpine_image" \
+               chown "${_uid}:${_uid}" "/s/${_rel_file}"; then
+          log_error "docker run chown ${_uid}:${_uid} failed on ${_label} — aborting"
+          return 1
+        fi
+        ;;
+    esac
+    return 0
+  }
 
-    # Chmod all certificate files to 0644. Certs are public material and must
-    # be readable by every container that verifies peer identity (pgbouncer,
-    # gateway, backoffice, postgres, redis, etc.). Keys remain 0600.
-    log_info "Chmod'ing client certs + CA certs to 0644 (public material)"
-    local _secrets_dir="${WORK_DIR}/docker/secrets"
-    find "${_secrets_dir}" -maxdepth 1 -type f \
-      \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
-      -exec chmod 0644 {} \; 2>/dev/null || true
+  for _svc_uid in "${_uid_mapped_services[@]}"; do
+    local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
+    local _keyfile="${_secrets_dir}/${_svc}_client.key"
+    if [[ -f "$_keyfile" ]]; then
+      _do_chown "${_uid}" "$_keyfile" "${_svc}_client.key" || return 1
+    fi
+  done
 
-    # Laura bonus finding (EX-231-10 closure): Prometheus container runs as
-    # uid 65534 (nobody). The secrets dir is owned by uid 1001, mode drwxr-x--x
-    # (traversable by others via o+x). Prometheus needs to read its own
-    # prometheus_client.{crt,key} for SPIFFE-gated /internal/metrics scrapes.
-    # Fix: chown prometheus_client.{crt,key} to 1001:1001, chmod key to 0640.
-    # Prometheus gets group_add: ["1001"] in docker-compose.yml so GID 1001
-    # membership grants read access to the 0640 key. The cert is already 0644
-    # (set above). This avoids world-readable key material.
-    log_info "Setting prometheus_client.key to 0640 (group 1001 — Laura EX-231-10 fix)"
-    local _prom_key="${_secrets_dir}/prometheus_client.key"
-    if [[ -f "$_prom_key" ]]; then
-      if [[ "$_chown_mode" == "direct" ]]; then
-        chown 1001:1001 "$_prom_key" 2>/dev/null \
-          || log_warn "chown failed on prometheus_client.key — continuing"
-        chmod 0640 "$_prom_key" 2>/dev/null || true
-      else
-        podman unshare chown 1001:1001 "$_prom_key" 2>/dev/null \
-          || log_warn "podman unshare chown failed on prometheus_client.key — continuing"
-        podman unshare chmod 0640 "$_prom_key" 2>/dev/null || true
-      fi
+  # Chmod all certificate files to 0644. Certs are public material and must
+  # be readable by every container that verifies peer identity (pgbouncer,
+  # gateway, backoffice, postgres, redis, etc.). Keys remain 0600.
+  # This find+chmod is runtime-agnostic — it runs as the host caller and only
+  # changes mode bits (not ownership), so it works for both root and non-root.
+  log_info "Chmod'ing client certs + CA certs to 0644 (public material)"
+  find "${_secrets_dir}" -maxdepth 1 -type f \
+    \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
+    -exec chmod 0644 {} \; 2>/dev/null || true
+
+  # Laura bonus finding (EX-231-10 closure): Prometheus container runs as
+  # uid 65534 (nobody). The secrets dir is owned by uid 1001, mode drwxr-x--x
+  # (traversable by others via o+x). Prometheus needs to read its own
+  # prometheus_client.{crt,key} for SPIFFE-gated /internal/metrics scrapes.
+  # Fix: chown prometheus_client.key to 1001:1001, chmod to 0640.
+  # Prometheus gets group_add: ["1001"] in docker-compose.yml so GID 1001
+  # membership grants read access to the 0640 key.
+  log_info "Setting prometheus_client.key to 0640 (group 1001 — Laura EX-231-10 fix)"
+  local _prom_key="${_secrets_dir}/prometheus_client.key"
+  if [[ -f "$_prom_key" ]]; then
+    _do_chown "1001" "$_prom_key" "prometheus_client.key" || return 1
+    # chmod 0640 is runtime-agnostic (mode bits only, no UID mapping needed).
+    if ! chmod 0640 "$_prom_key"; then
+      log_error "chmod 0640 failed on prometheus_client.key"
+      return 1
     fi
   fi
 }
