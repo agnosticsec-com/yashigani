@@ -197,6 +197,16 @@ AI Agent / Human (response)
 | **Wazuh SIEM** | Full stack (manager + indexer + dashboard), optional compose profile (`--wazuh`) |
 | **Optional ACME runtime CA (Smallstep)** | step-ca compose service for runtime ACME cert management; opt-in via `--with-internal-ca`. Not required for default-on mTLS — the in-tree PKI issuer handles install-time cert generation. |
 
+### 3.2.1 Network Isolation (EX-231-10 — v2.23.1)
+
+**Caddy is the sole ingress to backoffice and gateway.** No peer in the mesh reaches `:8443` or `:8080` directly.
+
+**Compose:** four networks enforce this posture — `edge` (Caddy + host ports), `caddy_internal` (Caddy + gateway + backoffice; the only network where their listeners exist), `data` (backoffice/gateway outbound + all data deps), and `obs` (prometheus/grafana/loki/alertmanager/otel-collector/jaeger). Services on `data` or `obs` that do not share `caddy_internal` cannot resolve gateway/backoffice by name (Docker DNS scopes to shared networks), and Docker bridge L2 segmentation removes the ARP reachability path.
+
+**Kubernetes:** `NetworkPolicy` resources enforce this at the kernel level. The `allow-backoffice-ingress` and `allow-gateway-ingress` policies admit only `yashigani-caddy` pods (plus nginx-ingress when `tlsMode=nginx`). Prometheus scrapes go exclusively through Caddy's SPIFFE-gated internal metrics listeners (`:8444`/`:8445`) — direct pod scrape egress is only emitted when those listeners are explicitly disabled.
+
+**Belt-and-braces:** application-layer mTLS + SPIFFE middleware remains active on both listeners as a second layer of defence.
+
 ### 3.3 Identity and Routing
 
 Yashigani v2.0 introduces a unified identity model: every entity — human or service — is an identity with a `kind` field. There are no separate user and agent stores. The same governance, budget enforcement, RBAC, and audit trail apply to all identities regardless of kind. Humans carry optional IdP federation metadata; services carry optional upstream URL, container configuration, system prompt, and capability declarations. Both are managed through the same Web UI and API.

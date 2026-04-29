@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-28T22:00:00+01:00
+# Last updated: 2026-04-29T14:30:00+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -121,9 +121,17 @@ services:
     # forward_auth — those services now bind-mount the internal CA for
     # their own mTLS identity, and Caddy waits for them via upstream
     # retries, not compose ordering.
+    #
+    # EX-231-10 network isolation (2026-04-29):
+    # Caddy is the SOLE ingress. It joins:
+    #   edge          — host port mapping (80/443)
+    #   caddy_internal — proxy to backoffice:8443 + gateway:8080
+    #   obs           — proxy /admin/grafana, /admin/prometheus, /admin/jaeger
+    # Caddy does NOT join `data` — no reason to talk to postgres/redis/OPA.
     networks:
-      - external
-      - internal
+      - edge
+      - caddy_internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # Gateway — MCP reverse proxy (data plane)
@@ -215,8 +223,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # EX-231-10: gateway joins caddy_internal (Caddy→gateway:8080) AND data
+    # (gateway→redis, policy, ollama, pgbouncer outbound).
+    # Does NOT join obs or edge.
     networks:
-      - internal
+      - caddy_internal
+      - data
 
   # ---------------------------------------------------------------------------
   # Backoffice — Admin control plane (generates first-run credentials)
@@ -318,8 +330,12 @@ services:
         condition: service_healthy
       pgbouncer:
         condition: service_healthy
+    # EX-231-10: backoffice joins caddy_internal (Caddy→backoffice:8443) AND
+    # data (backoffice→redis, policy, ollama, pgbouncer outbound).
+    # Does NOT join obs or edge.
     networks:
-      - internal
+      - caddy_internal
+      - data
 
   # ---------------------------------------------------------------------------
   # Open WebUI — User-facing chat interface (v1.0)
@@ -363,8 +379,14 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: open-webui calls gateway via http://gateway:8080/v1 — this is
+    # the one approved direct-to-gateway path (user-facing LLM calls, not admin
+    # control plane). open-webui is itself behind Caddy (:443/open-webui/*) so
+    # it represents a trusted position. Joins `data` for DNS visibility to
+    # gateway. Does NOT join caddy_internal (open-webui does not proxy to
+    # backoffice) or obs.
     networks:
-      - internal
+      - data
     profiles:
       - openwebui
 
@@ -407,8 +429,9 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: budget-redis is a data-plane dep of gateway/backoffice only.
     networks:
-      - internal
+      - data
 
   # ---------------------------------------------------------------------------
   # Policy — OPA (Open Policy Agent) — always local, never cloud-delegated
@@ -441,8 +464,9 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    # EX-231-10: OPA is a data-plane dep only. Never needs to reach caddy_internal.
     networks:
-      - internal
+      - data
 
   # ---------------------------------------------------------------------------
   # Redis — session store + TOTP provisioning tokens + rate limiter counters
@@ -485,8 +509,9 @@ services:
       retries: 5
     # No depends_on — redis_password is written by the installer to docker/secrets/
     # before compose starts. Removed backoffice dependency to break cycle.
+    # EX-231-10: redis is a data-plane dep only.
     networks:
-      - internal
+      - data
 
   # ---------------------------------------------------------------------------
   # Ollama — local LLM inference (never a cloud call for security classification)
@@ -508,9 +533,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    # EX-231-10: ollama is a data-plane dep. Joins `data` for gateway/backoffice
+    # calls and `edge` for model pulls from registry.ollama.ai (needs internet).
     networks:
-      - internal
-      - external    # Required for model pulls from registry.ollama.ai
+      - data
+      - edge    # Required for model pulls from registry.ollama.ai
     # Uncomment for NVIDIA GPU:
     # deploy:
     #   resources:
@@ -550,9 +577,10 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+    # EX-231-10: ollama-init needs data (ollama DNS) + edge (model pull).
     networks:
-      - internal
-      - external    # Required for model registry DNS resolution
+      - data
+      - edge    # Required for model registry DNS resolution
 
   # ---------------------------------------------------------------------------
   # Prometheus — metrics collection
@@ -584,8 +612,11 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # EX-231-10: prometheus scrapes gateway/backoffice VIA Caddy (:8444/:8445).
+    # Must be on `obs` (same network as Caddy). Does NOT join `data`.
+    # Caddy also joins `obs`, so Prometheus can resolve `caddy` by name here.
     networks:
-      - internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # Grafana — dashboards and alerting
@@ -621,8 +652,9 @@ services:
         condition: service_healthy
       backoffice:
         condition: service_healthy
+    # EX-231-10: grafana is obs-plane only.
     networks:
-      - internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # PostgreSQL 16 — primary durable store (tenants, audit, inference, RBAC)
@@ -655,8 +687,9 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: postgres is data-plane only.
     networks:
-      - internal
+      - data
 
   # ---------------------------------------------------------------------------
   # PgBouncer — transaction-mode connection pooler
@@ -699,8 +732,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: pgbouncer is data-plane only.
     networks:
-      - internal
+      - data
 
   # ---------------------------------------------------------------------------
   # Alertmanager — alert routing (Slack → Email → PagerDuty)
@@ -726,8 +760,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # EX-231-10: alertmanager is obs-plane only (receives from prometheus).
     networks:
-      - internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # Loki — log aggregation backend
@@ -747,8 +782,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    # EX-231-10: loki is obs-plane only.
     networks:
-      - internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # Promtail — ships Docker container logs to Loki
@@ -771,8 +807,9 @@ services:
       retries: 3
     depends_on:
       - loki
+    # EX-231-10: promtail ships logs to loki, obs-plane only.
     networks:
-      - internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # OpenTelemetry Collector — OTLP receiver, Jaeger exporter
@@ -801,8 +838,13 @@ services:
       retries: 3
     depends_on:
       - jaeger
+    # EX-231-10: otel-collector receives traces from gateway/backoffice (OTLP
+    # push, not pull). gateway/backoffice are on `data`. otel-collector needs
+    # to be reachable from `data` to receive OTLP pushes.
+    # Also joins `obs` to forward traces to jaeger.
     networks:
-      - internal
+      - data
+      - obs
 
   # ---------------------------------------------------------------------------
   # Jaeger — distributed trace UI
@@ -821,8 +863,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # EX-231-10: jaeger is obs-plane only.
     networks:
-      - internal
+      - obs
 
   # ---------------------------------------------------------------------------
   # Keycloak — upstream test IdP for OIDC/SAML federation validation
@@ -859,8 +902,10 @@ services:
       start_period: 60s
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: keycloak is the upstream IdP for backoffice SSO redirect.
+    # Backoffice reaches it on `data`; keycloak itself doesn't need caddy_internal.
     networks:
-      - internal
+      - data
     profiles:
       - test-idp
 
@@ -885,8 +930,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # EX-231-10: vault is a KMS dep for backoffice/gateway — data-plane.
     networks:
-      - internal
+      - data
     profiles:
       - vault
 
@@ -936,8 +982,10 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: langflow calls gateway via http://gateway:8080/v1 (same as
+    # open-webui). Joins `data` for gateway DNS. Does NOT join caddy_internal.
     networks:
-      - internal
+      - data
     profiles:
       - langflow
 
@@ -974,8 +1022,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: letta calls gateway + postgres, both on `data`.
     networks:
-      - internal
+      - data
     profiles:
       - letta
 
@@ -1026,9 +1075,10 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # EX-231-10: openclaw calls gateway (data) + needs internet for webhooks (edge).
     networks:
-      - internal
-      - external      # Port 18789 must be reachable by messaging channel webhooks
+      - data
+      - edge      # Port 18789 must be reachable by messaging channel webhooks
     profiles:
       - openclaw
 
@@ -1071,8 +1121,12 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # EX-231-10: wazuh receives audit events from backoffice/gateway sinks.
+    # Both gateway/backoffice are on `data`, so wazuh-manager joins `data`.
+    # Also joins `obs` for indexer (wazuh-indexer is on obs).
     networks:
-      - internal
+      - data
+      - obs
     profiles:
       - wazuh
 
@@ -1092,8 +1146,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # EX-231-10: wazuh-indexer is obs-plane (receives from wazuh-manager).
     networks:
-      - internal
+      - obs
     profiles:
       - wazuh
 
@@ -1125,8 +1180,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
+    # EX-231-10: wazuh-dashboard is obs-plane (queries indexer + manager).
     networks:
-      - internal
+      - obs
     profiles:
       - wazuh
 
@@ -1155,8 +1211,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    # EX-231-10: step-ca issues certs for internal services; data-plane dep.
     networks:
-      - internal
+      - data
     profiles:
       - internal-ca
 
@@ -1247,11 +1304,73 @@ volumes:
 # To upgrade to a paid tier, replace docker/secrets/license_key with your .ysg content.
 
 # ---------------------------------------------------------------------------
-# Networks
+# Networks — Caddy-centric isolation (EX-231-10 fix, 2026-04-29)
 # ---------------------------------------------------------------------------
+# Four networks enforce the Tiago directive: Caddy is the SOLE ingress to
+# backoffice and gateway. No other service may reach :8443 or :8080 directly.
+#
+# Network topology:
+#
+#   edge          — Caddy only; host port mapping (80/443) lives here.
+#                   `internal: false` so Caddy can reach Let's Encrypt ACME.
+#
+#   caddy_internal — Caddy + backoffice + gateway ONLY.
+#                   `internal: true` — no host-port egress.
+#                   This is the only network where backoffice/:8443 and
+#                   gateway/:8080 are reachable. Since Docker DNS only resolves
+#                   hostnames to IPs on shared networks, a service on `data`
+#                   that is NOT on `caddy_internal` cannot resolve backoffice or
+#                   gateway at all (DNS returns NXDOMAIN).
+#
+#   data          — backoffice + gateway + their outbound deps: postgres,
+#                   pgbouncer, redis, budget-redis, policy (OPA), ollama.
+#                   `internal: true`. Backoffice/gateway are MEMBERS of this
+#                   network so their outbound DB/cache calls work, but their
+#                   listeners (:8443/:8080) are NOT reachable here because
+#                   every service on `data` that IS NOT also on `caddy_internal`
+#                   will get an NXDOMAIN for `backoffice` and `gateway` (Docker
+#                   DNS scopes resolution to shared networks).
+#
+#   obs           — prometheus + grafana + loki + alertmanager + otel-collector
+#                   + jaeger. `internal: true`.
+#                   Prometheus scrapes gateway/backoffice via Caddy's
+#                   SPIFFE-gated listeners (:8444/:8445), so Caddy also joins
+#                   `obs`. Obs services never need to reach `data` services
+#                   directly, so they are NOT joined to `data`.
+#
+# Residual risk (documented, not hidden):
+#   Docker containers bind listeners to 0.0.0.0 by default, so a container
+#   that IS on both `caddy_internal` and `data` (backoffice, gateway) will
+#   technically accept TCP connections to :8443/:8080 from any peer that has
+#   a route to either network IP. However:
+#     (a) No `data`-only peer (postgres, redis, OPA, etc.) shares the
+#         `caddy_internal` network, so they have NO route to those IPs.
+#     (b) The `data` IP of backoffice/gateway is unreachable to `data`-only
+#         peers because Docker DNS will NOT resolve `backoffice` or `gateway`
+#         from a network where they don't share membership — Docker DNS is
+#         scoped to shared-network members only.
+#     (c) A `data`-only attacker would have to discover the raw IP via
+#         e.g. ARP/ICMP, which requires layer-2 adjacency — Docker bridges
+#         are separate L2 segments. Different bridge = no ARP reachability.
+#   The belt-and-braces mTLS + SPIFFE middleware remains active. K8s
+#   NetworkPolicy enforces this at the kernel level (no residual).
+#
 networks:
-  internal:
+  edge:
+    driver: bridge
+    # external: true — Caddy needs internet access for ACME challenges
+  caddy_internal:
     driver: bridge
     internal: true
-  external:
+    # Only Caddy, backoffice, gateway are members.
+    # Caddy → backoffice:8443 and Caddy → gateway:8080 happen here.
+  data:
     driver: bridge
+    internal: true
+    # Core data-plane: backoffice + gateway (outbound) + their deps.
+    # No obs services; no edge services.
+  obs:
+    driver: bridge
+    internal: true
+    # Observability-plane: prometheus, grafana, loki, alertmanager,
+    # otel-collector, jaeger. Caddy joins to proxy /admin/grafana etc.

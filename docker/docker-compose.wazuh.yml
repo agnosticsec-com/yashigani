@@ -1,5 +1,5 @@
 # Yashigani v2.23.1 — Wazuh SIEM auto-deploy override
-# Last updated: 2026-04-28T16:59:30+01:00
+# Last updated: 2026-04-29T14:30:00+01:00
 #
 # Activate: docker compose -f docker-compose.yml -f docker-compose.wazuh.yml up -d
 # Or set via Admin → Audit → SIEM Integration → Wazuh (Auto-deploy)
@@ -44,8 +44,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # EX-231-10: wazuh-indexer receives from manager; obs-plane.
     networks:
-      - internal
+      - obs
 
   wazuh-manager:
     image: wazuh/wazuh-manager:4.7.3
@@ -70,8 +71,11 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
+    # EX-231-10: wazuh-manager receives audit events from backoffice/gateway
+    # (data-plane push) and sends to indexer (obs). Joins both.
     networks:
-      - internal
+      - data
+      - obs
 
   wazuh-dashboard:
     image: wazuh/wazuh-dashboard:4.7.3
@@ -96,8 +100,9 @@ services:
         condition: service_healthy
       wazuh-manager:
         condition: service_healthy
+    # EX-231-10: wazuh-dashboard is obs-plane only.
     networks:
-      - internal
+      - obs
 
 volumes:
   wazuh_indexer_data:

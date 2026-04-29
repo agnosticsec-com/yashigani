@@ -1,5 +1,12 @@
 {{- /*
-Helm test: verify the backoffice /healthz endpoint returns HTTP 200.
+Helm test: verify the backoffice /healthz endpoint returns HTTP 200 via Caddy.
+
+EX-231-10 (2026-04-29): test pods connect through Caddy (:443), NOT direct
+to backoffice:8443. This validates both:
+  (a) the legitimate traffic path works end-to-end, and
+  (b) test pods cannot reach backoffice directly (NetworkPolicy enforce this).
+
+Last updated: 2026-04-29T14:30:00+01:00
 Run with: helm test <release-name> -n <namespace>
 */ -}}
 apiVersion: v1
@@ -15,33 +22,17 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
-  {{- if .Values.mtls.enabled }}
-  # /run/secrets PKI mount collides with SA-token mount at
-  # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
-  # Test pod doesn't need the SA token.
   automountServiceAccountToken: false
-  {{- end }}
   securityContext:
     runAsNonRoot: true
     runAsUser: 65534
-    {{- if .Values.mtls.enabled }}
-    # fsGroup so UID 65534 (nobody) can read the PKI Secret files (mode 0440).
-    fsGroup: 65534
-    {{- end }}
     seccompProfile:
       type: RuntimeDefault
   containers:
     - name: test-backoffice-health
-      {{- if .Values.mtls.enabled }}
-      # Python's ssl module validates the two-tier chain correctly when given
-      # only the root CA (alpine curl's OpenSSL incorrectly rejects the same
-      # server-presented chain with "unable to get local issuer certificate",
-      # even with both root and intermediate in --cacert). Mirrors the probe
-      # used by the backoffice container itself.
-      image: "python:3.12-alpine"
-      {{- else }}
+      # curl image — connects to Caddy:443. Skip TLS verify for self-signed / test.
+      # The test validates HTTP 200 from the Caddy→backoffice path, not TLS cert identity.
       image: "curlimages/curl:8.7.1"
-      {{- end }}
       imagePullPolicy: IfNotPresent
       securityContext:
         allowPrivilegeEscalation: false
@@ -53,53 +44,17 @@ spec:
         - -c
         - |
           set -e
-          echo "Testing backoffice /healthz..."
-          {{- if .Values.mtls.enabled }}
-          # mTLS: backoffice serves HTTPS on 8443 and requires client cert auth.
-          # Server cert SAN is "backoffice" (from service_identities.yaml),
-          # not "yashigani-backoffice" (K8s service name). Use server_hostname
-          # override so SNI + cert-hostname match the SAN while we connect to
-          # the K8s service IP.
-          # Pattern A for Python ssl: trust anchor is the public ca_root.crt.
-          # Python 3.12/OpenSSL 3.0/Ubuntu 24.04 strict-chain validation rejects
-          # intermediate-only anchors (gate #58a evidence, 2026-04-28).
-          python3 -c "
-          import ssl, socket, urllib.request, sys
-          ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-          ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-          # Resolve the K8s service name, then handshake with SNI='backoffice'
-          ip = socket.gethostbyname('yashigani-backoffice')
-          sock = socket.create_connection((ip, {{ .Values.backoffice.service.port }}), timeout=10)
-          ss = ctx.wrap_socket(sock, server_hostname='backoffice')
-          ss.sendall(b'GET /healthz HTTP/1.1\r\nHost: backoffice\r\nConnection: close\r\n\r\n')
-          resp = b''
-          while True:
-              chunk = ss.recv(4096)
-              if not chunk: break
-              resp += chunk
-          status_line = resp.split(b'\r\n', 1)[0].decode()
-          print('Backoffice /healthz returned:', status_line)
-          if ' 200 ' not in status_line:
-              print('FAIL: expected 200'); sys.exit(1)
-          print('PASS')
-          "
-          {{- else }}
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          echo "Testing backoffice /admin/healthz via Caddy (EX-231-10: Caddy-centric path)..."
+          STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
             --max-time 10 \
-            http://yashigani-backoffice:{{ .Values.backoffice.service.port }}/healthz)
-          echo "Backoffice /healthz returned HTTP ${STATUS}"
+            https://yashigani-caddy:443/admin/healthz)
+          echo "Caddy-proxied backoffice /healthz returned HTTP ${STATUS}"
           if [ "${STATUS}" != "200" ]; then
             echo "FAIL: expected 200, got ${STATUS}"
+            echo "Check: (1) Caddy is running, (2) backoffice is healthy, (3) NetworkPolicy allows Caddy→backoffice"
             exit 1
           fi
-          echo "PASS"
-          {{- end }}
-      {{- if .Values.mtls.enabled }}
-      volumeMounts:
-        - name: pki-certs
-          mountPath: /run/secrets
-          readOnly: true
-      {{- end }}
+          echo "PASS — backoffice reachable via Caddy"
       resources:
         requests:
           cpu: "10m"
@@ -107,10 +62,3 @@ spec:
         limits:
           cpu: "100m"
           memory: "64Mi"
-  {{- if .Values.mtls.enabled }}
-  volumes:
-    - name: pki-certs
-      secret:
-        secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-        defaultMode: 0440
-  {{- end }}

@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-28T16:59:30+01:00
+# Last updated: 2026-04-29T14:30:00+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -53,6 +53,23 @@ global:
 # Alternatively: uninstall the release + delete the PVC + fresh install.
 # Automated in-place migration for existing data is tracked as task #54.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Network Policies (EX-231-10 — Caddy-centric isolation)
+# ---------------------------------------------------------------------------
+# When enabled (default), the chart renders NetworkPolicy resources that
+# enforce the Caddy-sole-ingress posture: backoffice and gateway only accept
+# connections from yashigani-caddy pods. Prometheus scrapes go through Caddy's
+# SPIFFE-gated listeners (:8444/:8445) only.
+#
+# Set to false ONLY in CNI environments that do not support NetworkPolicy
+# (e.g. plain kind without Calico/Cilium, or specific managed K8s tiers).
+# In that case you accept that the Caddy-centric isolation control is
+# network-layer absent; application-layer mTLS + SPIFFE gate remain active.
+# Document any disablement in the risk register with Tiago's sign-off.
+# ---------------------------------------------------------------------------
+networkPolicies:
+  enabled: true
+
 mtls:
   # Hard-off switch. When false the chart renders the pre-v2.23.1 plaintext
   # topology (no PKI job, no cert mounts). Intended for deliberate testing
