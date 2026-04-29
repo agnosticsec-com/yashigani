@@ -368,65 +368,127 @@ resolve_compose_cmd() {
   COMPOSE_CMD=()
   YSG_PODMAN_RUNTIME=false   # reset before resolution — prevents stale env/state bleed
 
-  # Runtime override — if operator explicitly set YSG_RUNTIME=docker or =podman,
-  # honor that over the auto-detection preference below. Useful on hosts where
-  # BOTH runtimes are installed (Linux VMs, CI runners) — the default prefers
-  # Podman for rootless-first security, but the override allows forcing Docker
-  # when that's what the operator actually wants to test.
+  # ── HARD RUNTIME SEPARATION (Tiago directive 2026-04-29 after 3rd cross-runtime
+  # bug: Laura #95 docker-compose-shim against Podman socket "file name too long",
+  # plus prior compose-path-prefix bugs at v2.23.1 #58c rounds 4 + 7) ────────────
+  #
+  # When YSG_RUNTIME is set explicitly, ONLY native tools for that runtime are
+  # acceptable. We REFUSE to fall through to the other runtime's tools — even if
+  # they're available — because docker-compose against a Podman socket (and
+  # vice versa) consistently produces subtle path / serialisation / format
+  # incompatibilities that LOOK like generic compose bugs but are actually
+  # cross-runtime contract mismatches.
+  #
+  # Auto-detect (YSG_RUNTIME unset / =auto) still tries Podman first then Docker,
+  # but each branch is self-contained: Podman branch never selects docker-compose,
+  # Docker branch never selects podman-compose.
   local _prefer="${YSG_RUNTIME:-auto}"
 
+  # ── Docker-only branch ─────────────────────────────────────────────────────
   if [[ "$_prefer" == "docker" ]]; then
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-      if docker compose version >/dev/null 2>&1; then
-        COMPOSE_CMD=("docker" "compose")
-        YSG_PODMAN_RUNTIME=false
-        return 0
-      fi
-      if command -v docker-compose >/dev/null 2>&1; then
-        COMPOSE_CMD=("docker-compose")
-        YSG_PODMAN_RUNTIME=false
-        return 0
-      fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+      log_error "YSG_RUNTIME=docker requested but Docker daemon is not reachable."
+      log_error "Install Docker Desktop or start the Docker daemon and retry."
+      log_error "If you meant Podman, set YSG_RUNTIME=podman instead."
+      exit 1
     fi
-    log_warn "YSG_RUNTIME=docker requested but docker daemon not reachable — falling through to auto-detect"
+    if docker compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker" "compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker compose (Docker plugin)"
+      return 0
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker-compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker-compose (standalone)"
+      return 0
+    fi
+    log_error "YSG_RUNTIME=docker but no compose tool found. Install:"
+    log_error "  • docker compose plugin: https://docs.docker.com/compose/install/"
+    log_error "  • OR docker-compose: https://docs.docker.com/compose/install/standalone/"
+    exit 1
   fi
 
-  # Prefer Podman (rootless, daemonless, more secure)
-  # Check Podman FIRST — matches platform-detect.sh priority
-  # Prefer podman-compose (Python, sequential) over podman compose (plugin, parallel)
-  # because the docker-compose plugin crashes Podman's API socket with EOF on parallel creates.
-
-  # Try standalone podman-compose FIRST (pip install podman-compose) — sequential, stable
-  if [[ "$_prefer" != "docker" ]] && command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-    COMPOSE_CMD=("podman-compose")
-    YSG_PODMAN_RUNTIME=true
-    return 0
-  fi
-
-  # Fall back to podman compose (Podman 4+ built-in, delegates to docker-compose plugin)
-  if [[ "$_prefer" != "docker" ]] && command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  # ── Podman-only branch ─────────────────────────────────────────────────────
+  if [[ "$_prefer" == "podman" ]]; then
+    if ! command -v podman >/dev/null 2>&1 || ! podman info >/dev/null 2>&1; then
+      log_error "YSG_RUNTIME=podman requested but Podman is not reachable."
+      log_error "Install Podman + start its socket (rootful: systemctl start podman.socket)."
+      log_error "If you meant Docker, set YSG_RUNTIME=docker instead."
+      exit 1
+    fi
+    # podman-compose (Python) FIRST: sequential, stable, native to Podman.
+    # We do NOT fall through to docker-compose — passing docker-compose a Podman
+    # socket via DOCKER_HOST works for simple cases but breaks on seccomp profile
+    # paths (Laura #95 TM-V231-005), security_opt parsing, and a few other places
+    # where docker-compose makes Docker-specific assumptions about the socket.
+    if command -v podman-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman-compose")
+      YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman-compose (native, sequential)"
+      return 0
+    fi
     if podman compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("podman" "compose")
       YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman compose (Podman 4+ built-in)"
       return 0
     fi
+    log_error "YSG_RUNTIME=podman but no native Podman compose tool found. Install:"
+    log_error "  • podman-compose:  pip install podman-compose"
+    log_error "  • OR Podman 4+ with built-in compose subcommand"
+    log_error ""
+    log_error "Do NOT install docker-compose against the Podman socket — that path"
+    log_error "is explicitly NOT supported (cross-runtime compatibility issues, see"
+    log_error "Laura #95 TM-V231-005 + v2.23.1 retro #3a-fix)."
+    exit 1
   fi
 
-  # Fall back to Docker — verify daemon is running (not just CLI installed)
+  # ── Auto-detect (YSG_RUNTIME unset or =auto) ───────────────────────────────
+  # Prefer Podman for rootless-first security posture. Strict-self-contained:
+  # the Podman branch only considers podman-compose / podman compose; the
+  # Docker branch only considers docker compose / docker-compose. No mixing.
+
+  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    if command -v podman-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman-compose")
+      YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman-compose (auto-detect)"
+      return 0
+    fi
+    if podman compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman" "compose")
+      YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman compose (auto-detect, built-in)"
+      return 0
+    fi
+    # Podman is reachable but neither podman-compose nor `podman compose` is
+    # available. We refuse to silently fall through to docker-compose against
+    # the Podman socket (cross-runtime bug pattern). Tell the user.
+    log_warn "Podman is installed but no Podman-native compose tool found."
+    log_warn "Install podman-compose (pip install podman-compose) for the native"
+    log_warn "Podman path, OR set YSG_RUNTIME=docker if you intend to use Docker."
+    log_warn "Continuing auto-detect to look for Docker..."
+  fi
+
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     if docker compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("docker" "compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker compose (auto-detect, plugin)"
+      return 0
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker-compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker-compose (auto-detect, standalone)"
       return 0
     fi
   fi
 
-  # Try standalone docker-compose
-  if command -v docker-compose >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    COMPOSE_CMD=("docker-compose")
-    return 0
-  fi
-
-  # Docker Desktop on macOS without CLI in PATH
+  # Docker Desktop on macOS without CLI in PATH (only triggered when YSG_RUNTIME
+  # is explicitly =docker_desktop_no_cli; never auto-selected).
   if [ "${YSG_RUNTIME:-}" = "docker_desktop_no_cli" ]; then
     local dd_docker=""
     for p in "$HOME/.docker/bin/docker" "/usr/local/bin/com.docker.cli" \
@@ -435,14 +497,17 @@ resolve_compose_cmd() {
     done
     if [ -n "$dd_docker" ] && $dd_docker compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("$dd_docker" "compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: $dd_docker compose (Docker Desktop, CLI not in PATH)"
       return 0
     fi
   fi
 
   log_error "No compose command found. Install one of:"
-  log_error "  • Docker Desktop  — https://docker.com/products/docker-desktop"
-  log_error "  • Podman Desktop  — https://podman-desktop.io"
-  log_error "  • podman + podman-compose (pip install podman-compose)"
+  log_error "  • Docker:  Docker Desktop OR docker + docker compose plugin"
+  log_error "  • Podman:  podman + podman-compose (pip install podman-compose)"
+  log_error ""
+  log_error "Then set YSG_RUNTIME=docker or YSG_RUNTIME=podman to lock the runtime."
   exit 1
 }
 
