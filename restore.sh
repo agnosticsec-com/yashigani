@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-29T01:45:00Z (gate #58c retro #3ca: patch yashigani-postgres-secrets after K8s restore)
+# Last updated: 2026-04-29T03:30:00Z (gate #58c retro #3ca/#3cc: patch yashigani-postgres-secrets + pgbouncer DATABASE_URL after K8s restore)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -841,6 +841,26 @@ _restore_k8s_postgres_secrets() {
     log_success "yashigani-postgres-secrets patched"
   else
     log_error "Failed to patch yashigani-postgres-secrets — post-restore pods will fail to connect to postgres"
+  fi
+
+  # retro #3cc (gate #58c Round 13): The K8s pre-existing chart bug workaround
+  # (BUG-K1) patches the pgbouncer deployment's DATABASE_URL env to a LITERAL
+  # password string (via kubectl set env). After a restore the secret is updated
+  # but the deployment spec still carries the old literal, so pgbouncer userlist.txt
+  # is populated with the stale password → postgres auth fails.
+  # Fix: after patching the secret, also update DATABASE_URL in the pgbouncer
+  # deployment spec to the restored password, so the next rollout gets the right
+  # password regardless of whether BUG-K1 was previously applied.
+  local db_user="yashigani_app"
+  local pg_host="yashigani-postgres"
+  local pg_db="yashigani"
+  local new_db_url="postgresql://${db_user}:${pw}@${pg_host}:5432/${pg_db}"
+  log_info "Updating pgbouncer DATABASE_URL to restored password..."
+  if kubectl -n "$K8S_NAMESPACE" set env deployment/yashigani-pgbouncer \
+      "DATABASE_URL=${new_db_url}" 2>/dev/null; then
+    log_success "pgbouncer DATABASE_URL updated (restored password)"
+  else
+    log_warn "kubectl set env on pgbouncer failed — pgbouncer may not accept restored password. Manual: kubectl set env deployment/yashigani-pgbouncer -n ${K8S_NAMESPACE} 'DATABASE_URL=${new_db_url}'"
   fi
 }
 
