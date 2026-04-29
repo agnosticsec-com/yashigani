@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-28T00:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-29T00:42:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -222,7 +222,11 @@ data:
     {{- end }}
     # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
     # work regardless of how the cluster operator routes the public domain.
-    # Caddy still issues a self-signed leaf for tlsDomain via tls internal.
+    # Captain #58c #3by (2026-04-29): use explicit PKI cert (caddy_client.crt/key)
+    # instead of `tls internal`. Caddy's internal CA issued a cert bound to
+    # 'localhost', causing HTTP 421 Misdirected Request for IP-based connections
+    # (e.g. port-forward to 127.0.0.1). caddy_client.crt has IP Address:127.0.0.1
+    # in its SANs (mtls-bootstrap Job generates it with that SAN via service_identities.yaml).
     :443 {
       {{- if .Values.mtls.enabled }}
       # Site-level mTLS (Caddy v2 requires `client_auth` at the server block,
@@ -230,14 +234,16 @@ data:
       # connections AND extracts SPIFFE URI from a presented client cert when
       # one is given. Per-path SPIFFE forwarding stays in `handle` blocks.
       # Captain #58c #3br evidence (2026-04-28).
-      tls internal {
+      # #3by: explicit cert (not `tls internal`) — Caddy internal auto-cert
+      # binds to 'localhost' only; our PKI cert has IP Address:127.0.0.1 SAN.
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
           mode verify_if_given
           trust_pool file /run/secrets/ca_intermediate.crt
         }
       }
       {{- else }}
-      tls internal
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
       {{- end }}
       header {
         X-Content-Type-Options    "nosniff"
