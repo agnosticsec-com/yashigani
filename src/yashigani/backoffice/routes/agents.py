@@ -17,17 +17,29 @@ Routes:
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-04-27T00:00:00+01:00
+Last updated: 2026-04-29T22:58:39+01:00
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+
+# ---------------------------------------------------------------------------
+# AVA-2026-04-29-001 — Stored XSS: reject HTML tags in free-text agent fields
+# (ASVS v5 V5.3.3 | CWE-79 | WSTG-INPV-02)
+#
+# The dashboard.js render layer uses escapeHtml() on agent name (defence-in-depth),
+# but the API must reject stored XSS payloads before they reach the registry.
+# Any value containing an HTML tag open sequence is rejected with HTTP 422.
+# This closes the attack regardless of future render-layer changes.
+# ---------------------------------------------------------------------------
+_HTML_TAG_RE = re.compile(r"<[a-zA-Z/!]")
 
 from yashigani.backoffice.middleware import require_admin_session, AdminSession, require_stepup_admin_session, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
@@ -203,6 +215,17 @@ class AgentRegisterRequest(BaseModel):
         description="Optional CIDR allowlist. Empty = no IP restriction. E.g. ['10.0.0.0/8', '192.168.1.100/32']",
     )
 
+    @field_validator("name")
+    @classmethod
+    def _reject_html_in_name(cls, v: str) -> str:
+        """Reject HTML tags in agent name (AVA-2026-04-29-001, ASVS V5.3.3, CWE-79)."""
+        if _HTML_TAG_RE.search(v):
+            raise ValueError(
+                "agent name must not contain HTML tags — "
+                "strip markup and use plain text (CWE-79 / AVA-2026-04-29-001)"
+            )
+        return v
+
     @field_validator("upstream_url")
     @classmethod
     def _validate_upstream_url(cls, v: str) -> str:
@@ -216,6 +239,17 @@ class AgentUpdateRequest(BaseModel):
     allowed_caller_groups: Optional[list[str]] = None
     allowed_paths: Optional[list[str]] = None
     allowed_cidrs: Optional[list[str]] = None
+
+    @field_validator("name")
+    @classmethod
+    def _reject_html_in_name(cls, v: Optional[str]) -> Optional[str]:
+        """Reject HTML tags in agent name (AVA-2026-04-29-001, ASVS V5.3.3, CWE-79)."""
+        if v is not None and _HTML_TAG_RE.search(v):
+            raise ValueError(
+                "agent name must not contain HTML tags — "
+                "strip markup and use plain text (CWE-79 / AVA-2026-04-29-001)"
+            )
+        return v
 
     @field_validator("upstream_url")
     @classmethod
