@@ -975,7 +975,32 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
 @router.get("/models", response_model=ModelListResponse)
 async def list_models(request: Request):
-    """List available models (for Open WebUI model picker)."""
+    """List available models (for Open WebUI model picker).
+
+    AUTH REQUIRED. Ava #59 / FINDING-59-01 (2026-04-29): unauthenticated
+    callers were receiving the full Ollama model list + every active service
+    identity slug + every active agent slug — internal-topology disclosure
+    (OWASP API9 Improper Inventory Management, A01 Broken Access Control).
+    Caddy's `/v1/*` block does not gate via `forward_auth`; the gate is here.
+    Open WebUI carries the admin session cookie (it lives at /chat/* behind
+    the same Caddy auth) so the picker still populates after login. MCP
+    clients that hit `/v1/models` directly must present a valid Bearer
+    token or X-Forwarded-User header to enumerate.
+    """
+    identity = _resolve_identity(request)
+    if not identity:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "AUTHENTICATION_REQUIRED",
+                "detail": (
+                    "GET /v1/models requires an authenticated identity. "
+                    "Provide Authorization: Bearer <api_key> or authenticate "
+                    "via the admin SSO flow."
+                ),
+            },
+        )
+
     models = []
 
     # Add local Ollama models
