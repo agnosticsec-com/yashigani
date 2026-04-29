@@ -1060,8 +1060,25 @@ _write_aes_key_to_env() {
   # tolerated it because Podman on macOS ignores unknown apparmor profile
   # names silently, but fails HARD when the seccomp FILE path is wrong.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+    # AppArmor stays unconfined on Podman (macOS Podman, rootful Linux Podman
+    # both ignore unknown profile names; rather than name-mismatch silently,
+    # explicitly disable). Linux + AppArmor users override via env.
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
-    _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
+    # Laura #95 TM-V231-005 (2026-04-29) fix: instead of disabling seccomp on
+    # Podman to dodge the relative-path double-prefix bug, pass the ABSOLUTE
+    # path to the profile so podman-compose's working-dir semantics can't
+    # mangle it. The compose default `./seccomp/yashigani.json` stays as the
+    # manual-compose-from-docker-dir fallback for power users; install.sh
+    # always wins via env.
+    local _seccomp_abs="${WORK_DIR}/docker/seccomp/yashigani.json"
+    if [[ -f "$_seccomp_abs" ]]; then
+      _env_set "YASHIGANI_SECCOMP_PROFILE" "$_seccomp_abs"
+      log_success "Podman seccomp: absolute path ${_seccomp_abs}"
+    else
+      # Last-resort fallback only if the profile genuinely isn't on disk.
+      log_warn "Podman seccomp profile not found at $_seccomp_abs — using unconfined (Laura #95 TM-V231-005 deferred to v2.23.2 if this fires)"
+      _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
+    fi
   elif [[ "${YSG_OS:-}" == "linux" && "${YSG_RUNTIME:-}" == "docker" ]]; then
     # Docker on Linux: auto-load our AppArmor profile so containers start without
     # requiring a manual 'apparmor_parser -r' step. If loading fails (no apparmor,
