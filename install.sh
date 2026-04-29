@@ -59,6 +59,13 @@ UPSTREAM_URL=""
 LICENSE_KEY_PATH=""
 DB_AES_KEY=""                 # YASHIGANI_DB_AES_KEY — set via prompt or --db-aes-key
 NON_INTERACTIVE=false
+# Track whether YSG_RUNTIME was set explicitly by the operator (env var or
+# --runtime CLI flag). When true, prompt_runtime_choice() skips the
+# interactive prompt — the admin has already chosen.
+if [[ -n "${YSG_RUNTIME:-}" ]]; then
+  YSG_RUNTIME_EXPLICIT=true
+  export YSG_RUNTIME_EXPLICIT
+fi
 SKIP_PREFLIGHT=false
 SKIP_PULL=false
 UPGRADE=false
@@ -114,6 +121,12 @@ OPTIONS
   --wazuh                                 Install Wazuh SIEM (manager + indexer + dashboard)
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
+  --runtime <docker|podman|k8s>          Lock the container runtime (admin-must-choose
+                                          rule per feedback_runtime_choice.md;
+                                          equivalent to YSG_RUNTIME=...). Required in
+                                          --non-interactive mode if both Docker and
+                                          Podman are installed. Default in interactive
+                                          mode: prompt with Podman pre-selected.
   --skip-preflight                        Skip preflight checks
   --skip-pull                             Skip docker compose pull (use local images)
   --upgrade                               Upgrade an existing installation
@@ -188,6 +201,20 @@ parse_args() {
       --wazuh)           INSTALL_WAZUH=true;     shift ;;
       --offline)         OFFLINE=true;           shift ;;
       --non-interactive) NON_INTERACTIVE=true;  shift ;;
+      --runtime)
+        # Explicit runtime selection. Required in --non-interactive mode if
+        # auto-detection finds both Docker and Podman (admin-must-choose rule).
+        # Setting YSG_RUNTIME_EXPLICIT=true tells prompt_runtime_choice() to
+        # skip the prompt — the admin already chose via CLI flag.
+        case "${2:-}" in
+          docker|podman|k8s)
+            YSG_RUNTIME="$2"; export YSG_RUNTIME
+            YSG_RUNTIME_EXPLICIT=true; export YSG_RUNTIME_EXPLICIT
+            shift 2
+            ;;
+          *) log_error "--runtime must be one of: docker, podman, k8s"; exit 1 ;;
+        esac
+        ;;
       --skip-preflight)  SKIP_PREFLIGHT=true;   shift ;;
       --skip-pull)       SKIP_PULL=true;         shift ;;
       --upgrade)         UPGRADE=true;           shift ;;
@@ -700,6 +727,12 @@ print_platform_summary() {
     _interactive_platform_fallback
   fi
 
+  # --- Admin-must-choose-runtime prompt (Tiago directive 2026-04-29) ---
+  # Always runs; the function itself handles non-interactive vs interactive
+  # branching and respects YSG_RUNTIME_EXPLICIT (set by --runtime CLI flag
+  # or pre-existing env var).
+  prompt_runtime_choice
+
   printf "\n"
   printf "  %-22s %s\n" "OS:"           "${YSG_OS:-unknown} (${YSG_DISTRO:-unknown})"
   printf "  %-22s %s\n" "Architecture:" "${YSG_ARCH:-unknown}"
@@ -746,6 +779,132 @@ _print_model_recommendations() {
     printf "    - qwen2.5:3b (inspection only), CPU inference for others\n"
   fi
   printf "\n"
+}
+
+# =============================================================================
+# Runtime choice prompt — admin always picks the runtime
+# =============================================================================
+# Per feedback_runtime_choice.md (Tiago directive): admin ALWAYS picks the
+# container runtime, even when only one is detected. Default pre-selection
+# is Podman (rootless-first security posture). Non-interactive mode: require
+# YSG_RUNTIME explicit (--runtime CLI flag or env var); error out otherwise.
+#
+# This runs AFTER source_platform_detect.sh has set YSG_DOCKER_AVAILABLE +
+# YSG_PODMAN_AVAILABLE booleans and the auto-pick suggestion in YSG_RUNTIME.
+prompt_runtime_choice() {
+  local detected="${YSG_RUNTIME:-none}"
+  local docker_avail="${YSG_DOCKER_AVAILABLE:-false}"
+  local podman_avail="${YSG_PODMAN_AVAILABLE:-false}"
+  local docker_running="${YSG_DOCKER_RUNNING:-false}"
+  local podman_running="${YSG_PODMAN_RUNNING:-false}"
+
+  # If admin set --runtime / YSG_RUNTIME explicitly, that wins. Verify the
+  # chosen runtime is actually installed; refuse with clear message if not.
+  if [[ "${YSG_RUNTIME_EXPLICIT:-false}" == "true" ]]; then
+    log_info "Runtime explicitly set: $detected (skipping prompt)"
+    return 0
+  fi
+
+  # Non-interactive: require explicit choice. Refuse to auto-pick under the
+  # admin-must-choose rule. Helpful message tells the operator how to set it.
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    if [[ "$docker_avail" == "true" && "$podman_avail" == "true" ]]; then
+      log_error "Both Docker and Podman are installed — admin must choose explicitly."
+      log_error "Re-run with --runtime docker  OR  --runtime podman"
+      log_error "(or set YSG_RUNTIME=docker / YSG_RUNTIME=podman in the environment)"
+      exit 1
+    fi
+    # Only one detected — auto-pick is acceptable in non-interactive mode.
+    log_info "Non-interactive mode: runtime auto-selected = $detected"
+    return 0
+  fi
+
+  # ── Interactive: ALWAYS prompt the admin ────────────────────────────────
+  printf "\n"
+  printf "  ┌────────────────────────────────────────────────────────────────┐\n"
+  printf "  │  Container runtime — admin must choose                         │\n"
+  printf "  └────────────────────────────────────────────────────────────────┘\n"
+  printf "\n"
+  printf "  Detected on this host:\n"
+
+  local podman_status="not installed"
+  if [[ "$podman_avail" == "true" ]]; then
+    podman_status="installed"
+    [[ "$podman_running" == "true" ]] && podman_status="installed + running"
+  fi
+  local docker_status="not installed"
+  if [[ "$docker_avail" == "true" ]]; then
+    docker_status="installed"
+    [[ "$docker_running" == "true" ]] && docker_status="installed + running"
+  fi
+
+  printf "    Podman: %s\n" "$podman_status"
+  printf "    Docker: %s\n" "$docker_status"
+  printf "\n"
+  printf "  Yashigani supports both — pick the one you want this install to use.\n"
+  printf "  Podman is recommended (rootless-first, daemonless, more secure posture).\n"
+  printf "\n"
+
+  # Build the menu showing the actual options. Podman first (default).
+  local default_choice="1"
+  printf "    1) Podman   "
+  if [[ "$podman_avail" != "true" ]]; then
+    printf "(NOT installed — pick this only if you'll install podman+podman-compose)\n"
+  elif [[ "$podman_running" != "true" ]]; then
+    printf "(installed but not running — install will start the socket)\n"
+  else
+    printf "(installed + running — recommended)\n"
+  fi
+
+  printf "    2) Docker   "
+  if [[ "$docker_avail" != "true" ]]; then
+    printf "(NOT installed — pick this only if you'll install docker+compose)\n"
+  elif [[ "$docker_running" != "true" ]]; then
+    printf "(installed but daemon not running — start it before continuing)\n"
+  else
+    printf "(installed + running)\n"
+  fi
+
+  printf "    3) Kubernetes (Helm chart, advanced — Docker Desktop K8s, kind, k3s, prod cluster)\n"
+  printf "\n"
+  printf "  Choice [1-3] (default: 1 / Podman): "
+
+  local rt_choice
+  if ! read -r rt_choice </dev/tty 2>/dev/null; then
+    rt_choice=""
+  fi
+  rt_choice="${rt_choice:-$default_choice}"
+
+  case "$rt_choice" in
+    1) YSG_RUNTIME=podman ;;
+    2) YSG_RUNTIME=docker ;;
+    3) YSG_RUNTIME=k8s ;;
+    *) log_warn "Invalid choice — defaulting to Podman"; YSG_RUNTIME=podman ;;
+  esac
+  export YSG_RUNTIME
+
+  # Sanity-check the chosen runtime is actually installed. If not, warn loud
+  # so the admin knows the install will exit at compose-cmd resolution.
+  case "$YSG_RUNTIME" in
+    podman)
+      [[ "$podman_avail" != "true" ]] && \
+        log_warn "Podman is not installed yet. Install it before re-running install.sh,"
+      [[ "$podman_avail" != "true" ]] && \
+        log_warn "or set YSG_RUNTIME=docker if you intended to use Docker."
+      ;;
+    docker)
+      [[ "$docker_avail" != "true" ]] && \
+        log_warn "Docker is not installed yet. Install Docker Desktop or docker engine"
+      [[ "$docker_avail" != "true" ]] && \
+        log_warn "before re-running install.sh."
+      ;;
+    k8s)
+      log_info "Kubernetes runtime selected — install.sh will use helm install path"
+      ;;
+  esac
+
+  printf "\n"
+  log_success "Runtime selected: $YSG_RUNTIME"
 }
 
 _interactive_platform_fallback() {

@@ -202,6 +202,11 @@ _detect_runtime() {
   # Detect which container runtime is available and responsive.
   # Priority: whichever runtime is actually running > installed but not running.
   # Both Docker and Podman are first-class citizens.
+  #
+  # Exports per-runtime detection booleans into the environment so install.sh
+  # can present an explicit prompt to the admin (Tiago directive 2026-04-29 —
+  # admin always picks the runtime, even when both are detected; podman is the
+  # default pre-selection per `feedback_runtime_choice.md`).
 
   local docker_available=false
   local podman_available=false
@@ -231,6 +236,15 @@ _detect_runtime() {
     podman_available=true
     podman info >/dev/null 2>&1 && podman_running=true
   fi
+
+  # Export the per-runtime booleans so install.sh can present an explicit
+  # admin prompt with full visibility into what's installed AND what's running.
+  # The auto-pick below only sets the SUGGESTED default; install.sh's
+  # prompt_runtime_choice() always asks the admin to confirm or override.
+  export YSG_DOCKER_AVAILABLE="$docker_available"
+  export YSG_DOCKER_RUNNING="$docker_running"
+  export YSG_PODMAN_AVAILABLE="$podman_available"
+  export YSG_PODMAN_RUNNING="$podman_running"
 
   # --- Decision: prefer Podman (rootless, daemonless, more secure) ---
   if $podman_running; then
