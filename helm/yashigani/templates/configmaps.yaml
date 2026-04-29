@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-29T00:42:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-29T16:04:58+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -220,6 +220,23 @@ data:
       }
     }
     {{- end }}
+    # ────────────────────────────────────────────────────────────────────────
+    # EX-231-10 Layer B — Caddy HMAC shared-secret marker.
+    # Last updated: 2026-04-29T16:04:58+01:00
+    #
+    # caddy_internal_hmac is written by the mtls-bootstrap Job into the
+    # yashigani-pki-certs Secret and mounted at /run/secrets/caddy_internal_hmac
+    # in Caddy, gateway, and backoffice pods. Caddy reads it via the
+    # CADDY_INTERNAL_HMAC env var (sourced from the K8s Secret via envFrom or
+    # explicit env mapping in caddy.yaml). See compose-side design rationale in
+    # docker/Caddyfile.selfsigned.
+    # ────────────────────────────────────────────────────────────────────────
+    (inject-caddy-verified) {
+      # Strip any inbound value — only Caddy may set this header downstream.
+      header_up -X-Caddy-Verified-Secret
+      # Inject the per-install shared secret from the env var.
+      header_up X-Caddy-Verified-Secret {env.CADDY_INTERNAL_HMAC}
+    }
     # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
     # work regardless of how the cluster operator routes the public domain.
     # Captain #58c #3by (2026-04-29): use explicit PKI cert (caddy_client.crt/key)
@@ -258,6 +275,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-gateway
           {{- end }}
+          import inject-caddy-verified
         }
       }
       # V10.3.5 sender-constrained tokens: client cert is verified at the
@@ -272,6 +290,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-gateway
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle /agents/* {
@@ -283,6 +302,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-gateway
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle /mcp/* {
@@ -290,6 +310,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-gateway
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle /admin/* {
@@ -297,6 +318,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-backoffice
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle /auth/* {
@@ -304,6 +326,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-backoffice
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle /static/* {
@@ -311,6 +334,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-backoffice
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle /login {
@@ -318,6 +342,7 @@ data:
           {{- if .Values.mtls.enabled }}
           import internal-mtls-backoffice
           {{- end }}
+          import inject-caddy-verified
         }
       }
       handle {
@@ -361,6 +386,7 @@ data:
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
             tls_server_name gateway
           }
+          import inject-caddy-verified
         }
       }
       handle {
@@ -390,6 +416,7 @@ data:
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
             tls_server_name backoffice
           }
+          import inject-caddy-verified
         }
       }
       handle {

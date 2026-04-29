@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-28T00:00:00+01:00
+# Last updated: 2026-04-29T16:04:58+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -42,6 +42,61 @@
         tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
     }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Layer B — Caddy HMAC shared-secret marker (EX-231-10 Layer B).
+# Last updated: 2026-04-29T16:04:58+01:00
+#
+# DESIGN DECISION (2026-04-29):
+#   Standard caddy:2-alpine has NO inline HMAC computation capability.
+#   `caddy list-modules` confirms: no hmac/crypto/sign modules. A custom build
+#   would be required for HMAC-SHA256 inline computation. Per Tiago directive
+#   "Caddy-centric with hardening cryptography in communications" the pragmatic
+#   fallback is:
+#
+#   Caddy reads /run/secrets/caddy_internal_hmac (32-byte hex, install-time
+#   generated) and forwards it verbatim as X-Caddy-Verified-Secret on every
+#   reverse_proxy to backoffice:8443 and gateway:8080.
+#
+#   Tom's middleware (follow-on dispatch) reads the same secret from
+#   /run/secrets/caddy_internal_hmac at lifespan startup and verifies:
+#     hmac.compare_digest(
+#         request.headers["X-Caddy-Verified-Secret"],
+#         stored_secret
+#     )
+#   Requests without a matching header → 401.
+#
+#   SECURITY PROPERTY: A data-network attacker with a valid mTLS cert CAN
+#   present the cert + forge X-SPIFFE-ID, but CANNOT know the per-install
+#   HMAC secret (it lives only in /run/secrets/caddy_internal_hmac, readable
+#   only by uid 1001 within Caddy, backoffice, and gateway containers).
+#   Without the correct X-Caddy-Verified-Secret → 401 from Tom's middleware.
+#
+#   The secret is generated at install time (not per-boot) to survive Caddy
+#   restarts without requiring backoffice/gateway restart. It is regenerated
+#   on `install.sh --upgrade` and all three containers pick it up on their
+#   next lifespan startup.
+#
+#   REPLAY PROTECTION: The secret itself is static per install. Replay is
+#   accepted as the residual risk given the constraint that all three callers
+#   must agree on a 30-second time window without an NTP-sync step in install.
+#   Mitigating factors: the secret ONLY flows on the internal mTLS mesh
+#   (caddy_internal network), never on the external edge. An attacker able to
+#   sniff caddy_internal has already broken mTLS — the secret adds defense-in-
+#   depth, not primary authN.
+#
+# STRIP INBOUND: Drop any caller-supplied X-Caddy-Verified-Secret before
+# setting our own. Prevents a data-network caller from forwarding a leaked
+# secret value they captured from a previous request.
+# ─────────────────────────────────────────────────────────────────────────────
+(inject-caddy-verified) {
+    # Strip any inbound value — only Caddy may set this header downstream.
+    header_up -X-Caddy-Verified-Secret
+    # Inject the per-install shared secret from the mounted secrets file.
+    # {env.CADDY_INTERNAL_HMAC} is populated from the secret file via the
+    # environment variable CADDY_INTERNAL_HMAC, set in the entrypoint wrapper.
+    header_up X-Caddy-Verified-Secret {env.CADDY_INTERNAL_HMAC}
 }
 
 # Serve on HTTPS with self-signed cert
@@ -105,6 +160,7 @@ Hiring: https://agnosticsec.com/careers
     handle /healthz {
         reverse_proxy https://gateway:8080 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -118,6 +174,7 @@ Hiring: https://agnosticsec.com/careers
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -130,6 +187,7 @@ Hiring: https://agnosticsec.com/careers
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -139,6 +197,7 @@ Hiring: https://agnosticsec.com/careers
     handle /mcp/* {
         reverse_proxy https://gateway:8080 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -148,6 +207,7 @@ Hiring: https://agnosticsec.com/careers
     handle /admin/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -156,6 +216,7 @@ Hiring: https://agnosticsec.com/careers
     handle /auth/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -164,6 +225,7 @@ Hiring: https://agnosticsec.com/careers
     handle /dashboard/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -172,6 +234,7 @@ Hiring: https://agnosticsec.com/careers
     handle /scim/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -181,6 +244,7 @@ Hiring: https://agnosticsec.com/careers
     handle_path /admin/grafana/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -197,6 +261,7 @@ Hiring: https://agnosticsec.com/careers
     handle_path /admin/wazuh/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -213,6 +278,7 @@ Hiring: https://agnosticsec.com/careers
     handle_path /admin/prometheus/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -229,6 +295,7 @@ Hiring: https://agnosticsec.com/careers
     handle /static/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -238,6 +305,7 @@ Hiring: https://agnosticsec.com/careers
     handle /login {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -264,6 +332,7 @@ Hiring: https://agnosticsec.com/careers
         # On 401: redirects to login page.
         forward_auth https://backoffice:8443 {
         import internal-mtls
+        import inject-caddy-verified
             uri /auth/verify
             copy_headers X-Forwarded-User X-Forwarded-Name X-Forwarded-Email
 
@@ -338,6 +407,7 @@ http://{env.YASHIGANI_TLS_DOMAIN}:80 {
 
         reverse_proxy https://gateway:8080 {
             import internal-mtls
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -367,6 +437,7 @@ http://{env.YASHIGANI_TLS_DOMAIN}:80 {
 
         reverse_proxy https://backoffice:8443 {
             import internal-mtls
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }

@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-27T15:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-29T16:04:58+01:00 */ -}}
 {{- if .Values.caddy.enabled }}
 ---
 apiVersion: apps/v1
@@ -55,6 +55,16 @@ spec:
           env:
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
+            {{- if .Values.mtls.enabled }}
+            # EX-231-10 Layer B: CADDY_INTERNAL_HMAC is read from the same
+            # pki-certs Secret that carries the mTLS leaf certs. Caddy injects
+            # it as X-Caddy-Verified-Secret on every upstream proxy call.
+            - name: CADDY_INTERNAL_HMAC
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+                  key: caddy_internal_hmac
+            {{- end }}
           # Retro #3al — probe the public :80 listener instead of the admin
           # endpoint at :2019. Caddy's admin API is bound to localhost only;
           # exposing it on 0.0.0.0 to satisfy the kubelet would expose the

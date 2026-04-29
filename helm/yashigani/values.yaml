@@ -108,6 +108,11 @@ mtls:
   # Secret contains LEAF material only:
   #   * <service>_client.crt + <service>_client.key (the per-service leaves)
   #   * ca_root.crt + ca_intermediate.crt (public certs — workloads use intermediate only, Pattern B)
+  #   * caddy_internal_hmac (EX-231-10 Layer B) — per-install shared secret
+  #     injected by Caddy as X-Caddy-Verified-Secret on every upstream proxy.
+  #     backoffice and gateway verify it via Tom's middleware. The bootstrap Job
+  #     generates it fresh on install; on upgrade it reuses the existing value
+  #     from the Secret (idempotent) so a live stack isn't disrupted mid-apply.
   # It deliberately does NOT contain the CA private keys — those live in
   # caKeysSecretName below and are mounted only by the bootstrap Job and
   # rotation CronJob. Name retained as `yashigani-pki-certs` for upgrade

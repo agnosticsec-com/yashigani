@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-27T22:00:00Z (BUG-58B-01: fail-closed on secrets_dir chown; BUG-58B-04a: selective backup chmod; retro #59: Podman rootless chown/rm use unshare)
+# last-updated: 2026-04-29T16:04:58+01:00 (EX-231-10 Layer B: caddy_internal_hmac generation; Prometheus cert perms fix)
 set -euo pipefail
 
 # =============================================================================
@@ -2965,6 +2965,44 @@ generate_secrets() {
     fi
   done
 
+  # --- EX-231-10 Layer B: per-install Caddy HMAC shared secret ----------------
+  # caddy_internal_hmac: 32 bytes (256-bit), hex-encoded.
+  # Caddy reads it via CADDY_INTERNAL_HMAC env var and injects it as
+  # X-Caddy-Verified-Secret on every upstream proxy to backoffice and gateway.
+  # Tom's middleware does hmac.compare_digest(header, secret) → 401 if absent.
+  # Mode 0440: readable by uid 1001 (yashigani — Caddy/gateway/backoffice);
+  # never world-readable.
+  # On --upgrade this block regenerates the secret. All three containers must
+  # be restarted to pick it up (install.sh --upgrade restarts them).
+  local hmac_file="${secrets_dir}/caddy_internal_hmac"
+  if [[ ! -s "$hmac_file" ]] || [[ "${REINSTALL:-false}" == "true" ]]; then
+    local _hmac_secret
+    if command -v openssl >/dev/null 2>&1; then
+      _hmac_secret="$(openssl rand -hex 32)"
+    elif command -v python3 >/dev/null 2>&1; then
+      _hmac_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    else
+      log_error "Cannot generate caddy_internal_hmac: neither openssl nor python3 found"
+      return 1
+    fi
+    printf "%s" "$_hmac_secret" > "$hmac_file"
+    chmod 0440 "$hmac_file"
+    log_info "Generated caddy_internal_hmac → ${hmac_file} (mode 0440)"
+  else
+    log_info "caddy_internal_hmac already present — preserving (use REINSTALL=true to rotate)"
+  fi
+  # Write/update CADDY_INTERNAL_HMAC in .env so Compose can interpolate it
+  # into the Caddy, gateway, and backoffice environment blocks.
+  local _hmac_val
+  _hmac_val="$(cat "$hmac_file")"
+  if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+  fi
+
   # --- HIBP breach check on generated passwords (defense-in-depth) ---
   _hibp_check_passwords
 
@@ -3631,6 +3669,28 @@ _pki_chown_client_keys() {
     find "${_secrets_dir}" -maxdepth 1 -type f \
       \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
       -exec chmod 0644 {} \; 2>/dev/null || true
+
+    # Laura bonus finding (EX-231-10 closure): Prometheus container runs as
+    # uid 65534 (nobody). The secrets dir is owned by uid 1001, mode drwxr-x--x
+    # (traversable by others via o+x). Prometheus needs to read its own
+    # prometheus_client.{crt,key} for SPIFFE-gated /internal/metrics scrapes.
+    # Fix: chown prometheus_client.{crt,key} to 1001:1001, chmod key to 0640.
+    # Prometheus gets group_add: ["1001"] in docker-compose.yml so GID 1001
+    # membership grants read access to the 0640 key. The cert is already 0644
+    # (set above). This avoids world-readable key material.
+    log_info "Setting prometheus_client.key to 0640 (group 1001 — Laura EX-231-10 fix)"
+    local _prom_key="${_secrets_dir}/prometheus_client.key"
+    if [[ -f "$_prom_key" ]]; then
+      if [[ "$_chown_mode" == "direct" ]]; then
+        chown 1001:1001 "$_prom_key" 2>/dev/null \
+          || log_warn "chown failed on prometheus_client.key — continuing"
+        chmod 0640 "$_prom_key" 2>/dev/null || true
+      else
+        podman unshare chown 1001:1001 "$_prom_key" 2>/dev/null \
+          || log_warn "podman unshare chown failed on prometheus_client.key — continuing"
+        podman unshare chmod 0640 "$_prom_key" 2>/dev/null || true
+      fi
+    fi
   fi
 }
 

@@ -129,6 +129,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
+            {{- if .Values.mtls.enabled }}
+            # EX-231-10 Layer B: Tom's middleware reads CADDY_INTERNAL_HMAC at
+            # lifespan startup and rejects requests without a matching
+            # X-Caddy-Verified-Secret header → 401. Secret is in pki-certs.
+            - name: CADDY_INTERNAL_HMAC
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+                  key: caddy_internal_hmac
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.gateway.existingSecretName | default "yashigani-gateway-secrets" }}

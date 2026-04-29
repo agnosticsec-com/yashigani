@@ -167,13 +167,39 @@ spec:
                 echo "[applier] FATAL: CA private key leaked into leaves Secret payload" >&2
                 exit 1
               fi
+              # EX-231-10 Layer B: generate per-install caddy_internal_hmac and
+              # include it in the leaves Secret alongside PKI material.
+              # 32 bytes (256-bit), hex-encoded, written to the same Secret that
+              # backoffice, gateway, and Caddy mount at /run/secrets so all three
+              # can read it without a separate volume. Mode is controlled by K8s
+              # Secret → fsGroup 1001 on the mounting pods.
+              if ! command -v openssl >/dev/null 2>&1; then
+                echo "[applier] FATAL: openssl not found — cannot generate caddy_internal_hmac" >&2
+                exit 1
+              fi
+              # Idempotent: if the Secret already contains the key (upgrade), reuse
+              # the existing value so a live stack doesn't break mid-apply.
+              existing_hmac=""
+              existing_hmac=$(kubectl get secret {{ .Values.mtls.secretName }} \
+                --namespace {{ .Release.Namespace }} \
+                -o jsonpath='{.data.caddy_internal_hmac}' 2>/dev/null \
+                | base64 -d 2>/dev/null || true)
+              if [ -n "$existing_hmac" ]; then
+                echo "[applier] Reusing existing caddy_internal_hmac from Secret (upgrade path)"
+                printf "%s" "$existing_hmac" > /tmp/leaves/caddy_internal_hmac
+              else
+                echo "[applier] Generating fresh caddy_internal_hmac (fresh install)"
+                openssl rand -hex 32 > /tmp/leaves/caddy_internal_hmac
+              fi
+              echo "[applier] caddy_internal_hmac ready in leaves payload"
+
               cd /tmp/leaves
               kubectl create secret generic {{ .Values.mtls.secretName }} \
                 --namespace {{ .Release.Namespace }} \
-                $(for f in *.crt *.key; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
+                $(for f in *.crt *.key caddy_internal_hmac; do [ -f "$f" ] && echo "--from-file=$f=$f"; done) \
                 --dry-run=client -o yaml \
               | kubectl apply -n {{ .Release.Namespace }} -f -
-              echo "[applier] Secret {{ .Values.mtls.secretName }} applied (leaves + CA pubs)."
+              echo "[applier] Secret {{ .Values.mtls.secretName }} applied (leaves + CA pubs + caddy_internal_hmac)."
               cd /tmp/cakeys
               kubectl create secret generic {{ .Values.mtls.caKeysSecretName }} \
                 --namespace {{ .Release.Namespace }} \
