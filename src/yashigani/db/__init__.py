@@ -50,10 +50,20 @@ def run_migrations() -> None:
 
     # Multi-replica advisory lock: hold this for the duration of the upgrade.
     # Use a dedicated psycopg2 connection (not the alembic-internal one) so the
-    # lock outlives any of alembic's per-revision transactions. The DSN is the
-    # original (unescaped) sync_dsn — psycopg2 parses URL-encoded passwords
-    # natively, no %% escaping needed.
-    lock_conn = psycopg2.connect(sync_dsn.replace("postgresql+psycopg2://", "postgresql://"))
+    # lock outlives any of alembic's per-revision transactions.
+    #
+    # CRITICAL (Captain #58c #3bw, 2026-04-29): the lock connection MUST go
+    # direct to postgres, NOT through pgbouncer. pgbouncer in transaction-pool
+    # mode routes each new connection to a different postgres backend, and
+    # postgres advisory locks are session-scoped (per-backend). If both
+    # replicas connect through pgbouncer they land on different backends and
+    # both successfully "acquire" the same lock key independently — no
+    # serialisation. We use YASHIGANI_DB_DSN_DIRECT (set in K8s helm chart
+    # pointing at yashigani-postgres:5432, bypassing yashigani-pgbouncer:5432)
+    # for the lock connection when it's set; compose runs single-replica so
+    # falls back to YASHIGANI_DB_DSN where contention doesn't matter.
+    lock_dsn = os.environ.get("YASHIGANI_DB_DSN_DIRECT") or dsn
+    lock_conn = psycopg2.connect(lock_dsn)
     try:
         lock_conn.autocommit = True
         with lock_conn.cursor() as cur:

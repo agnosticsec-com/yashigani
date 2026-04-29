@@ -186,20 +186,48 @@ async def lifespan(app: FastAPI):
             # Hold the same advisory lock as run_migrations() across the
             # bootstrap so replica 2 only enters the bootstrap block AFTER
             # replica 1 has committed the admin rows; replica 2 then sees
-            # count != 0 and skips. Captain #58c #3bv evidence (2026-04-29).
+            # count != 0 and skips.
+            #
+            # CRITICAL (Captain #58c #3bw + #3bx, 2026-04-29): the lock
+            # connection MUST go direct to postgres, NOT through pgbouncer.
+            # pgbouncer in txn-pool mode routes each new connection to a
+            # different postgres backend, and pg_advisory_lock is session-
+            # scoped (per-backend). Replicas land on different backends ->
+            # both "acquire" the same key independently -> no serialisation.
+            # Plus the asyncpg pool's command_timeout=10 was making replica 2
+            # raise TimeoutError before replica 1 finished bootstrap.
+            # Use bare psycopg2 with YASHIGANI_DB_DSN_DIRECT (env var set in
+            # the K8s Helm chart pointing at yashigani-postgres:5432). Falls
+            # back to YASHIGANI_DB_DSN for compose (single-replica = no race).
             from yashigani.auth.pg_auth import PostgresLocalAuthService
             auth_service = PostgresLocalAuthService(pool=get_pool())
             backoffice_state.auth_service = auth_service
-            async with get_pool().acquire() as _bootstrap_conn:
-                await _bootstrap_conn.execute(
-                    "SELECT pg_advisory_lock($1)", _BOOTSTRAP_ADVISORY_LOCK_KEY
-                )
+
+            import asyncio as _asyncio
+            import psycopg2 as _psycopg2
+            direct_dsn = os.environ.get("YASHIGANI_DB_DSN_DIRECT") or db_dsn
+
+            def _acquire_lock_sync():
+                conn = _psycopg2.connect(direct_dsn)
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_lock(%s)", (_BOOTSTRAP_ADVISORY_LOCK_KEY,))
+                return conn
+
+            def _release_lock_sync(conn):
                 try:
-                    await _bootstrap_admin_accounts(auth_service, backoffice_state)
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_ADVISORY_LOCK_KEY,))
                 finally:
-                    await _bootstrap_conn.execute(
-                        "SELECT pg_advisory_unlock($1)", _BOOTSTRAP_ADVISORY_LOCK_KEY
-                    )
+                    conn.close()
+
+            _lock_conn = await _asyncio.to_thread(_acquire_lock_sync)
+            _log.info("Bootstrap: acquired admin advisory lock %s", hex(_BOOTSTRAP_ADVISORY_LOCK_KEY))
+            try:
+                await _bootstrap_admin_accounts(auth_service, backoffice_state)
+            finally:
+                await _asyncio.to_thread(_release_lock_sync, _lock_conn)
+                _log.info("Bootstrap: released admin advisory lock")
 
             inference_logger = InferencePayloadLogger()
             inference_logger.start()
