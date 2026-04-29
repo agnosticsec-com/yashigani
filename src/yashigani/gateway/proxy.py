@@ -108,6 +108,12 @@ def create_gateway_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
+        # EX-231-10 Layer B — load caddy_internal_hmac at startup.
+        # Fail-closed: RuntimeError propagates, uvicorn exits non-zero.
+        # SOP 1: no swallowing, no None fallback.
+        from yashigani.auth.caddy_verified import load_caddy_secret
+        load_caddy_secret()
+
         # Startup: create shared HTTP client for upstream proxying
         _state["http_client"] = httpx.AsyncClient(
             base_url=config.upstream_base_url,

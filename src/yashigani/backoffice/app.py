@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-04-26T21:15:00+01:00
+Last updated: 2026-04-29T16:18:31+01:00
 """
 from __future__ import annotations
 
@@ -155,6 +155,13 @@ async def lifespan(app: FastAPI):
     import os
     from urllib.parse import quote
     _log = _logging.getLogger("yashigani.backoffice.lifespan")
+
+    # EX-231-10 Layer B — load caddy_internal_hmac at startup.
+    # Fail-closed: RuntimeError propagates, uvicorn exits non-zero.
+    # SOP 1: no swallowing, no None fallback.
+    from yashigani.auth.caddy_verified import load_caddy_secret
+    load_caddy_secret()
+
     db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
     if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
         try:
@@ -336,6 +343,16 @@ def create_backoffice_app() -> FastAPI:
     #
     # Must run outermost (added last = executed first in starlette middleware
     # stack), matching gateway/entrypoint.py:423 placement.
+    # EX-231-10 Layer B — Caddy shared-secret gate.
+    # Added BEFORE SpiffePeerCertMiddleware so that Spiffe runs outermost
+    # (first) and CaddyVerified runs second in the Starlette middleware stack.
+    # Starlette ordering: add_middleware calls stack as wrappers; the LAST call
+    # wraps outermost (runs first). Adding CaddyVerified here (before Spiffe)
+    # means Spiffe is the outermost wrapper — matches the existing gateway
+    # ordering at entrypoint.py:423.
+    from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
+    app.add_middleware(CaddyVerifiedMiddleware)
+
     from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
     app.add_middleware(SpiffePeerCertMiddleware)
 
