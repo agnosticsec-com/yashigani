@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-29T16:56:34+01:00 (fix #58a-chown: bifurcate _pki_chown_client_keys by YSG_RUNTIME)
+# last-updated: 2026-04-29T22:05:15+01:00 (fix #58a-podman-remote: macOS Podman remote-client chown fallback via podman run)
 set -euo pipefail
 
 # =============================================================================
@@ -3626,6 +3626,15 @@ _pki_run_issuer() {
 # correct. Private keys remain 0600, chowned to the container's UID.
 #
 # fix #58a-chown (2026-04-29): bifurcate chown strategy by YSG_RUNTIME.
+# fix #58a-podman-remote (2026-04-29): detect Podman remote-client mode
+#   (macOS Podman tunnels to a VM; `podman unshare` is unsupported on the
+#   remote client). Detected via `podman info --format '{{.Host.RemoteSocket.Exists}}'`.
+#   Remote callers use podman_run mode (ephemeral `podman run --rm`) rather
+#   than `podman unshare`. This simplifies the matrix:
+#     docker            → docker_run  (docker run --rm alpine chown)
+#     podman remote     → podman_run  (podman run --rm alpine chown)
+#     podman local root → direct      (plain chown)
+#     podman local non-root → unshare (podman unshare chown)
 #
 #   Previous bug: _chown_mode was set to "unshare" purely on `id -u != 0`.
 #   When YSG_RUNTIME=docker AND Podman is also installed AND the caller is
@@ -3649,7 +3658,7 @@ _pki_run_issuer() {
 #   Error discipline (SOP 1 fail-closed): any chown failure is log_error +
 #   return 1. The previous log_warn + continue masked a 6-day live bug.
 #
-# Last updated: 2026-04-29T16:56:34+01:00
+# Last updated: 2026-04-29T22:05:15+01:00
 # ---------------------------------------------------------------------------
 _pki_chown_client_keys() {
   local _effective_runtime="${YSG_RUNTIME:-}"
@@ -3687,22 +3696,30 @@ _pki_chown_client_keys() {
   )
 
   # Determine chown strategy for this runtime.
-  # "direct"  — plain chown(1); works when caller is root or runtime is Docker
-  #             (Docker daemon runs as root and can map any UID).
-  # "unshare" — podman unshare chown; maps UIDs through the user-namespace
-  #             for the rootless Podman caller. MUST NOT be used on the Docker
-  #             path even when Podman is co-installed.
-  # "docker"  — ephemeral docker run --rm; mounts the secrets dir, runs chown
-  #             inside the container where Docker daemon provides root privs.
-  #             Works regardless of whether the host caller is root or not.
+  # "direct"      — plain chown(1); Podman local root caller.
+  # "unshare"     — podman unshare chown; maps UIDs through the user-namespace
+  #                 for the rootless Podman LOCAL caller. MUST NOT be used on
+  #                 the Docker path or on Podman remote (macOS client).
+  # "docker_run"  — ephemeral docker run --rm; mounts the secrets dir, runs
+  #                 chown inside the container where Docker daemon provides
+  #                 root privs. Works regardless of host caller UID.
+  # "podman_run"  — ephemeral podman run --rm; same approach for Podman remote
+  #                 (macOS tunnels to VM). `podman unshare` is NOT supported on
+  #                 the remote client — this is the correct fallback.
   local _chown_mode
   if [[ "$_effective_runtime" == "docker" ]]; then
-    _chown_mode="docker"
-  elif [[ "$(id -u)" == "0" ]]; then
-    _chown_mode="direct"
-  else
-    # Podman non-root → user-namespace-aware chown
-    _chown_mode="unshare"
+    _chown_mode="docker_run"
+  elif [[ "$_effective_runtime" == "podman" ]]; then
+    # Detect Podman remote-client (macOS Podman tunnels to a VM).
+    # `podman unshare` is unsupported on the remote client; use podman_run.
+    if podman info --format '{{.Host.RemoteSocket.Exists}}' 2>/dev/null | grep -q "true"; then
+      _chown_mode="podman_run"
+    elif [[ "$(id -u)" == "0" ]]; then
+      _chown_mode="direct"
+    else
+      # Podman local non-root → user-namespace-aware chown
+      _chown_mode="unshare"
+    fi
   fi
 
   log_info "Chown'ing client keys to container UIDs (runtime: ${_effective_runtime}, mode: ${_chown_mode})"
@@ -3730,7 +3747,7 @@ _pki_chown_client_keys() {
           return 1
         fi
         ;;
-      docker)
+      docker_run)
         # Bind-mount the secrets dir into a minimal container; chown the
         # specific file path relative to the mount root /s.
         # The container is rm'd immediately; no persistent state.
@@ -3740,6 +3757,20 @@ _pki_chown_client_keys() {
                "$_alpine_image" \
                chown "${_uid}:${_uid}" "/s/${_rel_file}"; then
           log_error "docker run chown ${_uid}:${_uid} failed on ${_label} — aborting"
+          return 1
+        fi
+        ;;
+      podman_run)
+        # Podman remote-client (macOS tunnels to VM): `podman unshare` is not
+        # supported. Use an ephemeral container instead — same approach as
+        # docker_run but invoking `podman run`. The Podman VM provides root
+        # inside the container, so it can chown to any UID.
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        if ! podman run --rm \
+               --volume "${_secrets_dir}:/s:rw" \
+               "$_alpine_image" \
+               chown "${_uid}:${_uid}" "/s/${_rel_file}"; then
+          log_error "podman run chown ${_uid}:${_uid} failed on ${_label} — aborting"
           return 1
         fi
         ;;
