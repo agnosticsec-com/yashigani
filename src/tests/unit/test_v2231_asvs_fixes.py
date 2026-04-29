@@ -227,6 +227,80 @@ class TestEscapeCsvCell:
         # Numbers that don't start with formula triggers are safe
         assert escape_csv_cell("12345") == "12345"
 
+    # -------------------------------------------------------------------------
+    # LF-CSV-BYPASS regression tests (Lu 2026-04-27)
+    # These are the six bypasses Lu empirically reproduced against the original
+    # fix.  All must be escaped by the strip-and-test approach.
+    # -------------------------------------------------------------------------
+
+    def test_cr_then_equals_escaped(self):
+        """LF-CSV-BYPASS: \\r=cmd... — CR normalised to space, strip reveals =."""
+        # After replace("\r"," ") we get " =cmd..." which the old code passed.
+        # The new code strips leading whitespace before the trigger check.
+        result = escape_csv_cell("\r=cmd|'/c calc'!A1")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: \\r=cmd... must be prefixed with ' — was bypassed by old fix"
+        )
+
+    def test_lf_then_equals_escaped(self):
+        """LF-CSV-BYPASS: \\n=cmd... — LF normalised to space, strip reveals =."""
+        result = escape_csv_cell("\n=cmd|'/c calc'!A1")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: \\n=cmd... must be prefixed with '"
+        )
+
+    def test_space_then_equals_escaped(self):
+        """LF-CSV-BYPASS: ' =cmd...' — attacker-supplied leading space."""
+        result = escape_csv_cell(" =cmd|'/c calc'!A1")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: ' =cmd...' must be prefixed with ' — Excel strips leading space"
+        )
+
+    def test_tab_then_equals_escaped(self):
+        """LF-CSV-BYPASS: \\t=cmd... — leading tab before formula trigger."""
+        result = escape_csv_cell("\t=cmd|'/c calc'!A1")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: \\t=cmd... must be prefixed with '"
+        )
+
+    def test_vt_then_equals_escaped(self):
+        """LF-CSV-BYPASS: \\v=cmd... — vertical tab before formula trigger."""
+        result = escape_csv_cell("\v=cmd|'/c calc'!A1")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: \\v=cmd... must be prefixed with '"
+        )
+
+    def test_ff_then_equals_escaped(self):
+        """LF-CSV-BYPASS: \\f=cmd... — form feed before formula trigger."""
+        result = escape_csv_cell("\f=cmd|'/c calc'!A1")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: \\f=cmd... must be prefixed with '"
+        )
+
+    def test_space_then_plus_escaped(self):
+        """LF-CSV-BYPASS: leading space before + trigger."""
+        result = escape_csv_cell(" +1234567890")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: ' +...' must be prefixed with '"
+        )
+
+    def test_space_then_at_escaped(self):
+        """LF-CSV-BYPASS: leading space before @ trigger."""
+        result = escape_csv_cell(" @SUM(1+1)")
+        assert result.startswith("'"), (
+            "LF-CSV-BYPASS: ' @...' must be prefixed with '"
+        )
+
+    def test_safe_value_with_embedded_space_passthrough(self):
+        """Non-trigger value with a space is NOT escaped."""
+        assert escape_csv_cell("hello world") == "hello world"
+
+    def test_midstring_formula_trigger_not_escaped(self):
+        """A formula trigger in the middle of the string (not leading) is safe."""
+        # " hello =world" — after stripping leading nothing, starts with "h"
+        result = escape_csv_cell("hello =world")
+        assert result == "hello =world"
+
 
 class TestAuditExportCsvFormulaSafety:
     """Integration check: the CSV export streams correctly escape formula cells."""
