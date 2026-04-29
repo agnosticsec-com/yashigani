@@ -6,7 +6,10 @@ to backoffice:8443. This validates both:
   (a) the legitimate traffic path works end-to-end, and
   (b) test pods cannot reach backoffice directly (NetworkPolicy enforce this).
 
-Last updated: 2026-04-29T14:30:00+01:00
+F2 fix (2026-04-29): /admin/healthz is session-gated → 401; /healthz is
+unauthenticated → 200. Test must probe the unauthenticated path.
+
+Last updated: 2026-04-29T23:20:00+01:00
 Run with: helm test <release-name> -n <namespace>
 */ -}}
 apiVersion: v1
@@ -44,10 +47,10 @@ spec:
         - -c
         - |
           set -e
-          echo "Testing backoffice /admin/healthz via Caddy (EX-231-10: Caddy-centric path)..."
+          echo "Testing backoffice /healthz via Caddy (EX-231-10: Caddy-centric path)..."
           STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
             --max-time 10 \
-            https://yashigani-caddy:443/admin/healthz)
+            https://yashigani-caddy:443/healthz)
           echo "Caddy-proxied backoffice /healthz returned HTTP ${STATUS}"
           if [ "${STATUS}" != "200" ]; then
             echo "FAIL: expected 200, got ${STATUS}"

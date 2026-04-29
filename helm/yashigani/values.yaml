@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-29T14:30:00+01:00
+# Last updated: 2026-04-29T23:20:00+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -164,8 +164,10 @@ adminBootstrap:
   # it avoids another image pull.
   image:
     # Resolves to global.imageRegistry/global.imageOwner/<repo>:<tag>.
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip 1dbccf6
+    # (2026-04-29T23:16+01:00) to include Layer B caddy_verified.py (F1 fix).
     repository: yashigani-gateway
-    tag: "2.23.1"
+    tag: "2.23.1@sha256:94256a95457a0a9df6e6930a760c6df28136cc1d48368911a473f825a711090d"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -181,8 +183,11 @@ adminBootstrap:
 gateway:
   enabled: true
   image:
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip 1dbccf6
+    # (2026-04-29T23:16+01:00) to include Layer B caddy_verified.py (F1 fix).
+    # LAURA-2026-04-29-003 closed by this digest pin.
     repository: yashigani-gateway
-    tag: "2.23.1"
+    tag: "2.23.1@sha256:94256a95457a0a9df6e6930a760c6df28136cc1d48368911a473f825a711090d"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit (scheduler sizing).
@@ -229,8 +234,11 @@ gateway:
 backoffice:
   enabled: true
   image:
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip 1dbccf6
+    # (2026-04-29T23:16+01:00) to include Layer B caddy_verified.py (F1 fix).
+    # LAURA-2026-04-29-003 closed by this digest pin.
     repository: yashigani-backoffice
-    tag: "2.23.1"
+    tag: "2.23.1@sha256:3f4aa33e54412be58b28ba956c4850587aa4892cc8d705345e558714465cb234"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit.
