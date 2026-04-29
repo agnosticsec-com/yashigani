@@ -1,5 +1,6 @@
 {{- if .Values.mtls.enabled }}
 {{- if not .Values.mtls.existingSecretName }}
+{{- /* Last updated: 2026-04-29T21:59:34+01:00 */}}
 {{- /*
   PKI bootstrap Job — pre-install + pre-upgrade hook.
 
@@ -173,8 +174,8 @@ spec:
               # backoffice, gateway, and Caddy mount at /run/secrets so all three
               # can read it without a separate volume. Mode is controlled by K8s
               # Secret → fsGroup 1001 on the mounting pods.
-              if ! command -v openssl >/dev/null 2>&1; then
-                echo "[applier] FATAL: openssl not found — cannot generate caddy_internal_hmac" >&2
+              if ! command -v dd >/dev/null 2>&1 || ! command -v od >/dev/null 2>&1; then
+                echo "[applier] FATAL: dd/od not found — cannot generate caddy_internal_hmac" >&2
                 exit 1
               fi
               # Idempotent: if the Secret already contains the key (upgrade), reuse
@@ -189,7 +190,7 @@ spec:
                 printf "%s" "$existing_hmac" > /tmp/leaves/caddy_internal_hmac
               else
                 echo "[applier] Generating fresh caddy_internal_hmac (fresh install)"
-                openssl rand -hex 32 > /tmp/leaves/caddy_internal_hmac
+                dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d " \n" > /tmp/leaves/caddy_internal_hmac
               fi
               echo "[applier] caddy_internal_hmac ready in leaves payload"
 
