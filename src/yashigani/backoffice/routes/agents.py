@@ -17,7 +17,7 @@ Routes:
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-04-28T00:00:00+01:00
+Last updated: 2026-04-27T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -327,7 +327,7 @@ async def list_agents(session: AdminSession = require_admin_session):
 @router.post("/admin/agents", response_model=AgentRegisterResponse, status_code=201)
 async def register_agent(
     body: AgentRegisterRequest,
-    session: AdminSession = require_admin_session,
+    session: StepUpAdminSession = require_stepup_admin_session,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
@@ -414,7 +414,7 @@ async def get_agent(
 async def update_agent(
     agent_id: str,
     body: AgentUpdateRequest,
-    session: AdminSession = require_admin_session,
+    session: StepUpAdminSession = require_stepup_admin_session,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
