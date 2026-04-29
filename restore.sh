@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-27T22:00:00Z (gate #58c: pg_ctl root fix + macOS cp 0400 overwrite fix)
+# Last updated: 2026-04-29T01:45:00Z (gate #58c retro #3ca: patch yashigani-postgres-secrets after K8s restore)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -373,6 +373,14 @@ restore_backup() {
   # 6. For K8s: update secrets in the cluster
   if [[ "$K8S_MODE" == "true" && -d "${backup_dir}/secrets" ]]; then
     _restore_k8s_secrets "${backup_dir}/secrets"
+    # 6b. Patch yashigani-postgres-secrets with the restored postgres_password.
+    #     backoffice/gateway/pgbouncer deployments read POSTGRES_PASSWORD via
+    #     valueFrom.secretKeyRef(name=yashigani-postgres-secrets, key=postgres_password).
+    #     _restore_k8s_secrets recreates the flat yashigani-secrets generic secret
+    #     but does NOT touch yashigani-postgres-secrets, so the fresh-install
+    #     password remains live and every post-restore pod startup fails with
+    #     "password authentication failed". (retro #3ca)
+    _restore_k8s_postgres_secrets "${backup_dir}/secrets"
   fi
 
   printf "\n${C_GREEN}${C_BOLD}Restore complete.${C_RESET}\n\n"
@@ -798,6 +806,41 @@ _restore_k8s_secrets() {
     log_success "Kubernetes secrets restored (${#from_files[@]} files)"
   else
     log_error "Failed to create Kubernetes secret — check permissions"
+  fi
+}
+
+# Patch the yashigani-postgres-secrets K8s secret with the restored postgres_password.
+# This is separate from yashigani-secrets (the flat generic secret that holds all
+# backup secret files) because the backoffice/gateway/pgbouncer deployments reference
+# postgres_password via secretKeyRef on yashigani-postgres-secrets specifically.
+# Without this patch the fresh-install password persists and all pods crash with
+# "password authentication failed" after restore. (retro #3ca, gate #58c Round 12)
+_restore_k8s_postgres_secrets() {
+  local secrets_dir="$1"
+  local pw_file="${secrets_dir}/postgres_password"
+
+  if [[ ! -f "$pw_file" ]]; then
+    log_warn "_restore_k8s_postgres_secrets: ${pw_file} not found — skipping yashigani-postgres-secrets patch"
+    return 0
+  fi
+
+  local pw
+  pw=$(<"$pw_file")
+  if [[ -z "$pw" ]]; then
+    log_warn "_restore_k8s_postgres_secrets: postgres_password is empty — skipping"
+    return 0
+  fi
+
+  local pw_b64
+  pw_b64=$(printf '%s' "$pw" | base64)
+
+  log_info "Patching yashigani-postgres-secrets with restored postgres_password..."
+  if kubectl -n "$K8S_NAMESPACE" patch secret yashigani-postgres-secrets \
+      --type='json' \
+      -p="[{\"op\":\"replace\",\"path\":\"/data/postgres_password\",\"value\":\"${pw_b64}\"}]"; then
+    log_success "yashigani-postgres-secrets patched"
+  else
+    log_error "Failed to patch yashigani-postgres-secrets — post-restore pods will fail to connect to postgres"
   fi
 }
 
