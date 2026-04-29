@@ -3,7 +3,7 @@ Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
 
-Last updated: 2026-04-27T00:00:00+01:00
+Last updated: 2026-04-29T17:45:00+01:00
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from yashigani.gateway.proxy import GatewayConfig, create_gateway_app
 from yashigani.gateway.agent_auth import AgentAuthMiddleware
 from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
 from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -414,6 +415,14 @@ def _build_app():
         pii_detector=pii_detector,
     )
     logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
+
+    # Layer B: Caddy-verified shared-secret middleware (EX-231-10 Layer B).
+    # Checks X-Caddy-Verified-Secret on every non-healthcheck request. Must run
+    # second from outermost — added BEFORE SpiffePeerCertMiddleware so that in
+    # Starlette LIFO order, Spiffe runs outermost and CaddyVerified runs second.
+    # load_caddy_secret() is called in the gateway _lifespan (proxy.py), not here,
+    # so the module-level secret is populated before any request dispatch.
+    gateway_app.add_middleware(CaddyVerifiedMiddleware)
 
     # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE fix (V10.3.5).
     # Extracts the TLS peer cert URI SAN from the ASGI handshake scope and

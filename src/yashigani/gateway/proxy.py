@@ -108,6 +108,14 @@ def create_gateway_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
+        # Layer B: load the per-install caddy_internal_hmac secret.
+        # Must be the FIRST thing in startup so the module-level _caddy_secret
+        # is populated before any request reaches CaddyVerifiedMiddleware.
+        # Raises RuntimeError → uvicorn exits non-zero if secret is missing
+        # (fail-closed per SOP 1 / CLAUDE.md §3).
+        from yashigani.auth.caddy_verified import load_caddy_secret as _load_caddy_secret
+        _load_caddy_secret()
+
         # Startup: create shared HTTP client for upstream proxying
         _state["http_client"] = httpx.AsyncClient(
             base_url=config.upstream_base_url,

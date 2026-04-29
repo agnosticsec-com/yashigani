@@ -222,7 +222,7 @@ data:
     {{- end }}
     # ────────────────────────────────────────────────────────────────────────
     # EX-231-10 Layer B — Caddy HMAC shared-secret marker.
-    # Last updated: 2026-04-29T16:04:58+01:00
+    # Last updated: 2026-04-29T17:45:00+01:00
     #
     # caddy_internal_hmac is written by the mtls-bootstrap Job into the
     # yashigani-pki-certs Secret and mounted at /run/secrets/caddy_internal_hmac
@@ -230,12 +230,15 @@ data:
     # CADDY_INTERNAL_HMAC env var (sourced from the K8s Secret via envFrom or
     # explicit env mapping in caddy.yaml). See compose-side design rationale in
     # docker/Caddyfile.selfsigned.
+    # IMPORTANT: {$CADDY_INTERNAL_HMAC} is parse-time env substitution. Do NOT
+    # use {env.CADDY_INTERNAL_HMAC} — request-time placeholder, not resolved in
+    # header_up directives (Round 1 failure root cause, 2026-04-29).
     # ────────────────────────────────────────────────────────────────────────
     (inject-caddy-verified) {
       # Strip any inbound value — only Caddy may set this header downstream.
       header_up -X-Caddy-Verified-Secret
-      # Inject the per-install shared secret from the env var.
-      header_up X-Caddy-Verified-Secret {env.CADDY_INTERNAL_HMAC}
+      # Inject the per-install shared secret via parse-time env substitution.
+      header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
     }
     # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
     # work regardless of how the cluster operator routes the public domain.

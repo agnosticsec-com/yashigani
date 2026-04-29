@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-29T16:04:58+01:00
+# Last updated: 2026-04-29T17:45:00+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -94,9 +94,13 @@
     # Strip any inbound value — only Caddy may set this header downstream.
     header_up -X-Caddy-Verified-Secret
     # Inject the per-install shared secret from the mounted secrets file.
-    # {env.CADDY_INTERNAL_HMAC} is populated from the secret file via the
-    # environment variable CADDY_INTERNAL_HMAC, set in the entrypoint wrapper.
-    header_up X-Caddy-Verified-Secret {env.CADDY_INTERNAL_HMAC}
+    # {$CADDY_INTERNAL_HMAC} is a parse-time env substitution (NOT a request-time
+    # placeholder). Caddy resolves this to the literal secret value when it parses
+    # the Caddyfile on startup. {env.X} form does NOT work in header_up directives
+    # (it is a request-time placeholder only valid in matchers/path expressions).
+    # Round 1 failure (2026-04-29) root cause: {env.CADDY_INTERNAL_HMAC} shipped
+    # the literal placeholder string instead of the secret value.
+    header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
 }
 
 # Serve on HTTPS with self-signed cert

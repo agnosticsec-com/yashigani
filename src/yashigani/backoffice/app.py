@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-04-26T21:15:00+01:00
+Last updated: 2026-04-29T17:45:00+01:00
 """
 from __future__ import annotations
 
@@ -155,6 +155,14 @@ async def lifespan(app: FastAPI):
     import os
     from urllib.parse import quote
     _log = _logging.getLogger("yashigani.backoffice.lifespan")
+
+    # Layer B: load the per-install caddy_internal_hmac secret.
+    # Must be first so _caddy_secret is populated before any request reaches
+    # CaddyVerifiedMiddleware. Raises RuntimeError if secret is missing
+    # (fail-closed per SOP 1 / CLAUDE.md §3).
+    from yashigani.auth.caddy_verified import load_caddy_secret as _load_caddy_secret
+    _load_caddy_secret()
+
     db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
     if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
         try:
@@ -318,6 +326,14 @@ def create_backoffice_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Layer B: Caddy-verified shared-secret middleware (EX-231-10 Layer B).
+    # Checks X-Caddy-Verified-Secret on every non-healthcheck request. Must run
+    # second from outermost — added BEFORE SpiffePeerCertMiddleware so that in
+    # Starlette LIFO order, Spiffe runs outermost and CaddyVerified runs second.
+    # load_caddy_secret() is called in lifespan() above.
+    from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
+    app.add_middleware(CaddyVerifiedMiddleware)
+
     # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE backoffice leg (Lu F-1B
     # EX-231-10, 2026-04-29). Extracts the TLS peer cert URI SAN from the ASGI
     # handshake scope and injects it as X-SPIFFE-ID-Peer-Cert. This is a
@@ -335,7 +351,7 @@ def create_backoffice_app() -> FastAPI:
     # x-spiffe-id (auth/spiffe.py:73).
     #
     # Must run outermost (added last = executed first in starlette middleware
-    # stack), matching gateway/entrypoint.py:423 placement.
+    # stack), matching gateway/entrypoint.py placement.
     from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
     app.add_middleware(SpiffePeerCertMiddleware)
 

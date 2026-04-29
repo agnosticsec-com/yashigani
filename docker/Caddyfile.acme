@@ -55,7 +55,7 @@
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Layer B — Caddy HMAC shared-secret marker (EX-231-10 Layer B).
-# Last updated: 2026-04-29T16:04:58+01:00
+# Last updated: 2026-04-29T17:45:00+01:00
 #
 # DESIGN DECISION: static-shared-secret variant. See Caddyfile.selfsigned for
 # full rationale. caddy:2-alpine has no inline HMAC computation capability.
@@ -64,12 +64,16 @@
 # injects it as X-Caddy-Verified-Secret on every upstream proxy call.
 # Tom's middleware does hmac.compare_digest(header_value, stored_secret) → 401
 # if absent or mismatched.
+#
+# IMPORTANT: {$CADDY_INTERNAL_HMAC} is parse-time env substitution. Do NOT use
+# {env.CADDY_INTERNAL_HMAC} — that is a request-time placeholder not resolved
+# in header_up directives (Round 1 failure root cause, 2026-04-29).
 # ─────────────────────────────────────────────────────────────────────────────
 (inject-caddy-verified) {
     # Strip any inbound value — only Caddy may set this header downstream.
     header_up -X-Caddy-Verified-Secret
-    # Inject the per-install shared secret from the mounted secrets file.
-    header_up X-Caddy-Verified-Secret {env.CADDY_INTERNAL_HMAC}
+    # Inject the per-install shared secret via parse-time env substitution.
+    header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
 }
 
 {env.YASHIGANI_TLS_DOMAIN} {
