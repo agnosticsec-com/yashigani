@@ -3,7 +3,7 @@ Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
 
-Last updated: 2026-04-27T21:53:12+01:00
+Last updated: 2026-04-27T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from yashigani.metrics.middleware import PrometheusMiddleware
 from yashigani.gateway.proxy import GatewayConfig, create_gateway_app
 from yashigani.gateway.agent_auth import AgentAuthMiddleware
 from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
+from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -413,6 +414,13 @@ def _build_app():
         pii_detector=pii_detector,
     )
     logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
+
+    # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE fix (V10.3.5).
+    # Extracts the TLS peer cert URI SAN from the ASGI handshake scope and
+    # injects it as X-SPIFFE-ID-Peer-Cert.  This is a server-controlled header
+    # that cannot be forged by the client, closing the direct-to-gateway bypass.
+    # Must run outermost (added last = executed first in starlette middleware stack).
+    gateway_app.add_middleware(SpiffePeerCertMiddleware)
 
     # Agent auth middleware — must run before Prometheus middleware so agent
     # requests are authenticated before metrics are emitted.
