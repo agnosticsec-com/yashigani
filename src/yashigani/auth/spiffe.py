@@ -2,7 +2,7 @@
 SPIFFE URI ACL gate — application-layer identity check for service-to-service
 callers.
 
-Last updated: 2026-04-27T00:00:00+01:00
+Last updated: 2026-04-27T00:00:01+01:00
 
 Threat model and trust boundary
 -------------------------------
@@ -75,6 +75,15 @@ _DEFAULT_MANIFEST_PATH = "/etc/yashigani/service_identities.yaml"
 _HEADER_NAME = "x-spiffe-id"  # FastAPI lower-cases headers on lookup
 _DEFAULT_TTL_SECONDS = 60
 
+# LF-SPIFFE-RETAIN: maximum time a stale ACL cache is retained after a
+# parse/I/O failure.  After this window the gate fails-closed (returns empty
+# ACL → 403 for all gated paths) and logs CRITICAL every subsequent attempt.
+# Env-tunable: YASHIGANI_SPIFFE_ACL_MAX_STALE_SECONDS (default: 86400 = 24h).
+_DEFAULT_MAX_STALE_SECONDS = 86400
+
+# Monotonic timestamp of the LAST successful manifest load.  None = never loaded.
+_LAST_GOOD_LOAD_AT: float | None = None
+
 
 def _get_ttl() -> float:
     """Return the configured TTL in seconds (env-tunable, default 60)."""
@@ -88,6 +97,24 @@ def _get_ttl() -> float:
             _DEFAULT_TTL_SECONDS,
         )
         return float(_DEFAULT_TTL_SECONDS)
+
+
+def _get_max_stale() -> float:
+    """Return the maximum stale retention window in seconds (env-tunable, default 86400 = 24h).
+
+    LF-SPIFFE-RETAIN: caps how long retain-on-parse-failure can keep a stale
+    ACL alive.  After this window, the gate fails-closed-empty.
+    """
+    raw = os.getenv("YASHIGANI_SPIFFE_ACL_MAX_STALE_SECONDS", str(_DEFAULT_MAX_STALE_SECONDS))
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "spiffe-gate: invalid YASHIGANI_SPIFFE_ACL_MAX_STALE_SECONDS=%r — using default %s",
+            raw,
+            _DEFAULT_MAX_STALE_SECONDS,
+        )
+        return float(_DEFAULT_MAX_STALE_SECONDS)
 
 
 def _read_manifest() -> dict[str, frozenset[str]]:
@@ -111,9 +138,15 @@ def _load_acls() -> dict[str, frozenset[str]]:
     TTL-expired calls: attempts reload; on failure retains previous cache
     and logs CRITICAL (retain-on-parse-failure — avoids outage during
     transient manifest edits).
+
+    LF-SPIFFE-RETAIN: retain-on-parse-failure is bounded by
+    YASHIGANI_SPIFFE_ACL_MAX_STALE_SECONDS (default 86400 = 24h).  After
+    the bound is exceeded, the gate fails-closed-empty and continues logging
+    CRITICAL on every retry until the manifest is fixed.
     """
-    global _CACHE
+    global _CACHE, _LAST_GOOD_LOAD_AT
     ttl = _get_ttl()
+    max_stale = _get_max_stale()
     now = time.monotonic()
 
     # Fast path — check without the lock first (double-checked locking).
@@ -136,6 +169,7 @@ def _load_acls() -> dict[str, frozenset[str]]:
         try:
             fresh = _read_manifest()
             _CACHE = (time.monotonic(), fresh)
+            _LAST_GOOD_LOAD_AT = time.monotonic()
             return fresh
         except Exception as exc:
             if cache is None:
@@ -148,25 +182,40 @@ def _load_acls() -> dict[str, frozenset[str]]:
                 _CACHE = (time.monotonic(), {})
                 return {}
             else:
-                # TTL refresh failed — retain previous cache, alert loudly.
+                # TTL refresh failed — check whether we are still within the
+                # bounded retain window (LF-SPIFFE-RETAIN).
                 _, prev_acls = cache
-                logger.critical(
-                    "spiffe-gate: TTL refresh failed — retaining previous ACL cache "
-                    "(retain-on-parse-failure). Resolve manifest error immediately. "
-                    "Error: %s",
-                    exc,
-                )
-                # Bump the timestamp so we don't re-attempt on every request
-                # while the manifest is broken (back-off by one full TTL).
-                _CACHE = (time.monotonic(), prev_acls)
-                return prev_acls
+                stale_age = (now - _LAST_GOOD_LOAD_AT) if _LAST_GOOD_LOAD_AT is not None else float("inf")
+                if stale_age > max_stale:
+                    # Bounded retention exceeded — fail-closed-empty.
+                    logger.critical(
+                        "spiffe-gate: retain-on-parse-failure exceeded max-stale "
+                        "window (%.0fs > %.0fs) — failing closed (empty ACL). "
+                        "ALL gated endpoints will 403 until manifest is fixed. "
+                        "Error: %s",
+                        stale_age, max_stale, exc,
+                    )
+                    _CACHE = (time.monotonic(), {})
+                    return {}
+                else:
+                    logger.critical(
+                        "spiffe-gate: TTL refresh failed — retaining previous ACL cache "
+                        "(retain-on-parse-failure, stale %.0fs/%.0fs). "
+                        "Resolve manifest error immediately. Error: %s",
+                        stale_age, max_stale, exc,
+                    )
+                    # Bump the timestamp so we don't re-attempt on every request
+                    # while the manifest is broken (back-off by one full TTL).
+                    _CACHE = (time.monotonic(), prev_acls)
+                    return prev_acls
 
 
 def _reset_cache_for_tests() -> None:
-    """Test helper — clear the TTL ACL cache entirely."""
-    global _CACHE
+    """Test helper — clear the TTL ACL cache and last-good-load timestamp entirely."""
+    global _CACHE, _LAST_GOOD_LOAD_AT
     with _CACHE_LOCK:
         _CACHE = None
+        _LAST_GOOD_LOAD_AT = None
 
 
 def require_spiffe_id(path: str) -> Callable[[Request], str]:

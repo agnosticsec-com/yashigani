@@ -235,7 +235,7 @@ async function registerAgent() {
         loadAgents();
     } else {
         var err = await resp.json().catch(function() { return {}; });
-        result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status);
+        result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail || resp.status);
     }
 }
 
@@ -352,7 +352,7 @@ async function createAdmin() {
         loadAccounts();
     } else {
         var err = await resp.json().catch(function() { return {}; });
-        result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
+        result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
     }
 }
 
@@ -374,7 +374,7 @@ async function createUser() {
         loadAccounts();
     } else {
         var err = await resp.json().catch(function() { return {}; });
-        result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
+        result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status);
     }
 }
 
@@ -470,7 +470,7 @@ async function addOrgCap() {
         })
     });
     if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; loadBudgets(); }
-    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail || resp.status); }
 }
 
 async function addGroupBudget() {
@@ -488,7 +488,7 @@ async function addGroupBudget() {
         })
     });
     if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; loadBudgets(); }
-    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail || resp.status); }
 }
 
 async function addIndBudget() {
@@ -506,7 +506,7 @@ async function addIndBudget() {
         })
     });
     if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; loadBudgets(); }
-    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail || resp.status); }
 }
 
 // Models
@@ -572,7 +572,7 @@ async function addAlias() {
         })
     });
     if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; document.getElementById('alias-name').value = ''; document.getElementById('alias-model').value = ''; loadModels(); }
-    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status); }
+    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status); }
 }
 
 async function deleteAlias(alias) {
@@ -597,7 +597,7 @@ async function addAllocation() {
         })
     });
     if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Allocated</span>'; loadModels(); }
-    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status); }
+    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail ? (err.detail.error || JSON.stringify(err.detail)) : resp.status); }
 }
 
 async function deleteAllocation(id) {
@@ -650,7 +650,7 @@ async function addPattern() {
         })
     });
     if (resp.ok) { result.innerHTML = '<span class="badge badge-green">Saved</span>'; document.getElementById('pat-pattern').value = ''; document.getElementById('pat-desc').value = ''; loadSensitivity(); }
-    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + (err.detail || resp.status); }
+    else { var err = await resp.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">Error</span> ' + escapeHtml(err.detail || resp.status); }
 }
 
 async function deletePattern(id) {
@@ -687,9 +687,9 @@ async function loadSettings() {
     var data = await api('/admin/license');
     var container = document.getElementById('license-info');
     if (data) {
-        container.innerHTML = '<p style="font-size:0.85rem;color:#334155;"><strong>Tier:</strong> ' + (data.tier || 'community') +
-            ' | <strong>Max Agents:</strong> ' + (data.max_agents === -1 ? 'Unlimited' : (data.max_agents || '-')) +
-            ' | <strong>Expires:</strong> ' + (data.expires_at || 'Never') + '</p>';
+        container.innerHTML = '<p style="font-size:0.85rem;color:#334155;"><strong>Tier:</strong> ' + escapeHtml(data.tier || 'community') +
+            ' | <strong>Max Agents:</strong> ' + escapeHtml(data.max_agents === -1 ? 'Unlimited' : (data.max_agents || '-')) +
+            ' | <strong>Expires:</strong> ' + escapeHtml(data.expires_at || 'Never') + '</p>';
     } else {
         container.innerHTML = '<p style="font-size:0.85rem;color:#334155;"><strong>Tier:</strong> Community Edition — no license required.<br><span style="color:#64748b;">To use other features please add a license for your preferred tier.</span></p>';
     }
@@ -772,10 +772,10 @@ async function saveAlertConfig() {
         if (r.ok) {
             result.innerHTML = '<span class="badge badge-green">Configuration saved</span>';
         } else {
-            result.innerHTML = '<span class="badge badge-red">Failed: ' + r.status + '</span>';
+            result.innerHTML = '<span class="badge badge-red">Failed: ' + escapeHtml(r.status) + '</span>';
         }
     } catch(e) {
-        result.innerHTML = '<span class="badge badge-red">Error: ' + e.message + '</span>';
+        result.innerHTML = '<span class="badge badge-red">Error: ' + escapeHtml(e.message) + '</span>';
     }
 }
 
@@ -785,13 +785,13 @@ async function testAlertWebhook(sink) {
     try {
         var r = await fetch('/admin/alerts/test/' + sink, { method: 'POST', credentials: 'same-origin' });
         if (r.ok) {
-            result.innerHTML = '<span class="badge badge-green">Test alert sent to ' + sink + '</span>';
+            result.innerHTML = '<span class="badge badge-green">Test alert sent to ' + escapeHtml(sink) + '</span>';
         } else {
             var data = await r.json().catch(function() { return {}; });
-            result.innerHTML = '<span class="badge badge-red">' + sink + ' test failed: ' + (data.detail || r.status) + '</span>';
+            result.innerHTML = '<span class="badge badge-red">' + escapeHtml(sink) + ' test failed: ' + escapeHtml(data.detail || r.status) + '</span>';
         }
     } catch(e) {
-        result.innerHTML = '<span class="badge badge-red">Error: ' + e.message + '</span>';
+        result.innerHTML = '<span class="badge badge-red">Error: ' + escapeHtml(e.message) + '</span>';
     }
 }
 
@@ -894,7 +894,7 @@ async function addAllowedIp() {
     var r = await fetch('/auth/allowed-ips', { method: 'POST', credentials: 'same-origin', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ip: ip}) });
     var result = document.getElementById('ip-access-result');
     if (r.ok) { document.getElementById('new-allowed-ip').value = ''; result.innerHTML = '<span class="badge badge-green">Added</span>'; loadIpAccess(); }
-    else { var err = await r.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">' + (err.detail?.message || 'Failed') + '</span>'; }
+    else { var err = await r.json().catch(function(){return {};}); result.innerHTML = '<span class="badge badge-red">' + escapeHtml(err.detail?.message || 'Failed') + '</span>'; }
 }
 
 async function removeAllowedIp(ip) {
@@ -1173,11 +1173,11 @@ async function toggleService(serviceId, action) {
     });
     if (r.ok) {
         var data = await r.json();
-        if (result) result.innerHTML = '<span class="badge badge-green">' + (data.message || 'Done') + '</span>';
+        if (result) result.innerHTML = '<span class="badge badge-green">' + escapeHtml(data.message || 'Done') + '</span>';
         loadServices();
     } else {
         var err = await r.json().catch(function(){return {};});
-        if (result) result.innerHTML = '<span class="badge badge-red">Failed: ' + (err.detail?.error || r.status) + '</span>';
+        if (result) result.innerHTML = '<span class="badge badge-red">Failed: ' + escapeHtml(err.detail?.error || r.status) + '</span>';
     }
 }
 

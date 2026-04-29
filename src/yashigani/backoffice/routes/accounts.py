@@ -157,6 +157,8 @@ async def disable_admin(username: str, session: StepUpAdminSession):
 
     await state.auth_service.disable(username)
     state.session_store.invalidate_all_for_account(record.account_id)
+    # LF-DISABLE-PARTIAL: suspend identity-registry entries for this admin.
+    _suspend_identity_registry_for_account(record.account_id)
     state.audit_writer.write(_config_event(
         session.account_id, "admin_account_disabled", username, "disabled"
     ))
@@ -195,6 +197,40 @@ async def force_reset(username: str, body: ForceResetRequest, session: StepUpAdm
         session.account_id, f"admin_{body.action}", username, "forced"
     ))
     return {"status": "ok"}
+
+
+def _suspend_identity_registry_for_account(account_id: str) -> None:
+    """Suspend all identity-registry entries owned by account_id.
+
+    LF-DISABLE-PARTIAL (2026-04-27): mirrors users.py equivalent.
+    Fail-soft on registry unavailability.
+    """
+    registry = backoffice_state.identity_registry
+    if registry is None:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "LF-DISABLE-PARTIAL: identity_registry not available — "
+            "API keys for account %s NOT suspended", account_id,
+        )
+        return
+    try:
+        all_ids = registry.list_all()
+        suspended = 0
+        for identity in all_ids:
+            if identity.get("org_id") == account_id:
+                registry.suspend(identity["identity_id"])
+                suspended += 1
+        import logging as _log
+        _log.getLogger(__name__).info(
+            "LF-DISABLE-PARTIAL: suspended %d identity-registry entries for account %s",
+            suspended, account_id,
+        )
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error(
+            "LF-DISABLE-PARTIAL: failed to suspend identity-registry entries "
+            "for account %s: %s", account_id, exc,
+        )
 
 
 def _config_event(admin_id: str, setting: str, prev: str, new: str):
