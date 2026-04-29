@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-29T22:05:15+01:00 (fix #58a-podman-remote: macOS Podman remote-client chown fallback via podman run)
+# last-updated: 2026-04-29T22:55:54+01:00 (revert Laura #95 seccomp absolute-path: docker-compose v5 inlines JSON, Podman rejects as filename; keep unconfined on Podman — TM-V231-005 deferred to v2.23.2)
 set -euo pipefail
 
 # =============================================================================
@@ -1288,21 +1288,20 @@ _write_aes_key_to_env() {
     # both ignore unknown profile names; rather than name-mismatch silently,
     # explicitly disable). Linux + AppArmor users override via env.
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
-    # Laura #95 TM-V231-005 (2026-04-29) fix: instead of disabling seccomp on
-    # Podman to dodge the relative-path double-prefix bug, pass the ABSOLUTE
-    # path to the profile so podman-compose's working-dir semantics can't
-    # mangle it. The compose default `./seccomp/yashigani.json` stays as the
-    # manual-compose-from-docker-dir fallback for power users; install.sh
-    # always wins via env.
-    local _seccomp_abs="${WORK_DIR}/docker/seccomp/yashigani.json"
-    if [[ -f "$_seccomp_abs" ]]; then
-      _env_set "YASHIGANI_SECCOMP_PROFILE" "$_seccomp_abs"
-      log_success "Podman seccomp: absolute path ${_seccomp_abs}"
-    else
-      # Last-resort fallback only if the profile genuinely isn't on disk.
-      log_warn "Podman seccomp profile not found at $_seccomp_abs — using unconfined (Laura #95 TM-V231-005 deferred to v2.23.2 if this fires)"
-      _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
-    fi
+    # TM-V231-005 (Laura #95): seccomp enforcement on Podman via docker-compose
+    # compat layer is NOT achievable by passing an absolute path. docker-compose
+    # v5.x reads the JSON file and inlines its contents into the API request;
+    # Podman's docker-compat API then tries to open() the JSON blob as a filename,
+    # hitting "file name too long" (ENAMETOOLONG). The absolute-path approach
+    # (Laura #95, 2026-04-29) was reverted because it causes a compose-up failure
+    # on every macOS Podman install.
+    #
+    # Correct fix requires native Podman-compose seccomp syntax (not docker-compose
+    # compat). Deferred to v2.23.2 (project_v232_backlog.md TM-V231-005). Until
+    # then, seccomp on Podman stays unconfined. The gateway + backoffice seccomp
+    # profile IS enforced on Docker (Linux and macOS Docker Desktop).
+    _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
+    log_warn "Podman seccomp: unconfined (TM-V231-005 — docker-compose v5 compat cannot pass file path to Podman; deferred to v2.23.2)"
   elif [[ "${YSG_OS:-}" == "linux" && "${YSG_RUNTIME:-}" == "docker" ]]; then
     # Docker on Linux: auto-load our AppArmor profile so containers start without
     # requiring a manual 'apparmor_parser -r' step. If loading fails (no apparmor,
