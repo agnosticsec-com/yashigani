@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-29T17:45:00+01:00
+# Last updated: 2026-04-30T21:15:00+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -41,6 +41,12 @@
         tls
         tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+        # Force HTTP/1.1 upstream to ensure header modifications from
+        # reverse_proxy.headers.request.set are correctly serialized.
+        # Caddy v2.11.x has a confirmed bug where headers set via
+        # reverse_proxy.headers.request.set are dropped on HTTP/2 upstream
+        # connections (confirmed R4 macOS Podman gate 2026-04-30).
+        versions 1.1
     }
 }
 
@@ -86,13 +92,19 @@
 #   sniff caddy_internal has already broken mTLS — the secret adds defense-in-
 #   depth, not primary authN.
 #
-# STRIP INBOUND: Drop any caller-supplied X-Caddy-Verified-Secret before
-# setting our own. Prevents a data-network caller from forwarding a leaked
-# secret value they captured from a previous request.
+# STRIP INBOUND: Caddy's `header_up` `set` operation REPLACES any existing
+# value for the header — an inbound X-Caddy-Verified-Secret is overwritten.
+# A separate `header_up -X-Caddy-Verified-Secret` (delete) is NOT used here
+# because in Caddy v2.11.x the Caddyfile adapter compiles both delete and set
+# into the same `headers.request` JSON object, and the JSON handler applies
+# `set` before `delete`, causing the header to be deleted after being set
+# (net result: header missing). Verified in R4 macOS Podman gate 2026-04-30.
+# `set` alone achieves equivalent security: an attacker-supplied inbound value
+# is overwritten by our secret. The HMAC secret is only available to containers
+# with /run/secrets/caddy_internal_hmac mounted, so a forged header cannot
+# match.
 # ─────────────────────────────────────────────────────────────────────────────
 (inject-caddy-verified) {
-    # Strip any inbound value — only Caddy may set this header downstream.
-    header_up -X-Caddy-Verified-Secret
     # Inject the per-install shared secret from the mounted secrets file.
     # {$CADDY_INTERNAL_HMAC} is a parse-time env substitution (NOT a request-time
     # placeholder). Caddy resolves this to the literal secret value when it parses
@@ -100,6 +112,8 @@
     # (it is a request-time placeholder only valid in matchers/path expressions).
     # Round 1 failure (2026-04-29) root cause: {env.CADDY_INTERNAL_HMAC} shipped
     # the literal placeholder string instead of the secret value.
+    # `set` (without preceding `-X-Caddy-Verified-Secret` delete) overwrites any
+    # inbound value — equivalent to delete+set without the Caddy v2.11.x bug.
     header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
 }
 

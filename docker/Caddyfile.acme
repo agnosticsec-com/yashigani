@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
-# Last updated: 2026-04-29T16:04:58+01:00
+# Last updated: 2026-04-30T21:15:00+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -50,6 +50,10 @@
         tls
         tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+        # Force HTTP/1.1: Caddy v2.11.x drops headers set via
+        # reverse_proxy.headers.request.set on HTTP/2 upstream connections.
+        # Confirmed R4 macOS Podman gate 2026-04-30.
+        versions 1.1
     }
 }
 
@@ -70,9 +74,13 @@
 # in header_up directives (Round 1 failure root cause, 2026-04-29).
 # ─────────────────────────────────────────────────────────────────────────────
 (inject-caddy-verified) {
-    # Strip any inbound value — only Caddy may set this header downstream.
-    header_up -X-Caddy-Verified-Secret
     # Inject the per-install shared secret via parse-time env substitution.
+    # NOTE: `header_up -X-Caddy-Verified-Secret` (delete before set) is NOT
+    # used here — in Caddy v2.11.x the JSON adapter applies set-before-delete
+    # in the headers.request object, so delete wins and the header goes missing.
+    # `set` alone overwrites any inbound value with equivalent security.
+    # Verified R4 macOS Podman gate 2026-04-30. See Caddyfile.selfsigned for
+    # full rationale.
     header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
 }
 
