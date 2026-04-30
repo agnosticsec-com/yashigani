@@ -1,5 +1,5 @@
 {{- if .Values.networkPolicies.enabled }}
-# Last updated: 2026-04-29T14:30:00+01:00
+# Last updated: 2026-04-30T19:30:00+01:00
 # NetworkPolicy — default-deny with explicit allow rules per service.
 # Enforces the principle of least privilege for intra-cluster traffic.
 #
@@ -235,6 +235,23 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Direct-to-postgres for bootstrap-class advisory locks only.
+    # run_migrations() acquires a session-scoped pg_advisory_lock directly on
+    # the postgres backend — pgbouncer transaction-pool mode routes each new
+    # connection to a DIFFERENT backend, so two replicas can each "acquire"
+    # the same key independently without serialisation. The direct path puts
+    # both lock connections on the same backend process, where advisory locks
+    # actually serialise. Captain #58c retro #3bw/#3bx. Scoped to port 5432
+    # only; backoffice app-traffic still goes through pgbouncer.
+    {{- if .Values.mtls.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
 
 ---
 # Policy (OPA) — accept ingress from gateway and backoffice only
@@ -383,7 +400,9 @@ spec:
           port: 80
 
 ---
-# PostgreSQL — accept ingress from pgbouncer only
+# PostgreSQL — accept ingress from pgbouncer (app traffic) and backoffice
+# (direct connection for session-scoped advisory lock during run_migrations).
+# See allow-backoffice-egress comment above for rationale. Captain #58c #3bw.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -405,6 +424,16 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    {{- if .Values.mtls.enabled }}
+    # Backoffice direct connection for advisory-lock-based migration serialisation.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
 
 ---
 # PgBouncer — accept ingress from gateway, backoffice, and langgraph agent
