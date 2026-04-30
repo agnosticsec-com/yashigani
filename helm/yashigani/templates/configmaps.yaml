@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-29T16:04:58+01:00 */ -}}
+{{- /* Last updated: 2026-04-30T20:20:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -235,9 +235,15 @@ data:
     # header_up directives (Round 1 failure root cause, 2026-04-29).
     # ────────────────────────────────────────────────────────────────────────
     (inject-caddy-verified) {
-      # Strip any inbound value — only Caddy may set this header downstream.
-      header_up -X-Caddy-Verified-Secret
       # Inject the per-install shared secret via parse-time env substitution.
+      # NOTE: `header_up -X-Caddy-Verified-Secret` (delete) is intentionally
+      # absent. In Caddy v2, header_up operations apply in order: set, then
+      # delete — meaning delete runs AFTER set and removes the injected value.
+      # `header_up X val` (without + prefix) is a SET operation that replaces
+      # any existing client-supplied value, which is the correct behaviour.
+      # Parity with docker/Caddyfile.selfsigned (lines 97-117) and
+      # docker/Caddyfile.acme (lines 76-84). Bug introduced in Helm-only
+      # Caddyfile during #58c — fixed at b85aad1 closure (2026-04-30).
       header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
     }
     # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
