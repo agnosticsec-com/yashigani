@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
-# Last updated: 2026-04-30T21:15:00+01:00
+# Last updated: 2026-04-30T23:20:00+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -8,9 +8,9 @@
 #   - Or port 443 reachable (TLS-ALPN-01)
 #   - YASHIGANI_TLS_DOMAIN must resolve to this server's public IP
 #
-# TLS policy: TLS 1.2 minimum, TLS 1.3 preferred.
-# Key exchange: hybrid post-quantum (X25519+ML-KEM-768) with X25519 fallback.
-# Cipher suites: Caddy defaults (ECDHE + AES-GCM / ChaCha20-Poly1305 only).
+# TLS policy: TLS 1.3 minimum (Tiago directive 2026-04-30; closes Ava R3 finding).
+# Key exchange: hybrid post-quantum (X25519+ML-KEM-768) preferred, X25519 fallback.
+# Cipher suites: GCM-only (TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256).
 # HSTS: max-age 1 year, includeSubDomains.
 # OCSP stapling: enabled automatically by Caddy.
 #
@@ -87,11 +87,14 @@
 {env.YASHIGANI_TLS_DOMAIN} {
     # ── TLS policy ──────────────────────────────────────────────────────────
     tls {
-        protocols tls1.2 tls1.3
+        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
+        # Closes Ava R3 finding (was negotiating TLS 1.2 + ChaCha20-Poly1305).
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
         # Hybrid post-quantum key exchange: X25519+ML-KEM-768 preferred,
         # X25519 fallback for clients that don't support ML-KEM.
         # Protects against "Harvest Now, Decrypt Later" (HNDL) attacks.
-        curves x25519mlkem768 x25519
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
         # V10.3.5 sender-constrained tokens: site-level optional client cert
         # verification. `verify_if_given` accepts non-mTLS browser connections
         # AND extracts SPIFFE URI from validated client cert. Per-path SPIFFE
@@ -390,7 +393,9 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
             mode require_and_verify
             trust_pool file /run/secrets/ca_intermediate.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     @metrics path /internal/metrics
@@ -422,7 +427,9 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
             mode require_and_verify
             trust_pool file /run/secrets/ca_intermediate.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     @metrics path /internal/metrics

@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (CA-signed certificate mode)
-# Last updated: 2026-04-30T23:05:00+01:00
+# Last updated: 2026-04-30T23:20:00+01:00
 # Use this for enterprise / on-prem deployments with an internal CA.
 #
 # Before starting:
@@ -73,9 +73,12 @@
 {env.YASHIGANI_TLS_DOMAIN} {
     # ── TLS policy — CA-signed certificate ──────────────────────────────────
     tls /etc/caddy/tls/server.crt /etc/caddy/tls/server.key {
-        protocols tls1.2 tls1.3
+        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
+        # Closes Ava R3 finding (was negotiating TLS 1.2 + ChaCha20-Poly1305).
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
         # Hybrid post-quantum key exchange (HNDL protection)
-        curves x25519mlkem768 x25519
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     # ── Security headers ────────────────────────────────────────────────────
@@ -358,7 +361,9 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
             mode require_and_verify
             trust_pool file /run/secrets/ca_intermediate.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     @metrics path /internal/metrics
@@ -390,7 +395,9 @@ http://{env.YASHIGANI_TLS_DOMAIN} {
             mode require_and_verify
             trust_pool file /run/secrets/ca_intermediate.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     @metrics path /internal/metrics

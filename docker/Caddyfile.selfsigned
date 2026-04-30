@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-30T21:15:00+01:00
+# Last updated: 2026-04-30T23:20:00+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -120,9 +120,14 @@
 # Serve on HTTPS with self-signed cert
 https://{env.YASHIGANI_TLS_DOMAIN}:443 {
     tls internal {
-        protocols tls1.2 tls1.3
+        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
+        # Closes Ava R3 finding (TLS 1.2 negotiated with ChaCha20-Poly1305).
+        # caddy adapt ground-truth confirmed: protocol_min=tls1.3,
+        # cipher_suites=[TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256].
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
         # Hybrid post-quantum key exchange (HNDL protection)
-        curves x25519mlkem768 x25519
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
         # V10.3.5 sender-constrained tokens: verify client cert if presented.
         # `verify_if_given` accepts non-mTLS browser connections AND extracts
         # SPIFFE URI from a presented client cert when one is given. Per-path
@@ -413,7 +418,9 @@ http://{env.YASHIGANI_TLS_DOMAIN}:80 {
             mode require_and_verify
             trust_pool file /run/secrets/ca_intermediate.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     @metrics path /internal/metrics
@@ -445,7 +452,9 @@ http://{env.YASHIGANI_TLS_DOMAIN}:80 {
             mode require_and_verify
             trust_pool file /run/secrets/ca_intermediate.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
     }
 
     @metrics path /internal/metrics
