@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-29T22:55:54+01:00 (revert Laura #95 seccomp absolute-path: docker-compose v5 inlines JSON, Podman rejects as filename; keep unconfined on Podman — TM-V231-005 deferred to v2.23.2)
+# last-updated: 2026-04-30T20:30:22+01:00 (fix: macOS Podman podman_run chown — warn-not-abort, virtiofs TCC Privacy blocks statfs after machine restart; gate R4 v2.23.1)
 set -euo pipefail
 
 # =============================================================================
@@ -3764,13 +3764,26 @@ _pki_chown_client_keys() {
         # supported. Use an ephemeral container instead — same approach as
         # docker_run but invoking `podman run`. The Podman VM provides root
         # inside the container, so it can chown to any UID.
+        #
+        # WARN-not-ABORT: macOS Podman virtiofs may not expose the secrets path
+        # (~/Documents/ can be blocked by macOS TCC Privacy settings after a
+        # machine restart). When this happens, `podman run --volume` fails with
+        # "statfs ... operation not permitted". This is safe to soft-warn:
+        # virtiofs + Podman rootless user-namespace already maps the macOS host
+        # user (UID 502) to the container owner UID dynamically — the chown is
+        # not required for the container to read its own key files.
+        # Evidence: R3 gate 2026-04-29 — gateway started without explicit chown.
+        # Hard-abort would block install on a working macOS Podman configuration.
+        # TM-V231-005: upgrade chown to hard-requirement in v2.23.2 by requiring
+        # the admin to grant Podman Full Disk Access before install.
         local _rel_file="${_file#"${_secrets_dir}/"}"
         if ! podman run --rm \
                --volume "${_secrets_dir}:/s:rw" \
                "$_alpine_image" \
-               chown "${_uid}:${_uid}" "/s/${_rel_file}"; then
-          log_error "podman run chown ${_uid}:${_uid} failed on ${_label} — aborting"
-          return 1
+               chown "${_uid}:${_uid}" "/s/${_rel_file}" 2>/dev/null; then
+          log_warn "podman run chown ${_uid}:${_uid} failed on ${_label} (macOS TCC Privacy may block virtiofs access)"
+          log_warn "  virtiofs UID remapping should compensate — verifying at service start"
+          log_warn "  To fix permanently: grant Podman Full Disk Access in System Settings > Privacy"
         fi
         ;;
     esac
