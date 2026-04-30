@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-30T21:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-30T23:20:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -269,13 +269,22 @@ data:
       # #3by: explicit cert (not `tls internal`) — Caddy internal auto-cert
       # binds to 'localhost' only; our PKI cert has IP Address:127.0.0.1 SAN.
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
+        # Closes Ava R3 finding. Consistent with docker/Caddyfile.acme.
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
         client_auth {
           mode verify_if_given
           trust_pool file /run/secrets/ca_bundle.crt
         }
       }
       {{- else }}
-      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
+      }
       {{- end }}
       header {
         X-Content-Type-Options    "nosniff"
@@ -388,7 +397,9 @@ data:
           mode require_and_verify
           trust_pool file /run/secrets/ca_bundle.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
       }
       @metrics path /internal/metrics
       handle @metrics {
@@ -418,7 +429,9 @@ data:
           mode require_and_verify
           trust_pool file /run/secrets/ca_bundle.crt
         }
-        protocols tls1.2 tls1.3
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
       }
       @metrics path /internal/metrics
       handle @metrics {
