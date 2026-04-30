@@ -12,7 +12,12 @@
 #   * For K8s / mTLS deployments, supply --client-cert and --client-key for
 #     mutual TLS — the backoffice requires a valid client cert.
 #
-# Last-Updated: 2026-04-27T12:00:00Z (surface ERR exception string for forensics)
+# macOS note: The system Python at /usr/bin/python3 links LibreSSL which has a
+# known bug (bad decrypt) with TLS 1.3 + HTTP/1.1 ALPN — confirmed R4 gate
+# 2026-04-30. On macOS, prefer /opt/homebrew/bin/python3 (OpenSSL 3.x) if
+# present. On Linux/container the system python3 works without restriction.
+#
+# Last-Updated: 2026-04-30T22:00:00+01:00 (macOS OpenSSL workaround; R4 gate)
 
 set -euo pipefail
 
@@ -45,6 +50,17 @@ SSH_PREFIX=""
 CAT_PREFIX="cat"
 CLIENT_CERT=""
 CLIENT_KEY=""
+
+# Resolve the best available Python: prefer Homebrew (OpenSSL) on macOS,
+# fall back to system python3.  On Linux the system python3 is always fine.
+# This is a platform shim — NOT a downgrade clause.  Both binaries run the
+# identical probe logic; only the TLS backend differs.
+_PYTHON3="python3"
+if [[ "$(uname -s)" == "Darwin" && -x /opt/homebrew/bin/python3 ]]; then
+  if /opt/homebrew/bin/python3 -c "import ssl; v=ssl.OPENSSL_VERSION; exit(0 if 'OpenSSL' in v else 1)" 2>/dev/null; then
+    _PYTHON3="/opt/homebrew/bin/python3"
+  fi
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -79,11 +95,11 @@ read_secret() {
 probe_admin() {
   local label="$1" user="$2" pass="$3" totp_secret="$4"
   local totp_code resp status
-  totp_code=$(python3 -c "import pyotp,hashlib,sys; print(pyotp.TOTP('${totp_secret}',digest=hashlib.sha256).now())" 2>/dev/null) || {
+  totp_code=$("$_PYTHON3" -c "import pyotp,hashlib,sys; print(pyotp.TOTP('${totp_secret}',digest=hashlib.sha256).now())" 2>/dev/null) || {
     echo "${label} login HTTP: TOTP_ERR"
     return 4
   }
-  resp=$(python3 - "$BASE_URL" "$user" "$pass" "$totp_code" "${CLIENT_CERT}" "${CLIENT_KEY}" <<'PYEOF'
+  resp=$("$_PYTHON3" - "$BASE_URL" "$user" "$pass" "$totp_code" "${CLIENT_CERT}" "${CLIENT_KEY}" <<'PYEOF'
 import json, ssl, sys, urllib.request, urllib.error
 base, user, pw, code, client_cert, client_key = sys.argv[1:7]
 ctx = ssl.create_default_context()
@@ -108,8 +124,8 @@ except Exception as ex:
     print(json.dumps({"status": "ERR", "err": str(ex)}))
 PYEOF
 )
-  status=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('status','unknown'))" "$resp" 2>/dev/null || echo "unknown")
-  err=$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('err',''))" "$resp" 2>/dev/null || echo "")
+  status=$("$_PYTHON3" -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('status','unknown'))" "$resp" 2>/dev/null || echo "unknown")
+  err=$("$_PYTHON3" -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('err',''))" "$resp" 2>/dev/null || echo "")
   if [[ "$status" == "ERR" && -n "$err" ]]; then
     echo "${label} login HTTP: ${status} (${err})"
   else

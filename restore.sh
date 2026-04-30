@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-29T03:30:00Z (gate #58c retro #3ca/#3cc: patch yashigani-postgres-secrets + pgbouncer DATABASE_URL after K8s restore)
+# Last updated: 2026-04-30T22:30:00+01:00 (R4 gate: widen chmod u+w sweep to all secret files, not just *.key/*.pem)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -314,12 +314,15 @@ restore_backup() {
     # The outer home directory (/home/max) provides the primary access control;
     # making the inner secrets/ directory traversable is intentional and safe.
     chmod 751 "${WORK_DIR}/docker/secrets"
-    # Ensure any pre-existing read-only keys in the destination are writable
+    # Ensure any pre-existing read-only files in the destination are writable
     # before we overwrite them. On macOS (BSD cp), cp -rp fails to overwrite
     # a 0400 file even when you own it — unlike GNU cp which can force-overwrite
-    # owner-writable-by-permission. This is idempotent: we restore canonical
-    # permissions in _pki_chown_client_keys immediately after the copy.
-    find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \( -name '*.key' -o -name '*.pem' \) \
+    # owner-writable-by-permission.  The original filter was *.key/*.pem only,
+    # but token files, hmac files, and password files are also installed 0400
+    # by install.sh — all need u+w for the cp to succeed.  This is idempotent:
+    # we restore canonical permissions in _pki_chown_client_keys immediately
+    # after the copy.  Bug caught: R4 macOS Podman gate 2026-04-30.
+    find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
       -exec chmod u+w {} \; 2>/dev/null || true
     # cp -p preserves source mode/ownership timestamps.
     if ! cp -rp "${backup_dir}/secrets/"* "${WORK_DIR}/docker/secrets/"; then
