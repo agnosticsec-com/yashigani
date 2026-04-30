@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (CA-signed certificate mode)
-# Last updated: 2026-04-30T23:20:00+01:00
+# Last updated: 2026-04-30T23:38:00+01:00
 # Use this for enterprise / on-prem deployments with an internal CA.
 #
 # Before starting:
@@ -79,6 +79,16 @@
         ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
         # Hybrid post-quantum key exchange (HNDL protection)
         curves x25519mlkem768 x25519 secp384r1 secp256r1
+        # V10.3.5 sender-constrained tokens: verify client cert if presented.
+        # `verify_if_given` accepts non-mTLS browser connections AND extracts
+        # SPIFFE URI from a presented client cert when one is given. Per-path
+        # SPIFFE forwarding stays in handle blocks. Caddy v2 requires
+        # client_auth at the server-block tls directive, not inside handle —
+        # Captain #58c #3br evidence (2026-04-28).
+        client_auth {
+            mode verify_if_given
+            trust_pool file /run/secrets/ca_intermediate.crt
+        }
     }
 
     # ── Security headers ────────────────────────────────────────────────────
@@ -133,14 +143,9 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Agent routing — /agents/* ──────────────────────────────────────────
-    # V10.3.5 sender-constrained tokens: verify client cert if presented.
+    # Site-level `tls { client_auth { ... } }` does the verify;
+    # this handle just forwards SPIFFE URI from the validated peer cert.
     handle /agents/* {
-        tls {
-            client_auth {
-                mode verify_if_given
-                trust_pool file /run/secrets/ca_intermediate.crt
-            }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
@@ -152,14 +157,8 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
-    # V10.3.5 same optional mTLS gate as /agents/*.
+    # Same as /agents/* — site-level client_auth, per-path SPIFFE forwarding.
     handle /v1/* {
-        tls {
-            client_auth {
-                mode verify_if_given
-                trust_pool file /run/secrets/ca_intermediate.crt
-            }
-        }
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
