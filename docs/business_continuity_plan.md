@@ -1,7 +1,8 @@
+<!-- last-updated: 2026-05-01T00:09:28+01:00 -->
 # Business Continuity Plan
 
-> Version: 1.0.0
-> Date: 2026-04-12
+> Version: 1.0.1
+> Date: 2026-05-01
 > Compliance: ISO 27001 A.5.29, A.5.30 | HIPAA §164.308(a)(7)(i)
 
 ## 1. Purpose

@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-04-28T19:50:00+00:00 -->
+<!-- last-updated: 2026-05-01T00:09:28+01:00 -->
 # Yashigani
 ---
 
@@ -16,13 +16,12 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Tagged Release:** v2.22.3 (main) — full v2.22.x feature set
-**In development:** v2.23.1 (`v2.23.1-mtls` branch) — Core-plane mTLS, two-tier PKI, hardening; Open WebUI optional via `--with-openwebui`
+**Latest Tagged Release:** v2.23.1 (`v2.23.1-mtls` branch) — Core-plane mTLS, two-tier PKI, hardening; all five clean-slate gates GREEN (macOS Podman + Docker, Linux Podman + Docker, K8s Helm)
 
 ---
 **Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, agent bundles, and the optional Smallstep step-ca runtime ACME service are all gated behind compose profiles / install flags. **Core-plane mTLS is default-on**: per-service leaf certificates are issued at install time by the in-tree two-tier PKI (`src/yashigani/pki/issuer.py`) — no optional services required.
 ---
-**Document Date:** 2026-04-25
+**Document Date:** 2026-05-01
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -291,6 +290,24 @@ v2.23.1 is a security-hardening release on top of v2.23.0. It makes mutual TLS m
 **Runtime-Routing Fixes** -- `install.sh` correctly honours `YSG_RUNTIME=docker` on hosts where Podman is also installed. Stale `YSG_PODMAN_RUNTIME` env-var bleed from prior sessions is neutralised at every call. Backup helpers read the resolved runtime, not `command -v` heuristics.
 
 **Installer Platform Coverage** -- Clean-slate installs are validated on macOS Podman, macOS Docker, Linux Podman (Ubuntu 24.04 aarch64), Linux Docker (Ubuntu 24.04 aarch64), and K8s Helm (Docker Desktop). All five platforms bring 15 containers to Healthy with mTLS active.
+
+**Day 9-12 hardening additions (tip 8ed29e6):**
+
+- **EX-231-10 Layer B re-implementation** (cf4e647, 00843b2) -- Caddy HMAC shared-secret middleware re-implemented as a single-author Caddy snippet (`inject-caddy-verified`) that sets `X-Caddy-Verified-Secret` on the forwarded request. The earlier Python-side verifier approach was reverted (35b51cb); the Caddy-native approach is simpler and does not require a Python middleware round-trip. A header-deletion bug (header_up `-X-Caddy-Verified-Secret` appearing before the set) was fixed in R4 (00843b2, 54e607a) to ensure the header reaches the upstream correctly.
+- **cryptography 46.x pin** (39e0879, de66f6f) -- `cryptography<47` pinned across all images after `cryptography==47.0.0` raised SIGILL on Podman VM aarch64 (illegal instruction on some ARM cores). Images rebuilt at 39e0879; Helm values updated with new digests.
+- **K8s Helm: gateway→postgres and backoffice→postgres NetworkPolicy** (b85aad1, 7023360) -- Two `NetworkPolicy` rules added to allow gateway and backoffice pods to reach the Postgres pod on port 5432. Previously absent, causing K8s gate failures during Alembic migration runs.
+- **K8s Helm: ca_bundle.crt chain-verify anchor** (1a6db9f, 7023360) -- `ca_bundle.crt` (intermediate + root) mounted into gateway and backoffice pods via ConfigMap for Python `ssl` chain verification. Required because Python's `ssl` module is libssl-direct and rejects partial-chain without the root in the trust store.
+- **K8s Helm: DSN_DIRECT for gateway** (1a6db9f) -- `YASHIGANI_DB_DSN_DIRECT` injected into the gateway pod so Alembic migrations bypass PgBouncer's transaction-pool mode during startup.
+- **K8s Helm: secret lookup preserve on upgrade** (6c8f660) -- Helm `lookup` used to preserve existing secrets across `helm upgrade`; prevents `randAlphaNum` regenerating credentials on every upgrade cycle.
+- **Caddy TLS 1.3 + GCM-only ciphers** (bc9cd0d, d7f6447) -- All Caddyfile variants (`Caddyfile`, `Caddyfile.ca`, `Caddyfile.waf`) and Helm ConfigMaps enforce `tls_min_version TLS1.3` with explicit GCM cipher suite list. Applies to all listeners including the WAF variant.
+- **Caddyfile.ca: client_auth at site-level** (63c5351) -- `client_auth` directive moved from individual `handle` blocks to the site-level TLS block in `Caddyfile.ca`. Fixes Laura finding LAURA-V231-008 where client cert verification could be bypassed by routing to an unhandled block.
+- **inject-caddy-verified on admin reverse_proxy blocks** (e0d3869) -- `import inject-caddy-verified` added to all admin `reverse_proxy` blocks in `Caddyfile.ca` (Laura finding LAURA-V231-007), ensuring the verified-secret header is injected on admin paths as well as the main proxy path.
+- **macOS Podman: chown warn-not-abort** (d5247b7) -- `_pki_chown_client_keys` in `install.sh` no longer aborts on chown failure under macOS Podman (TCC/permission restriction). A warning is logged and the install continues; the keys are still created with correct ownership where permissions allow.
+- **restore.sh: chmod u+w sweep** (f1ecf11) -- `restore.sh` widens all secret files to `u+w` before `cp` to handle cases where the backup contains read-only secrets. Fixes restore failures on Linux Podman when secret files were 0400 in the backup archive.
+- **install.sh: macOS Podman remote-client chown fallback** (17d369c) -- Installer detects the Podman remote-client case (macOS host, VM-backed socket) and falls back gracefully when `chown` cannot be applied from the host.
+- **CI: v2.23.x branch filter** (8ed29e6) -- GitHub Actions workflow branch filter extended to cover `v2.23.x` release tracks, ensuring CI runs on release branches without manual filter edits.
+
+For full root-cause analysis and retro items see `/Internal/Compliance/yashigani/v2.23.1/retro.md`.
 
 ### v2.23.0 — Single Branch, API-First Admin, Strict CSP, and Compose Profiles
 
