@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-27T15:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-30T21:00:00+01:00 */ -}}
 {{- if .Values.prometheus.enabled }}
 ---
 apiVersion: v1
@@ -38,7 +38,7 @@ data:
           - targets: ["yashigani-caddy:{{ .Values.caddy.internalMetricsListener.port }}"]
         metrics_path: /internal/metrics
         tls_config:
-          ca_file:   /run/secrets/ca_intermediate.crt
+          ca_file:   /run/secrets/ca_bundle.crt
           cert_file: /run/secrets/prometheus_client.crt
           key_file:  /run/secrets/prometheus_client.key
           server_name: yashigani-caddy
@@ -50,7 +50,7 @@ data:
           - targets: ["yashigani-caddy:{{ .Values.caddy.internalMetricsListenerBackoffice.port }}"]
         metrics_path: /internal/metrics
         tls_config:
-          ca_file:   /run/secrets/ca_intermediate.crt
+          ca_file:   /run/secrets/ca_bundle.crt
           cert_file: /run/secrets/prometheus_client.crt
           key_file:  /run/secrets/prometheus_client.key
           server_name: yashigani-caddy

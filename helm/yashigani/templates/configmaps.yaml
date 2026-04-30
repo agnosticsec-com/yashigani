@@ -41,10 +41,13 @@ metadata:
     {{- include "yashigani.labels" . | nindent 4 }}
 data:
   otel-collector.yml: |
-    # M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS (Pattern B).
-    # Trust anchor: ca_intermediate.crt. Clients must present leaf certs.
+    # M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS.
+    # Trust anchor: ca_bundle.crt (root+intermediate). Go x509 (OTEL Collector)
+    # verifies client certs (leaf+intermediate chain bundles) against the CA pool.
+    # Captain R4 K8s gate 2026-04-30: using ca_bundle.crt for consistency with
+    # all other Go/libssl consumers (pgbouncer, Caddy).
     {{- if .Values.mtls.enabled }}
-    # mTLS enabled: receivers require client cert auth (Pattern B).
+    # mTLS enabled: receivers require client cert auth.
     {{- end }}
     receivers:
       otlp:
@@ -55,7 +58,7 @@ data:
             tls:
               cert_file: /run/secrets/otel-collector_client.crt
               key_file: /run/secrets/otel-collector_client.key
-              client_ca_file: /run/secrets/ca_intermediate.crt
+              client_ca_file: /run/secrets/ca_bundle.crt
             {{- end }}
           http:
             endpoint: "0.0.0.0:4318"
@@ -63,7 +66,7 @@ data:
             tls:
               cert_file: /run/secrets/otel-collector_client.crt
               key_file: /run/secrets/otel-collector_client.key
-              client_ca_file: /run/secrets/ca_intermediate.crt
+              client_ca_file: /run/secrets/ca_bundle.crt
             {{- end }}
     processors:
       memory_limiter:
@@ -383,7 +386,7 @@ data:
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
           mode require_and_verify
-          trust_pool file /run/secrets/ca_intermediate.crt
+          trust_pool file /run/secrets/ca_bundle.crt
         }
         protocols tls1.2 tls1.3
       }
@@ -394,7 +397,7 @@ data:
         reverse_proxy https://yashigani-gateway:8080 {
           transport http {
             tls
-            tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+            tls_trusted_ca_certs /run/secrets/ca_bundle.crt
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
             tls_server_name gateway
           }
@@ -413,7 +416,7 @@ data:
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
           mode require_and_verify
-          trust_pool file /run/secrets/ca_intermediate.crt
+          trust_pool file /run/secrets/ca_bundle.crt
         }
         protocols tls1.2 tls1.3
       }
@@ -424,7 +427,7 @@ data:
         reverse_proxy https://yashigani-backoffice:8443 {
           transport http {
             tls
-            tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+            tls_trusted_ca_certs /run/secrets/ca_bundle.crt
             tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
             tls_server_name backoffice
           }

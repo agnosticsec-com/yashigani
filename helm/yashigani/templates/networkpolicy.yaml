@@ -149,6 +149,20 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    {{- if .Values.mtls.enabled }}
+    # Direct-to-postgres egress for session-scoped advisory lock during run_migrations.
+    # Gateway run_migrations() acquires pg_advisory_lock via YASHIGANI_DB_DSN_DIRECT —
+    # pgbouncer transaction-pool mode can route each connection to a different postgres
+    # backend, so the advisory lock must go direct to serialise concurrent gateway
+    # replicas. Same rationale as allow-backoffice-egress direct-postgres entry.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
     - to:
         - podSelector:
             matchLabels:
@@ -430,6 +444,18 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-backoffice
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Gateway direct connection for advisory-lock-based migration serialisation.
+    # Same rationale as backoffice above — gateway run_migrations() uses
+    # YASHIGANI_DB_DSN_DIRECT to acquire pg_advisory_lock directly on postgres.
+    # Captain R4 finding 2026-04-30: gateway→postgres blocked by NetworkPolicy,
+    # causing connection timeout in run_migrations() → CrashLoopBackOff.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
       ports:
         - protocol: TCP
           port: 5432
