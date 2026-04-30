@@ -3,8 +3,10 @@ name: Security Scan
 on:
   schedule:
     - cron: '0 3 * * *'
+  push:
+    branches: [main, "release/**", "v2.23.*"]
   pull_request:
-    branches: [main]
+    branches: [main, "release/**", "v2.23.*"]
 
 permissions:
   security-events: write
