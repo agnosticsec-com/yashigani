@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-04-30T21:38:00+01:00 */ -}}
 {{- if .Values.backoffice.enabled }}
 ---
 apiVersion: apps/v1
@@ -137,10 +138,14 @@ spec:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
             - name: YASHIGANI_DB_DSN
-              # Pattern A for Python ssl: asyncpg consumes this DSN via Python
-              # ssl, not libpq binary — sslrootcert anchor is the public
-              # ca_root.crt (Py 3.12/OpenSSL 3.0 strict-chain — gate #58a/#3bc).
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
+              # ca_bundle.crt (root+intermediate) for libpq/psycopg2 consumers.
+              # asyncpg also uses this DSN but asyncpg goes through Python ssl
+              # which can build the chain with root alone. Using ca_bundle.crt
+              # is safe for both consumers. Captain R4 K8s gate 2026-04-30:
+              # libpq (psycopg2) fails with ca_root.crt alone when pgbouncer
+              # serves a chain-bundle cert (openssl error 20 "unable to get
+              # local issuer certificate").
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
             - name: YASHIGANI_DB_DSN_DIRECT
               # Direct-to-postgres DSN, bypassing pgbouncer. Used ONLY by
               # bootstrap-class operations that need a session-scoped postgres
@@ -153,7 +158,9 @@ spec:
               # postgres-the-process puts both replicas' lock connections on
               # the same backend, where pg_advisory_lock actually serialises.
               # Captain #58c #3bw + #3bx evidence (2026-04-29).
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
+              # ca_bundle.crt: postgres also serves chain-bundle cert; libpq
+              # requires bundle CA to verify (Captain R4 finding 2026-04-30).
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
             {{- end }}
             - name: YASHIGANI_OPA_URL
               value: "http://yashigani-policy:8181"

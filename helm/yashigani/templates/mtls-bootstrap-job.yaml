@@ -1,6 +1,6 @@
 {{- if .Values.mtls.enabled }}
 {{- if not .Values.mtls.existingSecretName }}
-{{- /* Last updated: 2026-04-29T21:59:34+01:00 */}}
+{{- /* Last updated: 2026-04-30T21:00:00+01:00 */}}
 {{- /*
   PKI bootstrap Job — pre-install + pre-upgrade hook.
 
@@ -193,6 +193,20 @@ spec:
                 dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -A n -t x1 | tr -d " \n" > /tmp/leaves/caddy_internal_hmac
               fi
               echo "[applier] caddy_internal_hmac ready in leaves payload"
+
+              # ca_bundle.crt — root + intermediate concatenated. Required by
+              # libssl/libpq consumers (pgbouncer, psycopg2) that cannot build
+              # a chain from a chain-bundle cert when only the root is in the
+              # CAfile. openssl verify -CAfile ca_root.crt pgbouncer_client.crt
+              # fails with "unable to get local issuer certificate" (error 20)
+              # even though pgbouncer_client.crt contains the intermediate as
+              # block 2 — OpenSSL only reads the first block as the cert to
+              # verify. With ca_root.crt+ca_intermediate.crt bundled in the
+              # CAfile, OpenSSL verifies correctly. Python ssl consumers work
+              # with ca_root.crt alone (chain building from presented cert).
+              # Captain R4 K8s gate finding 2026-04-30.
+              cat /tmp/leaves/ca_root.crt /tmp/leaves/ca_intermediate.crt > /tmp/leaves/ca_bundle.crt
+              echo "[applier] ca_bundle.crt (root+intermediate) created for libssl consumers."
 
               cd /tmp/leaves
               kubectl create secret generic {{ .Values.mtls.secretName }} \

@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-04-30T21:38:00+01:00 */ -}}
 {{- if .Values.gateway.enabled }}
 ---
 apiVersion: apps/v1
@@ -115,11 +116,20 @@ spec:
             {{- if .Values.mtls.enabled }}
             # mTLS DSN — verify-ca + client cert, via pgbouncer.
             - name: YASHIGANI_DB_DSN
-              # Pattern A for Python ssl: asyncpg + psycopg2 both consume this
-              # DSN via Python ssl, not libpq binary — sslrootcert anchor is
-              # the public ca_root.crt (Py 3.12/OpenSSL 3.0 strict-chain — gate
-              # #58a/#3bc evidence).
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+              # ca_bundle.crt: libpq (psycopg2) used by run_migrations() advisory
+              # lock can't verify chain-bundle certs with ca_root.crt alone.
+              # openssl error 20 "unable to get local issuer certificate".
+              # ca_bundle.crt = ca_root.crt + ca_intermediate.crt concatenated.
+              # Captain R4 K8s gate finding 2026-04-30.
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+            - name: YASHIGANI_DB_DSN_DIRECT
+              # Direct-to-postgres DSN, bypassing pgbouncer. Used by run_migrations()
+              # advisory lock. pgbouncer transaction-pool routes each connection to
+              # a different postgres backend — session-scoped pg_advisory_lock
+              # cannot serialise across replicas via pgbouncer. Direct connection
+              # puts both replicas on the same backend. Captain #58c #3bw (2026-04-29).
+              # ca_bundle.crt: same libpq chain-verify fix as YASHIGANI_DB_DSN.
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
             {{- else }}
             - name: YASHIGANI_DB_DSN
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani"

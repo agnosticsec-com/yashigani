@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-30T20:20:00+01:00 */ -}}
+{{- /* Last updated: 2026-04-30T21:00:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -195,7 +195,10 @@ data:
     # Internal mTLS snippet — used by every reverse_proxy that targets a
     # service terminating mTLS (gateway:8080, backoffice:8443). Caddy
     # presents caddy_client.{crt,key} and verifies the upstream against
-    # ca_intermediate.crt (Pattern B). Mirrors docker/Caddyfile.selfsigned (internal-mtls).
+    # ca_bundle.crt (root+intermediate). Captain R4 K8s gate 2026-04-30:
+    # Caddy Go TLS also fails to verify chain-bundle upstreams with only
+    # ca_intermediate.crt as the trust anchor — x509: certificate signed by
+    # unknown authority. ca_bundle.crt (root+intermediate) resolves this.
     # ────────────────────────────────────────────────────────────────────────
     {{- if .Values.mtls.enabled }}
     # K8s service names (yashigani-gateway / yashigani-backoffice) don't
@@ -206,7 +209,7 @@ data:
     (internal-mtls-gateway) {
       transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+        tls_trusted_ca_certs /run/secrets/ca_bundle.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         tls_server_name gateway
       }
@@ -214,7 +217,7 @@ data:
     (internal-mtls-backoffice) {
       transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+        tls_trusted_ca_certs /run/secrets/ca_bundle.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         tls_server_name backoffice
       }
@@ -265,7 +268,7 @@ data:
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
         client_auth {
           mode verify_if_given
-          trust_pool file /run/secrets/ca_intermediate.crt
+          trust_pool file /run/secrets/ca_bundle.crt
         }
       }
       {{- else }}
