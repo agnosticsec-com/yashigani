@@ -18,7 +18,7 @@ Covers:
   - domain-bound license with unset YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
   - wildcard org_domain ("*") → no domain check (#102)
 
-Last updated: 2026-04-27T21:53:12+01:00
+Last updated: 2026-05-01T00:37:01+01:00
 """
 from __future__ import annotations
 
@@ -678,6 +678,12 @@ class TestSignLicenseV4Roundtrip:
         try:
             import sign_license
             return sign_license
+        except ModuleNotFoundError:
+            # scripts/sign_license.py is gitignored (internal signing tool) and
+            # will not be present in CI checkouts.  Skip the test class cleanly.
+            # v2.23.2 P0-5a: CI infrastructure fix.
+            pytest.skip("scripts/sign_license.py not available in this checkout — "
+                        "internal signing tool is gitignored (P0-5a)")
         finally:
             sys.path.pop(0)
 
@@ -704,10 +710,12 @@ class TestSignLicenseV4Roundtrip:
         assert result.valid is True
         assert result.tier == LicenseTier.PROFESSIONAL
 
-    def test_v3_roundtrip_still_works(self, patched_verifier):
+    def test_v3_sign_payload_produces_valid_format(self, patched_verifier):
+        """sign_license.sign_payload() produces v3 format (1 dot). LAURA-V231-003:
+        v3 licenses are now REJECTED by verify_license() — sign_payload() is kept
+        for offline tooling parity only; new issuance must use sign_payload_v4()."""
         primary_priv_pem, _, _, _ = patched_verifier
         from yashigani.licensing.verifier import verify_license
-        from yashigani.licensing.model import LicenseTier
 
         sl = self._import_sign_license()
         payload = _make_payload()
@@ -715,6 +723,7 @@ class TestSignLicenseV4Roundtrip:
         lic_str = sl.sign_payload(payload, primary_priv_pem)
         assert lic_str.count(".") == 1, "v3 license must have exactly 1 dot"
 
+        # v3 is now rejected — verify_license returns license_format_too_old.
         result = verify_license(lic_str)
-        assert result.valid is True
-        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.valid is False
+        assert result.error == "license_format_too_old"

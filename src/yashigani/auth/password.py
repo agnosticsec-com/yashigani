@@ -2,6 +2,8 @@
 Yashigani Auth — Argon2id password hashing + HIBP breach check.
 OWASP ASVS V2.4: m=65536, t=3, p=4 minimum parameters.
 OWASP ASVS V2.1.7: Passwords must be checked against breach databases.
+
+Last updated: 2026-05-01T00:37:01+01:00
 """
 from __future__ import annotations
 
@@ -177,7 +179,12 @@ def check_hibp(password: str) -> Optional[int]:
             logger.debug("HIBP check skipped — no HTTP client available")
             return None
 
-    sha1_hash = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+    # HIBP k-Anonymity protocol mandates SHA-1 as the wire format (NIST SP 800-63B §5.1.1.2).
+    # usedforsecurity=False: signals to hashlib/Bandit that this is a protocol requirement,
+    # not a security primitive. The actual password is stored with Argon2id. Closes B324.
+    sha1_hash = hashlib.sha1(  # noqa: S324
+        password.encode("utf-8"), usedforsecurity=False
+    ).hexdigest().upper()
     prefix = sha1_hash[:5]
     suffix = sha1_hash[5:]
 
@@ -205,7 +212,11 @@ def _check_hibp_urllib(password: str) -> Optional[int]:
     import urllib.request
     import urllib.error
 
-    sha1_hash = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+    # Same HIBP k-Anonymity protocol — SHA-1 mandated by external API.
+    # usedforsecurity=False: not a security primitive; closes B324 (Bandit).
+    sha1_hash = hashlib.sha1(  # noqa: S324
+        password.encode("utf-8"), usedforsecurity=False
+    ).hexdigest().upper()
     prefix = sha1_hash[:5]
     suffix = sha1_hash[5:]
 
@@ -215,7 +226,7 @@ def _check_hibp_urllib(password: str) -> Optional[int]:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=_HIBP_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=_HIBP_TIMEOUT) as resp:  # noqa: S310
             body = resp.read().decode("utf-8")
     except (urllib.error.URLError, OSError):
         logger.debug("HIBP API unreachable (urllib) — skipping breach check")

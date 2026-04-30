@@ -42,16 +42,19 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-backoffice.sarif
+      # P0-5b: distinct category per upload — GitHub rejects duplicate tool+job combinations.
       - name: Upload SARIF results
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-gateway.sarif
+          category: trivy-gateway
       - name: Upload SARIF backoffice
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-backoffice.sarif
+          category: trivy-backoffice
       - name: Push CVE metrics
         if: always()
         run: |
@@ -71,7 +74,14 @@ jobs:
           python-version: "3.12"
       - run: pip install "bandit[toml]>=1.7"
       - name: Run Bandit
-        run: bandit -r src/yashigani/ -c pyproject.toml -f json -o bandit-report.json -ll
+        run: |
+          # Write JSON artifact (JSON format always exits 0 — separate baseline check below).
+          bandit -r src/yashigani/ -c pyproject.toml -f json -o bandit-report.json -ll || true
+          # P0-5d: baseline check exits 1 on any net-new finding not in .bandit baseline.
+          # .bandit baseline pins 12 triaged B310 findings with documented compensating
+          # controls (validate_siem_url, _assert_safe_owui_url, EX-231-02/04 exceptions).
+          # B324 SHA-1 findings closed by usedforsecurity=False in auth/password.py.
+          bandit -r src/yashigani/ -c pyproject.toml -ll -b .bandit
       - name: Upload report
         uses: actions/upload-artifact@v4
         if: always()
@@ -89,9 +99,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e "." pip-audit
+      - run: pip install -e "." "pip-audit>=2.7"
       - name: Run pip-audit
-        run: pip-audit --format json --output pip-audit-report.json --fail-on-cvss 7
+        # P0-5c: --fail-on-cvss was removed in pip-audit 2.x (flag never existed in
+        # the OSS release; was confused with OWASP Dependency Check --failOnCVSS).
+        # pip-audit now exits non-zero on any found vulnerability by default.
+        # OSV provides broader CVE coverage than the default PyPI advisory database.
+        run: pip-audit --vulnerability-service osv --format json --output pip-audit-report.json
       - name: Upload report
         uses: actions/upload-artifact@v4
         if: always()
