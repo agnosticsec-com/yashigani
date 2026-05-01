@@ -57,7 +57,7 @@ class LicenseState:
 # Per-tier limit defaults — used by verifier for backwards-compat with
 # v1/v2 license payloads that pre-date the max_end_users / max_admin_seats fields.
 TIER_DEFAULTS: dict[str, dict] = {
-    "community":          {"max_agents": 20,    "max_end_users": 10,     "max_admin_seats": 2,   "max_orgs": 1},
+    "community":          {"max_agents": 20,    "max_end_users": 5,      "max_admin_seats": 2,   "max_orgs": 1},
     "starter":            {"max_agents": 300,   "max_end_users": 100,    "max_admin_seats": 10,  "max_orgs": 1},
     "professional":       {"max_agents": 1500,  "max_end_users": 500,    "max_admin_seats": 25,  "max_orgs": 1},
     "professional_plus":  {"max_agents": 15000, "max_end_users": 5000,   "max_admin_seats": 100, "max_orgs": 5},
@@ -66,12 +66,13 @@ TIER_DEFAULTS: dict[str, dict] = {
 }
 
 
-# Community hardcoded defaults — no license file needed (v0.8.4 limits)
+# Community hardcoded defaults — no license file needed
+# v2.23.2 canonical: 20 agents / 5 end users / 2 admin seats / 1 org
 COMMUNITY_LICENSE = LicenseState(
     tier=LicenseTier.COMMUNITY,
     org_domain="*",
     max_agents=20,
-    max_end_users=10,
+    max_end_users=5,
     max_admin_seats=2,
     max_orgs=1,
     features=frozenset(),
