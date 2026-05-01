@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-01T16:45:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-01T23:47:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -602,9 +602,7 @@ data:
                     await conn.execute(
                         f"CREATE TABLE IF NOT EXISTS {q_name}"
                         f" PARTITION OF {q_table}"
-                        " FOR VALUES FROM ($1) TO ($2)",
-                        start,
-                        end,
+                        f" FOR VALUES FROM ('{start.isoformat()}') TO ('{end.isoformat()}')"
                     )
                     created[table].append(name)
                     logger.info("Partition %s: OK", name)

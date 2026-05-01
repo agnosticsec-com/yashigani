@@ -12,7 +12,7 @@ Usage:
     DATABASE_URL=postgresql://user:pass@host/db python scripts/partition_maintenance.py
     python scripts/partition_maintenance.py --months-ahead 6
 
-Last updated: 2026-05-01T16:50:00+01:00
+Last updated: 2026-05-01T23:47:00+01:00
 mTLS fix: extract sslrootcert/sslcert/sslkey from DSN, build ssl.SSLContext
 for asyncpg (asyncpg does not parse libpq ssl params from DSN query string).
 """
@@ -136,16 +136,18 @@ async def ensure_partitions(conn_dsn: str, months_ahead: int = 3) -> dict[str, l
                 # Safe identifier quoting — _quote_ident rejects any name
                 # that doesn't match [a-zA-Z_][a-zA-Z0-9_]* before the
                 # statement is composed (CWE-89, YSG-RISK-001 #3ar).
-                # Date literals are passed as $1/$2 bind parameters so the
-                # database never interpolates them as SQL tokens.
+                # Date literals are formatted directly as ISO-8601 strings
+                # (YYYY-MM-DD). asyncpg bind parameters ($1/$2) are NOT
+                # supported in DDL statements like CREATE TABLE — the server
+                # reports "expects 0 arguments" and fails. The date values
+                # come from Python date arithmetic (not user input) so
+                # direct string interpolation is safe here.
                 q_name = _quote_ident(name)
                 q_table = _quote_ident(table)
                 await conn.execute(
                     f"CREATE TABLE IF NOT EXISTS {q_name}"
                     f" PARTITION OF {q_table}"
-                    " FOR VALUES FROM ($1) TO ($2)",
-                    start,
-                    end,
+                    f" FOR VALUES FROM ('{start.isoformat()}') TO ('{end.isoformat()}')"
                 )
                 created[table].append(name)
                 logger.info("Partition %s: OK", name)
