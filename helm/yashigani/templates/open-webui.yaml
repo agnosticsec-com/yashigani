@@ -1,5 +1,5 @@
 {{- /*
-  Last updated: 2026-05-01T23:30:00+01:00
+  Last updated: 2026-05-01T23:34:00+01:00
   v2.23.1 task #94 — startupProbe + tightened liveness/readiness so
   helm install --wait does not stall on slow first-boot of upstream image.
   v2.23.1 GA fix — initContainer chowns upstream image static/ dir so the
@@ -139,20 +139,29 @@ spec:
               value: {{ .Values.openWebui.env.defaultModels | quote }}
             - name: WEBUI_NAME
               value: {{ .Values.openWebui.env.webuiName | quote }}
-            # Disable HuggingFace model auto-download at startup. Our NetworkPolicy
-            # blocks open-webui egress to huggingface.co (correct zero-trust posture).
-            # Without these flags, open-webui tries to download embedding models on
-            # boot; each attempt times out after ~110s (ConnectTimeout) before failing
-            # gracefully. 4 model download attempts × 110s = 440s of blocked startup,
-            # which causes the startupProbe to fail even at 600s (120 × 5s) window.
-            # HF_HUB_OFFLINE=1 is the canonical HuggingFace Hub env var for fully
-            # offline mode — any snapshot_download call fails fast with
-            # LocalEntryNotFoundError instead of timing out on TCP. This is
-            # separate from RAG_EMBEDDING_MODEL_AUTO_UPDATE (which suppresses
-            # one code path) and covers ALL huggingface_hub call sites including
-            # retrieval/utils.py get_model_path. Without this, the process
-            # OOM-crashes during startup while retrying model lookups.
+            # Disable ALL HuggingFace/external model calls at startup. Our NetworkPolicy
+            # blocks open-webui egress to huggingface.co and AWS CloudFront (correct
+            # zero-trust posture). Without these flags, open-webui tries to download/
+            # check embedding models on boot; TCP to blocked hosts times out after
+            # 110s+ each, causing the startupProbe to fail.
+            # HF_HUB_OFFLINE=1 — canonical HuggingFace Hub offline flag; makes
+            # snapshot_download fail immediately with LocalEntryNotFoundError.
+            # TRANSFORMERS_OFFLINE=1 + HF_DATASETS_OFFLINE=1 — equivalent flags for
+            # transformers/datasets libraries. sentence-transformers bypasses
+            # HF_HUB_OFFLINE on some paths by making raw HTTPS HEAD to AWS CloudFront
+            # (us-east-2); these two flags suppress that code path.
+            # SCARF_NO_ANALYTICS=true — disables Scarf analytics telemetry that
+            # several pip packages call during import (gateway.scarf.sh).
+            # DO_NOT_TRACK=1 — W3C DNT signal respected by many Python packages.
             - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: HF_DATASETS_OFFLINE
+              value: "1"
+            - name: SCARF_NO_ANALYTICS
+              value: "true"
+            - name: DO_NOT_TRACK
               value: "1"
             - name: RAG_EMBEDDING_MODEL_AUTO_UPDATE
               value: "false"
