@@ -139,6 +139,18 @@ spec:
               value: {{ .Values.openWebui.env.defaultModels | quote }}
             - name: WEBUI_NAME
               value: {{ .Values.openWebui.env.webuiName | quote }}
+            # Disable HuggingFace model auto-download at startup. Our NetworkPolicy
+            # blocks open-webui egress to huggingface.co (correct zero-trust posture).
+            # Without these flags, open-webui tries to download embedding models on
+            # boot; each attempt times out after ~110s (ConnectTimeout) before failing
+            # gracefully. 4 model download attempts × 110s = 440s of blocked startup,
+            # which causes the startupProbe to fail even at 600s (120 × 5s) window.
+            # Setting RAG_EMBEDDING_MODEL_AUTO_UPDATE=false and using the default local
+            # model (if cached) or skipping the download resolves this.
+            - name: RAG_EMBEDDING_MODEL_AUTO_UPDATE
+              value: "false"
+            - name: SENTENCE_TRANSFORMERS_HOME
+              value: "/app/backend/data/cache/embedding/models"
           # Retro #3ag (v2.23.1 task #94) — startupProbe gates liveness/readiness
           # so cold-boot of the upstream open-webui image (SvelteKit + Python +
           # LangChain stack, regularly 90-180s on Docker Desktop) does not get
