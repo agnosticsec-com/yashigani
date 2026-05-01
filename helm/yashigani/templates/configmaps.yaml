@@ -454,13 +454,14 @@ data:
     {{- end }}
 {{- end }}
 
-{{- /* ── Partition maintenance script ConfigMap ───────────────────────────────
+{{/*
+── Partition maintenance script ConfigMap ──────────────────────────────────────
   The partition_maintenance.py script is NOT baked into the gateway image
   (only the gateway service entrypoint lives there). Mount it via ConfigMap so
   the CronJob can invoke it without requiring an image rebuild.
   See: partition-cronjob.yaml for mount and command usage.
   Finding D regression fix 2026-05-01.
-*/ -}}
+*/}}
 ---
 apiVersion: v1
 kind: ConfigMap
