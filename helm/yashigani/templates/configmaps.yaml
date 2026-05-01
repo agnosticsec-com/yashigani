@@ -486,7 +486,9 @@ data:
         DATABASE_URL=postgresql://user:pass@host/db python scripts/partition_maintenance.py
         python scripts/partition_maintenance.py --months-ahead 6
 
-    Last updated: 2026-04-28T00:00:00+01:00
+    Last updated: 2026-05-01T16:50:00+01:00
+    mTLS fix: extract sslrootcert/sslcert/sslkey from DSN, build ssl.SSLContext
+    for asyncpg (asyncpg does not parse libpq ssl params from DSN query string).
     """
     from __future__ import annotations
 
@@ -495,8 +497,10 @@ data:
     import logging
     import os
     import re
+    import ssl
     import sys
     from datetime import date
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
     logger = logging.getLogger(__name__)
 
@@ -535,6 +539,37 @@ data:
         return f"{table}_{year}_{month:02d}"
 
 
+    def _build_ssl_context(dsn: str) -> tuple[str, ssl.SSLContext | None]:
+        """Extract libpq SSL params from DSN query string, build ssl.SSLContext.
+
+        asyncpg does not parse sslrootcert/sslcert/sslkey from the DSN query
+        string — it expects an ssl.SSLContext object or the string 'require'.
+        This helper pulls the params out and returns a clean DSN + context.
+        """
+        parsed = urlparse(dsn)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        sslmode = params.pop("sslmode", [None])[0]
+        sslrootcert = params.pop("sslrootcert", [None])[0]
+        sslcert = params.pop("sslcert", [None])[0]
+        sslkey = params.pop("sslkey", [None])[0]
+
+        # Rebuild DSN without the extracted params
+        new_query = urlencode({k: v[0] for k, v in params.items()})
+        clean_dsn = urlunparse(parsed._replace(query=new_query))
+
+        if sslmode is None or sslmode == "disable":
+            return clean_dsn, None
+
+        ctx = ssl.create_default_context(cafile=sslrootcert)
+        if sslcert and sslkey:
+            ctx.load_cert_chain(certfile=sslcert, keyfile=sslkey)
+        if sslmode in ("require", "verify-ca"):
+            ctx.check_hostname = False
+            if sslmode == "require":
+                ctx.verify_mode = ssl.CERT_NONE
+        return clean_dsn, ctx
+
+
     async def ensure_partitions(conn_dsn: str, months_ahead: int = 3) -> dict[str, list[str]]:
         """
         Ensure partitions exist for the current month through months_ahead months forward.
@@ -546,7 +581,9 @@ data:
             logger.error("asyncpg is required. pip install asyncpg")
             sys.exit(1)
 
-        conn = await asyncpg.connect(conn_dsn)
+        clean_dsn, ssl_ctx = _build_ssl_context(conn_dsn)
+        conn_kwargs: dict = {"ssl": ssl_ctx} if ssl_ctx is not None else {}
+        conn = await asyncpg.connect(clean_dsn, **conn_kwargs)
         created: dict[str, list[str]] = {t: [] for t in _PARTITIONED_TABLES}
 
         try:
