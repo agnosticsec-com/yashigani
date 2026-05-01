@@ -555,3 +555,142 @@ class TestXssResidualSinks:
             assert "escapeHtml(" in pat_section, (
                 "LF-XSS-RES: addPattern has unescaped err.detail sink"
             )
+
+
+# ---------------------------------------------------------------------------
+# LAURA-V232-002 — SPIFFE identity forge via client-supplied X-SPIFFE-ID
+# ---------------------------------------------------------------------------
+
+class TestSpiffeForgeV232002:
+    """
+    LAURA-V232-002 regression: SpiffePeerCertMiddleware must strip the
+    client-supplied X-SPIFFE-ID header so it never reaches require_spiffe_id().
+
+    Without this fix: attacker with gateway_client.crt + forged
+    X-SPIFFE-ID: spiffe://yashigani.internal/prometheus → HTTP 200 on
+    /internal/metrics when uvicorn lacks peer_cert in ASGI scope.
+    """
+
+    def _import_middleware(self):
+        from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+        return SpiffePeerCertMiddleware
+
+    def test_client_forged_x_spiffe_id_stripped_by_middleware(self):
+        """
+        LAURA-V232-002: client-supplied X-SPIFFE-ID must be stripped before
+        the request reaches any route handler.  After stripping, the header
+        must be absent (None on lookup).
+        """
+        MW = self._import_middleware()
+
+        received_headers = {}
+
+        async def fake_app(scope, receive, send):
+            from starlette.datastructures import Headers
+            hdrs = Headers(scope=scope)
+            # Use a sentinel so we can distinguish "absent" from "empty string"
+            received_headers["x_spiffe_id"] = hdrs.get("x-spiffe-id")
+            received_headers["peer_cert"] = hdrs.get("x-spiffe-id-peer-cert", "MISSING")
+
+        middleware = MW(fake_app)
+
+        # Simulate direct-mesh attack: no TLS extension (uvicorn < 0.34 path),
+        # but attacker supplies forged X-SPIFFE-ID.
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/internal/metrics",
+            "headers": [
+                (b"x-spiffe-id", b"spiffe://yashigani.internal/prometheus"),
+                (b"authorization", b"Bearer gateway_client_cert_token"),
+            ],
+            "extensions": {},  # No TLS extension — peer_cert absent
+        }
+
+        import asyncio
+        asyncio.run(middleware(scope, None, None))
+
+        # X-SPIFFE-ID must have been stripped — absent from downstream headers.
+        assert received_headers["x_spiffe_id"] is None, (
+            "LAURA-V232-002: forged X-SPIFFE-ID must be stripped by middleware — "
+            f"downstream still sees x-spiffe-id={received_headers['x_spiffe_id']!r}"
+        )
+        # x-spiffe-id-peer-cert must be set to empty string (no TLS ext, no cert).
+        assert received_headers["peer_cert"] == "", (
+            "LAURA-V232-002: x-spiffe-id-peer-cert must be empty when TLS ext absent"
+        )
+
+    def test_client_forged_x_spiffe_id_header_absent_after_middleware(self):
+        """
+        LAURA-V232-002: after middleware processes the scope, x-spiffe-id must
+        not appear in the headers list passed to the downstream app.
+        """
+        MW = self._import_middleware()
+
+        downstream_scope = {}
+
+        async def capture_app(scope, receive, send):
+            downstream_scope.update(scope)
+
+        middleware = MW(capture_app)
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/internal/metrics",
+            "headers": [
+                (b"x-spiffe-id", b"spiffe://yashigani.internal/prometheus"),
+                (b"host", b"gateway"),
+            ],
+            "extensions": {},
+        }
+
+        import asyncio
+        asyncio.run(middleware(scope, None, None))
+
+        # Check that x-spiffe-id is absent from downstream headers
+        header_names = [k.lower() for k, v in downstream_scope.get("headers", [])]
+        assert b"x-spiffe-id" not in header_names, (
+            "LAURA-V232-002: middleware must strip x-spiffe-id from inbound client "
+            "request — forged header must not reach downstream route handler"
+        )
+
+    def test_middleware_strips_both_spiffe_headers_no_tls_ext(self):
+        """
+        LAURA-V232-002: when ASGI TLS extension is absent, both
+        x-spiffe-id AND x-spiffe-id-peer-cert supplied by client must be
+        stripped.  Downstream sees x-spiffe-id-peer-cert="" and no x-spiffe-id.
+        """
+        MW = self._import_middleware()
+
+        downstream_scope = {}
+
+        async def capture_app(scope, receive, send):
+            downstream_scope.update(scope)
+
+        middleware = MW(capture_app)
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/internal/metrics",
+            "headers": [
+                (b"x-spiffe-id", b"spiffe://yashigani.internal/prometheus"),
+                (b"x-spiffe-id-peer-cert", b"spiffe://yashigani.internal/fake"),
+            ],
+            "extensions": {},
+        }
+
+        import asyncio
+        asyncio.run(middleware(scope, None, None))
+
+        headers_dict = {k.lower(): v for k, v in downstream_scope.get("headers", [])}
+
+        # x-spiffe-id-peer-cert must be empty (server-set from absent TLS ext)
+        assert headers_dict.get(b"x-spiffe-id-peer-cert") == b"", (
+            "LAURA-V232-002: x-spiffe-id-peer-cert must be empty when TLS ext absent"
+        )
+        # x-spiffe-id must not appear at all (client-supplied, stripped)
+        assert b"x-spiffe-id" not in headers_dict, (
+            "LAURA-V232-002: x-spiffe-id must be stripped from client requests"
+        )

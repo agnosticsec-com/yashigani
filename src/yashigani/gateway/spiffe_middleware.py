@@ -1,7 +1,7 @@
 """
 Yashigani Gateway — SPIFFE peer-cert verification middleware.
 
-# Last updated: 2026-04-27T00:00:00+01:00
+# Last updated: 2026-04-30T04:30:00+01:00
 
 LF-SPIFFE-FORGE fix (V10.3.5, 2026-04-27)
 ------------------------------------------
@@ -17,22 +17,63 @@ cert (via uvicorn's ASGI scope extensions) and writes it to a server-internal
 header ``X-SPIFFE-ID-Peer-Cert`` that is NOT settable by clients (it is always
 overwritten by this middleware before the request reaches a route handler).
 
-_resolve_identity() is updated to use ``X-SPIFFE-ID-Peer-Cert`` for the
-SPIFFE-URI binding check when present, falling back to ``X-SPIFFE-ID`` for the
-Caddy-proxied code path (Caddy sets X-SPIFFE-ID from the peer cert; the
-direct-to-gateway path sets X-SPIFFE-ID-Peer-Cert from the handshake).
+LAURA-V232-002 hardening (2026-04-30)
+--------------------------------------
+uvicorn 0.34.x+ exposes ``peer_cert`` in the ASGI TLS scope extension (added in
+uvicorn 0.34.0 — see upstream changelog).  However the original middleware
+fallback allowed a client connecting directly to gateway:8080 to supply a
+forged ``X-SPIFFE-ID`` header: when ``peer_cert`` is absent the middleware sets
+``x-spiffe-id-peer-cert`` to an empty string, and ``require_spiffe_id()`` then
+falls back to the client-supplied ``x-spiffe-id`` header.
+
+This is a complete authentication bypass on the direct-mesh path.
+
+PoC: ``gateway_client.crt`` + forged ``X-SPIFFE-ID: spiffe://yashigani.internal/prometheus``
+→ HTTP 200 on ``/internal/metrics`` (Laura V232-002 2026-04-30).
+
+Double-strip fix:
+- This middleware strips BOTH ``x-spiffe-id-peer-cert`` AND ``x-spiffe-id``
+  from all inbound client requests.
+- It re-sets ``x-spiffe-id-peer-cert`` from the TLS handshake (or empty
+  string if the ASGI TLS extension is absent).
+- ``require_spiffe_id()`` now only trusts ``x-spiffe-id-peer-cert`` on the
+  direct-mesh path; there is NO fallback to a client-supplied ``x-spiffe-id``.
+- The Caddy-proxied path: Caddy strips inbound ``x-spiffe-id`` before setting
+  its own value (strip-then-set pattern in Caddyfile).  The Caddy-set header
+  survives because it is injected by Caddy AFTER this middleware strips
+  client-supplied values — Caddy operates at the Caddy→upstream hop, so
+  Caddy's ``header_up X-SPIFFE-ID`` directive adds the header to the request
+  forwarded from Caddy to the upstream service, not to the client→Caddy leg.
+  This means the Caddy-set ``x-spiffe-id`` is NOT present in the client→Caddy
+  request that arrives at this middleware; it is injected downstream.
+  Consequence: on the Caddy-proxied path ``x-spiffe-id-peer-cert`` is still
+  empty (no ASGI TLS extension since Caddy is the TLS terminator), and
+  ``x-spiffe-id`` IS set by Caddy.  To support the Caddy path, ``require_spiffe_id()``
+  checks ``x-spiffe-id-peer-cert`` first; if non-empty, uses it; if empty,
+  checks ``x-spiffe-id`` ONLY when that header is PRESENT (non-empty).  A truly
+  absent header → 401.
+
+Fail-closed on absent peer_cert:
+  When uvicorn does not expose ``peer_cert`` (TLS extension absent) AND
+  ``x-spiffe-id`` is not set (direct-mesh attack without forged header),
+  ``require_spiffe_id()`` returns 401.  Attacker who forges ``X-SPIFFE-ID``
+  — the header is stripped by this middleware before the route sees it.
+
+uvicorn requirement: >=0.34.0 (``peer_cert`` in ASGI TLS scope extension).
+pyproject.toml pins ``uvicorn[standard]>=0.34``.
 
 Design
 ------
 This middleware runs BEFORE any route handler.  It modifies the ASGI scope's
-``headers`` list to inject ``X-SPIFFE-ID-Peer-Cert``.  Route handlers access
-this via ``request.headers.get("x-spiffe-id-peer-cert")``.
+``headers`` list to strip client-supplied ``x-spiffe-id`` and inject
+``X-SPIFFE-ID-Peer-Cert`` from the TLS handshake.
 
-Peer cert extraction (uvicorn 0.17+ / ASGI 3.0 extensions):
+Peer cert extraction (uvicorn 0.34+ / ASGI 3.0 extensions):
   scope["extensions"]["tls"]["peer_cert"]  → ssl.SSLSocket.getpeercert() dict
 
-If the TLS scope extension is absent (non-TLS connection, older uvicorn,
-test environment), the header is set to an empty string.
+If the TLS scope extension is absent (Caddy-proxied path, test environment,
+non-TLS connection), the header is set to an empty string.  The gate in
+``require_spiffe_id()`` then relies on the Caddy-set ``x-spiffe-id`` header.
 
 If the peer cert dict has a ``subjectAltName`` with URI type entries, the first
 ``spiffe://`` URI SAN is used.  Otherwise empty string (= no cert presented or
@@ -46,13 +87,14 @@ spiffe://yashigani.internal/wazuh-agent), NOT the bound_spiffe_uri of the
 stolen API key (e.g. spiffe://yashigani.internal/my-agent).  The binding check
 in _resolve_identity() rejects the mismatch.
 
-An attacker who could forge the TLS handshake itself would need to break mTLS
-— which is outside the threat model for v2.23.1.
+A client forging ``X-SPIFFE-ID`` has it stripped by this middleware before any
+route handler sees it — the forge cannot reach the gate.
 
 References
 ----------
 - Lu sanity-check: /Users/max/Documents/Claude/Internal/ACS/v3/asvs-sanity-check-post-fix-2026-04-29.md §LF-SPIFFE-FORGE
 - ASVS v5 V10.3.5 (CWE-287)
+- LAURA-V232-002 (2026-04-30)
 """
 from __future__ import annotations
 
@@ -92,16 +134,24 @@ class SpiffePeerCertMiddleware:
             # (clients cannot set this header to a trusted value — it is always
             # replaced here from the TLS handshake or empty if no TLS).
             peer_cert_bytes = peer_cert_uri.encode("ascii", errors="replace")
-            header_name = b"x-spiffe-id-peer-cert"
+            peer_cert_header_name = b"x-spiffe-id-peer-cert"
+            # LAURA-V232-002: also strip client-supplied x-spiffe-id.
+            # Caddy injects x-spiffe-id at the Caddy→upstream hop (after this
+            # middleware runs on the client→Caddy leg), so the legitimate
+            # Caddy-set header is NOT present in the inbound scope — it is
+            # added by Caddy when it forwards to the upstream service.  Any
+            # x-spiffe-id visible at this point came from the client and must
+            # be stripped to prevent forge attacks on the direct-mesh path.
+            spiffe_id_header_name = b"x-spiffe-id"
 
-            # Remove any client-supplied x-spiffe-id-peer-cert (spoof-prevention).
             headers = [
                 (k, v)
                 for k, v in scope.get("headers", [])
-                if k.lower() != header_name
+                if k.lower() != peer_cert_header_name
+                and k.lower() != spiffe_id_header_name
             ]
             # Append the server-set value (may be empty string if no TLS/no cert).
-            headers.append((header_name, peer_cert_bytes))
+            headers.append((peer_cert_header_name, peer_cert_bytes))
             scope = dict(scope)
             scope["headers"] = headers
 

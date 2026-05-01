@@ -7,7 +7,7 @@ POST /auth/password/change  — forced change on first login
 POST /auth/totp/provision   — TOTP + recovery codes provisioning
 POST /auth/stepup           — V6.8.4 step-up TOTP verification for high-value flows
 
-Last updated: 2026-04-27T00:00:00+01:00
+Last updated: 2026-04-30T04:45:00+01:00
 """
 from __future__ import annotations
 
@@ -274,6 +274,45 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     # Success — reset per-IP failure counter (global decays via TTL)
     _reset_ip_auth_failures(client_ip)
+
+    # LAURA-V232-003: when force_totp_provision=True, authenticate() returns
+    # reason="totp_provision_required" meaning the account has NOT yet set up
+    # TOTP (or has been reset). Issue a RESTRICTED session with
+    # account_tier="totp_provisioning" — accepted by require_any_session
+    # (for /auth/totp/provision/* and /auth/password/change) but REJECTED by
+    # require_admin_session (account_tier must be "admin"). This prevents an
+    # attacker from using the provisioning-state bypass to gain a full admin
+    # session before completing TOTP setup.
+    #
+    # The client must:
+    #   1. POST /auth/totp/provision/start → QR code + seed
+    #   2. POST /auth/totp/provision/confirm {totp_code} → clears flag
+    #   3. Log out and log in again → authenticates with full TOTP → gets admin session
+    if reason == "totp_provision_required":
+        session = state.session_store.create(
+            account_id=record.account_id,
+            account_tier="totp_provisioning",
+            client_ip=client_ip,
+        )
+        state.audit_writer.write(
+            _make_login_event(body.username, "totp_provision_restricted", None)
+        )
+        _log.info(
+            "TOTP provisioning session issued for %s (force_totp_provision=True). "
+            "Full admin access blocked until TOTP is provisioned.",
+            body.username,
+        )
+        _set_session_cookie(response, session.token, "totp_provisioning")
+        return {
+            "status": "totp_provision_required",
+            "force_password_change": record.force_password_change,
+            "force_totp_provision": True,
+            "message": (
+                "Your account requires TOTP provisioning before you can "
+                "access admin functions. POST to /auth/totp/provision/start "
+                "to begin enrolment."
+            ),
+        }
 
     # Check password age against admin-configurable policy.
     #
