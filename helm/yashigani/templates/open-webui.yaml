@@ -153,12 +153,15 @@ spec:
             httpGet:
               path: /health
               port: 8080
-            # Allow up to 60 * 5s = 300s for first-boot. Once startupProbe
-            # passes, livenessProbe starts policing in the normal way.
+            # Allow up to 120 * 5s = 600s (10 min) for first-boot. The open-webui
+            # image (SvelteKit + Python + LangChain) consistently takes 4-7 min to
+            # bind :8080 on Docker Desktop K8s; 300s (60 failures) was insufficient
+            # — uvicorn runs as PID 1 but imports LangChain modules before serving.
+            # Once startupProbe passes, livenessProbe starts policing normally.
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 5
-            failureThreshold: 60
+            failureThreshold: 120
           readinessProbe:
             httpGet:
               path: /health
