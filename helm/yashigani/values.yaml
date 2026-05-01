@@ -1,6 +1,6 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-04-30T20:15:00+01:00
+# Last updated: 2026-05-01T09:45:00+01:00
 
 global:
   imageRegistry: "ghcr.io"
@@ -164,10 +164,10 @@ adminBootstrap:
   # it avoids another image pull.
   image:
     # Resolves to global.imageRegistry/global.imageOwner/<repo>:<tag>.
-    # Digest pinned per feedback_image_pinning.md — rebuilt at tip 39e0879
-    # (2026-04-30T20:15+01:00) cryptography<47 pin (46.0.7); SIGILL fix aarch64.
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-gateway
-    tag: "2.23.1@sha256:07862c7d85b5f6a5db5aaca78c6b9ee549167431b04d88a609491ff6af91087d"
+    tag: "2.23.1@sha256:e3dfc6b4a38f44ccbf6ec965d32140ab621bc15cd360c2953c9a2545962a630a"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -183,11 +183,10 @@ adminBootstrap:
 gateway:
   enabled: true
   image:
-    # Digest pinned per feedback_image_pinning.md — rebuilt at tip 39e0879
-    # (2026-04-30T20:15+01:00) cryptography<47 pin (46.0.7); SIGILL fix aarch64.
-    # LAURA-2026-04-29-003 closed by this digest pin.
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-gateway
-    tag: "2.23.1@sha256:07862c7d85b5f6a5db5aaca78c6b9ee549167431b04d88a609491ff6af91087d"
+    tag: "2.23.1@sha256:e3dfc6b4a38f44ccbf6ec965d32140ab621bc15cd360c2953c9a2545962a630a"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit (scheduler sizing).
@@ -234,11 +233,10 @@ gateway:
 backoffice:
   enabled: true
   image:
-    # Digest pinned per feedback_image_pinning.md — rebuilt at tip 39e0879
-    # (2026-04-30T20:15+01:00) cryptography<47 pin (46.0.7); SIGILL fix aarch64.
-    # LAURA-2026-04-29-003 closed by this digest pin.
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-backoffice
-    tag: "2.23.1@sha256:952e4fa67d829e3669ce63b803ff89a1f3ebb242d5411271a7098f385a1f4dbc"
+    tag: "2.23.1@sha256:542680c17071e15e8f9453fd7e676d9f15e67655e45143f6be2f62b5f131e153"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit.
