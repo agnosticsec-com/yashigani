@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
-# Last updated: 2026-04-30T23:20:00+01:00
+# Last updated: 2026-04-30T05:00:00+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -84,7 +84,7 @@
     header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
 }
 
-{env.YASHIGANI_TLS_DOMAIN} {
+{$YASHIGANI_TLS_DOMAIN} {
     # ── TLS policy ──────────────────────────────────────────────────────────
     tls {
         # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
@@ -352,8 +352,8 @@ Hiring: https://agnosticsec.com/careers
 }
 
 # Redirect HTTP → HTTPS
-http://{env.YASHIGANI_TLS_DOMAIN} {
-    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
+http://{$YASHIGANI_TLS_DOMAIN} {
+    redir https://{$YASHIGANI_TLS_DOMAIN}{uri} permanent
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
