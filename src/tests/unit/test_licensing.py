@@ -205,30 +205,30 @@ class TestTierDefaults:
 
     def test_community_limits(self):
         d = TIER_DEFAULTS["community"]
-        assert d["max_agents"] == 5
-        assert d["max_end_users"] == 10
+        assert d["max_agents"] == 20
+        assert d["max_end_users"] == 5
         assert d["max_admin_seats"] == 2
         assert d["max_orgs"] == 1
 
     def test_starter_limits(self):
         d = TIER_DEFAULTS["starter"]
-        assert d["max_agents"] == 100
-        assert d["max_end_users"] == 250
-        assert d["max_admin_seats"] == 25
+        assert d["max_agents"] == 300
+        assert d["max_end_users"] == 100
+        assert d["max_admin_seats"] == 10
         assert d["max_orgs"] == 1
 
     def test_professional_limits(self):
         d = TIER_DEFAULTS["professional"]
-        assert d["max_agents"] == 500
-        assert d["max_end_users"] == 1000
-        assert d["max_admin_seats"] == 50
+        assert d["max_agents"] == 1500
+        assert d["max_end_users"] == 500
+        assert d["max_admin_seats"] == 25
         assert d["max_orgs"] == 1
 
     def test_professional_plus_limits(self):
         d = TIER_DEFAULTS["professional_plus"]
-        assert d["max_agents"] == 2000
-        assert d["max_end_users"] == 10000
-        assert d["max_admin_seats"] == 200
+        assert d["max_agents"] == 15000
+        assert d["max_end_users"] == 5000
+        assert d["max_admin_seats"] == 100
         assert d["max_orgs"] == 5
 
     def test_enterprise_unlimited(self):
