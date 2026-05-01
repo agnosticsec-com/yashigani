@@ -53,26 +53,37 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
-      # Retro #3ak follow-up — the upstream open-webui image bakes its static/
-      # directory (branding files) with root ownership and mode 644. The main
-      # container runs as uid 1000 and tries to WRITE branding overrides to
-      # static/ at startup; without the initContainer below, every write fails
-      # with EPERM (even though reads work fine — mode 644 is world-readable,
-      # but the directory itself is owned by root and not group-writable).
-      # The initContainer runs as root (documented exception for third-party
-      # image compatibility) and chowns the directory in-place so uid 1000
-      # can write to it. This does not expand the attack surface: the
-      # initContainer has no capabilities, allowPrivilegeEscalation:false,
-      # exits immediately after chown, and the main container continues at
-      # uid 1000 with the same securityContext constraints.
+      # Retro #3ak follow-up (v2.23.1 GA fix) — the upstream open-webui image bakes
+      # /app/backend/open_webui/static/ with root:root ownership (dir: 755, files:
+      # 644). Running the main container as uid 1000 means uid 1000 can READ the
+      # baked files but cannot WRITE to the directory. open-webui's startup code
+      # copies user-configured branding overrides into static/ at boot; every copy
+      # fails with EPERM and the process exits before uvicorn binds to :8080.
+      #
+      # Fix: mount an emptyDir volume at /app/backend/open_webui/static so the main
+      # container writes to a uid-1000-owned tmpfs instead of the root-owned image
+      # layer. An initContainer (running as uid 1000, no privilege escalation) copies
+      # the original baked static files into the emptyDir before the main container
+      # starts, preserving the app's expected static asset tree. The open-webui
+      # startup code then succeeds when it writes branding files.
+      #
+      # This approach requires NO root privileges at any point — the baked files are
+      # 644 (world-readable) and cp/sh run as uid 1000 in the initContainer.
       initContainers:
-        - name: open-webui-chown-static
+        - name: open-webui-copy-static
           image: "{{ .Values.openWebui.image.repository }}:{{ .Values.openWebui.image.tag }}"
           imagePullPolicy: {{ .Values.openWebui.image.pullPolicy }}
-          command: ["chown", "-R", "1000:1000", "/app/backend/open_webui/static"]
+          # Copy the image-baked static/ tree into the writable emptyDir mount.
+          # We use cp -a (preserve permissions/timestamps) so the content is intact.
+          # The destination is the emptyDir volume, owned by uid 1000 (fsGroup: 1000).
+          command:
+            - sh
+            - -c
+            - |
+              cp -a /app/backend/open_webui/static/. /static-rw/
           securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
+            runAsUser: 1000
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
@@ -85,6 +96,9 @@ spec:
             limits:
               cpu: "100m"
               memory: "128Mi"
+          volumeMounts:
+            - name: static-rw
+              mountPath: /static-rw
       containers:
         - name: open-webui
           image: "{{ .Values.openWebui.image.repository }}:{{ .Values.openWebui.image.tag }}"
@@ -164,10 +178,17 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /app/backend/data
+            - name: static-rw
+              mountPath: /app/backend/open_webui/static
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: open-webui-data
+        # emptyDir that shadows the baked static/ directory so uid 1000 can write
+        # branding overrides at runtime. Pre-populated by the open-webui-copy-static
+        # initContainer before the main container starts.
+        - name: static-rw
+          emptyDir: {}
 ---
 {{- if .Values.openWebui.persistence.enabled }}
 apiVersion: v1
