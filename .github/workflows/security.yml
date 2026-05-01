@@ -1,3 +1,4 @@
+# Last updated: 2026-05-01T00:00:00+01:00
 name: Security Scan
 
 on:
@@ -114,27 +115,37 @@ jobs:
           path: pip-audit-report.json
           retention-days: 30
 
-  semgrep-full:
-    name: Semgrep Full Scan (scheduled only)
+  opengrep-full:
+    name: Opengrep Full Scan (scheduled only)
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     permissions:
       security-events: write
     steps:
       - uses: actions/checkout@v6
-      - uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/python
-            p/owasp-top-ten
-            p/secrets
-            p/supply-chain
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+      - name: Install Opengrep
+        run: |
+          python3 -m pip install opengrep
+      - name: Run Opengrep full scan
+        # LAURA-2026-04-29-005 (P0-9): Semgrep replaced with Opengrep per standing ban.
+        # Four rule packs mirror the former semgrep-full config.
+        # --sarif output redirected to file; --sarif-output flag does not write to disk
+        # in opengrep 1.20.0 (verified 2026-05-01). Exit 0 = findings only (no crash),
+        # exit 1 = scan error; we never suppress exit 1.
+        run: |
+          opengrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --config p/supply-chain \
+            --sarif \
+            src/yashigani/ > opengrep.sarif
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: semgrep.sarif
+          sarif_file: opengrep.sarif
+          # P0-5b: distinct category per upload — GitHub rejects duplicate tool+job combinations.
+          category: opengrep-full
 
   owasp-dep-check:
     name: OWASP Dependency Check (scheduled only)
