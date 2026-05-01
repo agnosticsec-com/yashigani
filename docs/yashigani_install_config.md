@@ -263,12 +263,12 @@ All services are manageable from the admin panel via API after installation. The
   Admin 1 Username : phoenix
   Admin 1 Password : <36-char random>
   Admin 1 TOTP Key : <base32 secret>
-  Admin 1 TOTP URI : otpauth://totp/Yashigani%3Aphoenix?secret=...
+  Admin 1 TOTP URI : otpauth://totp/Yashigani%3Aphoenix?secret=...&algorithm=SHA256&digits=6&period=30
 
   Admin 2 Username : condor
   Admin 2 Password : <36-char random>
   Admin 2 TOTP Key : <base32 secret>
-  Admin 2 TOTP URI : otpauth://totp/Yashigani%3Acondor?secret=...
+  Admin 2 TOTP URI : otpauth://totp/Yashigani%3Acondor?secret=...&algorithm=SHA256&digits=6&period=30
 
   Postgres Password : <36-char random>
   Redis Password    : <36-char random>

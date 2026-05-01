@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-01T01:45:00+00:00 (fix: 3 installer bugs blocking macOS Podman from-scratch gate: (1) check_existing_installation hardcoded 'docker compose' instead of COMPOSE_CMD — hangs when Docker Desktop not running; (2) global COMPOSE_CMD=() missing — set -u unbound-variable abort; (3) _ensure_docker_running + _fix_docker_credentials called unconditionally in compose_pull — both hang on Docker-down Podman installs; all gated on YSG_PODMAN_RUNTIME; v2.23.2)
+# last-updated: 2026-05-01T13:00:00+01:00 (fix: P0-10 otpauth URI missing algorithm=SHA256 — authenticator apps defaulted to SHA-1 → codes never matched pyotp SHA-256; v2.23.2)
 set -euo pipefail
 
 # =============================================================================
@@ -2708,11 +2708,14 @@ _gen_totp_secret() {
 }
 
 _gen_totp_uri() {
-  # otpauth://totp/Yashigani:username?secret=SECRET&issuer=Yashigani&digits=6&period=30
+  # otpauth://totp/Yashigani:username?secret=SECRET&issuer=Yashigani&algorithm=SHA256&digits=6&period=30
+  # algorithm=SHA256 is mandatory — pyotp uses digest=hashlib.sha256.
+  # Without this parameter, authenticator apps default to SHA-1 → codes never match.
+  # P0-10 / feedback_sha256_minimum_pqr (Tiago 2026-05-01).
   local username="$1"
   local secret="$2"
   local issuer="${DOMAIN:-Yashigani}"
-  echo "otpauth://totp/Yashigani:${username}?secret=${secret}&issuer=${issuer}&digits=6&period=30"
+  echo "otpauth://totp/Yashigani:${username}?secret=${secret}&issuer=${issuer}&algorithm=SHA256&digits=6&period=30"
 }
 
 # Generate two distinct admin usernames from curated word lists
