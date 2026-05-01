@@ -74,13 +74,15 @@ spec:
           image: "{{ .Values.openWebui.image.repository }}:{{ .Values.openWebui.image.tag }}"
           imagePullPolicy: {{ .Values.openWebui.image.pullPolicy }}
           # Copy the image-baked static/ tree into the writable emptyDir mount.
-          # We use cp -a (preserve permissions/timestamps) so the content is intact.
-          # The destination is the emptyDir volume, owned by uid 1000 (fsGroup: 1000).
+          # We use cp -r (recursive, no timestamp preservation) because cp -a /
+          # cp -p attempt utimensat(2) which RuntimeDefault seccomp blocks with
+          # EPERM, causing the initContainer to exit non-zero. Files are readable
+          # by uid 1000 (baked as 644) so cp -r succeeds without privilege.
           command:
             - sh
             - -c
             - |
-              cp -a /app/backend/open_webui/static/. /static-rw/
+              cp -r /app/backend/open_webui/static/. /static-rw/
           securityContext:
             runAsUser: 1000
             runAsNonRoot: true
