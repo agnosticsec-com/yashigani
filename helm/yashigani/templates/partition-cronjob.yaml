@@ -14,7 +14,7 @@ secretKeyRef with Option α pattern: POSTGRES_PASSWORD from yashigani-postgres-s
 interpolation. Connects direct to postgres (not pgbouncer) for DDL — same pattern as
 YASHIGANI_DB_DSN_DIRECT in gateway.yaml. mTLS cert mount added for when mtls.enabled.
 
-Last updated: 2026-05-01T10:00:00+01:00
+Last updated: 2026-05-01T16:40:00+01:00
 */ -}}
 apiVersion: batch/v1
 kind: CronJob
@@ -45,6 +45,13 @@ spec:
             app.kubernetes.io/component: db-maintenance
         spec:
           serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+          # automountServiceAccountToken disabled: /run/secrets is mounted
+          # read-only (PKI certs) and /var/run -> /run symlink in the gateway
+          # image means K8s SA token projection at /var/run/secrets/kubernetes.io
+          # resolves to /run/secrets/kubernetes.io — which fails to mkdir under
+          # the read-only volume. The job only needs DATABASE_URL + PKI certs,
+          # not apiserver access. (Finding D regression fix 2026-05-01)
+          automountServiceAccountToken: false
           restartPolicy: OnFailure
           securityContext:
             runAsNonRoot: true
