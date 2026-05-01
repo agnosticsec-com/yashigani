@@ -1,7 +1,15 @@
 {{- /*
-  Last updated: 2026-04-27T06:05:04Z
+  Last updated: 2026-05-01T22:00:00+01:00
   v2.23.1 task #94 — startupProbe + tightened liveness/readiness so
   helm install --wait does not stall on slow first-boot of upstream image.
+  v2.23.1 GA fix — initContainer chowns upstream image static/ dir so the
+  main container (uid 1000) can write branding files at startup. Without this,
+  open-webui exits immediately after the banner with Permission denied errors
+  on /app/backend/open_webui/static/, preventing uvicorn from binding to :8080
+  and causing startupProbe to fail. The initContainer explicitly runs as root
+  (runAsUser: 0, runAsNonRoot: false) which is a documented exception for
+  third-party image compatibility — the root privilege is scoped to this single
+  chown call and the main container continues running as uid 1000.
 */ -}}
 {{- if .Values.openWebui.enabled }}
 ---
@@ -45,6 +53,38 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      # Retro #3ak follow-up — the upstream open-webui image bakes its static/
+      # directory (branding files) with root ownership and mode 644. The main
+      # container runs as uid 1000 and tries to WRITE branding overrides to
+      # static/ at startup; without the initContainer below, every write fails
+      # with EPERM (even though reads work fine — mode 644 is world-readable,
+      # but the directory itself is owned by root and not group-writable).
+      # The initContainer runs as root (documented exception for third-party
+      # image compatibility) and chowns the directory in-place so uid 1000
+      # can write to it. This does not expand the attack surface: the
+      # initContainer has no capabilities, allowPrivilegeEscalation:false,
+      # exits immediately after chown, and the main container continues at
+      # uid 1000 with the same securityContext constraints.
+      initContainers:
+        - name: open-webui-chown-static
+          image: "{{ .Values.openWebui.image.repository }}:{{ .Values.openWebui.image.tag }}"
+          imagePullPolicy: {{ .Values.openWebui.image.pullPolicy }}
+          command: ["chown", "-R", "1000:1000", "/app/backend/open_webui/static"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
       containers:
         - name: open-webui
           image: "{{ .Values.openWebui.image.repository }}:{{ .Values.openWebui.image.tag }}"
