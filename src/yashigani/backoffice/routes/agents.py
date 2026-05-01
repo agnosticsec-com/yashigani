@@ -17,7 +17,7 @@ Routes:
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-04-29T22:58:39+01:00
+Last updated: 2026-04-30T04:50:00+01:00
 """
 from __future__ import annotations
 
@@ -38,8 +38,14 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 # but the API must reject stored XSS payloads before they reach the registry.
 # Any value containing an HTML tag open sequence is rejected with HTTP 422.
 # This closes the attack regardless of future render-layer changes.
+#
+# AVA-C006 — Protocol-URI bypass (ASVS v5 V5.3.3 | CWE-79 | OWASP A03):
+# The original pattern only blocked angle-bracket HTML tags. A value such as
+# `javascript:alert(1)` passes the angle-bracket check but executes if the UI
+# ever renders agent names inside <a href="..."> attributes. Extend to
+# case-insensitively match javascript:, data:, and vbscript: prefixes.
 # ---------------------------------------------------------------------------
-_HTML_TAG_RE = re.compile(r"<[a-zA-Z/!]")
+_HTML_TAG_RE = re.compile(r"(?i)(?:javascript:|data:|vbscript:|<[a-zA-Z/!])")
 
 from yashigani.backoffice.middleware import require_admin_session, AdminSession, require_stepup_admin_session, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
@@ -218,11 +224,11 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def _reject_html_in_name(cls, v: str) -> str:
-        """Reject HTML tags in agent name (AVA-2026-04-29-001, ASVS V5.3.3, CWE-79)."""
+        """Reject HTML tags and protocol URIs in agent name (AVA-2026-04-29-001 / AVA-C006, ASVS V5.3.3, CWE-79)."""
         if _HTML_TAG_RE.search(v):
             raise ValueError(
-                "agent name must not contain HTML tags — "
-                "strip markup and use plain text (CWE-79 / AVA-2026-04-29-001)"
+                "agent name must not contain HTML tags or protocol URIs — "
+                "strip markup and use plain text (CWE-79 / AVA-2026-04-29-001 / AVA-C006)"
             )
         return v
 
@@ -243,11 +249,11 @@ class AgentUpdateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def _reject_html_in_name(cls, v: Optional[str]) -> Optional[str]:
-        """Reject HTML tags in agent name (AVA-2026-04-29-001, ASVS V5.3.3, CWE-79)."""
+        """Reject HTML tags and protocol URIs in agent name (AVA-2026-04-29-001 / AVA-C006, ASVS V5.3.3, CWE-79)."""
         if v is not None and _HTML_TAG_RE.search(v):
             raise ValueError(
-                "agent name must not contain HTML tags — "
-                "strip markup and use plain text (CWE-79 / AVA-2026-04-29-001)"
+                "agent name must not contain HTML tags or protocol URIs — "
+                "strip markup and use plain text (CWE-79 / AVA-2026-04-29-001 / AVA-C006)"
             )
         return v
 
