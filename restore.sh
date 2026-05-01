@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-04-30T22:30:00+01:00 (R4 gate: widen chmod u+w sweep to all secret files, not just *.key/*.pem)
+# Last updated: 2026-05-01T17:45:00+01:00 (fix: P0-14 pre-flight docker group + remove sudo from restore body; mirrors P0-12 in install.sh)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -103,6 +103,62 @@ detect_runtime() {
   else
     RUNTIME="none"
     COMPOSE_CMD=()
+  fi
+}
+
+# =============================================================================
+# Pre-flight hard-stop (P0-14 — mirrors check_installer_preflight in install.sh)
+#
+# The restore body runs zero sudo.  These two checks ensure the operator has
+# done any required privileged setup before we touch the live secrets dir.
+# Exits non-zero with a copy-pasteable remediation block on first failure.
+# Skipped for Kubernetes (K8s manages its own RBAC and bind-mounts).
+# =============================================================================
+check_restore_preflight() {
+  # K8s restore path does not use Docker group or host bind-mount dirs.
+  if [[ "$K8S_MODE" == "true" ]]; then
+    return 0
+  fi
+
+  # --- Check 1: docker group membership (Docker runtime only) ----------------
+  # restore.sh body never runs sudo, so the current user must reach the Docker
+  # daemon without elevated privilege.
+  if [[ "${RUNTIME}" == "docker" ]]; then
+    if ! docker info >/dev/null 2>&1; then
+      printf "\nPre-flight failed: your user cannot run docker without sudo.\n\n"
+      printf "  sudo groupadd docker          # creates the group if it doesn't exist\n"
+      printf "  sudo usermod -aG docker \$USER # adds you to the group\n"
+      printf "  newgrp docker                 # activate without logout (or log out and back in)\n\n"
+      printf "Then re-run this restore script.\n\n"
+      exit 1
+    fi
+  fi
+
+  # --- Check 2: bind-mount directory ownership (UID 1001) --------------------
+  # PKI issuer and backoffice services run as UID 1001 inside containers and
+  # write to bind-mounted host dirs.  restore.sh no longer runs chown via sudo —
+  # the operator must do this once before running the restore.
+  local _bm_failed=0
+  for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
+    if [[ ! -d "$_bm_dir" ]]; then
+      _bm_failed=1
+      break
+    fi
+    # shellcheck disable=SC2012
+    local _uid
+    _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ "$_uid" != "1001" ]]; then
+      _bm_failed=1
+      break
+    fi
+  done
+
+  if [[ "$_bm_failed" -eq 1 ]]; then
+    printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
+    printf "  mkdir -p docker/data docker/certs docker/logs\n"
+    printf "  sudo chown -R 1001:1001 docker/data docker/certs docker/logs\n\n"
+    printf "Then re-run this restore script.\n\n"
+    exit 1
   fi
 }
 
@@ -280,6 +336,11 @@ restore_backup() {
   fi
   printf "\n"
 
+  # Pre-flight hard-stop (P0-14): docker group + bind-mount ownership.
+  # Mirrors check_installer_preflight in install.sh.  Exits with a
+  # copy-pasteable remediation block if the operator environment is not ready.
+  check_restore_preflight
+
   # Validate backup before restoring. --force bypasses validation for
   # genuine recovery scenarios (e.g. manually-assembled partial backup).
   if ! validate_backup "$backup_dir"; then
@@ -442,16 +503,18 @@ _pki_chown_client_keys() {
   )
 
   # Determine chown mode: root can chown directly; non-root uses podman unshare
-  # (Podman rootless user-namespace). Docker non-root users need sudo — if sudo
-  # is unavailable, warn but do not abort (service may already own the key if
-  # the backup was taken from a correctly-owned install).
+  # (Podman rootless user-namespace). Docker non-root: restore.sh never runs
+  # sudo (P0-14) — warn with a copy-pasteable remediation block instead.
+  # check_restore_preflight() has already verified docker group membership; the
+  # key re-own step is the one operation that still requires host privilege when
+  # backup keys land as root:root.
   local _chown_mode="direct"
   if [[ "$(id -u)" != "0" ]]; then
     if [[ "${RUNTIME}" == "podman" ]]; then
       _chown_mode="unshare"
     else
-      # Docker non-root: attempt sudo -n; degrade to warn-only if unavailable.
-      _chown_mode="sudo"
+      # Docker non-root: warn-only — never sudo (P0-14 / feedback_security_company_no_shortcuts).
+      _chown_mode="warn"
     fi
   fi
 
@@ -473,14 +536,10 @@ _pki_chown_client_keys() {
         podman unshare chown "${_uid}:${_uid}" "$_keyfile" \
           || log_warn "podman unshare chown failed on ${_svc} key — container may fail to start"
         ;;
-      sudo)
-        if command -v sudo &>/dev/null; then
-          sudo -n chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
-            || log_warn "sudo chown failed on ${_svc} key — container may fail to start"
-        else
-          log_warn "Non-root install without sudo: cannot chown ${_svc} key to UID ${_uid}."
-          log_warn "  If ${_svc} fails to start, run: sudo chown ${_uid}:${_uid} \"${_keyfile}\""
-        fi
+      warn)
+        log_warn "Non-root Docker: cannot chown ${_svc} key to UID ${_uid} without sudo."
+        log_warn "  Run manually if ${_svc} fails to start:"
+        log_warn "    sudo chown ${_uid}:${_uid} \"${_keyfile}\""
         ;;
     esac
   done
