@@ -1,5 +1,5 @@
 {{- /*
-  Last updated: 2026-05-01T22:00:00+01:00
+  Last updated: 2026-05-01T23:30:00+01:00
   v2.23.1 task #94 — startupProbe + tightened liveness/readiness so
   helm install --wait does not stall on slow first-boot of upstream image.
   v2.23.1 GA fix — initContainer chowns upstream image static/ dir so the
@@ -145,8 +145,15 @@ spec:
             # boot; each attempt times out after ~110s (ConnectTimeout) before failing
             # gracefully. 4 model download attempts × 110s = 440s of blocked startup,
             # which causes the startupProbe to fail even at 600s (120 × 5s) window.
-            # Setting RAG_EMBEDDING_MODEL_AUTO_UPDATE=false and using the default local
-            # model (if cached) or skipping the download resolves this.
+            # HF_HUB_OFFLINE=1 is the canonical HuggingFace Hub env var for fully
+            # offline mode — any snapshot_download call fails fast with
+            # LocalEntryNotFoundError instead of timing out on TCP. This is
+            # separate from RAG_EMBEDDING_MODEL_AUTO_UPDATE (which suppresses
+            # one code path) and covers ALL huggingface_hub call sites including
+            # retrieval/utils.py get_model_path. Without this, the process
+            # OOM-crashes during startup while retrying model lookups.
+            - name: HF_HUB_OFFLINE
+              value: "1"
             - name: RAG_EMBEDDING_MODEL_AUTO_UPDATE
               value: "false"
             - name: SENTENCE_TRANSFORMERS_HOME

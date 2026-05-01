@@ -644,17 +644,19 @@ openWebui:
   # The bundled SvelteKit + Python embedding + LangChain stack consistently
   # peaks at ~1.2-1.5 GiB on first boot. 512Mi was guesswork carried over
   # from the docker-compose default; insufficient for the K8s pod where
-  # there is no host page cache to lean on. 1.5Gi requests / 2Gi limit
-  # gives steady headroom without monopolising a single-node Docker
-  # Desktop cluster.
-  # YSG-RISK-005 #3av: requests = 50% of limit (risk register sizing: 2048m/1.0).
+  # there is no host page cache to lean on.
+  # Retro #3as — OOMKilled again at 2Gi limit. LangChain + sentence-transformers
+  # stack imports during startup push peak RSS above 2Gi even with
+  # HF_HUB_OFFLINE=1 (which eliminates download wait but not model-graph init).
+  # 3Gi limit gives stable headroom on Docker Desktop single-node cluster.
+  # YSG-RISK-005 #3av: requests = 50% of limit (risk register sizing: 3072m/1.0).
   resources:
     requests:
       cpu: "500m"
-      memory: "1024Mi"
+      memory: "1536Mi"
     limits:
       cpu: "1000m"
-      memory: "2048Mi"
+      memory: "3072Mi"
   service:
     port: 8080
     type: ClusterIP
