@@ -65,9 +65,11 @@ spec:
               # same Python package. Override the entrypoint to run the script directly.
               image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
               imagePullPolicy: {{ .Values.gateway.image.pullPolicy | default "IfNotPresent" }}
+              # Script is NOT baked into the gateway image — mounted via ConfigMap.
+              # Finding D regression fix 2026-05-01.
               command:
                 - python
-                - scripts/partition_maintenance.py
+                - /scripts/partition_maintenance.py
                 - --months-ahead
                 - "3"
               env:
@@ -96,14 +98,21 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
-              {{- if .Values.mtls.enabled }}
               volumeMounts:
+                - name: partition-script
+                  mountPath: /scripts
+                  readOnly: true
+              {{- if .Values.mtls.enabled }}
                 - name: secrets
                   mountPath: /run/secrets
                   readOnly: true
               {{- end }}
-          {{- if .Values.mtls.enabled }}
           volumes:
+            - name: partition-script
+              configMap:
+                name: {{ include "yashigani.fullname" . }}-partition-script
+                defaultMode: 0555
+          {{- if .Values.mtls.enabled }}
             - name: secrets
               secret:
                 secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
