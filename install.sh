@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-04-30T20:30:22+01:00 (fix: macOS Podman podman_run chown — warn-not-abort, virtiofs TCC Privacy blocks statfs after machine restart; gate R4 v2.23.1)
+# last-updated: 2026-05-01T01:45:00+00:00 (fix: 3 installer bugs blocking macOS Podman from-scratch gate: (1) check_existing_installation hardcoded 'docker compose' instead of COMPOSE_CMD — hangs when Docker Desktop not running; (2) global COMPOSE_CMD=() missing — set -u unbound-variable abort; (3) _ensure_docker_running + _fix_docker_credentials called unconditionally in compose_pull — both hang on Docker-down Podman installs; all gated on YSG_PODMAN_RUNTIME; v2.23.2)
 set -euo pipefail
 
 # =============================================================================
@@ -390,6 +390,7 @@ require_cmd() {
 # Sets COMPOSE_CMD as an array (e.g. "docker compose" or "podman compose")
 # Sets YSG_PODMAN_RUNTIME=true if using Podman (for auto-applying override file)
 YSG_PODMAN_RUNTIME=false
+COMPOSE_CMD=()   # global declaration so ${#COMPOSE_CMD[@]} is safe under set -u before first resolve
 
 resolve_compose_cmd() {
   COMPOSE_CMD=()
@@ -1576,13 +1577,24 @@ check_existing_installation() {
     return 0
   fi
 
-  # Check whether compose containers are running
+  # Check whether compose containers are running.
+  # MUST use $COMPOSE_CMD (or resolve it on demand) — never hardcode 'docker compose'
+  # here, because Docker Desktop may not be running when the admin is using Podman.
+  # Hardcoding 'docker compose' caused a silent hang on macOS from-scratch Podman
+  # install (v2.23.2 gate, 2026-05-01): docker CLI is present but daemon is down.
+  # Fix: resolve_compose_cmd if COMPOSE_CMD is still empty, then use the array.
+  # Guard with timeout 10 to prevent infinite block if socket is unreachable.
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
   local running=false
 
-  if command -v docker &>/dev/null && [[ -f "$compose_file" ]]; then
-    if docker compose -f "$compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
-      running=true
+  if [[ -f "$compose_file" ]]; then
+    if [[ ${#COMPOSE_CMD[@]} -eq 0 ]]; then
+      resolve_compose_cmd 2>/dev/null || true
+    fi
+    if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+      if timeout 10 "${COMPOSE_CMD[@]}" -f "$compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+        running=true
+      fi
     fi
   fi
 
@@ -1816,11 +1828,18 @@ compose_pull() {
 
   resolve_compose_cmd
 
-  # --- Verify Docker daemon is running before attempting pull ---
-  _ensure_docker_running
+  # --- Docker-only checks (skip entirely when using Podman runtime) ---
+  # _ensure_docker_running and _fix_docker_credentials call 'docker info' and
+  # docker-credential-osxkeychain which are Docker Desktop-specific. Calling
+  # them when YSG_PODMAN_RUNTIME=true hangs because Docker daemon is not running.
+  # Podman manages its own machine lifecycle — no equivalent checks needed here.
+  if [[ "$YSG_PODMAN_RUNTIME" != "true" ]]; then
+    # --- Verify Docker daemon is running before attempting pull ---
+    _ensure_docker_running
 
-  # --- Fix Docker credential helper if missing (common macOS issue) ---
-  _fix_docker_credentials
+    # --- Fix Docker credential helper if missing (common macOS issue) ---
+    _fix_docker_credentials
+  fi
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
