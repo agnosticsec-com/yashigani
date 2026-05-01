@@ -2,7 +2,7 @@
 SPIFFE URI ACL gate — application-layer identity check for service-to-service
 callers.
 
-Last updated: 2026-04-27T00:00:01+01:00
+Last updated: 2026-04-30T04:30:00+01:00
 
 Threat model and trust boundary
 -------------------------------
@@ -268,11 +268,38 @@ def require_spiffe_id(path: str) -> Callable[[Request], str]:
         # Prefer the server-controlled peer-cert header (direct-mesh path,
         # set by SpiffePeerCertMiddleware from the validated TLS handshake).
         # Fall back to the Caddy-set header (Caddy-proxied path; Caddy strips
-        # inbound x-spiffe-id and re-sets from {http.request.tls.client.san.uris.0}).
-        # Lu F-1B EX-231-10 (2026-04-29).
-        caller = request.headers.get(_HEADER_NAME_PEER_CERT) \
-                 or request.headers.get(_HEADER_NAME)
+        # inbound x-spiffe-id at the client→Caddy hop and re-sets it from
+        # {http.request.tls.client.san.uris.0} at the Caddy→upstream hop —
+        # SpiffePeerCertMiddleware does NOT see the Caddy-injected header
+        # because it runs on the upstream side, after Caddy injects it).
+        # Lu F-1B EX-231-10 (2026-04-29). LAURA-V232-002 (2026-04-30).
+        #
+        # LAURA-V232-002 defence-in-depth note: SpiffePeerCertMiddleware now
+        # strips client-supplied x-spiffe-id before route handlers run, so
+        # any x-spiffe-id present here was injected by Caddy (trusted).
+        # A direct-mesh attacker who supplies a forged X-SPIFFE-ID has it
+        # stripped by the middleware — the forge never reaches this gate.
+        peer_cert_uri = request.headers.get(_HEADER_NAME_PEER_CERT)
+        caddy_uri = request.headers.get(_HEADER_NAME)
+        caller = peer_cert_uri or caddy_uri
+        if peer_cert_uri:
+            # Direct-mesh path — ASGI TLS extension extracted by middleware.
+            pass
+        elif caddy_uri:
+            # Caddy-proxied path — header injected by Caddy after peer cert
+            # validation.  Log at DEBUG so operators can trace the path taken.
+            logger.debug(
+                "spiffe-gate: using Caddy-set x-spiffe-id for path=%s caller=%r "
+                "(peer_cert extension absent — Caddy-proxied path)",
+                path, caddy_uri,
+            )
         if not caller:
+            logger.warning(
+                "spiffe-gate: 401 no_spiffe_id for path=%s — "
+                "both x-spiffe-id-peer-cert and x-spiffe-id absent "
+                "(direct-mesh with no TLS extension or stripped forge attempt)",
+                path,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="no_spiffe_id",
