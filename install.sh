@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-01T13:00:00+01:00 (fix: P0-10 otpauth URI missing algorithm=SHA256 — authenticator apps defaulted to SHA-1 → codes never matched pyotp SHA-256; v2.23.2)
+# last-updated: 2026-05-01T15:30:00+01:00 (fix: P0-12 docker-group preflight + bind-mount ownership preflight + remove all sudo from installer body; P0-13 chmod 600 on all TOTP + secret files; v2.23.2)
 set -euo pipefail
 
 # =============================================================================
@@ -1016,6 +1016,67 @@ install_runtime() {
 }
 
 # =============================================================================
+# STEP 4b: Installer pre-flight hard-stop checks (P0-12)
+#
+# These checks run before the main preflight script and will EXIT with a
+# copy-pasteable remediation block if the condition is not met.  The installer
+# body runs zero sudo — these gates ensure the operator has done any required
+# privileged setup before we start.
+# =============================================================================
+check_installer_preflight() {
+  if [[ "$SKIP_PREFLIGHT" == "true" || "$DRY_RUN" == "true" ]]; then
+    return 0
+  fi
+
+  # Only applies to compose / docker runtimes — K8s manages its own RBAC.
+  if [[ "${MODE:-}" == "k8s" ]]; then
+    return 0
+  fi
+
+  # --- Check 1: docker group membership (Docker runtime only) ---------------
+  # The installer body never runs sudo, so the current user must be able to
+  # reach the Docker daemon without elevated privilege.
+  if [[ "${YSG_RUNTIME:-}" == "docker" ]]; then
+    if ! docker info >/dev/null 2>&1; then
+      printf "\nPre-flight failed: your user cannot run docker without sudo.\n\n"
+      printf "  sudo groupadd docker          # creates the group if it doesn't exist\n"
+      printf "  sudo usermod -aG docker \$USER # adds you to the group\n"
+      printf "  newgrp docker                 # activate without logout (or log out and back in)\n\n"
+      printf "Then re-run this installer.\n\n"
+      exit 1
+    fi
+  fi
+
+  # --- Check 2: bind-mount directory ownership (UID 1001) -------------------
+  # PKI issuer and backoffice services run as UID 1001 inside containers and
+  # write to the bind-mounted secrets dir.  The installer no longer runs chown
+  # via sudo — the operator must do this once before running the installer.
+  local _bm_failed=0
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+  for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
+    if [[ ! -d "$_bm_dir" ]]; then
+      _bm_failed=1
+      break
+    fi
+    # shellcheck disable=SC2012
+    local _uid
+    _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ "$_uid" != "1001" ]]; then
+      _bm_failed=1
+      break
+    fi
+  done
+
+  if [[ "$_bm_failed" -eq 1 ]]; then
+    printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
+    printf "  mkdir -p data certs logs\n"
+    printf "  sudo chown -R 1001:1001 data certs logs\n\n"
+    printf "Then re-run this installer.\n\n"
+    exit 1
+  fi
+}
+
+# =============================================================================
 # STEP 5: Preflight checks
 # =============================================================================
 run_preflight() {
@@ -2007,7 +2068,7 @@ _fix_docker_credentials() {
     fi
   fi
 
-  if sudo ln -sf "$cred_helper" /usr/local/bin/docker-credential-osxkeychain 2>/dev/null; then
+  if ln -sf "$cred_helper" /usr/local/bin/docker-credential-osxkeychain 2>/dev/null; then
     log_success "docker-credential-osxkeychain symlinked"
   else
     log_warn "Could not create symlink — configuring Docker to pull without credential helper"
@@ -2141,10 +2202,9 @@ compose_up() {
       export YASHIGANI_HTTPS_PORT=8443
     fi
 
-    # 3. Create Docker-compatible directories for promtail
+    # 3. Create Docker-compatible directories for promtail (best-effort, no sudo)
     if [[ ! -d "/var/lib/docker/containers" ]]; then
-      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
-        mkdir -p /var/lib/docker/containers 2>/dev/null || \
+      mkdir -p /var/lib/docker/containers 2>/dev/null || \
         log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
     fi
 
@@ -2205,28 +2265,26 @@ compose_up() {
   # mapping — then the host sees the remapped UID. The assertion must
   # accept either the raw UID 1001 (Docker / root Podman) or the
   # subuid-remapped value (rootless Podman non-root install).
+  # P0-12: installer body runs zero sudo. Privileged chown is operator-side,
+  # gated by check_installer_preflight() before we reach this point.
+  # Podman rootless uses podman unshare (unprivileged, no sudo needed).
+  # Docker / rootful: chown without sudo — succeeds when installer runs as
+  # the dir owner (typical non-root user install) or as root.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
     if podman unshare chown 1001:1001 "$secrets_dir" 2>/dev/null; then
       log_info "secrets_dir chown 1001:1001 applied via podman unshare (rootless)"
-    elif command -v sudo &>/dev/null && sudo -S bash -c "chown 1001:1001 '${secrets_dir}'" <<< "${SUDO_PASS:-}" 2>/dev/null; then
-      log_info "secrets_dir chown 1001:1001 completed via sudo (rootless fallback)"
     else
-      log_warn "Could not chown ${secrets_dir} — PKI issuer will use :U remapping"
+      log_warn "Could not chown ${secrets_dir} via podman unshare — PKI issuer will use :U remapping"
     fi
   else
-    if ! chown 1001:1001 "$secrets_dir" 2>/dev/null; then
-      # Try via sudo if available (operator running install as non-root but with
-      # sudo rights). If sudo is not available or not granted, fail-closed:
-      # the operator must fix permissions before PKI bootstrap will succeed.
-      if command -v sudo &>/dev/null && sudo -n chown 1001:1001 "$secrets_dir" 2>/dev/null; then
-        log_info "secrets_dir chown 1001:1001 completed via sudo"
-      else
-        log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
-        log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
-        log_error "Fix: run install.sh as root (sudo bash install.sh) or grant write access:"
-        log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
-        exit 1
-      fi
+    if chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+      log_info "secrets_dir chown 1001:1001 applied"
+    else
+      log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
+      log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
+      log_error "Fix (run once as root, then re-run installer as your user):"
+      log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
+      exit 1
     fi
     # Defensive assertion: secrets dir must be owned by UID 1001 before proceeding.
     # (Skipped for Podman rootless — subuid remapping means host UID != 1001.)
@@ -2243,7 +2301,7 @@ compose_up() {
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
       echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}"
-      chmod 644 "${secrets_dir}/${_secret_file}"
+      chmod 600 "${secrets_dir}/${_secret_file}"
       log_info "Created secret placeholder: ${_secret_file}"
     fi
   done
@@ -2258,7 +2316,7 @@ compose_up() {
       local _token_file="${secrets_dir}/${_profile}_token"
       if [[ ! -s "$_token_file" ]]; then
         echo "# placeholder — auto-generated at first bootstrap" > "$_token_file"
-        chmod 666 "$_token_file"
+        chmod 600 "$_token_file"
         log_info "Created token placeholder: ${_profile}_token"
       fi
     fi
@@ -2543,7 +2601,7 @@ for r in results:
         local _token="${_rest#*:}"
         if [[ -n "$_profile" && -n "$_token" && "$_token" != "$_profile" ]]; then
           echo "$_token" > "${secrets_dir}/${_profile}_token"
-          chmod 644 "${secrets_dir}/${_profile}_token"
+          chmod 600 "${secrets_dir}/${_profile}_token"
         fi
         log_success "  ${_agent_name}: registered"
         any_registered=true
@@ -2824,7 +2882,7 @@ generate_secrets() {
         local _new_pw
         _new_pw="$(_gen_password)"
         printf "%s" "$_new_pw" > "${secrets_dir}/${_cred_name}"
-        chmod 644 "${secrets_dir}/${_cred_name}"
+        chmod 600 "${secrets_dir}/${_cred_name}"
         # Map secret file name to env var name
         local _env_key
         _env_key="$(echo "$_cred_name" | tr '[:lower:]' '[:upper:]')"
@@ -2872,13 +2930,13 @@ generate_secrets() {
   # --- Admin 1 (primary) ---
   GEN_ADMIN1_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin1_password"
-  chmod 644 "${secrets_dir}/admin1_password"
+  chmod 600 "${secrets_dir}/admin1_password"
   # Also write as admin_initial_password — the backoffice bootstrap checks this
   # file to decide whether to generate new credentials or use existing ones
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin_initial_password"
-  chmod 644 "${secrets_dir}/admin_initial_password"
+  chmod 600 "${secrets_dir}/admin_initial_password"
   printf "%s" "$GEN_ADMIN1_USERNAME" > "${secrets_dir}/admin1_username"
-  chmod 644 "${secrets_dir}/admin1_username"
+  chmod 600 "${secrets_dir}/admin1_username"
   # Update .env so backoffice creates the account with the generated username
   local env_file="${WORK_DIR}/docker/.env"
   if grep -q "^YASHIGANI_ADMIN_USERNAME=" "$env_file" 2>/dev/null; then
@@ -2891,25 +2949,25 @@ generate_secrets() {
 
   GEN_ADMIN1_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN1_TOTP_SECRET" > "${secrets_dir}/admin1_totp_secret"
-  chmod 644 "${secrets_dir}/admin1_totp_secret"
+  chmod 600 "${secrets_dir}/admin1_totp_secret"
   GEN_ADMIN1_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN1_USERNAME" "$GEN_ADMIN1_TOTP_SECRET")"
 
   # --- Admin 2 (backup — anti-lockout) ---
   GEN_ADMIN2_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN2_PASSWORD" > "${secrets_dir}/admin2_password"
-  chmod 644 "${secrets_dir}/admin2_password"
+  chmod 600 "${secrets_dir}/admin2_password"
   printf "%s" "$GEN_ADMIN2_USERNAME" > "${secrets_dir}/admin2_username"
-  chmod 644 "${secrets_dir}/admin2_username"
+  chmod 600 "${secrets_dir}/admin2_username"
 
   GEN_ADMIN2_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN2_TOTP_SECRET" > "${secrets_dir}/admin2_totp_secret"
-  chmod 644 "${secrets_dir}/admin2_totp_secret"
+  chmod 600 "${secrets_dir}/admin2_totp_secret"
   GEN_ADMIN2_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN2_USERNAME" "$GEN_ADMIN2_TOTP_SECRET")"
 
   # --- PostgreSQL ---
   GEN_POSTGRES_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_POSTGRES_PASSWORD" > "${secrets_dir}/postgres_password"
-  chmod 644 "${secrets_dir}/postgres_password"
+  chmod 600 "${secrets_dir}/postgres_password"
   # Also write to .env so Docker Compose can interpolate ${POSTGRES_PASSWORD}
   # in service DSN and PgBouncer DATABASE_URL
   local env_file="${WORK_DIR}/docker/.env"
@@ -2933,7 +2991,7 @@ generate_secrets() {
   # --- Redis ---
   GEN_REDIS_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_REDIS_PASSWORD" > "${secrets_dir}/redis_password"
-  chmod 644 "${secrets_dir}/redis_password"
+  chmod 600 "${secrets_dir}/redis_password"
   # Write to .env for Compose interpolation (LangGraph REDIS_URI needs it)
   if grep -q "^REDIS_PASSWORD=" "$env_file" 2>/dev/null; then
     local tmp_env; tmp_env="$(mktemp)"
@@ -2947,7 +3005,7 @@ generate_secrets() {
   local openclaw_token
   openclaw_token="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
   printf "%s" "$openclaw_token" > "${secrets_dir}/openclaw_gateway_token"
-  chmod 644 "${secrets_dir}/openclaw_gateway_token"
+  chmod 600 "${secrets_dir}/openclaw_gateway_token"
   if grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
     local tmp_env; tmp_env="$(mktemp)"
     sed "s|^OPENCLAW_GATEWAY_TOKEN=.*|OPENCLAW_GATEWAY_TOKEN=${openclaw_token}|" "$env_file" > "$tmp_env"
@@ -2959,7 +3017,7 @@ generate_secrets() {
   # --- Grafana ---
   GEN_GRAFANA_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_GRAFANA_PASSWORD" > "${secrets_dir}/grafana_admin_password"
-  chmod 644 "${secrets_dir}/grafana_admin_password"
+  chmod 600 "${secrets_dir}/grafana_admin_password"
 
   # --- Wazuh SIEM (generated even if --wazuh not selected — ready for later) ---
   GEN_WAZUH_INDEXER_PASSWORD="$(_gen_password)"
@@ -2968,7 +3026,7 @@ generate_secrets() {
   printf "%s" "$GEN_WAZUH_INDEXER_PASSWORD" > "${secrets_dir}/wazuh_indexer_password"
   printf "%s" "$GEN_WAZUH_API_PASSWORD" > "${secrets_dir}/wazuh_api_password"
   printf "%s" "$GEN_WAZUH_DASHBOARD_PASSWORD" > "${secrets_dir}/wazuh_dashboard_password"
-  chmod 644 "${secrets_dir}/wazuh_indexer_password" "${secrets_dir}/wazuh_api_password" "${secrets_dir}/wazuh_dashboard_password"
+  chmod 600 "${secrets_dir}/wazuh_indexer_password" "${secrets_dir}/wazuh_api_password" "${secrets_dir}/wazuh_dashboard_password"
   # Write to .env for Compose interpolation
   for _wkey in WAZUH_INDEXER_PASSWORD WAZUH_API_PASSWORD WAZUH_DASHBOARD_PASSWORD; do
     local _wval
@@ -4127,6 +4185,9 @@ main() {
 
     # Step 4: Install runtime (vm mode only — no-op for compose)
     install_runtime
+
+    # Step 4b: Installer pre-flight hard-stop (P0-12: docker group + bind-mount owner)
+    check_installer_preflight
 
     # Step 5: Preflight
     run_preflight
