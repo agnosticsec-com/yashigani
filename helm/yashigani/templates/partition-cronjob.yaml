@@ -7,6 +7,14 @@ Safe to run at any time; CREATE TABLE IF NOT EXISTS prevents double-creation.
 
 Image: reuses the gateway image because partition_maintenance.py lives in the
 same Python package. The job only needs DATABASE_URL — no network exposure.
+
+rc.3 fix (Finding D — 2026-05-01): replaced nonexistent yashigani-db-credentials
+secretKeyRef with Option α pattern: POSTGRES_PASSWORD from yashigani-postgres-secrets
+(declared first for K8s forward-ref order), DATABASE_URL assembled via $(POSTGRES_PASSWORD)
+interpolation. Connects direct to postgres (not pgbouncer) for DDL — same pattern as
+YASHIGANI_DB_DSN_DIRECT in gateway.yaml. mTLS cert mount added for when mtls.enabled.
+
+Last updated: 2026-05-01T10:00:00+01:00
 */ -}}
 apiVersion: batch/v1
 kind: CronJob
@@ -56,11 +64,24 @@ spec:
                 - --months-ahead
                 - "3"
               env:
-                - name: DATABASE_URL
+                # POSTGRES_PASSWORD MUST be declared before DATABASE_URL — K8s env
+                # interpolation is forward-only; $(POSTGRES_PASSWORD) in DATABASE_URL
+                # silently stays literal if the source var appears after it.
+                - name: POSTGRES_PASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: {{ include "yashigani.fullname" . }}-db-credentials
-                      key: url
+                      name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
+                      key: postgres_password
+                {{- if .Values.mtls.enabled }}
+                # mTLS: connect direct to postgres (not pgbouncer) for DDL — same
+                # rationale as YASHIGANI_DB_DSN_DIRECT in gateway.yaml. ca_bundle.crt
+                # provides chain verification (libpq needs full chain, not just root).
+                - name: DATABASE_URL
+                  value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@{{ include "yashigani.fullname" . }}-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+                {{- else }}
+                - name: DATABASE_URL
+                  value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@{{ include "yashigani.fullname" . }}-postgres:5432/yashigani"
+                {{- end }}
               resources:
                 {{- toYaml .Values.partitionCronjob.resources | nindent 16 }}
               securityContext:
@@ -68,3 +89,16 @@ spec:
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
+              {{- if .Values.mtls.enabled }}
+              volumeMounts:
+                - name: secrets
+                  mountPath: /run/secrets
+                  readOnly: true
+              {{- end }}
+          {{- if .Values.mtls.enabled }}
+          volumes:
+            - name: secrets
+              secret:
+                secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+                defaultMode: 0440
+          {{- end }}
