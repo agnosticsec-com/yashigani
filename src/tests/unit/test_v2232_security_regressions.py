@@ -3,19 +3,24 @@ Regression tests for v2.23.2 security findings.
 
 LAURA-V232-003 — TOTP bypass on force_totp_provision=True accounts.
 AVA-A006       — TOTP replay in step-up flow (stale window accepted).
+AVA-C006       — Stored XSS via protocol-URI bypass (javascript:/data:/vbscript:).
 
-Last updated: 2026-04-30T04:45:00+01:00
+Last updated: 2026-04-30T04:50:00+01:00
 """
 from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
+import sys
 import time
+import typing
 from pathlib import Path
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 SRC = Path(__file__).parent.parent.parent / "yashigani"
 ROUTES_AUTH = SRC / "backoffice" / "routes" / "auth.py"
@@ -341,3 +346,168 @@ class TestTotpReplayAvaA006:
             "verify_totp() must cache the MATCHED window key (not always current window key) "
             "so cross-window replay is blocked."
         )
+
+
+# ---------------------------------------------------------------------------
+# AVA-C006 — Protocol-URI bypass: javascript:/data:/vbscript: in agent name
+# ASVS v5 V5.3.3 | CWE-79 | OWASP A03 | WSTG-INPV-01
+# ---------------------------------------------------------------------------
+
+_AGENTS_PATH_C006 = Path(__file__).parents[2] / "yashigani" / "backoffice" / "routes" / "agents.py"
+
+
+def _load_agents_module_c006():
+    """Load agents.py in isolation — same pattern as test_ava_2026_04_29_001_002.py."""
+    _stubs = {
+        "yashigani.backoffice.middleware": type(sys)("stub"),
+        "yashigani.backoffice.state": type(sys)("stub"),
+        "yashigani.licensing.enforcer": type(sys)("stub"),
+        "pydantic": importlib.import_module("pydantic"),
+        "fastapi": importlib.import_module("fastapi"),
+    }
+    _stubs["yashigani.backoffice.middleware"].require_admin_session = lambda *a, **kw: None
+    _stubs["yashigani.backoffice.middleware"].AdminSession = object
+    _stubs["yashigani.backoffice.middleware"].require_stepup_admin_session = lambda *a, **kw: None
+    _stubs["yashigani.backoffice.middleware"].StepUpAdminSession = object
+    _stubs["yashigani.backoffice.state"].backoffice_state = None
+    _stubs["yashigani.licensing.enforcer"].require_feature = lambda *a, **kw: None
+
+    old = {}
+    for k, v in _stubs.items():
+        old[k] = sys.modules.get(k)
+        sys.modules[k] = v
+
+    spec = importlib.util.spec_from_file_location("agents_isolated_ava_c006", _AGENTS_PATH_C006)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+    return mod
+
+
+_agents_mod_c006 = _load_agents_module_c006()
+_AgentRegisterRequestC006 = _agents_mod_c006.AgentRegisterRequest
+_AgentUpdateRequestC006 = _agents_mod_c006.AgentUpdateRequest
+try:
+    _AgentUpdateRequestC006.model_rebuild(
+        _types_namespace={"Optional": typing.Optional, "list": list},
+    )
+except Exception:
+    pass
+
+
+class TestAvaC006ProtocolUriBypass:
+    """
+    AVA-C006: agent name validator must reject javascript:, data:, and vbscript:
+    protocol URIs in addition to HTML angle-bracket tags.
+
+    Root cause: _HTML_TAG_RE only matched '<[a-zA-Z/!]', so protocol URIs such as
+    'javascript:alert(1)' reached the registry and would execute if the UI rendered
+    agent names inside <a href="..."> attributes.
+
+    Fix: _HTML_TAG_RE (now a combined pattern) also matches (?i)javascript:|data:|vbscript:
+    ASVS V5.3.3, CWE-79, OWASP A03 Injection.
+    """
+
+    _VALID_URL = "https://agent.example.com"
+
+    # --- AgentRegisterRequest — protocol URI payloads -----------------------
+
+    def test_register_rejects_javascript_uri_lowercase(self):
+        """javascript:alert(1) must be rejected with HTTP 422."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentRegisterRequestC006(
+                name="javascript:alert(1)",
+                upstream_url=self._VALID_URL,
+            )
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_register_rejects_javascript_uri_uppercase(self):
+        """JAVASCRIPT:alert(1) must be rejected — check is case-insensitive."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentRegisterRequestC006(
+                name="JAVASCRIPT:alert(1)",
+                upstream_url=self._VALID_URL,
+            )
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_register_rejects_javascript_uri_mixed_case(self):
+        """JaVaScRiPt:alert(1) must be rejected — case-insensitive match."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentRegisterRequestC006(
+                name="JaVaScRiPt:alert(1)",
+                upstream_url=self._VALID_URL,
+            )
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_register_rejects_data_uri(self):
+        """data:text/html,<script>alert(1)</script> must be rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentRegisterRequestC006(
+                name="data:text/html,<script>alert(1)</script>",
+                upstream_url=self._VALID_URL,
+            )
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_register_rejects_vbscript_uri(self):
+        """vbscript:msgbox(1) must be rejected."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentRegisterRequestC006(
+                name="vbscript:msgbox(1)",
+                upstream_url=self._VALID_URL,
+            )
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_register_accepts_legitimate_name(self):
+        """Legitimate agent names must still be accepted (positive path)."""
+        req = _AgentRegisterRequestC006(
+            name="My Production Agent v2",
+            upstream_url=self._VALID_URL,
+        )
+        assert req.name == "My Production Agent v2"
+
+    def test_register_still_rejects_html_tag(self):
+        """Existing angle-bracket tag rejection must not regress."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentRegisterRequestC006(
+                name="<script>alert('XSS')</script>",
+                upstream_url=self._VALID_URL,
+            )
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    # --- AgentUpdateRequest — protocol URI payloads -------------------------
+
+    def test_update_rejects_javascript_uri(self):
+        """Update request must also reject javascript: URIs in name."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentUpdateRequestC006(name="javascript:alert(1)")
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_update_rejects_data_uri(self):
+        """Update request must also reject data: URIs in name."""
+        with pytest.raises(ValidationError) as exc_info:
+            _AgentUpdateRequestC006(name="data:text/html,xss")
+        errors = exc_info.value.errors()
+        assert any(e["loc"] == ("name",) for e in errors), errors
+
+    def test_update_accepts_none_name(self):
+        """None (field omitted) must still pass for partial updates."""
+        req = _AgentUpdateRequestC006(name=None)
+        assert req.name is None
+
+    def test_update_accepts_legitimate_name(self):
+        """Legitimate name on update must still be accepted."""
+        req = _AgentUpdateRequestC006(name="Renamed Agent")
+        assert req.name == "Renamed Agent"
