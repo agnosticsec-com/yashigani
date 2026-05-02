@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T07:30:00+01:00 (fix: defer secrets_dir chown to just before PKI bootstrap for Podman rootless)
+# last-updated: 2026-05-02T07:45:00+01:00 (fix: stale-partial-install guard + deferred secrets_dir chown for Podman rootless)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
@@ -2283,6 +2283,34 @@ compose_up() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
+  # Podman rootless stale-partial-install guard (gate #ROOTLESS-3):
+  # If secrets_dir exists but is owned by a different UID (subuid-mapped 1001, e.g.
+  # 363144), a previous partial install got far enough to chown the dir before
+  # failing. The installer (e.g. UID 1004) cannot write into it. Since
+  # check_existing_installation() already confirmed no containers are running,
+  # it's safe to wipe and regenerate — no live data is at risk.
+  # Only applies when not explicitly upgrading (UPGRADE=false) and when
+  # the dir is NOT owned by the current user.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" && "${UPGRADE:-false}" != "true" ]]; then
+    local _secrets_uid
+    # shellcheck disable=SC2012
+    _secrets_uid="$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ -n "$_secrets_uid" && "$_secrets_uid" != "$(id -u)" ]]; then
+      log_warn "secrets_dir owned by UID ${_secrets_uid} (not installer UID $(id -u)) — stale partial install detected"
+      log_warn "Wiping secrets_dir for clean regeneration (no containers running)"
+      # Use podman unshare rm -rf so we can remove files owned by the mapped UID
+      # without needing sudo. Falls back to plain rm (which works if we have perms).
+      if podman unshare rm -rf "$secrets_dir" 2>/dev/null; then
+        log_info "secrets_dir wiped via podman unshare"
+      else
+        log_warn "Could not wipe via podman unshare — trying direct rm"
+        rm -rf "$secrets_dir" 2>/dev/null \
+          || { log_error "Cannot wipe stale secrets_dir ${secrets_dir}. Run: sudo rm -rf \"${secrets_dir}\" then re-run."; exit 1; }
+      fi
+      mkdir -p "$secrets_dir"
+      log_info "secrets_dir recreated fresh"
+    fi
+  fi
   # PKI issuer runs as UID 1001 inside the gateway image and writes cert/key files
   # to the bind-mounted secrets dir. The directory must be writable by UID 1001
   # (or its subuid-mapped equivalent) BEFORE the PKI issuer container runs.
