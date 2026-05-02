@@ -1,6 +1,8 @@
 """
 Yashigani Backoffice — Alert sink configuration routes (v0.7.0).
 
+Last updated: 2026-05-02T09:00:00+01:00
+
 Configure Slack / Teams / PagerDuty direct webhook alerting.
 
 Routes:
@@ -16,7 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession, require_admin_session
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -86,7 +88,7 @@ def _rebuild_dispatcher(config: AlertConfigRequest) -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("/config")
-async def get_alert_config(session: AdminSession = require_admin_session):
+async def get_alert_config(session: AdminSession):
     """Return current alert sink configuration. URLs and keys are masked."""
     config = getattr(backoffice_state, "alert_config", None)
     if config is None:
@@ -114,7 +116,7 @@ async def get_alert_config(session: AdminSession = require_admin_session):
 @router.put("/config")
 async def update_alert_config(
     body: AlertConfigRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """Update alert sink configuration and rebuild the dispatcher."""
     _rebuild_dispatcher(body)
@@ -144,8 +146,8 @@ async def update_alert_config(
 
 @router.post("/test/{sink_type}")
 async def test_alert_sink(
+    session: AdminSession,
     sink_type: str = Path(pattern="^(slack|teams|pagerduty)$"),
-    session: AdminSession = require_admin_session,
 ):
     """Send a test alert to a specific configured sink."""
     config = getattr(backoffice_state, "alert_config", None)

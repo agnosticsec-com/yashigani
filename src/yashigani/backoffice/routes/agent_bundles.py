@@ -1,6 +1,8 @@
 """
 Yashigani Backoffice — Optional agent bundle registry (v0.8.0).
 
+Last updated: 2026-05-02T09:00:00+01:00
+
 These routes expose metadata about the third-party agent containers that users
 can opt-in to at install time.  No bundle is installed or removed via this API
 — that is handled by the installer / Helm values.  The API exists so the
@@ -17,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from yashigani.backoffice.middleware import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import AdminSession
 
 router = APIRouter()
 
@@ -141,7 +143,7 @@ class DisclaimerResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/", response_model=AgentBundleListResponse)
-async def list_agent_bundles(session: AdminSession = require_admin_session):
+async def list_agent_bundles(session: AdminSession):
     """Return all available optional agent bundles with their metadata and disclaimer."""
     return AgentBundleListResponse(
         bundles=[AgentBundleResponse(**b) for b in _BUNDLES],
@@ -150,6 +152,6 @@ async def list_agent_bundles(session: AdminSession = require_admin_session):
 
 
 @router.get("/disclaimer", response_model=DisclaimerResponse)
-async def get_disclaimer(session: AdminSession = require_admin_session):
+async def get_disclaimer(session: AdminSession):
     """Return the standard third-party agent bundle disclaimer for use in UI banners."""
     return DisclaimerResponse(disclaimer=_DISCLAIMER)

@@ -26,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.inspection.backend_base import ClassifierBackend, BackendUnavailableError
 
@@ -198,7 +198,7 @@ def _config_request_to_dict(config: Optional[BackendConfigRequest]) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/backend")
-async def get_active_backend(session: AdminSession = require_admin_session):
+async def get_active_backend(session: AdminSession):
     """Return the active backend name, config (no secrets), fallback chain, and health."""
     registry = _get_registry()
 
@@ -226,7 +226,7 @@ async def get_active_backend(session: AdminSession = require_admin_session):
 @router.put("/backend")
 async def swap_backend(
     body: BackendSwapRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     Hot-swap the active inspection backend.
@@ -307,7 +307,7 @@ async def swap_backend(
 @router.get("/backend/{backend_name}/health")
 async def get_backend_health(
     backend_name: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """Ping a specific backend and return its health status."""
     _validate_backend_name(backend_name)
@@ -337,7 +337,7 @@ async def get_backend_health(
 @router.post("/backend/{backend_name}/test")
 async def test_backend(
     backend_name: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     Run a test classification against a registered backend.

@@ -1,6 +1,8 @@
 """
 Yashigani Backoffice — OPA Policy Assistant routes (v0.7.0).
 
+Last updated: 2026-05-02T09:00:00+01:00
+
 Natural language → RBAC JSON suggestion with admin approve/reject flow.
 The assistant only generates the data document (JSON).
 It never generates or modifies Rego files.
@@ -19,7 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession, require_admin_session
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -70,7 +72,7 @@ class RejectRequest(BaseModel):
 @router.post("/suggest", response_model=SuggestResponse)
 async def suggest(
     body: SuggestRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     Generate an RBAC JSON suggestion from a natural language description.
@@ -134,7 +136,7 @@ async def suggest(
 @router.post("/apply", status_code=200)
 async def apply_suggestion(
     body: ApplyRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     Apply a validated RBAC suggestion to OPA.
@@ -193,7 +195,7 @@ async def apply_suggestion(
 @router.post("/reject", status_code=200)
 async def reject_suggestion(
     body: RejectRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """Record that the admin rejected a suggestion. Audit log only — nothing changes."""
     from yashigani.audit.schema import OPAAssistantSuggestionRejectedEvent
@@ -213,7 +215,7 @@ async def reject_suggestion(
 
 
 @router.get("/schema")
-async def get_schema(session: AdminSession = require_admin_session):
+async def get_schema(session: AdminSession):
     """Return the RBAC data document JSON schema for client-side validation."""
     from yashigani.opa_assistant.validator import _RBAC_SCHEMA
     return {"schema": _RBAC_SCHEMA}

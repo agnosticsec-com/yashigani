@@ -416,8 +416,8 @@ class TestHighValueEndpointsHaveStepup:
         ("license.py",  "activate_license", "require_stepup_admin_session"),
         ("license.py",  "revert_license",   "require_stepup_admin_session"),
         ("audit_sinks.py", "update_siem_config", "require_stepup_admin_session"),
-        ("agents.py",   "deactivate_agent",    "require_stepup_admin_session"),
-        ("agents.py",   "rotate_agent_token",  "require_stepup_admin_session"),
+        ("agents.py",   "deactivate_agent",    "StepUpAdminSession"),
+        ("agents.py",   "rotate_agent_token",  "StepUpAdminSession"),
         ("jwt_config.py", "set_jwt_config",    "require_stepup_admin_session"),
         ("jwt_config.py", "delete_jwt_config", "require_stepup_admin_session"),
     ]
