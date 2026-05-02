@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T00:30:00+01:00 (fix: chown password files + bootstrap tokens + HMAC secret to UID 1001 — gate #ROOTLESS-11)
 # last-updated: 2026-05-03T00:15:00+01:00 (fix: _pki_runtime_cmd honours YSG_RUNTIME=podman on --skip-pull path — gate #ROOTLESS-10)
 # last-updated: 2026-05-03T00:00:00+01:00 (fix: separate mount opts for manifest vs secrets in _pki_run_issuer for Podman rootless — gate #ROOTLESS-9)
 # last-updated: 2026-05-02T21:55:00+01:00 (fix: guard podman unshare data/audit mkdir on rootful installs — gate #ROOTFUL-1)
@@ -4293,6 +4294,61 @@ _pki_chown_client_keys() {
     # owned by uid 1001 from the host shell after the in-container chown exits.
     _do_chown "1001" "$_prom_key" "prometheus_client.key" "0640" || return 1
   fi
+
+  # gate #ROOTLESS-11: password files, bootstrap tokens, and HMAC secret are
+  # written by generate_secrets() as the installer user (e.g. UID 1005 on Podman
+  # rootless, UID 0 on Docker root installs). They are mode 0600 (owner-read-only).
+  # Containers running as UID 1001 (gateway, backoffice) cannot read their own
+  # Redis password, Postgres password, admin credentials, or bootstrap token
+  # without an explicit chown to 1001.
+  #
+  # _pki_chown_client_keys previously only re-owned *_client.key files; all other
+  # secrets remained owned by the installer user and were unreadable by UID 1001
+  # containers. This caused Redis AuthenticationError (gateway falls back to empty
+  # password → connect rejected) and backoffice PermissionError on admin_initial_password.
+  #
+  # Fix: enumerate all "container-consumed" secret files and chown to 1001:1001.
+  # Files NOT listed here (admin1/2_password, admin1/2_totp_secret) are also read
+  # by the backoffice (to bootstrap TOTP) — they are included in the list below.
+  # This is correct: the admin password files are "installer-display-only" on the
+  # host side; ownership by UID 1001 does not weaken them (mode stays 0600).
+  log_info "Chown'ing password files + bootstrap tokens + HMAC to UID 1001 (gate #ROOTLESS-11)"
+  local _uid1001_secrets=(
+    redis_password
+    postgres_password
+    license_key
+    admin_initial_password
+    admin1_password
+    admin1_username
+    admin1_totp_secret
+    admin2_password
+    admin2_username
+    admin2_totp_secret
+    grafana_admin_password
+    caddy_internal_hmac
+    openclaw_gateway_token
+    # wazuh passwords are read by the wazuh containers (run as root inside docker),
+    # not by the UID 1001 services. Chowning them to 1001 is harmless: root (UID 0)
+    # inside the wazuh containers can still read them; the mode stays 0600.
+    wazuh_indexer_password
+    wazuh_api_password
+    wazuh_dashboard_password
+  )
+  for _sf in "${_uid1001_secrets[@]}"; do
+    local _sfpath="${_secrets_dir}/${_sf}"
+    if [[ -f "$_sfpath" ]]; then
+      _do_chown "1001" "$_sfpath" "$_sf" || return 1
+    fi
+  done
+
+  # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
+  # bootstrap token at startup to verify identity; all services run as UID 1001
+  # (or, for root-inside-container services like caddy/redis, as UID 0 which
+  # can always read the file after the chown).
+  log_info "Chown'ing *_bootstrap_token files to UID 1001"
+  while IFS= read -r -d '' _btoken; do
+    _do_chown "1001" "$_btoken" "$(basename "$_btoken")" || return 1
+  done < <(find "${_secrets_dir}" -maxdepth 1 -name '*_bootstrap_token' -print0 2>/dev/null)
 }
 
 # ---------------------------------------------------------------------------
