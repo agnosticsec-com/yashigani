@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T09:45:00+01:00 (fix: postgres SSL upgrade injection for v2.22.x→v2.23.1 path; fix _pki_chown_client_keys remote-socket detection on Linux VMs)
+# last-updated: 2026-05-02T10:00:00+01:00 (fix: _pki_chown_client_keys mode probe replaced with static subuid check; unshare fallback to podman_run on failure — gate #ROOTLESS-7)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
 # 2026-05-02: stale-partial-install guard in compose_up() must not wipe when ca_root.crt already present (gate #ROOTLESS-5 blocker)
 # 2026-05-02: license_key placeholder created at step 7 (before PKI chown) in demo mode; compose_up placeholder write is non-fatal for Podman rootless (gate #ROOTLESS-6 blocker)
+# 2026-05-02: _pki_chown_client_keys mode probe replaced with static /etc/subuid check; unshare case falls back to podman_run before aborting (gate #ROOTLESS-7 blocker)
 # 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
@@ -4059,16 +4060,34 @@ _pki_chown_client_keys() {
     # UNIX socket path exists on the host.  This caused Linux-local installs to
     # take the podman_run path, which then failed when the alpine pull image was
     # unavailable (Docker Hub rate limit) and soft-warned instead of chowning.
-    # Fix: prefer `podman unshare` if it works (Linux non-root local user), and
-    # only fall back to podman_run if unshare is genuinely unavailable (macOS
-    # remote client where `podman unshare` exits non-zero or is absent).
+    #
+    # gate #ROOTLESS-7 (2026-05-02): `podman unshare echo "unshare_probe"` was
+    # the previous probe but it touches Podman's container storage briefly.
+    # When called immediately after _pki_run_issuer releases the storage lock,
+    # there is a transient window where the probe returns non-zero, causing
+    # the install to fall through to podman_run mode. In podman_run mode the
+    # ephemeral alpine container volume mount fails because secrets_dir was
+    # chowned to a subuid-range UID (363144) that podman run cannot access from
+    # the rootless installer, so chown is silently skipped and pgbouncer (UID 70)
+    # cannot read its key → pgbouncer crash-loops → podman-compose waits forever.
+    #
+    # Fix: replace the live podman probe with a static /etc/subuid check.
+    # If the current user has a subuid allocation ≥ 65536 entries, podman unshare
+    # is supported and we are the local rootless caller. This is a kernel-level
+    # capability check, not a runtime lock check, so it is immune to transient
+    # storage contention. macOS remote callers do not have /etc/subuid entries on
+    # the Mac side (they run via the Podman VM), so they fall through to podman_run.
     if [[ "$(id -u)" == "0" ]]; then
       _chown_mode="direct"
-    elif podman unshare echo "unshare_probe" >/dev/null 2>&1; then
-      # podman unshare works → we are the local rootless Podman user.
+    elif awk -v u="$(id -un)" -F: '$1==u && $3>=65536 {found=1} END{exit !found}' \
+           /etc/subuid 2>/dev/null; then
+      # User has a subuid allocation ≥ 65536 → local rootless Podman; use unshare.
+      # Note: /etc/subuid uses username (not numeric UID) in field 1; id -un gets
+      # the username. Some distros also accept numeric UIDs in /etc/subuid; we
+      # check by username first which covers the common Debian/Ubuntu layout.
       _chown_mode="unshare"
     else
-      # podman unshare unavailable (macOS remote client or restricted env).
+      # No /etc/subuid entry for this user (macOS client, restricted env).
       _chown_mode="podman_run"
     fi
   fi
@@ -4107,17 +4126,36 @@ _pki_chown_client_keys() {
         fi
         ;;
       unshare)
-        if ! podman unshare chown "${_uid}:${_uid}" "$_file"; then
-          log_error "podman unshare chown ${_uid}:${_uid} failed on ${_label} — aborting"
-          return 1
+        # gate #ROOTLESS-7 fallback: if podman unshare chown fails (e.g., file
+        # owned by a subuid-range UID outside the current unshare namespace, or
+        # a transient storage lock), attempt a podman_run ephemeral container
+        # before aborting. This makes unshare mode resilient to edge cases while
+        # still preferring the lower-overhead unshare path.
+        local _unshare_ok=0
+        if podman unshare chown "${_uid}:${_uid}" "$_file" 2>/dev/null; then
+          _unshare_ok=1
+          if [[ -n "$_extra_chmod" ]]; then
+            # BUG-2 fix: chmod must also run inside unshare; host-side chmod
+            # would fail with EPERM on a subuid-mapped file.
+            if ! podman unshare chmod "$_extra_chmod" "$_file" 2>/dev/null; then
+              log_warn "podman unshare chmod ${_extra_chmod} failed on ${_label} — falling back to podman_run"
+              _unshare_ok=0
+            fi
+          fi
         fi
-        # BUG-2 fix: after podman unshare chown, the file is owned by the
-        # mapped UID in the user namespace. From the host, this appears as a
-        # subuid-range UID that the non-root caller does not own, so host-side
-        # chmod would fail with EPERM. Apply chmod inside the same unshare.
-        if [[ -n "$_extra_chmod" ]]; then
-          if ! podman unshare chmod "$_extra_chmod" "$_file"; then
-            log_error "podman unshare chmod ${_extra_chmod} failed on ${_label} — aborting"
+        if [[ "$_unshare_ok" == "0" ]]; then
+          # Fall back to podman_run (same as macOS path).
+          log_warn "podman unshare chown/chmod failed on ${_label} — falling back to podman_run"
+          local _rel_file="${_file#"${_secrets_dir}/"}"
+          local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
+          if [[ -n "$_extra_chmod" ]]; then
+            _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
+          fi
+          if ! podman run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "$_container_cmd" 2>/dev/null; then
+            log_error "podman_run fallback chown/chmod also failed on ${_label} — aborting"
             return 1
           fi
         fi
