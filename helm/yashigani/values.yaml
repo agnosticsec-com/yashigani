@@ -1,6 +1,8 @@
 # Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-05-01T09:45:00+01:00
+# Last updated: 2026-05-02T12:00:00+01:00
+# 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit;
+# cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 
 global:
   imageRegistry: "ghcr.io"
@@ -630,8 +632,12 @@ agentBundles:
     tokenSecretKey: "token"
 
 # ---------------------------------------------------------------------------
-# Open WebUI — user-facing chat interface (v2.1)
-# Internal only. All inference routes through gateway.
+# Open WebUI — optional integration with the open-source Open WebUI project (v2.1)
+# Image pulled unmodified from ghcr.io/open-webui/open-webui (upstream).
+# Open WebUI is governed by its own licence terms — review at
+# https://github.com/open-webui/open-webui/blob/main/LICENSE before enabling.
+# Yashigani orchestrates deployment via Helm; it does not redistribute Open
+# WebUI binaries. Internal only — all inference routes through the gateway.
 # ---------------------------------------------------------------------------
 openWebui:
   enabled: true
