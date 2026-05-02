@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T07:45:00+01:00 (fix: stale-partial-install guard + deferred secrets_dir chown for Podman rootless)
+# last-updated: 2026-05-02T08:00:00+01:00 (fix: stale-partial-install guard must not wipe after PKI bootstrap for Podman rootless)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
+# 2026-05-02: stale-partial-install guard in compose_up() must not wipe when ca_root.crt already present (gate #ROOTLESS-5 blocker)
 # 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
@@ -2283,19 +2284,21 @@ compose_up() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
-  # Podman rootless stale-partial-install guard (gate #ROOTLESS-3):
+  # Podman rootless stale-partial-install guard (gate #ROOTLESS-5):
   # If secrets_dir exists but is owned by a different UID (subuid-mapped 1001, e.g.
   # 363144), a previous partial install got far enough to chown the dir before
   # failing. The installer (e.g. UID 1004) cannot write into it. Since
   # check_existing_installation() already confirmed no containers are running,
   # it's safe to wipe and regenerate — no live data is at risk.
   # Only applies when not explicitly upgrading (UPGRADE=false) and when
-  # the dir is NOT owned by the current user.
+  # the dir is NOT owned by the current user AND PKI certs have NOT been generated
+  # yet (ca_root.crt absent). If ca_root.crt is present, PKI bootstrap already ran
+  # and chowned the dir legitimately — do NOT wipe it.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" && "${UPGRADE:-false}" != "true" ]]; then
     local _secrets_uid
     # shellcheck disable=SC2012
     _secrets_uid="$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')"
-    if [[ -n "$_secrets_uid" && "$_secrets_uid" != "$(id -u)" ]]; then
+    if [[ -n "$_secrets_uid" && "$_secrets_uid" != "$(id -u)" && ! -f "${secrets_dir}/ca_root.crt" ]]; then
       log_warn "secrets_dir owned by UID ${_secrets_uid} (not installer UID $(id -u)) — stale partial install detected"
       log_warn "Wiping secrets_dir for clean regeneration (no containers running)"
       # Use podman unshare rm -rf so we can remove files owned by the mapped UID
