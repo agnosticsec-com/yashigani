@@ -94,12 +94,12 @@ async def update_ratelimit_config(body: RateLimitConfigRequest, session: AdminSe
         from yashigani.audit.schema import RateLimitThresholdChangedEvent
         state.audit_writer.write(RateLimitThresholdChangedEvent(
             admin_account=session.account_id,
-            previous_medium=prev.rpi_scale_medium,
-            previous_high=prev.rpi_scale_high,
-            previous_critical=prev.rpi_scale_critical,
-            new_medium=new_cfg.rpi_scale_medium,
-            new_high=new_cfg.rpi_scale_high,
-            new_critical=new_cfg.rpi_scale_critical,
+            previous_rpi_scale_medium=prev.rpi_scale_medium,
+            previous_rpi_scale_high=prev.rpi_scale_high,
+            previous_rpi_scale_critical=prev.rpi_scale_critical,
+            new_rpi_scale_medium=new_cfg.rpi_scale_medium,
+            new_rpi_scale_high=new_cfg.rpi_scale_high,
+            new_rpi_scale_critical=new_cfg.rpi_scale_critical,
         ))
     elif state.audit_writer is not None:
         state.audit_writer.write(_config_event(
@@ -168,6 +168,7 @@ async def reset_bucket(bucket_key: str, session: AdminSession):
             detail={"error": "redis_error", "message": str(exc)},
         )
 
+    assert state.audit_writer is not None  # set unconditionally at startup
     state.audit_writer.write(_config_event(
         session.account_id, "rate_limit_bucket_reset", bucket_key, "deleted"
     ))

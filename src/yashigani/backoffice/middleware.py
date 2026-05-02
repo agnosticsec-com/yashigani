@@ -20,6 +20,7 @@ _USER_SESSION_COOKIE = "__Host-yashigani_session"
 def get_session_store() -> SessionStore:
     """FastAPI dependency — returns the singleton SessionStore."""
     from yashigani.backoffice.state import backoffice_state
+    assert backoffice_state.session_store is not None  # set unconditionally at startup
     return backoffice_state.session_store
 
 

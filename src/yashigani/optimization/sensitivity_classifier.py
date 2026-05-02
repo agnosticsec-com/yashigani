@@ -103,7 +103,7 @@ class SensitivityClassifier:
         Returns:
             SensitivityResult with level, triggers, and per-layer details
         """
-        triggers = []
+        triggers: list[str] = []
         layer_results = {}
 
         # Layer 1: Regex (always on, cannot be disabled)
