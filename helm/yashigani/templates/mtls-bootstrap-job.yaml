@@ -1,6 +1,6 @@
 {{- if .Values.mtls.enabled }}
 {{- if not .Values.mtls.existingSecretName }}
-{{- /* Last updated: 2026-04-30T21:00:00+01:00 */}}
+{{- /* Last updated: 2026-05-01T20:00:00+01:00 */}}
 {{- /*
   PKI bootstrap Job — pre-install + pre-upgrade hook.
 
@@ -49,6 +49,66 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
+        # ── pre-seed (v2.23.1 Path A PKI race fix) ─────────────────────────
+        # On helm upgrade the emptyDir starts empty.  If the CA-keys Secret
+        # already exists (yashigani-pki-ca-keys), copy root + intermediate
+        # private keys + public certs into the shared emptyDir (/secrets) and
+        # set a sentinel file (/secrets/.upgrade_mode) so the issuer container
+        # knows to call rotate-leaves instead of bootstrap.
+        # On fresh install the Secret is absent → sentinel is NOT written →
+        # issuer runs full bootstrap as before.
+        # The || true on kubectl get ensures a missing secret (first install)
+        # does not fail this container.
+        - name: pki-pre-seed
+          image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
+          imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy }}
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              existing_root_key=$(kubectl get secret {{ .Values.mtls.caKeysSecretName }} \
+                --namespace {{ .Release.Namespace }} \
+                -o jsonpath='{.data.ca_root\.key}' 2>/dev/null \
+                | base64 -d 2>/dev/null || true)
+
+              if [ -n "$existing_root_key" ]; then
+                echo "[pre-seed] Existing CA keys found in {{ .Values.mtls.caKeysSecretName }} — upgrade path."
+
+                # CA private keys
+                kubectl get secret {{ .Values.mtls.caKeysSecretName }} \
+                  --namespace {{ .Release.Namespace }} \
+                  -o jsonpath='{.data.ca_root\.key}' | base64 -d > /secrets/ca_root.key
+                kubectl get secret {{ .Values.mtls.caKeysSecretName }} \
+                  --namespace {{ .Release.Namespace }} \
+                  -o jsonpath='{.data.ca_intermediate\.key}' | base64 -d > /secrets/ca_intermediate.key
+
+                # CA public certs (from leaves Secret which always has them)
+                kubectl get secret {{ .Values.mtls.secretName }} \
+                  --namespace {{ .Release.Namespace }} \
+                  -o jsonpath='{.data.ca_root\.crt}' | base64 -d > /secrets/ca_root.crt
+                kubectl get secret {{ .Values.mtls.secretName }} \
+                  --namespace {{ .Release.Namespace }} \
+                  -o jsonpath='{.data.ca_intermediate\.crt}' | base64 -d > /secrets/ca_intermediate.crt
+
+                # Sentinel: tells the issuer container to call rotate-leaves
+                printf "1" > /secrets/.upgrade_mode
+
+                echo "[pre-seed] Existing CA material seeded — upgrade will rotate leaves only."
+              else
+                echo "[pre-seed] No existing CA keys — fresh install, running full bootstrap."
+              fi
+          volumeMounts:
+            - name: pki-certs
+              mountPath: /secrets
+          resources:
+            {{- toYaml .Values.mtls.bootstrapResources | nindent 12 }}
         - name: issuer
           image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
           imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
@@ -70,13 +130,24 @@ spec:
             - |
               set -euo pipefail
               cp /manifest-ro/service_identities.yaml /manifest-rw/service_identities.yaml
-              python -m yashigani.pki.issuer \
-                --secrets-dir /secrets \
-                --manifest /manifest-rw/service_identities.yaml \
-                bootstrap \
-                --root-lifetime-years {{ .Values.mtls.rootLifetimeYears }} \
-                --intermediate-lifetime-days {{ .Values.mtls.intermediateLifetimeDays }} \
-                --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
+
+              if [ -f /secrets/.upgrade_mode ]; then
+                echo "[issuer] Upgrade mode: rotating leaves under existing CA root."
+                python -m yashigani.pki.issuer \
+                  --secrets-dir /secrets \
+                  --manifest /manifest-rw/service_identities.yaml \
+                  rotate-leaves \
+                  --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
+              else
+                echo "[issuer] Fresh install: running full bootstrap."
+                python -m yashigani.pki.issuer \
+                  --secrets-dir /secrets \
+                  --manifest /manifest-rw/service_identities.yaml \
+                  bootstrap \
+                  --root-lifetime-years {{ .Values.mtls.rootLifetimeYears }} \
+                  --intermediate-lifetime-days {{ .Values.mtls.intermediateLifetimeDays }} \
+                  --leaf-lifetime-days {{ .Values.mtls.leafLifetimeDays }}
+              fi
               # Retro #3am — fail-closed verification that SPIFFE URI SAN
               # made it onto every leaf. If issuer.build_leaf silently
               # skipped the URI SAN (manifest path bug, schema regression,
