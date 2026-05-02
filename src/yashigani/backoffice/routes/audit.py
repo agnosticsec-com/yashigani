@@ -1,6 +1,6 @@
 """
 Yashigani Backoffice — Audit log management routes.
-GET    /audit/export                 — stream NDJSON (format=ndjson) or CSV (format=csv) log export
+GET    /audit/export/raw             — stream full unfiltered NDJSON/CSV log export (no row cap)
 GET    /audit/masking/scope          — current masking scope config
 PUT    /audit/masking/scope          — update masking scope (default + overrides)
 POST   /audit/masking/scope/agent    — set per-agent masking override
@@ -14,7 +14,13 @@ POST   /audit/siem                   — add a SIEM target
 DELETE /audit/siem/{name}            — remove a SIEM target
 POST   /audit/siem/{name}/test       — send a test event to a SIEM target
 
-Last updated: 2026-04-29T22:58:39+01:00
+A1 (2026-05-02): Renamed /export → /export/raw to resolve path shadow with
+audit_search.py's filtered /export endpoint. Both routers mount at prefix
+/admin/audit. The audit_search filtered export (10k row cap, full filter suite)
+is the canonical user-facing export at /admin/audit/export. This unfiltered
+streaming export is now at /admin/audit/export/raw for operator/compliance dumps.
+
+Last updated: 2026-05-02T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -79,7 +85,7 @@ class SiemTargetRequest(BaseModel):
 # Log export
 # ---------------------------------------------------------------------------
 
-@router.get("/export")
+@router.get("/export/raw")
 async def export_audit_log(
     session: AdminSession,
     output_format: str = Query(default="ndjson", pattern=r"^(ndjson|csv)$"),
