@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-02T12:00:00+01:00 (fix RESTORE-1/2/3: unshare chmod fix, .env postgres password sync, secrets-dir ownership reset)
+# Last updated: 2026-05-02T23:10:00+01:00 (fix RESTORE-4: BSD sed -i portability — use sed -i "" for macOS)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -837,13 +837,18 @@ _restore_pg_role_password() {
     if [[ -n "$_pw_urlenc" ]]; then
       # Update or append POSTGRES_PASSWORD
       if grep -q "^POSTGRES_PASSWORD=" "$_env_file"; then
-        sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${_new_pw}|" "$_env_file"
+        # macOS BSD sed requires an explicit backup-extension arg (can be empty string).
+        # GNU sed accepts sed -i "..." but BSD sed treats the pattern as the extension.
+        # Use sed -i "" for portability across both.
+        sed -i "" "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${_new_pw}|" "$_env_file" 2>/dev/null || \
+          sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${_new_pw}|" "$_env_file"
       else
         printf 'POSTGRES_PASSWORD=%s\n' "$_new_pw" >> "$_env_file"
       fi
       # Update or append POSTGRES_PASSWORD_URLENC
       if grep -q "^POSTGRES_PASSWORD_URLENC=" "$_env_file"; then
-        sed -i "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${_pw_urlenc}|" "$_env_file"
+        sed -i "" "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${_pw_urlenc}|" "$_env_file" 2>/dev/null || \
+          sed -i "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${_pw_urlenc}|" "$_env_file"
       else
         printf 'POSTGRES_PASSWORD_URLENC=%s\n' "$_pw_urlenc" >> "$_env_file"
       fi
