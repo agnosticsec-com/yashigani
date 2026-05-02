@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T00:15:00+01:00 (fix: _pki_runtime_cmd honours YSG_RUNTIME=podman on --skip-pull path — gate #ROOTLESS-10)
 # last-updated: 2026-05-03T00:00:00+01:00 (fix: separate mount opts for manifest vs secrets in _pki_run_issuer for Podman rootless — gate #ROOTLESS-9)
 # last-updated: 2026-05-02T21:55:00+01:00 (fix: guard podman unshare data/audit mkdir on rootful installs — gate #ROOTFUL-1)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
@@ -3803,11 +3804,19 @@ _pki_runtime_cmd() {
   # Pick docker vs podman. Priority:
   #   1. Explicit request: YSG_PODMAN_RUNTIME=true -> podman (even if docker is
   #      installed, honour the operator's choice).
+  #   1b. gate #ROOTLESS-10: also honour YSG_RUNTIME=podman directly. When
+  #      --skip-pull is passed, compose_pull() returns before resolve_compose_cmd()
+  #      is called, so YSG_PODMAN_RUNTIME stays false even though the operator
+  #      chose podman via YSG_RUNTIME=podman. Reading YSG_RUNTIME here as a
+  #      fallback ensures _pki_run_issuer uses podman on --skip-pull paths.
   #   2. Docker available -> docker (fastest path on typical dev machines).
   #   3. Podman fallback.
   # Su Review Finding fix — earlier version had inverted logic that ignored
   # YSG_PODMAN_RUNTIME when docker was also present.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    echo "podman"; return
+  fi
+  if [[ "${YSG_RUNTIME:-}" == "podman" ]]; then
     echo "podman"; return
   fi
   if command -v docker >/dev/null 2>&1; then
