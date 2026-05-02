@@ -6,11 +6,22 @@ cryptographic algorithm in use, deprecated algorithms, post-quantum
 status, and compliance references.
 
 Admin-authenticated. Useful for compliance audits and procurement teams.
+
+Auth note (2026-05-02): Added require_admin_session dependency to the handler.
+The endpoint was declared as admin-authenticated in the docstring but had no
+actual auth dependency — no Depends(), no router-level guard, no middleware
+covering /admin/crypto/*. The CryptoBoM is not itself a secret (it describes
+algorithm choices, not key material) but exposing it unauthenticated leaks
+reconnaissance data to unauthenticated callers (OWASP API1:2023 / ASVS V4.1.1).
+
+Last updated: 2026-05-02T00:00:00+01:00
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+
+from yashigani.backoffice.middleware import require_admin_session
 
 router = APIRouter()
 
@@ -36,9 +47,10 @@ _CRYPTO_INVENTORY = {
 
 
 @router.get("/crypto/inventory")
-async def crypto_inventory():
+async def crypto_inventory(session=Depends(require_admin_session)):
     """
     Return the full cryptographic algorithm inventory.
     ASVS 11.1.3 — all algorithms, strength levels, and PQ readiness.
+    Requires admin session.
     """
     return JSONResponse(content=_CRYPTO_INVENTORY)
