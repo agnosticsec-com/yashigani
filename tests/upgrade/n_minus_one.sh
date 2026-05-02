@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T10:10:00+01:00
+# last-updated: 2026-05-02T10:30:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -78,18 +78,8 @@ ROUND_LIMIT=10  # number of bump_round() phases; separate from the 3-retry rule
 REMOTE_COMPOSE="docker compose"   # updated below after arg parse
 
 # ---------------------------------------------------------------------------
-# Timestamp + output files
-# ---------------------------------------------------------------------------
-RUN_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-mkdir -p "$EVIDENCE_DIR"
-LOG_FILE="${EVIDENCE_DIR}/n_minus_one_${RUN_TS}.log"
-JSON_FILE="${EVIDENCE_DIR}/n_minus_one_${RUN_TS}.json"
-
-# All output goes to both stdout and the log file
-exec > >(tee -a "$LOG_FILE") 2>&1
-
-# ---------------------------------------------------------------------------
-# Argument parsing
+# Argument parsing  (MUST come before output-file setup so --evidence-dir
+# is honoured before mkdir + exec tee)
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -112,6 +102,17 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+# ---------------------------------------------------------------------------
+# Timestamp + output files  (after arg parse so --evidence-dir is applied)
+# ---------------------------------------------------------------------------
+RUN_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mkdir -p "$EVIDENCE_DIR"
+LOG_FILE="${EVIDENCE_DIR}/n_minus_one_${RUN_TS}.log"
+JSON_FILE="${EVIDENCE_DIR}/n_minus_one_${RUN_TS}.json"
+
+# All output goes to both stdout and the log file
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ---------------------------------------------------------------------------
 # Helpers
