@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T07:05:00+01:00 (fix: data/audit mkdir via podman unshare for Podman rootless subuid-mapped data dir)
+# last-updated: 2026-05-02T07:30:00+01:00 (fix: defer secrets_dir chown to just before PKI bootstrap for Podman rootless)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
+# 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
 # 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
@@ -2283,35 +2284,24 @@ compose_up() {
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
   # PKI issuer runs as UID 1001 inside the gateway image and writes cert/key files
-  # to the bind-mounted secrets dir. When install runs as root (sudo), the dir is
-  # owned by root:root 0755 by default, which makes the issuer's writes fail with
-  # PermissionError. Retro v2.23.1 item #3ad: chown secrets dir to UID 1001 so the
-  # PKI issuer container can write without needing root inside the container.
+  # to the bind-mounted secrets dir. The directory must be writable by UID 1001
+  # (or its subuid-mapped equivalent) BEFORE the PKI issuer container runs.
   #
-  # BUG-58B-01 (v2.23.1): drop '|| true' — fail-closed so the PKI issuer
-  # container does not silently fail to write certs into a root-owned dir.
-  # Non-root installs (e.g. Docker non-root path) require elevated privilege
-  # for this chown; if it fails, surface the error rather than continuing with
-  # a permissions mismatch that breaks the PKI bootstrap step downstream.
+  # For Docker / rootful Podman: chown 1001:1001 now. The installer runs as
+  # root (or a user that can chown to 1001), so subsequent writes by the
+  # installer process also work because it runs as root.
   #
-  # Podman rootless (v2.23.1 gate #59): container UID 1001 remaps to a
-  # high host UID (base + 1000) via /etc/subuid. Plain `chown 1001:1001`
-  # will fail because the host user does not own UID 1001. Use
-  # `podman unshare chown 1001:1001` so Podman applies the namespace
-  # mapping — then the host sees the remapped UID. The assertion must
-  # accept either the raw UID 1001 (Docker / root Podman) or the
-  # subuid-remapped value (rootless Podman non-root install).
-  # P0-12: installer body runs zero sudo. Privileged chown is operator-side,
-  # gated by check_installer_preflight() before we reach this point.
-  # Podman rootless uses podman unshare (unprivileged, no sudo needed).
-  # Docker / rootful: chown without sudo — succeeds when installer runs as
-  # the dir owner (typical non-root user install) or as root.
+  # For Podman rootless: the installer runs as a non-root user (e.g. UID 1004).
+  # If we chown secrets_dir to UID 363144 (subuid-mapped 1001) NOW, the installer
+  # can no longer write to it (1004 is "other", no write bit). DEFER the chown
+  # to _prepare_secrets_dir_for_pki(), called just before bootstrap_internal_pki().
+  # All installer-side writes happen in this function; by the time PKI bootstrap
+  # runs, the chown will have been applied and the container can write its certs.
+  #
+  # Retro v2.23.1 item #3ad + gate #ROOTLESS-3.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
-    if podman unshare chown 1001:1001 "$secrets_dir" 2>/dev/null; then
-      log_info "secrets_dir chown 1001:1001 applied via podman unshare (rootless)"
-    else
-      log_warn "Could not chown ${secrets_dir} via podman unshare — PKI issuer will use :U remapping"
-    fi
+    # Deferred to _prepare_secrets_dir_for_pki() — see comment above.
+    log_info "secrets_dir chown deferred to PKI bootstrap (Podman rootless)"
   else
     if chown 1001:1001 "$secrets_dir" 2>/dev/null; then
       log_info "secrets_dir chown 1001:1001 applied"
@@ -4114,6 +4104,30 @@ _pki_detect_uri_san_drift() {
   return $drift
 }
 
+# _prepare_secrets_dir_for_pki() — chown secrets_dir so the PKI issuer container
+# can write certs into it. For Podman rootless this is deferred from generate_secrets()
+# to here, because the installer needs to write files into secrets_dir during
+# generate_secrets() and can only do so while it still owns the directory.
+# gate #ROOTLESS-3 fix (v2.23.1).
+_prepare_secrets_dir_for_pki() {
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    if [[ "$(id -u)" == "0" ]]; then
+      # Rootful Podman running as root — plain chown works
+      chown 1001:1001 "$secrets_dir" 2>/dev/null || true
+      log_info "secrets_dir chown 1001:1001 applied (rootful)"
+    else
+      # Rootless Podman — use podman unshare to map through the user namespace
+      if podman unshare chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+        log_info "secrets_dir chown 1001:1001 applied via podman unshare (rootless)"
+      else
+        log_warn "Could not chown ${secrets_dir} via podman unshare — PKI issuer will use :U remapping"
+      fi
+    fi
+  fi
+  # Docker / non-Podman path: chown was already applied in generate_secrets().
+}
+
 bootstrap_internal_pki() {
   set_step "9b" "internal mTLS PKI"
   log_step "9b/${TOTAL_STEPS}" "Bootstrapping internal mTLS PKI..."
@@ -4189,6 +4203,7 @@ bootstrap_internal_pki() {
 handle_pki_subcommand() {
   case "$PKI_ACTION" in
     bootstrap)
+      _prepare_secrets_dir_for_pki
       bootstrap_internal_pki
       ;;
     rotate-leaves)
@@ -4375,6 +4390,9 @@ main() {
     # Step 9b: Internal mTLS PKI — bootstrap root + intermediate + leaves BEFORE
     # services start, because postgres/redis/opa/gateway/backoffice all now
     # mount certs from docker/secrets/. No certs = no boot.
+    # Podman rootless: chown secrets_dir now (deferred from generate_secrets to
+    # allow installer-side writes; see _prepare_secrets_dir_for_pki comment).
+    _prepare_secrets_dir_for_pki
     _pki_prompt_lifetimes
     bootstrap_internal_pki
 
