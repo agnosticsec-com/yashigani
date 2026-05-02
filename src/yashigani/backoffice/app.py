@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-04-29T17:45:00+01:00
+Last updated: 2026-05-02T19:17:04+01:00
 """
 from __future__ import annotations
 
@@ -420,7 +420,7 @@ def create_backoffice_app() -> FastAPI:
         ("/admin/ratelimit",            8 * 1024),
         ("/admin/rbac",                 32 * 1024),
         ("/admin/alerts",               32 * 1024),
-        ("/admin/budgets",              16 * 1024),
+        ("/admin/budget",               16 * 1024),
         ("/auth/login",                 4 * 1024),    # u/p/totp
         ("/auth/password/change",       8 * 1024),
         ("/auth/password/self-reset",   4 * 1024),
