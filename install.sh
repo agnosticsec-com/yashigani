@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T11:00:00+01:00 (fix: step-7 license_key write non-fatal when secrets_dir owned by stale UID — gate #ROOTLESS-8)
+# last-updated: 2026-05-02T21:55:00+01:00 (fix: guard podman unshare data/audit mkdir on rootful installs — gate #ROOTFUL-1)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
@@ -2358,7 +2358,10 @@ compose_up() {
   # For Podman rootless, data_dir is owned by the subuid-remapped UID (e.g. 363144).
   # mkdir as the installer user (e.g. UID 1004) would fail with Permission denied.
   # Use `podman unshare` to create the subdirectory inside the user namespace.
-  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+  # Gate #ROOTFUL-1: podman unshare is a rootless-only primitive — calling it as
+  # UID 0 (rootful install) prints "please use unshare with rootless" and aborts.
+  # Guard on id -u != 0 so rootful installs use the plain mkdir -p path instead.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" ]]; then
     podman unshare mkdir -p "${data_dir}/audit" \
       || { log_error "Cannot create ${data_dir}/audit via podman unshare"; exit 1; }
   else

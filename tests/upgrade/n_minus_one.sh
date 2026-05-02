@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T10:45:00+01:00
+# last-updated: 2026-05-02T21:15:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -102,6 +102,31 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+# ---------------------------------------------------------------------------
+# Execution-context guard — must run from developer machine, not from VM
+#
+# This harness SSHes to the VM for every remote step.  Running it ON the VM
+# itself (as happened in Run 3) causes the SSH key path to be unresolvable,
+# producing a confusing "Cannot SSH" error in Phase 0.
+#
+# After arg-parse, VM_KEY has its final value.  If the key file does not exist
+# on the local filesystem, we are almost certainly running from the wrong host.
+# Exit immediately with a clear remediation message.
+# ---------------------------------------------------------------------------
+if [[ ! -f "$VM_KEY" ]]; then
+    echo "ERROR: SSH key not found: $VM_KEY" >&2
+    echo "" >&2
+    echo "This harness must be run from the developer machine, not from the VM." >&2
+    echo "It SSHes to the VM (${VM_USER}@${VM_HOST}) for every remote step." >&2
+    echo "" >&2
+    echo "Remediation:" >&2
+    echo "  1. Run this script from your developer machine (macOS/Linux with the key)." >&2
+    echo "  2. Or pass the correct key path:  --vm-key /path/to/private_key" >&2
+    echo "" >&2
+    echo "Do NOT copy this script to the VM and run it there." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Timestamp + output files  (after arg parse so --evidence-dir is applied)
