@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T08:00:00+01:00 (fix: stale-partial-install guard must not wipe after PKI bootstrap for Podman rootless)
+# last-updated: 2026-05-02T08:30:00+01:00 (fix: license_key placeholder created before PKI bootstrap in demo mode; compose_up placeholder write non-fatal for Podman rootless)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
 # 2026-05-02: stale-partial-install guard in compose_up() must not wipe when ca_root.crt already present (gate #ROOTLESS-5 blocker)
+# 2026-05-02: license_key placeholder created at step 7 (before PKI chown) in demo mode; compose_up placeholder write is non-fatal for Podman rootless (gate #ROOTLESS-6 blocker)
 # 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
@@ -2365,9 +2366,16 @@ compose_up() {
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
-      echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}"
-      chmod 600 "${secrets_dir}/${_secret_file}"
-      log_info "Created secret placeholder: ${_secret_file}"
+      # gate #ROOTLESS-6: for Podman rootless, secrets_dir may be owned by the PKI
+      # container UID (363144) after bootstrap. If the write fails, warn and continue —
+      # the service will start without the placeholder (secrets should have been created
+      # by generate_secrets() before PKI ran; this path is a safety net for upgrades).
+      if ! echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}" 2>/dev/null; then
+        log_warn "Could not create placeholder ${_secret_file} (secrets_dir owned by PKI UID — expected for Podman rootless)"
+      else
+        chmod 600 "${secrets_dir}/${_secret_file}" 2>/dev/null || true
+        log_info "Created secret placeholder: ${_secret_file}"
+      fi
     fi
   done
 
@@ -4371,6 +4379,13 @@ main() {
     # Step 7: License key (skipped in demo — Community, no key needed)
     if [[ "$DEPLOY_MODE" == "demo" ]]; then
       log_step "7/${TOTAL_STEPS}" "Skipping licence key (demo mode — Community tier)"
+      # gate #ROOTLESS-6: create placeholder NOW (before PKI bootstrap chowns secrets_dir)
+      # so compose_up() doesn't need to write it after the chown.
+      local _lic="${WORK_DIR}/docker/secrets/license_key"
+      if [[ ! -s "$_lic" ]]; then
+        echo "# community — no licence key required" > "$_lic"
+        chmod 600 "$_lic"
+      fi
     else
       handle_license
     fi
