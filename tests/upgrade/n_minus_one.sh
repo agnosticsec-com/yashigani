@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T04:30:00+01:00
+# last-updated: 2026-05-02T10:10:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -336,6 +336,20 @@ RUNTIME="${RUNTIME}"
 COMPOSE_CMD="${REMOTE_COMPOSE}"
 SUDO_PASS="${VM_PASSWORD}"
 
+# safe_rm_rf: remove a directory that may contain files owned by Podman rootless
+# sub-UIDs (e.g. secrets chowned to container UIDs by _pki_chown_client_keys).
+# Regular rm -rf fails on those files. podman unshare runs inside the user
+# namespace where those sub-UIDs map back to the process owner.
+safe_rm_rf() {
+    local dir="\$1"
+    [ -d "\$dir" ] || return 0
+    if command -v podman >/dev/null 2>&1 && podman unshare echo "probe" >/dev/null 2>&1; then
+        podman unshare rm -rf "\$dir"
+    else
+        rm -rf "\$dir"
+    fi
+}
+
 echo "[remote] Tearing down any existing stack at \$WORK ..."
 
 # Nuke running stack if it exists
@@ -346,10 +360,11 @@ if [ -d "\$WORK/docker" ]; then
     cd /
 fi
 
-# Remove old work dir
+# Remove old work dir (use safe_rm_rf: may contain sub-UID-owned secrets from
+# a previous v2.23.x run that used _pki_chown_client_keys).
 if [ -d "\$WORK" ]; then
     echo "[remote] Removing old work dir \$WORK ..."
-    rm -rf "\$WORK"
+    safe_rm_rf "\$WORK"
 fi
 
 echo "[remote] Cloning tag \$OLD_VER ..."
@@ -396,6 +411,44 @@ REMOTE_SCRIPT
         log "WARNING: install.sh exited $rc — stack health check will determine PASS/FAIL"
         printf "N-1 FINDING: v2.22.x install exit code %s (Podman rootless statfs bug in v2.22.x; stack may still be up)\n" "$rc"
         # Do not fail here — let wait_for_old_stack() decide
+    fi
+
+    # N1-HARNESS-004 FIX: Under Podman rootless, edoburu/pgbouncer v1.23.1-p0's
+    # entrypoint (line 56) tries to append credentials to /etc/pgbouncer/userlist.txt.
+    # In the image, that file is owned by container root (UID 0), mode 0644.
+    # Container postgres (UID 70) cannot write it. Fix: chmod 0666 the file in
+    # the image layer so any container user can write it. Only needed for Podman
+    # rootless — Docker runs containers as root and has no issue.
+    #
+    # The pgbouncer container is typically crashing in a restart loop at this
+    # point. We fix the image layer, stop+rm the crashed container, and restart
+    # it so the fix takes effect before the health gate.
+    if [[ "$RUNTIME" == "podman" ]]; then
+        log "Applying N1-HARNESS-004 pgbouncer userlist.txt write-permission fix ..."
+        vm_run_script <<'FIX_PGBOUNCER'
+set -euo pipefail
+# Find userlist.txt in the podman overlay for the pgbouncer image.
+UL=$(find /home/tom/.local/share/containers/storage/overlay -name 'userlist.txt' \
+     -path '*/etc/pgbouncer/userlist.txt' 2>/dev/null | head -1)
+if [ -n "$UL" ] && [ -f "$UL" ]; then
+    chmod 0666 "$UL"
+    echo "[remote] pgbouncer userlist.txt chmod 0666: $UL"
+else
+    echo "[remote] WARNING: pgbouncer userlist.txt not found in overlay"
+fi
+# Restart pgbouncer so it picks up the changed file permission.
+# Use 'podman rm --force' so a new container is created (restart reuses the
+# old container's overlay which still has the old permissions).
+pgbc=$(podman ps -a --filter name=docker_pgbouncer_1 --format '{{.Names}}' 2>/dev/null)
+if [ -n "$pgbc" ]; then
+    podman stop docker_pgbouncer_1 2>/dev/null || true
+    podman rm docker_pgbouncer_1 2>/dev/null || true
+    cd /home/tom/n1_harness/docker
+    podman-compose up -d pgbouncer 2>&1 | tail -5 || true
+    echo "[remote] pgbouncer recreated"
+fi
+FIX_PGBOUNCER
+        log "pgbouncer userlist.txt fix applied"
     fi
 
     # Detect which compose tool v2.22.x actually used, so subsequent phases
@@ -885,17 +938,31 @@ NEW_REF="${NEW_REF}"
 RUNTIME="${RUNTIME}"
 COMPOSE_CMD="${REMOTE_COMPOSE}"
 
+# safe_rm_rf: handles directories containing Podman rootless sub-UID-owned files.
+safe_rm_rf() {
+    local dir="\$1"
+    [ -d "\$dir" ] || return 0
+    if command -v podman >/dev/null 2>&1 && podman unshare echo "probe" >/dev/null 2>&1; then
+        podman unshare rm -rf "\$dir"
+    else
+        rm -rf "\$dir"
+    fi
+}
+
 echo "[remote] Stopping old stack (preserving volumes) ..."
 cd "\$OLD_DIR"
 YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml down --remove-orphans 2>&1 || true
 
 echo "[remote] Cloning new ref \$NEW_REF ..."
-rm -rf "\$NEW_DIR"
+# Use safe_rm_rf: NEW_DIR may contain sub-UID-owned secrets from a prior harness run.
+safe_rm_rf "\$NEW_DIR"
 git clone --depth 1 --branch "\$NEW_REF" "\$REPO" "\$NEW_DIR"
 echo "[remote] Cloned \$NEW_REF at: \$(git -C \$NEW_DIR log --oneline -1)"
 
 echo "[remote] Migrating secrets + env from old to new ..."
-# Copy secrets dir (preserves ownership+mode per install.sh backup logic)
+# Copy secrets dir. If files are sub-UID-owned (v2.22.x plain-mode secrets are
+# tom-owned, so cp works; v2.23.x mTLS secrets may not be — but the source here
+# is the OLD v2.22.x install dir, which has no sub-UID files).
 cp -rp "\$OLD_DIR/docker/secrets" "\$NEW_DIR/docker/secrets"
 # Copy .env (contains passwords, DSNs)
 cp "\$OLD_DIR/docker/.env" "\$NEW_DIR/docker/.env"
@@ -917,7 +984,7 @@ bash install.sh \
 echo "[remote] install.sh --upgrade exit code: \$?"
 
 # Swap work dir so subsequent phases point at the new dir
-rm -rf "\${OLD_DIR}.old" 2>/dev/null || true
+safe_rm_rf "\${OLD_DIR}.old"
 mv "\$OLD_DIR" "\${OLD_DIR}.old"
 mv "\$NEW_DIR" "\$OLD_DIR"
 
@@ -1125,12 +1192,23 @@ NEW_REF="${NEW_REF}"
 RUNTIME="${RUNTIME}"
 COMPOSE_CMD="${REMOTE_COMPOSE}"
 
+# safe_rm_rf: handles directories containing Podman rootless sub-UID-owned files.
+safe_rm_rf() {
+    local dir="\$1"
+    [ -d "\$dir" ] || return 0
+    if command -v podman >/dev/null 2>&1 && podman unshare echo "probe" >/dev/null 2>&1; then
+        podman unshare rm -rf "\$dir"
+    else
+        rm -rf "\$dir"
+    fi
+}
+
 echo "[remote] Stopping restored stack ..."
 cd "\$OLD_DIR"
 YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml down --remove-orphans 2>&1 || true
 
 echo "[remote] Cloning new ref for re-upgrade: \$NEW_REF ..."
-rm -rf "\$NEW_DIR"
+safe_rm_rf "\$NEW_DIR"
 git clone --depth 1 --branch "\$NEW_REF" "\$REPO" "\$NEW_DIR"
 
 echo "[remote] Migrating secrets from restored state ..."
@@ -1154,7 +1232,7 @@ bash install.sh \
 echo "[remote] Re-upgrade install.sh exit code: \$?"
 
 # Swap work dir again
-rm -rf "\${OLD_DIR}.reup" 2>/dev/null || true
+safe_rm_rf "\${OLD_DIR}.reup"
 mv "\$OLD_DIR" "\${OLD_DIR}.reup"
 mv "\$NEW_DIR" "\$OLD_DIR"
 
