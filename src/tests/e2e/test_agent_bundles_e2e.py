@@ -5,8 +5,6 @@ Verifies that registered agent bundles (Langflow, Letta, OpenClaw)
 can receive and process requests through the gateway.
 
 Requires: running Yashigani stack with agent bundles enabled.
-
-Last updated: 2026-04-24T22:45:00+01:00
 """
 from __future__ import annotations
 
@@ -30,19 +28,11 @@ class TestAgentRegistration:
 
     def test_agents_registered(self):
         output = runtime_run("docker-gateway-1", """
-import redis, os, ssl
+import redis, os
 from urllib.parse import quote
 
 pw = open('/run/secrets/redis_password').read().strip()
-# Post-mTLS: main redis requires TLS on port 6380 with mutual auth.
-r = redis.from_url(
-    f"rediss://:{quote(pw, safe='')}@redis:6380/3",
-    decode_responses=True,
-    ssl_cert_reqs=ssl.CERT_REQUIRED,
-    ssl_ca_certs='/run/secrets/ca_root.crt',
-    ssl_certfile='/run/secrets/gateway_client.crt',
-    ssl_keyfile='/run/secrets/gateway_client.key',
-)
+r = redis.from_url(f"redis://:{quote(pw, safe='')}@redis:6379/3", decode_responses=True)
 
 # Check agent index
 agents = r.smembers("agent:index:active")
@@ -76,14 +66,10 @@ class TestGatewayModelsEndpoint:
     """Test that /v1/models lists available models and agents."""
 
     def test_models_endpoint(self):
-        # Post-mTLS: gateway listens on HTTPS only.
-        # /v1/models requires user auth — we expect 401/403, not a connection error.
         output = runtime_run("docker-gateway-1", """
-import ssl, urllib.request, json
-c = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-c.load_cert_chain('/run/secrets/gateway_client.crt', '/run/secrets/gateway_client.key')
+import urllib.request, json
 try:
-    r = urllib.request.urlopen("https://localhost:8080/v1/models", context=c, timeout=10)
+    r = urllib.request.urlopen("http://localhost:8080/v1/models", timeout=10)
     body = json.loads(r.read())
     models = [m["id"] for m in body.get("data", [])]
     print(f"model_count:{len(models)}")

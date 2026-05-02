@@ -1,18 +1,12 @@
 """
 Yashigani Backoffice — Sensitivity pattern management routes.
 
-# Last updated: 2026-04-27T00:00:00+01:00
-
 CRUD for detection patterns used by the sensitivity classifier pipeline.
   GET     /admin/sensitivity/patterns    — List all patterns
-  POST    /admin/sensitivity/patterns    — Create a pattern (step-up required)
-  DELETE  /admin/sensitivity/patterns/{id} — Delete a pattern (step-up required)
+  POST    /admin/sensitivity/patterns    — Create a pattern
+  DELETE  /admin/sensitivity/patterns/{id} — Delete a pattern
   GET     /admin/sensitivity/status      — Pipeline status (layers active/inactive)
   POST    /admin/sensitivity/test        — Test classify a text sample
-
-LF-STEPUP-AGENT-CREATE (2026-04-27): POST and DELETE /patterns added step-up
-gate — DLP rule mutation is a policy-sensitive operation; a hijacked admin
-session must not bypass TOTP to neutralise detection patterns.
 """
 from __future__ import annotations
 
@@ -22,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession, require_stepup_admin_session
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -63,7 +57,7 @@ async def list_patterns(session: AdminSession):
 
 
 @router.post("/patterns", status_code=201)
-async def create_pattern(body: PatternRequest, session: StepUpAdminSession = require_stepup_admin_session):
+async def create_pattern(body: PatternRequest, session: AdminSession):
     global _pattern_counter
     _pattern_counter += 1
     pattern = {
@@ -78,7 +72,7 @@ async def create_pattern(body: PatternRequest, session: StepUpAdminSession = req
 
 
 @router.delete("/patterns/{pattern_id}")
-async def delete_pattern(pattern_id: str, session: StepUpAdminSession = require_stepup_admin_session):
+async def delete_pattern(pattern_id: str, session: AdminSession):
     global _patterns
     before = len(_patterns)
     _patterns = [p for p in _patterns if p["id"] != pattern_id]

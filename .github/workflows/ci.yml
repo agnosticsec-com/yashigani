@@ -1,11 +1,10 @@
-# Last updated: 2026-05-02T06:58:47+01:00
 name: CI
 
 on:
   push:
-    branches: [main, "release/**", "v2.23.*", "2.23.x"]
+    branches: [main, "release/**"]
   pull_request:
-    branches: [main, "release/**", "v2.23.*", "2.23.x"]
+    branches: [main, "release/**"]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -34,60 +33,7 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run pytest
-        run: |
-          python -m pytest src/tests/ -x -q --tb=short \
-            --junitxml=test-results-${{ matrix.python-version }}.xml
-        # --junitxml: machine-readable results for artifact archive; always produced
-        # even when -x aborts early so the artifact upload step gets a file.
-
-      - name: Build pytest verdict
-        if: always()
-        run: |
-          python - <<'PYEOF'
-          import xml.etree.ElementTree as ET, sys, os
-
-          xml_path = f"test-results-{os.environ['PYTHON_VERSION']}.xml"
-          try:
-              tree = ET.parse(xml_path)
-              root = tree.getroot()
-              suite = root if root.tag == 'testsuite' else root.find('testsuite')
-              total   = int(suite.get('tests',  0))
-              errors  = int(suite.get('errors',  0))
-              failed  = int(suite.get('failures', 0))
-              skipped = int(suite.get('skipped',  0))
-              passed  = total - failed - errors - skipped
-              status  = 'PASS' if (failed + errors) == 0 else 'FAIL'
-          except Exception as exc:
-              total = passed = skipped = 0
-              failed = errors = 1
-              status = 'FAIL'
-              print(f"[ERROR] could not parse junit xml: {exc}", file=sys.stderr)
-
-          verdict_path = f"verdict-{os.environ['PYTHON_VERSION']}.txt"
-          with open(verdict_path, 'w') as f:
-              f.write(f"Unit tests: {status}\n")
-              f.write(f"Python: {os.environ['PYTHON_VERSION']}\n")
-              f.write(f"Total: {total}\n")
-              f.write(f"Passed: {passed}\n")
-              f.write(f"Failed: {failed + errors}\n")
-              f.write(f"Skipped: {skipped}\n")
-              f.write(f"Commit: {os.environ.get('GITHUB_SHA', 'unknown')}\n")
-              f.write(f"Workflow: {os.environ.get('GITHUB_WORKFLOW', 'CI')}\n")
-              f.write(f"Run: {os.environ.get('GITHUB_RUN_ID', 'unknown')}\n")
-          print(open(verdict_path).read())
-          PYEOF
-        env:
-          PYTHON_VERSION: ${{ matrix.python-version }}
-
-      - name: Upload unit-test artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: unit-tests-py${{ matrix.python-version }}-${{ github.sha }}
-          path: |
-            test-results-${{ matrix.python-version }}.xml
-            verdict-${{ matrix.python-version }}.txt
-          retention-days: 90
+        run: python -m pytest src/tests/ -x -q --tb=short
 
       - name: Verify all package imports
         run: |
@@ -115,81 +61,3 @@ jobs:
             exit 1
           fi
           echo "Version consistent: $PY_VER"
-
-  mypy:
-    runs-on: ubuntu-latest
-    # Run on Python 3.12 only — type stubs are stable; 3.13 parity is not
-    # required for a type-check gate (would just duplicate findings).
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Run mypy
-        id: run_mypy
-        # --xml-report writes mypy-xml/index.xml; always() ensures the upload
-        # step runs even when mypy exits non-zero (i.e. on type errors).
-        run: |
-          mypy src/yashigani/ \
-            --xml-report mypy-xml \
-            --any-exprs-report mypy-xml \
-            2>&1 | tee mypy-output.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: Build mypy verdict
-        if: always()
-        run: |
-          python - <<'PYEOF'
-          import re, os
-
-          output_path = "mypy-output.txt"
-          try:
-              text = open(output_path).read()
-          except FileNotFoundError:
-              text = ""
-
-          # mypy summary line: "Found N errors in M files (checked K source files)"
-          # or "Success: no issues found in K source files"
-          error_match = re.search(r'Found (\d+) error', text)
-          success_match = re.search(r'Success: no issues found', text)
-          checked_match = re.search(r'checked (\d+) source files', text)
-
-          errors = int(error_match.group(1)) if error_match else 0
-          checked = int(checked_match.group(1)) if checked_match else 0
-          status = 'PASS' if (success_match or errors == 0) else 'FAIL'
-
-          with open("mypy-summary.txt", "w") as f:
-              f.write(f"Type check: {status}\n")
-              f.write(f"Errors: {errors}\n")
-              f.write(f"Files checked: {checked}\n")
-              f.write(f"Commit: {os.environ.get('GITHUB_SHA', 'unknown')}\n")
-              f.write(f"Workflow: {os.environ.get('GITHUB_WORKFLOW', 'CI')}\n")
-              f.write(f"Run: {os.environ.get('GITHUB_RUN_ID', 'unknown')}\n")
-          print(open("mypy-summary.txt").read())
-          PYEOF
-
-      - name: Upload mypy artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mypy-${{ github.sha }}
-          path: |
-            mypy-xml/
-            mypy-output.txt
-            mypy-summary.txt
-          retention-days: 90
-
-      - name: Fail if mypy found errors
-        # Deferred exit so the artifact is always uploaded regardless of result.
-        if: steps.run_mypy.outputs.exit_code != '0'
-        run: |
-          echo "mypy reported type errors — see mypy-output.txt artifact"
-          exit 1

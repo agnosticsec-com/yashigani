@@ -64,15 +64,12 @@
     }
 }
 
-{$YASHIGANI_TLS_DOMAIN} {
+{env.YASHIGANI_TLS_DOMAIN} {
     # ── TLS policy ──────────────────────────────────────────────────────────
-    # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
-    # Kept consistent with docker/Caddyfile.acme (non-WAF production baseline).
     tls {
-        protocols tls1.3
-        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        protocols tls1.2 tls1.3
         # Hybrid post-quantum key exchange (HNDL protection)
-        curves x25519mlkem768 x25519 secp384r1 secp256r1
+        curves x25519mlkem768 x25519
     }
 
     # ── Security headers ────────────────────────────────────────────────────
@@ -225,6 +222,6 @@
 }
 
 # Redirect HTTP → HTTPS
-http://{$YASHIGANI_TLS_DOMAIN} {
-    redir https://{$YASHIGANI_TLS_DOMAIN}{uri} permanent
+http://{env.YASHIGANI_TLS_DOMAIN} {
+    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
 }

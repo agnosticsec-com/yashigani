@@ -9,18 +9,9 @@ Every outbound internal call should build a :func:`client_ssl_context`.
 
 Both contexts enforce:
   * TLS 1.2 minimum (same floor as the edge TLS policy)
-  * Root CA is the trust anchor for Python ssl consumers.  Python 3.12 /
-    OpenSSL 3.0 does NOT auto-set X509_V_FLAG_PARTIAL_CHAIN on
-    SSLContext.load_verify_locations(), so intermediate-only anchors fail
-    with "unable to get issuer certificate" on Ubuntu 24.04 aarch64 (gate
-    #58a evidence, 2026-04-28).  We therefore use ca_root.crt for all
-    Python ssl load_verify_locations() calls (Pattern A for Python ssl).
-    Caddy/Go/postgres/pgbouncer remain on Pattern B (partial-chain capable).
+  * Internal CA is the ONLY trusted issuer (no system roots fall back)
   * Server context requires client cert on every handshake
   * Hostname verification ON for clients (matches cert SANs)
-  * System roots are never loaded — internal mesh only.
-
-Last updated: 2026-04-28T00:00:00+00:00
 """
 
 from __future__ import annotations
@@ -39,10 +30,9 @@ def server_ssl_context(identity: Optional[ServiceIdentity] = None) -> ssl.SSLCon
     """Build an :class:`ssl.SSLContext` for inbound mTLS.
 
     * Loads this service's cert + private key.
-    * Trust anchor: ca_root.crt (Pattern A for Python ssl — OpenSSL 3.0 on
-      Ubuntu 24.04 does not support partial-chain without X509_V_FLAG_PARTIAL_CHAIN).
+    * Trusts only the internal CA root.
     * Requires every connecting client to present a cert signed by the
-      internal CA chain (mutual TLS).
+      same CA (mutual TLS).
     """
     ident = identity or current_service()
     cert_path, key_path, ca_root = ident.expect_cert_files()
@@ -55,7 +45,7 @@ def server_ssl_context(identity: Optional[ServiceIdentity] = None) -> ssl.SSLCon
     # We explicitly DO NOT load_default_certs() — system trust roots must
     # not bridge into the internal mesh.
     logger.info(
-        "internal-pki: server SSLContext built for %s (client auth REQUIRED, root anchor)",
+        "internal-pki: server SSLContext built for %s (client auth REQUIRED)",
         ident.name,
     )
     return ctx
@@ -65,7 +55,7 @@ def client_ssl_context(identity: Optional[ServiceIdentity] = None) -> ssl.SSLCon
     """Build an :class:`ssl.SSLContext` for outbound internal mTLS.
 
     Presents this service's client cert to peers and verifies the peer
-    cert chain against ca_root.crt (Pattern A for Python ssl).
+    cert chains to the internal CA.
     """
     ident = identity or current_service()
     cert_path, key_path, ca_root = ident.expect_cert_files()
@@ -77,18 +67,14 @@ def client_ssl_context(identity: Optional[ServiceIdentity] = None) -> ssl.SSLCon
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
     logger.info(
-        "internal-pki: client SSLContext built for %s (peer verify REQUIRED, root anchor)",
+        "internal-pki: client SSLContext built for %s (peer verify REQUIRED)",
         ident.name,
     )
     return ctx
 
 
 def ca_trust_only_context(ca_root_path: str | Path) -> ssl.SSLContext:
-    """Client context that trusts the internal root CA, no client cert.
-
-    Pattern A for Python ssl: anchor is ca_root.crt, not the intermediate.
-    Python 3.12 / OpenSSL 3.0 (Ubuntu 24.04) does not auto-set
-    X509_V_FLAG_PARTIAL_CHAIN, so intermediate-only anchors fail.
+    """Client context that trusts ONLY the internal CA root, no client cert.
 
     Used by components that can't present a client cert but still need to
     verify peers — e.g. the install.sh cert-extract step contacting Caddy

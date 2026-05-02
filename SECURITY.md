@@ -6,8 +6,7 @@ A single release line is actively maintained on the `main` branch. Open WebUI is
 
 | Version | Supported | Notes |
 |---------|-----------|-------|
-| 2.23.1  | ✅ Current | Core-plane mTLS default-on, two-tier PKI (step-ca), seccomp + AppArmor default-on, full Lu / Ava pre-release hardening |
-| 2.23.0  | ✅ Patch window | Single branch, API-first admin, strict CSP, compose profiles, opt-in internal CA |
+| 2.23.x  | ✅ Current | Full stack — OPA on all /v1, Podman isolation, strict CSP, API-first admin, optional services via compose profiles |
 | 2.22.x  | ✅ Patch window | OPA on /v1, Wazuh SIEM, Grafana/Prometheus admin access, agent personas |
 | 2.20.x  | ❌ | Superseded by 2.22.x |
 | 2.1.x   | ❌ | Superseded by 2.20.x |

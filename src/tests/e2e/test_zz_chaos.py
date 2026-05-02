@@ -1,8 +1,6 @@
 """
 E2E: Chaos test — self-healing verification.
 
-Last updated: 2026-04-24T22:45:00+01:00
-
 Kill containers while the system is running. Verify:
   1. Container runtime auto-restarts the container (restart: unless-stopped)
   2. Health checks detect the recovery
@@ -34,13 +32,8 @@ def _wait_for_healthy(name: str, timeout: int = 90) -> bool:
 
 
 def _gateway_healthz() -> bool:
-    # Post-mTLS: gateway listens on HTTPS only — use ssl context with gateway cert.
     result = runtime_run("docker-gateway-1",
-        "import ssl, urllib.request; "
-        "c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); "
-        "c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); "
-        "r=urllib.request.urlopen('https://localhost:8080/healthz', context=c); "
-        "print(r.read().decode())",
+        "import urllib.request; r=urllib.request.urlopen('http://localhost:8080/healthz'); print(r.read().decode())",
         timeout=10)
     return "ok" in result
 

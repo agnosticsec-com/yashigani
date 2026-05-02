@@ -1,8 +1,7 @@
-<!-- last-updated: 2026-05-01T00:09:28+01:00 -->
 # Disaster Recovery Plan
 
-> Version: 1.0.1
-> Date: 2026-05-01
+> Version: 1.0.0
+> Date: 2026-04-12
 > Compliance: HIPAA §164.308(a)(7)(ii)(B) | ISO 27001 A.5.29
 
 ## 1. Purpose
@@ -80,8 +79,6 @@ Before a disaster occurs, the following must be in place:
    - Configuration file restoration (docker-compose.yml, Caddyfile, OPA policies)
    - Secret restoration (encrypted credentials, API keys)
    - TLS certificate restoration
-
-   > **v2.23.1 note:** `restore.sh` widens all secret files to `u+w` before copying from the backup archive. This handles the case where backup archives contain 0400 secrets (read-only), which previously caused restore failures on Linux Podman. No operator action required; this is automatic.
 
 #### 4.4 Post-Recovery Validation
 

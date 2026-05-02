@@ -1,8 +1,6 @@
 """
 E2E: Ollama sensitivity classification — real model, real prompts.
 
-Last updated: 2026-04-24T22:45:00+01:00
-
 Tests the three-layer sensitivity pipeline against the running Ollama
 instance with actual PII/PCI/IP content. Verifies that sensitive data
 is correctly classified and would be routed locally.
@@ -88,12 +86,8 @@ class TestOllamaLive:
     """Test actual Ollama inference via the gateway."""
 
     def test_gateway_healthz(self):
-        # Post-mTLS: gateway listens on HTTPS only — use ssl context with gateway cert.
         result = runtime_run("docker-gateway-1",
-            "import ssl, urllib.request; "
-            "c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); "
-            "c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); "
-            "print(urllib.request.urlopen('https://localhost:8080/healthz', context=c).read().decode())",
+            "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/healthz').read().decode())",
             timeout=10)
         assert "ok" in result
 

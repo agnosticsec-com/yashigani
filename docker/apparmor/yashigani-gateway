@@ -21,16 +21,15 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/openssl>
   #include <abstractions/python>
 
-  # Allow read/mmap access to system config and shared libraries.
-  # 'm' (mmap) is required for .so files and Python's zipimport.
+  # Allow read access to system config
   /etc/ r,
   /etc/** r,
   /usr/ r,
-  /usr/** rm,
+  /usr/** r,
   /lib/ r,
-  /lib/** rm,
+  /lib/** r,
   /lib64/ r,
-  /lib64/** rm,
+  /lib64/** r,
 
   # Application code and assets (read-only)
   /app/ r,
@@ -47,16 +46,9 @@ profile yashigani-gateway flags=(attach_disconnected,mediate_deleted) {
   /data/bootstrap/ rw,
   /data/bootstrap/** rw,
 
-  # Python runtime — shared libraries need 'm' (mmap/execute) permission.
-  # libpython3.12.so.1.0 lives directly in /usr/local/lib/ (not in python*/),
-  # so we grant rm on /usr/local/lib/ separately from the python sub-tree.
-  # Retro v2.23.1 item #3af: AppArmor blocked file_mmap on libpython3.12.so
-  # because only 'r' was granted for /usr/local/lib/python*/** — this path
-  # does not match the .so file one level up.
-  # Last updated: 2026-04-23T23:20:00+00:00
-  /usr/local/lib/** rm,
+  # Python runtime
   /usr/local/lib/python*/** r,
-  /usr/local/bin/python* rix,
+  /usr/local/bin/python* ix,
   /usr/local/bin/uvicorn ix,
 
   # Secrets (read-only)

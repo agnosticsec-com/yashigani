@@ -89,7 +89,7 @@ class TestIdentityRegistry:
             slug="langflow",
             description="Visual multi-agent workflow builder",
             upstream_url="http://langflow:7860",
-            container_image="docker.io/langflowai/langflow:1.9.0",
+            container_image="docker.io/langflowai/langflow:latest",
             capabilities=["code_execution"],
         )
         identity = registry.get(identity_id)

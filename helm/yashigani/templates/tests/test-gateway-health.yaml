@@ -1,12 +1,5 @@
 {{- /*
-Helm test: verify the gateway /healthz endpoint returns HTTP 200 via Caddy.
-
-EX-231-10 (2026-04-29): test pods connect through Caddy (:443), NOT direct
-to gateway:8080. This validates both:
-  (a) the legitimate traffic path works end-to-end, and
-  (b) test pods cannot reach gateway directly (NetworkPolicy enforces this).
-
-Last updated: 2026-04-29T14:30:00+01:00
+Helm test: verify the gateway /healthz endpoint returns HTTP 200.
 Run with: helm test <release-name> -n <namespace>
 */ -}}
 apiVersion: v1
@@ -22,7 +15,6 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
-  automountServiceAccountToken: false
   securityContext:
     runAsNonRoot: true
     runAsUser: 65534
@@ -30,8 +22,6 @@ spec:
       type: RuntimeDefault
   containers:
     - name: test-gateway-health
-      # curl image — connects to Caddy:443. Skip TLS verify for self-signed / test.
-      # The test validates HTTP 200 from the Caddy→gateway path, not TLS cert identity.
       image: "curlimages/curl:8.7.1"
       imagePullPolicy: IfNotPresent
       securityContext:
@@ -44,17 +34,16 @@ spec:
         - -c
         - |
           set -e
-          echo "Testing gateway /healthz via Caddy (EX-231-10: Caddy-centric path)..."
-          STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
+          echo "Testing gateway /healthz..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             --max-time 10 \
-            https://yashigani-caddy:443/healthz)
-          echo "Caddy-proxied gateway /healthz returned HTTP ${STATUS}"
+            http://yashigani-gateway:{{ .Values.gateway.service.port }}/healthz)
+          echo "Gateway /healthz returned HTTP ${STATUS}"
           if [ "${STATUS}" != "200" ]; then
             echo "FAIL: expected 200, got ${STATUS}"
-            echo "Check: (1) Caddy is running, (2) gateway is healthy, (3) NetworkPolicy allows Caddy→gateway"
             exit 1
           fi
-          echo "PASS — gateway reachable via Caddy"
+          echo "PASS"
       resources:
         requests:
           cpu: "10m"

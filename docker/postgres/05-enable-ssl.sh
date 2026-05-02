@@ -1,7 +1,6 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
 # Yashigani v2.23.1 — enable TLS + client-cert verification on Postgres.
-# Last updated: 2026-04-27T20:40:49Z (BUG-59-01: trust intermediate CA, not root)
 #
 # This init script runs ONCE on first initdb of the postgres container (the
 # stock postgres entrypoint executes /docker-entrypoint-initdb.d/*.sh in
@@ -15,52 +14,15 @@
 #     (clientcert=verify-ca)
 #   * Password auth (scram-sha-256) still required on top of the cert
 #     (defence in depth — three factors: TLS + cert + password)
-#
-# PKI design: root → intermediate → leaf (two-tier).
-# ssl_ca_file (root.crt) must contain the INTERMEDIATE CA, not the root.
-# All service leaf certs are signed directly by the intermediate.  When
-# pgbouncer presents its client cert to postgres it may not send the
-# intermediate in the TLS handshake chain (behaviour varies by libssl
-# version / pgbouncer version).  Seeding root.crt with the intermediate
-# ensures postgres can always verify the leaf directly without requiring the
-# intermediate to appear in the peer's TLS Certificate message.
-#
-# The root CA MUST NOT appear in this file and MUST NOT be mounted as an
-# mTLS trust anchor into any workload container (design invariant, retro S1).
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 echo "[05-enable-ssl] Installing server cert chain and enabling TLS"
 
-# Fail-closed: both CA certs must be present before we write anything.
-: "${PGDATA:?PGDATA must be set by the postgres image}"
-for f in /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt; do
-  if [[ ! -f "${f}" ]]; then
-    echo "[05-enable-ssl] FATAL: ${f} not found — PKI bootstrap must run before postgres init" >&2
-    exit 1
-  fi
-done
-
 # Postgres requires SSL material inside PGDATA and owned by the postgres user.
 install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt "${PGDATA}/server.crt"
 install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDATA}/server.key"
-
-# Trust bundle: ca_root.crt + ca_intermediate.crt concatenated. Required because:
-#   * Leaf certs in /run/secrets are issued as chain-bundles (leaf + intermediate
-#     PEM concatenated) — see src/yashigani/pki/issuer.py.
-#   * When pgbouncer/clients present a chain-bundle cert, postgres builds a
-#     verification chain leaf → intermediate (in chain) → ca_root (in trust
-#     store). With ca_intermediate.crt as the only anchor, postgres tries to
-#     verify the intermediate against itself and fails because the intermediate
-#     is signed by ca_root, not self-signed (Su #58a evidence, 2026-04-28).
-#   * Concatenating both gives postgres both anchors: leaf-only clients verify
-#     against ca_intermediate; chain-bundle clients verify against ca_root at
-#     depth 2. Defense-in-depth — works regardless of client cert format.
-# "root.crt" is postgres's hardcoded ssl_ca_file name; the content is the bundle.
-install -m 0640 -o postgres -g postgres /dev/null "${PGDATA}/root.crt"
-cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > "${PGDATA}/root.crt"
-chown postgres:postgres "${PGDATA}/root.crt"
-chmod 0640 "${PGDATA}/root.crt"
+install -m 0644 -o postgres -g postgres /run/secrets/ca_root.crt         "${PGDATA}/root.crt"
 
 # Append TLS settings to postgresql.conf (keep existing settings; our lines
 # win by virtue of being later in the file).

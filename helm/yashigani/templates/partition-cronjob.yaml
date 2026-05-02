@@ -7,14 +7,6 @@ Safe to run at any time; CREATE TABLE IF NOT EXISTS prevents double-creation.
 
 Image: reuses the gateway image because partition_maintenance.py lives in the
 same Python package. The job only needs DATABASE_URL — no network exposure.
-
-rc.3 fix (Finding D — 2026-05-01): replaced nonexistent yashigani-db-credentials
-secretKeyRef with Option α pattern: POSTGRES_PASSWORD from yashigani-postgres-secrets
-(declared first for K8s forward-ref order), DATABASE_URL assembled via $(POSTGRES_PASSWORD)
-interpolation. Connects direct to postgres (not pgbouncer) for DDL — same pattern as
-YASHIGANI_DB_DSN_DIRECT in gateway.yaml. mTLS cert mount added for when mtls.enabled.
-
-Last updated: 2026-05-01T16:40:00+01:00
 */ -}}
 apiVersion: batch/v1
 kind: CronJob
@@ -43,21 +35,8 @@ spec:
             app.kubernetes.io/name: {{ include "yashigani.name" . }}
             app.kubernetes.io/instance: {{ .Release.Name }}
             app.kubernetes.io/component: db-maintenance
-          {{- if .Values.mtls.enabled }}
-          annotations:
-            # Trigger re-creation of CronJob pods when PKI Secret changes.
-            # See gateway.yaml for full rationale.
-            checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
-          {{- end }}
         spec:
           serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
-          # automountServiceAccountToken disabled: /run/secrets is mounted
-          # read-only (PKI certs) and /var/run -> /run symlink in the gateway
-          # image means K8s SA token projection at /var/run/secrets/kubernetes.io
-          # resolves to /run/secrets/kubernetes.io — which fails to mkdir under
-          # the read-only volume. The job only needs DATABASE_URL + PKI certs,
-          # not apiserver access. (Finding D regression fix 2026-05-01)
-          automountServiceAccountToken: false
           restartPolicy: OnFailure
           securityContext:
             runAsNonRoot: true
@@ -71,56 +50,26 @@ spec:
               # same Python package. Override the entrypoint to run the script directly.
               image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
               imagePullPolicy: {{ .Values.gateway.image.pullPolicy | default "IfNotPresent" }}
-              # Script is NOT baked into the gateway image — mounted via ConfigMap.
-              # Finding D regression fix 2026-05-01.
               command:
                 - python
-                - /scripts/partition_maintenance.py
+                - scripts/partition_maintenance.py
                 - --months-ahead
                 - "3"
               env:
-                # POSTGRES_PASSWORD MUST be declared before DATABASE_URL — K8s env
-                # interpolation is forward-only; $(POSTGRES_PASSWORD) in DATABASE_URL
-                # silently stays literal if the source var appears after it.
-                - name: POSTGRES_PASSWORD
+                - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
-                      name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
-                      key: postgres_password
-                {{- if .Values.mtls.enabled }}
-                # mTLS: connect direct to postgres (not pgbouncer) for DDL — same
-                # rationale as YASHIGANI_DB_DSN_DIRECT in gateway.yaml. ca_bundle.crt
-                # provides chain verification (libpq needs full chain, not just root).
-                - name: DATABASE_URL
-                  value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@{{ include "yashigani.fullname" . }}-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
-                {{- else }}
-                - name: DATABASE_URL
-                  value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@{{ include "yashigani.fullname" . }}-postgres:5432/yashigani"
-                {{- end }}
+                      name: {{ include "yashigani.fullname" . }}-db-credentials
+                      key: url
               resources:
-                {{- toYaml .Values.partitionCronjob.resources | nindent 16 }}
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "256Mi"
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
-              volumeMounts:
-                - name: partition-script
-                  mountPath: /scripts
-                  readOnly: true
-              {{- if .Values.mtls.enabled }}
-                - name: secrets
-                  mountPath: /run/secrets
-                  readOnly: true
-              {{- end }}
-          volumes:
-            - name: partition-script
-              configMap:
-                name: {{ include "yashigani.fullname" . }}-partition-script
-                defaultMode: 0555
-          {{- if .Values.mtls.enabled }}
-            - name: secrets
-              secret:
-                secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-                defaultMode: 0440
-          {{- end }}

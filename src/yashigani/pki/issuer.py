@@ -1,8 +1,6 @@
 """
 Yashigani internal PKI issuer — generates root, intermediate, and leaf certs.
 
-Last updated: 2026-04-27T21:40:00Z
-
 Invoked by:
   * install.sh bootstrap_internal_pki()  — first-install cert generation
   * install.sh rotate-certs               — leaf rotation
@@ -131,7 +129,7 @@ def _write_secret(path: Path, data: bytes, mode: int) -> None:
     if path.exists():
         try:
             path.chmod(0o600)
-        except (PermissionError, FileNotFoundError):  # pragma: no cover
+        except PermissionError:  # pragma: no cover
             pass
         path.unlink()
     path.write_bytes(data)
@@ -139,16 +137,6 @@ def _write_secret(path: Path, data: bytes, mode: int) -> None:
         path.chmod(mode)
     except PermissionError:  # pragma: no cover
         logger.warning("chmod failed on %s — permission denied", path)
-    except FileNotFoundError:  # pragma: no cover
-        # Podman rootless + :U bind-mount: os.chmod() (via fchmodat) can
-        # return ENOENT on a file that was just written, due to kernel
-        # user-namespace inode visibility lag on some aarch64 kernels
-        # (observed with Podman 4.9.3 / Ubuntu 24.04 / Linux 6.8 aarch64).
-        # The file IS present on the host; this is a spurious ENOENT from
-        # the namespace bridge. Log and continue — mode is advisory for the
-        # issuer; the _pki_chown_client_keys step applies correct perms
-        # on the host side after the container exits.
-        logger.warning("chmod ENOENT on %s — Podman rootless namespace lag, continuing", path)
 
 
 def _gen_keypair() -> ec.EllipticCurvePrivateKey:
@@ -307,32 +295,9 @@ def build_leaf(
     key = _gen_keypair()
     now = _utcnow()
 
-    sans: list[x509.GeneralName] = [x509.DNSName(n) for n in service.dns_sans]
+    sans = [x509.DNSName(n) for n in service.dns_sans]
     if not sans:
         sans = [x509.DNSName(service.name)]
-    # Always include localhost + loopback so in-container healthchecks and
-    # self-connecting clients can verify the cert against their own hostname.
-    existing_dns = {n.value for n in sans if isinstance(n, x509.DNSName)}
-    for local_name in ("localhost",):
-        if local_name not in existing_dns:
-            sans.append(x509.DNSName(local_name))
-    import ipaddress as _ipaddr
-    sans.append(x509.IPAddress(_ipaddr.IPv4Address("127.0.0.1")))
-    sans.append(x509.IPAddress(_ipaddr.IPv6Address("::1")))
-    # SPIFFE URI SAN (v2.23.1 — EX-231-08). All DNS + URI SANs live in the
-    # SAME SubjectAlternativeName extension — cryptography emits one extension
-    # per add_extension() call, so we must assemble the full GeneralName list
-    # before the single add_extension(x509.SubjectAlternativeName(sans), ...)
-    # call below. Two SAN extensions are illegal per RFC 5280 §4.2.1.6 and
-    # would silently break peer validation in strict clients.
-    spiffe_id = (service.spiffe_id or "").strip()
-    if spiffe_id:
-        if not spiffe_id.startswith("spiffe://"):
-            raise RuntimeError(
-                f"service {service.name!r} has non-SPIFFE URI {spiffe_id!r} — "
-                "manifest validation should have caught this"
-            )
-        sans.append(x509.UniformResourceIdentifier(spiffe_id))
 
     cert = (
         x509.CertificateBuilder()

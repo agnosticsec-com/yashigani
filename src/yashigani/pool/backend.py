@@ -10,7 +10,6 @@ across Docker SDK and Podman SDK. Falls back gracefully:
 Security: container-per-identity isolation is a CIAA compliance
 requirement. Stub mode should only be used in tests.
 """
-# Last updated: 2026-04-23T11:36:14+01:00
 from __future__ import annotations
 
 import logging
@@ -187,14 +186,7 @@ def create_backend() -> Optional[ContainerBackend]:
         except Exception:
             continue
 
-    logger.warning(
-        "Pool Manager: no Docker or Podman SDK available — running in STUB MODE. "
-        "Container-per-identity isolation is DISABLED and CIAA compliance cannot "
-        "be satisfied. To fix on macOS with Podman: run "
-        "`podman machine init --rootful && podman machine start`, then ensure "
-        "docker-compose.podman-override.yml mounts /var/run/docker.sock into the "
-        "gateway container. On Linux: `systemctl --user enable --now podman.socket`."
-    )
+    logger.warning("Pool Manager: no Docker or Podman SDK available — stub mode")
     return None
 
 

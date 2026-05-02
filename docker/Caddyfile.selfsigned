@@ -1,5 +1,4 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-30T05:00:00+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -33,111 +32,23 @@
 # Internal mTLS snippet — imported by every reverse_proxy / forward_auth block
 # that targets a service terminating mTLS (gateway:8080, backoffice:8443).
 # Caddy presents its own client cert and verifies the peer against the
-# internal intermediate CA (Pattern B). The caddy_client.{crt,key} are minted
-# by install.sh via yashigani.pki.issuer.
+# internal CA root. The caddy_client.{crt,key} are minted by install.sh via
+# yashigani.pki.issuer.
 # ─────────────────────────────────────────────────────────────────────────────
 (internal-mtls) {
     transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+        tls_trusted_ca_certs /run/secrets/ca_root.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
-        # Force HTTP/1.1 upstream to ensure header modifications from
-        # reverse_proxy.headers.request.set are correctly serialized.
-        # Caddy v2.11.x has a confirmed bug where headers set via
-        # reverse_proxy.headers.request.set are dropped on HTTP/2 upstream
-        # connections (confirmed R4 macOS Podman gate 2026-04-30).
-        versions 1.1
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Layer B — Caddy HMAC shared-secret marker (EX-231-10 Layer B).
-# Last updated: 2026-04-29T16:04:58+01:00
-#
-# DESIGN DECISION (2026-04-29):
-#   Standard caddy:2-alpine has NO inline HMAC computation capability.
-#   `caddy list-modules` confirms: no hmac/crypto/sign modules. A custom build
-#   would be required for HMAC-SHA256 inline computation. Per Tiago directive
-#   "Caddy-centric with hardening cryptography in communications" the pragmatic
-#   fallback is:
-#
-#   Caddy reads /run/secrets/caddy_internal_hmac (32-byte hex, install-time
-#   generated) and forwards it verbatim as X-Caddy-Verified-Secret on every
-#   reverse_proxy to backoffice:8443 and gateway:8080.
-#
-#   Tom's middleware (follow-on dispatch) reads the same secret from
-#   /run/secrets/caddy_internal_hmac at lifespan startup and verifies:
-#     hmac.compare_digest(
-#         request.headers["X-Caddy-Verified-Secret"],
-#         stored_secret
-#     )
-#   Requests without a matching header → 401.
-#
-#   SECURITY PROPERTY: A data-network attacker with a valid mTLS cert CAN
-#   present the cert + forge X-SPIFFE-ID, but CANNOT know the per-install
-#   HMAC secret (it lives only in /run/secrets/caddy_internal_hmac, readable
-#   only by uid 1001 within Caddy, backoffice, and gateway containers).
-#   Without the correct X-Caddy-Verified-Secret → 401 from Tom's middleware.
-#
-#   The secret is generated at install time (not per-boot) to survive Caddy
-#   restarts without requiring backoffice/gateway restart. It is regenerated
-#   on `install.sh --upgrade` and all three containers pick it up on their
-#   next lifespan startup.
-#
-#   REPLAY PROTECTION: The secret itself is static per install. Replay is
-#   accepted as the residual risk given the constraint that all three callers
-#   must agree on a 30-second time window without an NTP-sync step in install.
-#   Mitigating factors: the secret ONLY flows on the internal mTLS mesh
-#   (caddy_internal network), never on the external edge. An attacker able to
-#   sniff caddy_internal has already broken mTLS — the secret adds defense-in-
-#   depth, not primary authN.
-#
-# STRIP INBOUND: Caddy's `header_up` `set` operation REPLACES any existing
-# value for the header — an inbound X-Caddy-Verified-Secret is overwritten.
-# A separate `header_up -X-Caddy-Verified-Secret` (delete) is NOT used here
-# because in Caddy v2.11.x the Caddyfile adapter compiles both delete and set
-# into the same `headers.request` JSON object, and the JSON handler applies
-# `set` before `delete`, causing the header to be deleted after being set
-# (net result: header missing). Verified in R4 macOS Podman gate 2026-04-30.
-# `set` alone achieves equivalent security: an attacker-supplied inbound value
-# is overwritten by our secret. The HMAC secret is only available to containers
-# with /run/secrets/caddy_internal_hmac mounted, so a forged header cannot
-# match.
-# ─────────────────────────────────────────────────────────────────────────────
-(inject-caddy-verified) {
-    # Inject the per-install shared secret from the mounted secrets file.
-    # {$CADDY_INTERNAL_HMAC} is a parse-time env substitution (NOT a request-time
-    # placeholder). Caddy resolves this to the literal secret value when it parses
-    # the Caddyfile on startup. {env.X} form does NOT work in header_up directives
-    # (it is a request-time placeholder only valid in matchers/path expressions).
-    # Round 1 failure (2026-04-29) root cause: {env.CADDY_INTERNAL_HMAC} shipped
-    # the literal placeholder string instead of the secret value.
-    # `set` (without preceding `-X-Caddy-Verified-Secret` delete) overwrites any
-    # inbound value — equivalent to delete+set without the Caddy v2.11.x bug.
-    header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
-}
-
 # Serve on HTTPS with self-signed cert
-https://{$YASHIGANI_TLS_DOMAIN}:443 {
+https://{env.YASHIGANI_TLS_DOMAIN}:443 {
     tls internal {
-        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
-        # Closes Ava R3 finding (TLS 1.2 negotiated with ChaCha20-Poly1305).
-        # caddy adapt ground-truth confirmed: protocol_min=tls1.3,
-        # cipher_suites=[TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256].
-        protocols tls1.3
-        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        protocols tls1.2 tls1.3
         # Hybrid post-quantum key exchange (HNDL protection)
-        curves x25519mlkem768 x25519 secp384r1 secp256r1
-        # V10.3.5 sender-constrained tokens: verify client cert if presented.
-        # `verify_if_given` accepts non-mTLS browser connections AND extracts
-        # SPIFFE URI from a presented client cert when one is given. Per-path
-        # SPIFFE forwarding stays in handle blocks. Caddy v2 requires
-        # client_auth at the server-block tls directive, not inside handle —
-        # Captain #58c #3br evidence (2026-04-28).
-        client_auth {
-            mode verify_if_given
-            trust_pool file /run/secrets/ca_intermediate.crt
-        }
+        curves x25519mlkem768 x25519
     }
 
     # Browser security features expected by Yashigani:
@@ -183,34 +94,24 @@ Hiring: https://agnosticsec.com/careers
     handle /healthz {
         reverse_proxy https://gateway:8080 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }
 
     # ── Agent routing — /agents/* ──────────────────────────────────────────
-    # Site-level `tls internal { client_auth { ... } }` does the verify;
-    # this handle just forwards SPIFFE URI from validated peer cert.
     handle /agents/* {
-        request_header -X-SPIFFE-ID
-        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }
 
     # ── Gateway API — /v1/* (OpenAI-compatible) ─────────────────────────
-    # Same as /agents/* — site-level client_auth, per-path SPIFFE forwarding.
     handle /v1/* {
-        request_header -X-SPIFFE-ID
-        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
         reverse_proxy https://gateway:8080 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -220,7 +121,6 @@ Hiring: https://agnosticsec.com/careers
     handle /mcp/* {
         reverse_proxy https://gateway:8080 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -230,7 +130,6 @@ Hiring: https://agnosticsec.com/careers
     handle /admin/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -239,7 +138,6 @@ Hiring: https://agnosticsec.com/careers
     handle /auth/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -248,7 +146,6 @@ Hiring: https://agnosticsec.com/careers
     handle /dashboard/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -257,7 +154,6 @@ Hiring: https://agnosticsec.com/careers
     handle /scim/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -267,7 +163,6 @@ Hiring: https://agnosticsec.com/careers
     handle_path /admin/grafana/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -284,7 +179,6 @@ Hiring: https://agnosticsec.com/careers
     handle_path /admin/wazuh/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -301,7 +195,6 @@ Hiring: https://agnosticsec.com/careers
     handle_path /admin/prometheus/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             uri /auth/verify
             @unauthorized status 401
             handle_response @unauthorized {
@@ -318,7 +211,6 @@ Hiring: https://agnosticsec.com/careers
     handle /static/* {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -328,7 +220,6 @@ Hiring: https://agnosticsec.com/careers
     handle /login {
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -355,7 +246,6 @@ Hiring: https://agnosticsec.com/careers
         # On 401: redirects to login page.
         forward_auth https://backoffice:8443 {
         import internal-mtls
-        import inject-caddy-verified
             uri /auth/verify
             copy_headers X-Forwarded-User X-Forwarded-Name X-Forwarded-Email
 
@@ -377,100 +267,6 @@ Hiring: https://agnosticsec.com/careers
 }
 
 # Also serve on HTTP for local convenience (self-signed mode only)
-http://{$YASHIGANI_TLS_DOMAIN}:80 {
-    redir https://{$YASHIGANI_TLS_DOMAIN}{uri} permanent
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Internal observability listeners — :8444 gateway / :8445 backoffice.
-# Mesh-internal only, never published to the host.
-# Last updated: 2026-04-24T13:47:12+01:00
-#
-# Purpose:
-#   Prometheus scrapes gateway/backoffice /internal/metrics through Caddy so
-#   every scrape goes through our SPIFFE-aware identity gate. mTLS client-cert
-#   auth is REQUIRED — Caddy refuses the TLS handshake without one.
-#
-# Per-port split (#81 fix):
-#   Prometheus v3.x rejects setting `Host` via http_headers (forbidden). The
-#   previous design used a single :8444 listener with a Host-header matcher
-#   to pick gateway vs backoffice — that is incompatible with Prom v3. We
-#   now give each upstream its own listener with identical semantics.
-#
-# Identity forwarding (EX-231-08, zero-trust default):
-#   1. `request_header -X-SPIFFE-ID` strips any inbound value. Critical:
-#      only Caddy may set this header downstream; an attacker co-located on
-#      the internal bridge network who forged it would otherwise bypass the
-#      application-layer ACL.
-#   2. `request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}` sets
-#      the header from the peer cert's first URI SAN. The peer cert was
-#      minted by our internal CA (see yashigani.pki.issuer.build_leaf) with a
-#      URI SAN of the form `spiffe://yashigani.internal/<service-name>`.
-#   3. The upstream (gateway/backoffice) enforces the allowlist in
-#      yashigani.auth.spiffe.require_spiffe_id against the parsed manifest.
-#
-# These listeners are NOT exposed in docker-compose.yml `ports:` — they are
-# only reachable over the internal bridge network.
-# ─────────────────────────────────────────────────────────────────────────────
-:8444 {
-    tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
-        client_auth {
-            mode require_and_verify
-            trust_pool file /run/secrets/ca_intermediate.crt
-        }
-        protocols tls1.3
-        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
-        curves x25519mlkem768 x25519 secp384r1 secp256r1
-    }
-
-    @metrics path /internal/metrics
-    handle @metrics {
-        # Spoof-prevention: drop any inbound X-SPIFFE-ID before setting our own.
-        request_header -X-SPIFFE-ID
-        # Populate from the verified peer cert's URI SAN.
-        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
-
-        reverse_proxy https://gateway:8080 {
-            import internal-mtls
-            import inject-caddy-verified
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    # Default: reject anything else on this listener.
-    handle {
-        respond "Not Found" 404
-    }
-}
-
-# Parallel listener for the backoffice upstream — identical SPIFFE gate,
-# identical strip-before-set header discipline.
-:8445 {
-    tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
-        client_auth {
-            mode require_and_verify
-            trust_pool file /run/secrets/ca_intermediate.crt
-        }
-        protocols tls1.3
-        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
-        curves x25519mlkem768 x25519 secp384r1 secp256r1
-    }
-
-    @metrics path /internal/metrics
-    handle @metrics {
-        request_header -X-SPIFFE-ID
-        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
-
-        reverse_proxy https://backoffice:8443 {
-            import internal-mtls
-            import inject-caddy-verified
-            header_up X-Forwarded-Proto https
-            header_up X-Real-IP {remote_host}
-        }
-    }
-
-    handle {
-        respond "Not Found" 404
-    }
+http://{env.YASHIGANI_TLS_DOMAIN}:80 {
+    redir https://{env.YASHIGANI_TLS_DOMAIN}{uri} permanent
 }

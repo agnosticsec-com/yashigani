@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
-from yashigani.auth.local_auth import LocalAuthService  # noqa: F401 — back-compat
+from yashigani.auth.local_auth import LocalAuthService
 from yashigani.auth.session import SessionStore
 from yashigani.audit.writer import AuditLogWriter
 from yashigani.kms.base import KSMProvider
@@ -23,10 +23,7 @@ from yashigani.auth.broker import IdentityBroker
 
 @dataclass
 class BackofficeState:
-    # v2.23.1 P0-2: auth_service is now PostgresLocalAuthService (async, durable).
-    # Typed Any to avoid circular import through the DB pool; constructed in the
-    # FastAPI lifespan after create_pool() completes.
-    auth_service: Optional[Any] = None
+    auth_service: Optional[LocalAuthService] = None
     session_store: Optional[SessionStore] = None
     audit_writer: Optional[AuditLogWriter] = None
     kms_provider: Optional[KSMProvider] = None

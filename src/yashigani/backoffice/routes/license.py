@@ -8,7 +8,6 @@ Routes:
   POST   /admin/license/activate — activate a new license key
   DELETE /admin/license          — revert to community license
 """
-# Last updated: 2026-04-27T21:53:12+01:00
 from __future__ import annotations
 
 import logging
@@ -18,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from yashigani.backoffice.middleware import require_admin_session, require_stepup_admin_session
+from yashigani.backoffice.middleware import require_admin_session
 
 logger = logging.getLogger(__name__)
 license_router = APIRouter(tags=["license"])
@@ -80,7 +79,7 @@ async def get_license_status(session=Depends(require_admin_session)):
     auth = backoffice_state.auth_service
     if auth is not None:
         try:
-            current_end_users = await auth.total_user_count()
+            current_end_users = auth.total_user_count()
         except Exception:
             current_end_users = 0
 
@@ -88,7 +87,7 @@ async def get_license_status(session=Depends(require_admin_session)):
     current_admin_seats = 0
     if auth is not None:
         try:
-            current_admin_seats = await auth.total_admin_count()
+            current_admin_seats = auth.total_admin_count()
         except Exception:
             current_admin_seats = 0
 
@@ -122,7 +121,7 @@ async def get_license_status(session=Depends(require_admin_session)):
 async def activate_license(
     license_content: Optional[str] = Form(default=None),
     license_file: Optional[UploadFile] = File(default=None),
-    session=Depends(require_stepup_admin_session),
+    session=Depends(require_admin_session),
 ):
     from yashigani.licensing import set_license
     from yashigani.licensing.verifier import verify_license
@@ -140,24 +139,7 @@ async def activate_license(
             detail={"error": "MISSING_LICENSE_CONTENT", "detail": "Provide license_content or license_file"},
         )
 
-    # M-05 / LAURA-V231-002 follow-on: verify_license() is guarded here so that
-    # a crafted malformed license file (null seat fields, garbage bytes, truncated
-    # content, malformed JSON) cannot crash the backoffice worker with an
-    # unhandled exception → 500 (DoS on admin plane, authenticated session required).
-    # The route responds with a clean 4xx to the admin, logs the rejection, and
-    # does NOT re-raise.
-    try:
-        new_lic = verify_license(content)
-    except Exception as exc:
-        logger.warning(
-            "License activation rejected — verify_license raised unexpectedly "
-            "(M-05 / LAURA-V231-002): %s",
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "INVALID_LICENSE", "detail": "malformed_license_content"},
-        )
+    new_lic = verify_license(content)
 
     if not new_lic.valid:
         raise HTTPException(
@@ -200,7 +182,7 @@ async def activate_license(
 
 
 @license_router.delete("")
-async def revert_license(body: RevertRequest, session=Depends(require_stepup_admin_session)):
+async def revert_license(body: RevertRequest, session=Depends(require_admin_session)):
     from yashigani.licensing import COMMUNITY_LICENSE, set_license
 
     if not body.confirm:

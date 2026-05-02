@@ -1,4 +1,3 @@
-{{- /* Last updated: 2026-05-02T02:32:22+01:00 */ -}}
 {{- if .Values.backoffice.enabled }}
 ---
 apiVersion: apps/v1
@@ -21,77 +20,14 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-backoffice
         app.kubernetes.io/instance: {{ .Release.Name }}
-      {{- if .Values.mtls.enabled }}
-      annotations:
-        # Trigger rolling update when PKI Secret resourceVersion changes.
-        # See gateway.yaml for full rationale.
-        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
-      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
-      # /run/secrets mount collision — see redis.yaml note.
-      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 1001
-        # fsGroup: chgrp Secret volumes so UID 1001 can read them.
-        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
-      {{- if .Values.mtls.enabled }}
-      # Backoffice bootstrap writes admin_initial_password + redis_password
-      # + grafana_admin_password into YASHIGANI_SECRETS_DIR (default
-      # /run/secrets). In docker-compose, /run/secrets is a tmpfs overlay
-      # populated by docker secrets — writable. Under K8s a Secret mount is
-      # readOnly at the kernel level, breaking write_docker_secrets(). Copy
-      # the PKI cert material into a writable emptyDir at startup.
-      initContainers:
-        - name: copy-pki-to-writable
-          # alpine/k8s is already cached on the node (used by pki-bootstrap
-          # Job). Reusing it avoids another image pull + keeps the chart's
-          # image surface small.
-          image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
-          imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy | default "IfNotPresent" }}
-          # Retro #3ap — also seed admin1/admin2 bootstrap material so
-          # _bootstrap_admin_accounts in src/yashigani/backoffice/app.py can
-          # find admin1_username, admin_initial_password, admin1_totp_secret,
-          # admin2_username, admin2_password, admin2_totp_secret.
-          command:
-            - sh
-            - -c
-            - |
-              set -e
-              cp -L /pki-ro/* /secrets-rw/
-              if [ -d /admin-bootstrap-ro ]; then
-                # tolerate empty admin-bootstrap mount (existingSecretName=empty
-                # placeholder pattern OR adminBootstrap.enabled=false at upgrade
-                # time on a release that already seeded admins).
-                for f in /admin-bootstrap-ro/*; do
-                  [ -e "$f" ] || continue
-                  cp -L "$f" /secrets-rw/
-                done
-              fi
-              chmod 0400 /secrets-rw/*
-          securityContext:
-            runAsUser: 1001
-            runAsGroup: 1001
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - name: pki-ro
-              mountPath: /pki-ro
-              readOnly: true
-            {{- if .Values.adminBootstrap.enabled }}
-            - name: admin-bootstrap-ro
-              mountPath: /admin-bootstrap-ro
-              readOnly: true
-            {{- end }}
-            - name: secrets
-              mountPath: /secrets-rw
-      {{- end }}
       containers:
         - name: backoffice
           image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.backoffice.image.repository }}:{{ .Values.backoffice.image.tag }}"
@@ -112,81 +48,16 @@ spec:
               value: {{ .Values.global.environment | quote }}
             - name: YASHIGANI_KSM_PROVIDER
               value: "docker"
-            - name: YASHIGANI_SERVICE_NAME
-              value: "backoffice"
-            {{- if .Values.adminBootstrap.enabled }}
-            # Retro #3ap — pull the generated admin1 username out of the
-            # adminBootstrap Secret. _bootstrap_admin_accounts in app.py uses
-            # this as the username it creates the admin1 row with. Compose
-            # parity: install.sh rewrites .env's YASHIGANI_ADMIN_USERNAME on
-            # generate; we get the same effect here without a writable .env.
-            - name: YASHIGANI_ADMIN_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.adminBootstrap.existingSecretName | default .Values.adminBootstrap.secretName }}
-                  key: admin1_username
-                  optional: true
-            {{- end }}
             - name: REDIS_HOST
               value: "yashigani-redis"
             - name: REDIS_PORT
-              value: {{ if .Values.mtls.enabled }}"6380"{{ else }}"6379"{{ end }}
-            {{- if .Values.mtls.enabled }}
-            - name: REDIS_USE_TLS
-              value: "true"
-            - name: YASHIGANI_SERVICE_MANIFEST_PATH
-              value: "/etc/yashigani/service_identities.yaml"
-            - name: YASHIGANI_INTERNAL_CA_DIR
-              value: "/run/secrets"
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
-                  key: postgres_password
-            - name: YASHIGANI_DB_DSN
-              # ca_bundle.crt (root+intermediate) for libpq/psycopg2 consumers.
-              # asyncpg also uses this DSN but asyncpg goes through Python ssl
-              # which can build the chain with root alone. Using ca_bundle.crt
-              # is safe for both consumers. Captain R4 K8s gate 2026-04-30:
-              # libpq (psycopg2) fails with ca_root.crt alone when pgbouncer
-              # serves a chain-bundle cert (openssl error 20 "unable to get
-              # local issuer certificate").
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
-            - name: YASHIGANI_DB_DSN_DIRECT
-              # Direct-to-postgres DSN, bypassing pgbouncer. Used ONLY by
-              # bootstrap-class operations that need a session-scoped postgres
-              # advisory lock (run_migrations, admin-account bootstrap). pgbouncer
-              # in transaction-pool mode routes each new connection to a
-              # different postgres backend, so session-scoped advisory locks
-              # acquired THROUGH pgbouncer don't serialise across replicas:
-              # replicas land on different backends, both "acquire" the same
-              # key independently, no exclusion. Connecting direct to
-              # postgres-the-process puts both replicas' lock connections on
-              # the same backend, where pg_advisory_lock actually serialises.
-              # Captain #58c #3bw + #3bx evidence (2026-04-29).
-              # ca_bundle.crt: postgres also serves chain-bundle cert; libpq
-              # requires bundle CA to verify (Captain R4 finding 2026-04-30).
-              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
-            {{- end }}
+              value: "6379"
             - name: YASHIGANI_OPA_URL
               value: "http://yashigani-policy:8181"
             - name: YASHIGANI_SECRETS_DIR
               value: "/run/secrets"
             - name: YASHIGANI_DEPLOYMENT_STREAM
               value: {{ .Values.gateway.env.deploymentStream | quote }}
-            {{- if .Values.mtls.enabled }}
-            # M-01 fix: backoffice exports OTLP traces via mTLS. Python OTEL
-            # exporter uses Python ssl — Pattern A (ca_root.crt) per gate #58a
-            # evidence (Python 3.12/OpenSSL 3.0/Ubuntu 24.04 strict chain).
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "grpcs://otel-collector:4317"
-            - name: OTEL_EXPORTER_OTLP_CERTIFICATE
-              value: "/run/secrets/ca_root.crt"
-            - name: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE
-              value: "/run/secrets/backoffice_client.crt"
-            - name: OTEL_EXPORTER_OTLP_CLIENT_KEY
-              value: "/run/secrets/backoffice_client.key"
-            {{- end }}
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
             - name: OWUI_API_URL
@@ -196,51 +67,9 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
-            {{- if .Values.mtls.enabled }}
-            # EX-231-10 Layer B: Tom's middleware reads CADDY_INTERNAL_HMAC at
-            # lifespan startup and rejects requests without a matching
-            # X-Caddy-Verified-Secret header → 401. Secret is in pki-certs.
-            - name: CADDY_INTERNAL_HMAC
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-                  key: caddy_internal_hmac
-            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.backoffice.existingSecretName | default "yashigani-backoffice-secrets" }}
-          {{- if .Values.mtls.enabled }}
-          # Startup probe: same rationale as gateway — DB pool + anomaly
-          # detector + uvicorn TLS bind can exceed the 30s liveness grace.
-          startupProbe:
-            exec:
-              command:
-                - python3
-                - -c
-                - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8443))"
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 30
-          readinessProbe:
-            exec:
-              command:
-                - python3
-                - -c
-                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 5
-          livenessProbe:
-            exec:
-              command:
-                - python3
-                - -c
-                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key');urllib.request.urlopen('https://localhost:8443/healthz',context=c)"
-            periodSeconds: 15
-            timeoutSeconds: 5
-            failureThreshold: 5
-          {{- else }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -257,7 +86,6 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
-          {{- end }}
           resources:
             {{- toYaml .Values.backoffice.resources | nindent 12 }}
           volumeMounts:
@@ -267,13 +95,6 @@ spec:
               mountPath: /var/log/yashigani
             - name: secrets
               mountPath: /run/secrets
-              # writable: initContainer seeds PKI, bootstrap writes
-              # admin_initial_password + friends alongside them.
-            {{- if .Values.mtls.enabled }}
-            - name: service-manifest
-              mountPath: /etc/yashigani
-              readOnly: true
-            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -281,33 +102,9 @@ spec:
         - name: varlog
           emptyDir:
             sizeLimit: 50Mi
-        {{- if .Values.mtls.enabled }}
-        # Writable /run/secrets seeded by initContainer.
-        - name: secrets
-          emptyDir:
-            medium: Memory
-            sizeLimit: 10Mi
-        # Read-only mount of the PKI Secret — the initContainer reads from
-        # this and copies into the writable /run/secrets emptyDir.
-        - name: pki-ro
-          secret:
-            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
-            defaultMode: 0440
-        {{- if .Values.adminBootstrap.enabled }}
-        - name: admin-bootstrap-ro
-          secret:
-            secretName: {{ .Values.adminBootstrap.existingSecretName | default .Values.adminBootstrap.secretName }}
-            defaultMode: 0400
-            optional: true
-        {{- end }}
-        - name: service-manifest
-          configMap:
-            name: yashigani-pki-manifest
-        {{- else }}
         - name: secrets
           emptyDir:
             sizeLimit: 10Mi
-        {{- end }}
 ---
 apiVersion: v1
 kind: Service

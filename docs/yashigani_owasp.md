@@ -1,9 +1,8 @@
 # Yashigani Security Gateway -- OWASP Compliance Mapping
 
-**Document Version:** 2.23.1
-**Date:** 2026-04-27
-<!-- Last updated: 2026-04-27T22:18:09+01:00 -->
-**Codebase version:** v2.23.1
+**Document Version:** 2.23
+**Date:** 2026-04-12
+**Codebase version:** v2.23.0
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
@@ -40,7 +39,7 @@ This assessment targets **ASVS v5 Level 3**, the highest assurance tier intended
 
 ### Summary Coverage (ASVS v5 Level 3)
 
-**Coverage scope:** OWASP ASVS v5 (all 17 chapters), OWASP API Security, OWASP Agentic AI / LLM Top 10, plus infrastructure controls. Per-control assessment with PASS / PARTIAL / FAIL / N/A verdicts and file:line evidence.
+**Automated pre-release gate:** `python3 scripts/owasp_prerelease_check.py` runs 398 checks (345 ASVS v5 all chapters + 38 API + 10 Agentic AI + 7 Infrastructure) with a **97.7% pass rate**.
 
 | Verdict | Count | Percentage |
 |---|---|---|
@@ -311,8 +310,8 @@ Yashigani captures the following environmental factors in audit events:
 | V9.1.4 | Verify that HSTS is enabled with appropriate directives | L2 | Strict-Transport-Security: max-age=31536000; includeSubDomains served by Caddy and backoffice middleware | PASS |
 | V9.1.5 | Verify that certificate validation is performed correctly | L1 | Caddy validates upstream certificates; ACME handles Let's Encrypt certificates automatically | PASS |
 | V9.1.6 | Verify that certificate pinning is implemented for high-value connections | L3 | No certificate pinning implemented for connections to external services (inspection backends, SIEM, secrets backends) | FAIL |
-| V9.2.1 | Verify that internal service communications are encrypted | L2 | Core data-plane fully mTLS as of v2.23.1 (gateway↔backoffice↔postgres↔pgbouncer↔redis↔budget-redis↔Caddy); OTEL collector upgraded to mTLS gRPC (M-01 closed 2026-04-27); OPA plaintext HTTP is the only remaining exception (tracked as task #54, v2.23.2) | PARTIAL |
-| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | Two-tier PKI (root→intermediate→per-service leaves) with SPIFFE URI SANs on all core-plane services; two remaining exceptions: OPA plaintext (task #54) and Ollama (no TLS support upstream, bearer token + bridge isolation). **Trust-store policy:** workload trust stores reference `ca_intermediate.crt` where the TLS library supports partial-chain anchoring (Python ssl, Go crypto/tls, postgres with pg_hba hostssl rules). Where the library is libssl-direct without partial-chain support (pgbouncer, Redis), workload trust stores reference `ca_root.crt` — public cert only. The root CA private key (`ca_root.key`) never enters any workload container. See memory file `project_v231_pki_trust_pattern.md` for full library compatibility matrix. | PARTIAL |
+| V9.2.1 | Verify that internal service communications are encrypted | L2 | Internal comms (gateway-to-OPA, gateway-to-PostgreSQL, gateway-to-Redis) use network isolation; TLS available but not enforced by default on all internal paths | PARTIAL |
+| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | mTLS not implemented for internal service mesh; relies on Docker network isolation | FAIL |
 | V9.3.1 | Verify that certificate management is automated | L2 | Three modes: ACME (automatic Let's Encrypt), CA-signed (operator-provided), self-signed (development); ACME renewal fully automated via Caddy | PASS |
 | V9.3.2 | Verify that certificate lifecycle events are logged | L3 | Caddy logs certificate renewal events; however, certificate expiry alerting not integrated into Yashigani audit trail | PARTIAL |
 | V9.4.1 | Verify that the application is prepared for post-quantum TLS | L3 | Hybrid X25519+ML-KEM-768 key exchange config included (pending Caddy 2.10 release) | PARTIAL |
@@ -331,7 +330,7 @@ Yashigani captures the following environmental factors in audit events:
 | V10.2.1 | Verify that the application does not request unnecessary permissions | L1 | Container runs as UID 1001 (non-root); no privilege escalation (allowPrivilegeEscalation: false); no new privileges flag | PASS |
 | V10.2.2 | Verify that the application uses OS-level sandboxing | L2 | seccomp allowlist restricts syscalls; AppArmor profile provides MAC; readOnlyRootFilesystem: true; tmpfs for writable paths | PASS |
 | V10.2.3 | Verify that system call filtering is applied | L3 | seccomp allowlist restricts to required syscalls only; AppArmor mandatory access control at kernel level | PASS |
-| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; all 25 upstream images digest-pinned to sha256 at release time in `docker/docker-compose.release.yml` (H-02 Iris finding closed 2026-04-27); Helm parity in `helm/yashigani/values.release.yaml`; no mutable tags in production overlay. Mirror to registry.agnosticsec.com tracked as RETRO-H02-MIRROR (v2.23.2 P0). | PASS |
+| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; digest-pinned; no mutable tags (:latest) in production | PASS |
 | V10.3.2 | Verify that container images are scanned before deployment | L2 | Trivy scanning integrated in CI/CD; images failing scan threshold not promoted to production | PASS |
 | V10.3.3 | Verify that container runtime security is enforced | L3 | seccomp + AppArmor + non-root + read-only filesystem + no privilege escalation; cgroup v2 resource limits | PASS |
 | V10.4.1 | Verify that software composition analysis (SCA) is performed | L2 | Trivy SCA in CI; GitHub Dependabot for dependency monitoring; hashed requirements in pyproject.toml | PASS |
@@ -866,7 +865,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 
 | Gap | ASVS Req | Verdict | Risk Level | Priority | Mitigation Type |
 |---|---|---|---|---|---|
-| Internal mTLS | V9.2.2 | PARTIAL | Medium | MEDIUM | Engineering (close OPA #54 + Ollama upstream TLS) |
+| Internal mTLS | V9.2.2 | FAIL | High | HIGH | Engineering (service mesh) |
 | Certificate pinning | V9.1.6 | FAIL | Medium | MEDIUM | Engineering |
 | Hardware attestation | V10.5.2 | FAIL | Medium | MEDIUM | Deployment (confidential computing) |
 | Memory zeroing | V8.2.3 | FAIL | Low-Med | LOW-MED | Engineering (C extension) or deployment |
@@ -946,37 +945,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | LLM policy review for P1-P3 routing | ASVS V4.1, LLM01 | Semantic policy analysis for high-priority routing decisions |
 | 363 tests | ASVS V1.6.1, V14.1 | Comprehensive test coverage across all modules including identity, billing, optimization, and pool |
 
-#### v2.23.1 Changes
-
-| Change | OWASP Relevance | Effect |
-|---|---|---|
-| Core-plane mTLS default-on (gateway / backoffice / postgres / pgbouncer / redis / opa) | ASVS V9.2, V9.3, V10.2, V14.1 | All inter-service traffic on the core plane uses mutual TLS with client-certificate verification; plaintext listeners removed |
-| Two-tier PKI: step-ca root → intermediate → per-service leafs (SPIFFE-style URIs) | ASVS V10.1, V10.2, V10.4 | Short-lived per-service identities issued by an internal CA with automatic rotation; root stays 0400 on disk, never baked into images |
-| seccomp + AppArmor default-on for every service on every runtime | ASVS V14.2, V10.4 | Container kernel-surface confinement; no "skip on dev" branch; AppArmor `mmap` permission added after regression |
-| Fail-closed on missing HMAC + OWUI secrets | ASVS V6.4.1, V14.1 | Startup hard-fails when critical secrets are absent; no silent dev-mode fallback into production |
-| Centralised SSRF allowlist helper | ASVS V12.6, API7, LLM05 | All outbound HTTP from backend services routed through a single allowlist-enforcing helper; ad-hoc outbound calls removed |
-| Per-endpoint body-size limits | ASVS V4.3.1, API4 | Tighter per-endpoint caps below the Caddy global floor; resource-exhaustion surface reduced |
-| Log-injection sanitisation (CR/LF strip, length-cap, unicode-normalise) | ASVS V16.6.1 | All user-controllable strings sanitised before audit/app log formatting |
-| Session rotation on password change | ASVS V7.4.2, V7.2.5 | Password change invalidates all prior sessions for the principal |
-| Uniformised 401 vs 404 on unauth admin endpoints | ASVS V4.1.5, API5 | No information leakage via differential status codes revealing protected route existence |
-| Explicit CSP `script-src` + working `/admin/csp-report` handler | ASVS V14.3.2, V7.1 | CSP no longer falls back to `default-src`; violations captured in audit log |
-| Algorithm allowlist on license ECDSA verifier (ES256 only) | ASVS V6.2.1, V10.1 | Prevents algorithm-substitution downgrade on license verification |
-| Caddy header hygiene (strip Server, remove stale alt-svc) | ASVS V14.3.2, API9 | Reduces version fingerprinting on Shodan / banner-grab |
-| PCI-compliant password expiry profile (≤90 days) | ASVS V2.1.1, PCI-DSS 8.3.9 | Optional tighter expiry profile for PCI-scope deployments |
-| TOTP enrolment split provision/confirm | ASVS V2.5.4, V2.5.5 | Secret is never active without a confirmation round-trip; defeats provision-and-abandon attacks |
-| Auth-throttle admin self-visibility | ASVS V7.2.1 | Authenticated admins can see their own + all throttled/blocked IPs at /admin → Security → Blocked IPs (backed by /auth/blocked-ips). Unauthenticated locked-out operator path (RFC 6585 Retry-After) tracked as v2.23.2 follow-up. |
-| Agent tier-limit returns 402 (was 500) with correct body | ASVS V14.2, API8 | Correct HTTP semantics; 500 no longer leaks that tier enforcement is a caught exception |
-| AGENT_REGISTERED audit events persisted | ASVS V7.1.1, V7.1.3 | Registration events land in audit log; previously fired only to in-memory channel |
-| `/.well-known/security.txt` (RFC 9116) | ASVS V1.14.1 | Coordinated-disclosure contact discoverable via standard path |
-| Symbol-bearing generated passwords (`!*,-._~`, category-guaranteed) | ASVS V2.1.1, V2.1.9 | Installer credentials include symbols; character class enforced per-password; safe across URL/.env/sed/shell |
-| `YSG_RUNTIME=docker` stale-env bleed fix + runtime-honouring backup helpers | ASVS V14.1 | Deterministic runtime selection on hosts with both podman + docker installed |
-| Clean-slate install validated on macOS Podman, macOS Docker, Linux Podman, Linux Docker, K8s Helm | ASVS V1.6.1, V14.1 | Five-platform installer gate for every release |
-| Caddy-gated `/internal/metrics` with SPIFFE URI ACL (closes EX-231-08) | ASVS V4.1.1, V4.1.3, V4.2.1, V8.2.1, V10.2, V14.1 | Prometheus scrapes route through Caddy :8444 mTLS listener; Caddy validates client cert against internal CA and forwards the verified URI SAN as `X-SPIFFE-ID`; gateway/backoffice `/internal/metrics` now enforce an allowlist sourced from `service_identities.yaml` (`endpoint_acls`). Per-service SPIFFE URI SANs (`spiffe://yashigani.internal/<service>`) embedded in leaf certs at issuance. Zero-trust: app-layer authN on every endpoint, mTLS no longer used as a sole control. Fails closed on missing/malformed manifest. |
-| Refined PKI trust-store rule: Pattern B where supported, root-cert-anchor where not (pgbouncer, Redis) | ASVS V9.2.2, V10.2 | Runtime discovery showed OpenSSL `verify-ca` strict mode (`error:0A000086`) rejects non-self-signed intermediate anchors. Audit confirmed pgbouncer and Redis (libssl-direct) require `ca_root.crt` as trust anchor; Python ssl, Go crypto/tls, and postgres with pg_hba hostssl correctly accept `ca_intermediate.crt` (partial-chain). The root CA private key never enters any workload. Pattern B sweep (`b32c115`) + pgbouncer fix (`cc3c5bf`) + Redis fix (`<this commit>`) produce a consistent, library-aware trust-store policy across all services. |
-
-(Authoritative manual evidence sweep for v2.23.1 is produced by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` — outside the code repo per policy.)
-
-#### v2.23.0 Changes
+#### v2.23 Changes
 
 | Change | OWASP Relevance | Effect |
 |---|---|---|
@@ -994,7 +963,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Self-service password reset (TOTP-verified) | ASVS V2.1.5, V2.1.6 | Users can reset their own password after TOTP verification |
 | Crypto inventory API + admin UI | ASVS V6.2.2, V1.4.1 | Complete inventory of all cryptographic algorithms in use, accessible via API and admin panel |
 | Podman SDK (podman-py) for container isolation | ASVS V14.2 | Native Podman API access for container management; macOS socket detection |
-| Pre-release OWASP gate | ASVS V1.6.1, V14.1 | Pre-release compliance review covering OWASP ASVS v5, API Security, and Agentic AI controls |
+| Pre-release gate: 398 OWASP checks (97.7% pass rate) | ASVS V1.6.1, V14.1 | Automated compliance validation: 345 ASVS v5 + 38 API + 10 Agentic AI + 7 Infra |
 | 523 unit + 25 e2e tests | ASVS V1.6.1, V14.1 | Expanded test coverage including all v2.23 security controls |
 
 #### v0.7.0 / v0.7.1 Changes
@@ -1079,4 +1048,4 @@ Yashigani does **not** implement application-level memory encryption. Python's g
 
 ---
 
-*This document assesses Yashigani v2.23.1 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment. The v2.23.1 manual evidence sweep is produced separately by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` outside the code repo per policy.*
+*This document assesses Yashigani v2.23.0 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment.*

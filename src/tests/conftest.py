@@ -5,20 +5,8 @@ Fixtures cover the three main I/O boundaries:
   - Redis (via fakeredis)
   - OPA (via httpx MockTransport)
   - Upstream MCP / Ollama (via httpx MockTransport)
-
-Last updated: 2026-04-27T21:08:49+01:00
 """
 from __future__ import annotations
-
-# LAURA-V231-004: set YASHIGANI_ENV=dev before any yashigani.licensing imports.
-# The licensing verifier runs _check_self_integrity() at module load; without
-# this line CI (which does not set YASHIGANI_ENV) would trigger the
-# _integrity_violated flag for every test that imports verifier, causing 17+
-# tests to fail with COMMUNITY-tier results instead of their expected values.
-# setdefault() preserves any explicit override already present in the environment.
-import os
-os.environ.setdefault("YASHIGANI_ENV", "dev")
-
 import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock

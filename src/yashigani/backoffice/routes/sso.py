@@ -4,7 +4,7 @@ Yashigani Backoffice — SSO routes.
 GET  /auth/sso/select                  — list available IdPs (JSON)
 GET  /auth/sso/oidc/{idp_id}           — initiate OIDC flow (redirect to IdP)
 GET  /auth/sso/oidc/{idp_id}/callback  — OIDC callback: exchange code, create session
-POST /auth/sso/saml/{idp_id}/acs       — SAML ACS endpoint
+POST /auth/sso/saml/{idp_id}/acs       — SAML ACS endpoint (placeholder, 501)
 
 Security invariants:
   - State token and nonce are generated with secrets.token_urlsafe(32) (256-bit).
@@ -14,18 +14,9 @@ Security invariants:
     nonce claim (if present) to prevent token injection (ASVS V3.5.4).
   - On callback success, the Yashigani identity is resolved or created in the
     IdentityRegistry, then a session is issued via SessionStore.
-  - Email is never stored in audit logs — HMAC-SHA256 hash only.
+  - Email is never stored in audit logs — SHA-256 hash only.
   - All state/nonce keys use a dedicated Redis namespace (sso:state:).
   - require_feature("oidc") is called before any OIDC-specific work (tier gate).
-
-V6.8.4 — acr/amr allowlist validation (ASVS V6.3.3):
-  - OIDC: required_acr_values (allowlist) and required_amr_values (subset check)
-    are read from IdPConfig. The old env-var fallback has been removed.
-  - SAML: required_acr_values validated against AuthnContextClassRef.
-  - Both paths write acr/amr/auth_time claims to the audit log.
-  - Purpose: detect honest IdP misconfiguration, NOT a security boundary.
-
-Last updated: 2026-04-28T23:58:36+01:00
 """
 from __future__ import annotations
 
@@ -266,11 +257,6 @@ def _write_sso_success_audit(
     groups: list[str],
     client_ip: str,
     org_id: str = "",
-    # V6.8.4 — acr/amr/auth_time/iss claims for forensic audit
-    acr: str = "",
-    amr: Optional[list] = None,
-    auth_time: Optional[int] = None,
-    iss: str = "",
 ) -> None:
     from yashigani.audit.schema import SSOLoginSuccessEvent
     try:
@@ -282,10 +268,6 @@ def _write_sso_success_audit(
                 email_hash=_email_hash(email, org_id=org_id),
                 groups=groups,
                 client_ip_prefix=_mask_ip(client_ip),
-                acr=acr,
-                amr=amr if amr is not None else [],
-                auth_time=auth_time,
-                iss=iss,
             )
         )
     except Exception as exc:
@@ -310,59 +292,6 @@ def _write_sso_failure_audit(
         )
     except Exception as exc:
         logger.error("SSO audit write failed (failure): %s", exc)
-
-
-def _write_saml_success_audit(
-    idp_id: str,
-    idp_name: str,
-    identity_id: str,
-    email: str,
-    groups: list[str],
-    client_ip: str,
-    org_id: str = "",
-    authn_context_class_ref: str = "",
-    authn_instant: str = "",
-    issuer: str = "",
-) -> None:
-    """V6.8.4 — write SAML-specific success event with AuthnContextClassRef."""
-    from yashigani.audit.schema import SAMLLoginSuccessEvent
-    try:
-        backoffice_state.audit_writer.write(
-            SAMLLoginSuccessEvent(
-                idp_id=idp_id,
-                idp_name=idp_name,
-                identity_id=identity_id,
-                email_hash=_email_hash(email, org_id=org_id),
-                groups=groups,
-                client_ip_prefix=_mask_ip(client_ip),
-                authn_context_class_ref=authn_context_class_ref,
-                authn_instant=authn_instant,
-                issuer=issuer,
-            )
-        )
-    except Exception as exc:
-        logger.error("SAML audit write failed (success): %s", exc)
-
-
-def _write_saml_failure_audit(
-    idp_id: str,
-    idp_name: str,
-    reason: str,
-    client_ip: str,
-) -> None:
-    """V6.8.4 — write SAML-specific failure event."""
-    from yashigani.audit.schema import SAMLLoginFailureEvent
-    try:
-        backoffice_state.audit_writer.write(
-            SAMLLoginFailureEvent(
-                idp_id=idp_id,
-                idp_name=idp_name,
-                failure_reason=reason,
-                client_ip_prefix=_mask_ip(client_ip),
-            )
-        )
-    except Exception as exc:
-        logger.error("SAML audit write failed (failure): %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -565,87 +494,47 @@ async def oidc_callback(
         )
 
     # -----------------------------------------------------------------------
-    # V6.8.4 — acr/amr allowlist validation (ASVS V6.3.3)
-    # Replaces the previous lexicographic env-var compare.
-    # Purpose: catch honest IdP misconfiguration loudly. NOT a security
-    # boundary — a compromised IdP can lie about these claims.
+    # Validate acr (Authentication Context Class Reference) — ASVS 10.3.4
     # -----------------------------------------------------------------------
-    _raw_claims: dict = sso_result.raw_claims if hasattr(sso_result, "raw_claims") else {}
-    _claim_acr: str = str(_raw_claims.get("acr", "")).strip()
-    _claim_amr_raw = _raw_claims.get("amr", [])
-    _claim_amr: list[str] = (
-        [str(m) for m in _claim_amr_raw]
-        if isinstance(_claim_amr_raw, list)
-        else ([str(_claim_amr_raw)] if _claim_amr_raw else [])
-    )
-    _claim_auth_time: Optional[int] = (
-        int(_raw_claims["auth_time"])
-        if "auth_time" in _raw_claims and _raw_claims["auth_time"] is not None
-        else None
-    )
-    _claim_iss: str = str(_raw_claims.get("iss", "")).strip()
+    _min_acr = os.getenv("YASHIGANI_MIN_ACR_VALUE", "").strip()
+    _id_token_acr = ""
+    if hasattr(sso_result, "raw_claims"):
+        _id_token_acr = str(sso_result.raw_claims.get("acr", ""))
+    # SSOResult may not carry raw_claims yet; fall back to empty.
+    if not _id_token_acr and hasattr(sso_result, "acr"):
+        _id_token_acr = str(getattr(sso_result, "acr", ""))
 
-    # acr allowlist check: if IdPConfig.required_acr_values is set,
-    # the claim MUST appear in the allowlist.
-    _idp_cfg = broker.get_idp(idp_id)
-    _required_acr: Optional[list] = (
-        _idp_cfg.required_acr_values if _idp_cfg else None
-    )
-    _required_amr: Optional[list] = (
-        _idp_cfg.required_amr_values if _idp_cfg else None
-    )
-
-    if _required_acr is not None:
-        if not _claim_acr or _claim_acr not in _required_acr:
+    if _min_acr and _id_token_acr:
+        # Simple lexicographic comparison — works for well-structured acr URIs
+        # (e.g. urn:mace:incommon:iap:silver < urn:mace:incommon:iap:gold)
+        # and numeric levels (e.g. "1" < "2").
+        if _id_token_acr < _min_acr:
             logger.warning(
-                "OIDC acr mismatch: IdP %s returned acr=%r, allowed=%r",
-                idp_id, _claim_acr, _required_acr,
+                "OIDC acr too low: got %s, minimum %s (IdP %s)",
+                _id_token_acr, _min_acr, idp_id,
             )
             _write_sso_failure_audit(
                 idp_id, sso_result.idp_name or idp_id,
-                f"acr_not_in_allowlist:got={_claim_acr!r}:allowed={_required_acr!r}",
-                client_ip,
+                f"acr_insufficient:{_id_token_acr}<{_min_acr}", client_ip,
             )
             return RedirectResponse(
                 url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
                 status_code=status.HTTP_302_FOUND,
             )
 
-    # amr subset check: every required method must appear in the claim.
-    if _required_amr is not None:
-        _missing_amr = sorted(set(_required_amr) - set(_claim_amr))
-        if _missing_amr:
-            logger.warning(
-                "OIDC amr insufficient: IdP %s returned amr=%r, "
-                "required methods missing: %r",
-                idp_id, _claim_amr, _missing_amr,
-            )
-            _write_sso_failure_audit(
-                idp_id, sso_result.idp_name or idp_id,
-                f"amr_methods_missing:got={_claim_amr!r}:missing={_missing_amr!r}",
-                client_ip,
-            )
-            return RedirectResponse(
-                url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
-                status_code=status.HTTP_302_FOUND,
-            )
+    logger.info("OIDC acr=%s for IdP %s (min=%s)", _id_token_acr or "(none)", idp_id, _min_acr or "(any)")
 
-    logger.info(
-        "OIDC acr=%r amr=%r auth_time=%s for IdP %s",
-        _claim_acr or "(none)", _claim_amr or "(none)", _claim_auth_time, idp_id,
-    )
-
-    # Resolve or provision the Yashigani identity.
-    # Re-use _idp_cfg already fetched during the acr/amr check above.
+    # Resolve or provision the Yashigani identity
+    idp_config = broker.get_idp(idp_id)
     try:
         identity_id = _resolve_or_create_identity(
             email=sso_result.email,
             name=sso_result.name,
             groups=sso_result.groups,
             idp_name=sso_result.idp_name,
-            org_id=_idp_cfg.org_id if _idp_cfg else "",
+            org_id=idp_config.org_id if idp_config else "",
             default_sensitivity=(
-                _idp_cfg.default_sensitivity if _idp_cfg else "INTERNAL"
+                idp_config.default_sensitivity if idp_config else "INTERNAL"
             ),
         )
     except RuntimeError as exc:
@@ -667,20 +556,12 @@ async def oidc_callback(
             detail={"error": "identity_resolution_failed"},
         )
 
-    # Check if 2FA is required after SSO.
-    # Default: true — YASHIGANI_SSO_2FA_REQUIRED=false to disable.
-    # Reconciliation (V6.8.4 fix 2026-04-27): Lu's Stage B report noted this
-    # was default-OFF ("false"). Tiago's stated baseline is 2FA always-on.
-    # The control is "force Yashigani TOTP on top of IdP-mediated SSO session"
-    # — separate from admin local login which always requires TOTP unconditionally.
-    # Flipped to default-ON per Tiago's instruction.
-    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "true").lower() == "true"
+    # Check if 2FA is required after SSO
+    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "false").lower() == "true"
 
     if sso_2fa_required:
         # Create a pending-2FA token instead of a full session.
         # The user must complete Yashigani TOTP before getting access.
-        # V6.8.4: persist acr/amr/auth_time/iss so the 2FA-complete path
-        # can write a fully-populated audit event.
         pending_token = secrets.token_urlsafe(32)
         pending_data = json.dumps({
             "identity_id": identity_id,
@@ -691,11 +572,6 @@ async def oidc_callback(
             "idp_name": sso_result.idp_name,
             "client_ip": client_ip,
             "created_at": time.time(),
-            # V6.8.4 — auth-context claims for audit on 2FA completion
-            "acr": _claim_acr,
-            "amr": _claim_amr,
-            "auth_time": _claim_auth_time,
-            "iss": _claim_iss,
         })
         r.setex(f"{_PENDING_2FA_PREFIX}{pending_token}", _PENDING_2FA_TTL, pending_data)
 
@@ -729,11 +605,6 @@ async def oidc_callback(
         email=sso_result.email,
         groups=sso_result.groups,
         client_ip=client_ip,
-        org_id=_idp_cfg.org_id if _idp_cfg else "",
-        acr=_claim_acr,
-        amr=_claim_amr,
-        auth_time=_claim_auth_time,
-        iss=_claim_iss,
     )
 
     response = RedirectResponse(url="/chat", status_code=status.HTTP_302_FOUND)
@@ -880,9 +751,6 @@ async def sso_2fa_verify(request: Request):
         client_ip=client_ip,
     )
 
-    # V6.8.4 — propagate acr/amr/auth_time/iss from the pending token
-    # (set during OIDC callback) so the audit event is fully populated.
-    _p_amr = pending.get("amr", [])
     _write_sso_success_audit(
         idp_id=pending.get("idp_id", ""),
         idp_name=pending.get("idp_name", ""),
@@ -890,10 +758,6 @@ async def sso_2fa_verify(request: Request):
         email=pending.get("email", ""),
         groups=pending.get("groups", []),
         client_ip=client_ip,
-        acr=pending.get("acr", ""),
-        amr=_p_amr if isinstance(_p_amr, list) else [],
-        auth_time=pending.get("auth_time"),
-        iss=pending.get("iss", ""),
     )
 
     response = RedirectResponse(url="/chat", status_code=status.HTTP_302_FOUND)
@@ -950,13 +814,14 @@ async def saml_acs(idp_id: str, request: Request):
     relay_state = form_data.get("RelayState", "")
 
     if not saml_response:
-        _write_saml_failure_audit(idp_id, idp.name, "missing_saml_response", client_ip)
+        _write_sso_failure_audit(idp_id, idp.name, "missing_saml_response", client_ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "missing_saml_response"},
         )
 
     # Construct request_data dict expected by python3-saml
+    url = str(request.url)
     request_data = {
         "https": "on" if request.url.scheme == "https" else "off",
         "http_host": request.url.hostname or "localhost",
@@ -969,54 +834,11 @@ async def saml_acs(idp_id: str, request: Request):
     sso_result = broker.handle_saml_response(idp_id=idp_id, saml_response=saml_response)
 
     if not sso_result.success:
-        _write_saml_failure_audit(idp_id, idp.name, sso_result.error, client_ip)
+        _write_sso_failure_audit(idp_id, idp.name, sso_result.error, client_ip)
         return RedirectResponse(
             url=f"/login?error=sso_failed&idp={idp_id}",
             status_code=status.HTTP_302_FOUND,
         )
-
-    # -----------------------------------------------------------------------
-    # V6.8.4 — SAML AuthnContextClassRef allowlist (mirrors OIDC acr check)
-    # -----------------------------------------------------------------------
-    # Extract the AuthnContextClassRef from the SAMLUserInfo.
-    # The broker returns it in sso_result.raw_claims["authn_context_class_ref"]
-    # via the SSOResult.  For SAML the raw_claims dict is empty; the classref
-    # lives on the SAMLUserInfo attached to the raw_saml_user_info on broker.
-    # Rather than threading it through SSOResult, we look it up directly via
-    # the broker's internal handle (since broker.handle_saml_response already
-    # ran successfully at this point).
-    _saml_classref: str = ""
-    _saml_authn_instant: str = ""
-    _saml_issuer: str = ""
-    # Attempt to extract from the raw_claims if populated by broker
-    if sso_result.raw_claims:
-        _saml_classref = str(sso_result.raw_claims.get("authn_context_class_ref", "")).strip()
-        _saml_authn_instant = str(sso_result.raw_claims.get("authn_instant", "")).strip()
-        _saml_issuer = str(sso_result.raw_claims.get("iss", "")).strip()
-
-    # acr allowlist validation against required_acr_values on IdPConfig.
-    _required_saml_acr = idp.required_acr_values if idp else None
-    if _required_saml_acr is not None:
-        if not _saml_classref or _saml_classref not in _required_saml_acr:
-            logger.warning(
-                "SAML AuthnContextClassRef mismatch: IdP %s returned %r, allowed=%r",
-                idp_id, _saml_classref, _required_saml_acr,
-            )
-            _write_saml_failure_audit(
-                idp_id, idp.name,
-                f"authn_context_class_ref_not_in_allowlist:"
-                f"got={_saml_classref!r}:allowed={_required_saml_acr!r}",
-                client_ip,
-            )
-            return RedirectResponse(
-                url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
-                status_code=status.HTTP_302_FOUND,
-            )
-
-    logger.info(
-        "SAML AuthnContextClassRef=%r authn_instant=%s for IdP %s",
-        _saml_classref or "(none)", _saml_authn_instant or "(none)", idp_id,
-    )
 
     # Resolve or create the identity
     try:
@@ -1030,15 +852,15 @@ async def saml_acs(idp_id: str, request: Request):
         )
     except RuntimeError as exc:
         logger.error("SAML identity resolution failed: %s", exc)
-        _write_saml_failure_audit(idp_id, idp.name, "identity_registry_unavailable", client_ip)
+        _write_sso_failure_audit(idp_id, idp.name, "identity_registry_unavailable", client_ip)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"error": "identity_registry_unavailable"},
         )
 
-    # Check 2FA requirement — default ON (matches OIDC path, V6.8.4 fix).
+    # Check 2FA requirement
     r = _redis()
-    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "true").lower() == "true"
+    sso_2fa_required = os.getenv("YASHIGANI_SSO_2FA_REQUIRED", "false").lower() == "true"
 
     if sso_2fa_required and r is not None:
         pending_token = secrets.token_urlsafe(32)
@@ -1051,10 +873,6 @@ async def saml_acs(idp_id: str, request: Request):
             "idp_name": idp.name,
             "client_ip": client_ip,
             "created_at": time.time(),
-            # V6.8.4 — persist SAML auth-context for audit on 2FA completion
-            "saml_authn_context_class_ref": _saml_classref,
-            "saml_authn_instant": _saml_authn_instant,
-            "saml_issuer": _saml_issuer,
         })
         r.setex(f"{_PENDING_2FA_PREFIX}{pending_token}", _PENDING_2FA_TTL, pending_data)
 
@@ -1066,21 +884,17 @@ async def saml_acs(idp_id: str, request: Request):
         )
         return response
 
-    # Issue full session — write SAML-specific audit event.
+    # Issue full session
     session = backoffice_state.session_store.create(
         account_id=identity_id,
         account_tier="user",
         client_ip=client_ip,
     )
 
-    _write_saml_success_audit(
+    _write_sso_success_audit(
         idp_id=idp_id, idp_name=idp.name,
         identity_id=identity_id, email=sso_result.email,
         groups=sso_result.groups, client_ip=client_ip,
-        org_id=idp.org_id,
-        authn_context_class_ref=_saml_classref,
-        authn_instant=_saml_authn_instant,
-        issuer=_saml_issuer,
     )
 
     response = RedirectResponse(url="/chat", status_code=status.HTTP_302_FOUND)

@@ -86,4 +86,3 @@ docker/secrets/
 *.secret
 *.pem
 *.key
-.claude-tmp/

@@ -9,7 +9,6 @@ Export: CSV or JSON, same filter set, hard cap of 10,000 rows.
 
 Security: never exposes raw file paths; all user inputs validated via Pydantic.
 """
-# Last updated: 2026-04-28T00:00:00+01:00
 from __future__ import annotations
 
 import base64
@@ -24,7 +23,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from yashigani.audit.export import escape_csv_cell  # V1.2.10 formula-injection fix
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
@@ -392,8 +390,11 @@ async def _stream_csv(log_path: Path, filters: _Filters):
                         header_written = True
                         yield buf.getvalue().encode("utf-8")
 
-                    # V1.2.10: escape formula triggers + strip newlines
-                    clean = {k: escape_csv_cell(v) for k, v in record.items()}
+                    # CSV injection prevention: strip newline chars from values
+                    clean = {
+                        k: str(v).replace("\n", " ").replace("\r", " ")
+                        for k, v in record.items()
+                    }
                     buf = io.StringIO()
                     writer = csv.DictWriter(
                         buf,

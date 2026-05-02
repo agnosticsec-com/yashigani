@@ -1,5 +1,5 @@
 """
-Smoke integration tests for Yashigani v2.23.1.
+Smoke integration tests for Yashigani v0.9.3.
 
 These tests validate that core components initialize correctly.
 They do NOT require a running Docker stack — they test Python-level
@@ -7,8 +7,6 @@ initialization and configuration, not network connectivity.
 
 Run with: pytest -m integration src/tests/integration/
 """
-# Last updated: 2026-04-23T11:12:28+01:00
-
 import pytest
 
 pytestmark = pytest.mark.integration

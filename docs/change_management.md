@@ -45,7 +45,7 @@ Before a commit is accepted, the following automated checks run:
 
 | Check | Tool | Scope |
 |-------|------|-------|
-| OWASP pre-release compliance | Manual review | OWASP ASVS v5, API Security, and Agentic AI controls reviewed against current code |
+| OWASP pre-release compliance | Yashigani Compliance Suite (YCS) | 398 automated controls across OWASP ASVS, API Security, and Agentic AI |
 | Static analysis | Ruff, mypy | Code quality, type safety |
 | Secret scanning | Gitleaks | Prevent credential commits |
 | Licence compliance | pip-licences | Dependency licence verification |
@@ -70,7 +70,7 @@ After push, the CI pipeline executes:
 |-------|-------|---------------|
 | Unit tests | 523 tests | 100% pass |
 | End-to-end tests | 25 tests | 100% pass |
-| Compliance review | Manual OWASP review | No regressions in PASS verdicts vs prior release |
+| Compliance scan | YCS v2.0 | No regressions in pass rate |
 | Container build | Docker build | Successful build, no vulnerabilities above configured threshold |
 | SBOM generation | CycloneDX | SBOM produced and archived with the build |
 
@@ -181,7 +181,7 @@ All changes are traceable through:
 | Git commit history | Git repository | Permanent |
 | CI/CD build logs | CI platform | 12 months |
 | Pre-push review results | Review agent logs | 12 months |
-| OWASP review records | Per-release docs | 12 months |
+| Compliance scan results | YCS reports | 12 months |
 | Release notes | Repository (docs/) | Permanent |
 | Emergency change register | Internal documentation | 6 years |
 

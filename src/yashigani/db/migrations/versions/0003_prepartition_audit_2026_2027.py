@@ -3,7 +3,6 @@
 Revision ID: 0003
 Revises: 0002
 Create Date: 2026-03-28
-Last updated: 2026-04-28T00:00:00+01:00
 
 v0.7.1 (P1-B completion): The CronJob and maintenance script handle ongoing
 partition creation, but a static bootstrap is needed so the first 14 months
@@ -55,12 +54,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Drop in reverse order to avoid dependency issues.
-    # op.drop_table() is used instead of a raw f-string DDL to ensure
-    # Alembic handles identifier quoting correctly (CWE-89, YSG-RISK-002 #3as).
-    # The loop already covers only the partitions created in upgrade(), so
-    # IF NOT EXISTS semantics are not needed here — the tables exist.
+    # Drop in reverse order to avoid dependency issues
     for year, month in reversed(_MONTHS):
         for table in _TABLES:
             name = f"{table}_{year}_{month:02d}"
-            op.drop_table(name)
+            op.execute(f"DROP TABLE IF EXISTS {name}")

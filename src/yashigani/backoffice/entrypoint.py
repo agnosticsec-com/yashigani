@@ -13,6 +13,7 @@ First-run behaviour:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -26,7 +27,6 @@ from yashigani.auth.bootstrap import (
     mark_bootstrapped,
 )
 from yashigani.auth.local_auth import LocalAuthService
-from yashigani.auth.pg_auth import PostgresLocalAuthService
 from yashigani.auth.session import SessionStore
 from yashigani.chs.handle import CredentialHandleService
 from yashigani.chs.resource_monitor import ResourceMonitor
@@ -117,24 +117,46 @@ def _bootstrap():
     session_store = SessionStore(redis_url=redis_url)
 
     # ── Auth service ────────────────────────────────────────────────────────
-    # v2.23.1 P0-2 fix: auth_service is now a PostgresLocalAuthService backed
-    # by the admin_accounts table. The DB pool is created asynchronously in
-    # the FastAPI lifespan (after alembic upgrade head), so the service
-    # instance + bootstrap seeding both have to defer until the lifespan
-    # runs. We stash the bootstrap inputs on the state object here and let
-    # backoffice.app.lifespan finalise once the pool is open.
-    backoffice_state._auth_bootstrap = {
-        "admin_username": admin_username,
-        "initial_admin_password": initial_admin_password,
-        "secrets_dir": secrets_dir,
-    }
-    # Leave auth_service = None for now — lifespan will assign the
-    # PostgresLocalAuthService instance after create_pool() completes.
-    # The only code that touches auth_service between module import and
-    # lifespan start is MetricsCollector (instantiated at bottom of this
-    # file) and it tolerates None gracefully via the dashboard degradation
-    # logic in routes/dashboard.py.
-    auth_service = None
+    auth_service = LocalAuthService()
+
+    if not auth_service._accounts:
+        _, _ = auth_service.create_admin(
+            username=admin_username,
+            auto_generate=False,
+            plaintext_password=initial_admin_password,
+        )
+        # Pre-provision TOTP if the installer wrote a secret
+        totp_file = os.path.join(secrets_dir, "admin1_totp_secret")
+        if os.path.exists(totp_file):
+            totp_secret = open(totp_file).read().strip()
+            record = auth_service._accounts.get(admin_username)
+            if record and totp_secret:
+                record.totp_secret = totp_secret
+                record.force_totp_provision = False
+                logger.info("Bootstrap: TOTP pre-provisioned from installer secret")
+        logger.info("Bootstrap: initial admin account created — %s", admin_username)
+
+        # --- Admin 2 (backup — anti-lockout) ---
+        admin2_user_file = os.path.join(secrets_dir, "admin2_username")
+        admin2_pwd_file = os.path.join(secrets_dir, "admin2_password")
+        if os.path.exists(admin2_user_file) and os.path.exists(admin2_pwd_file):
+            admin2_username = open(admin2_user_file).read().strip()
+            admin2_password = open(admin2_pwd_file).read().strip()
+            if admin2_username and admin2_password:
+                _, _ = auth_service.create_admin(
+                    username=admin2_username,
+                    auto_generate=False,
+                    plaintext_password=admin2_password,
+                )
+                totp2_file = os.path.join(secrets_dir, "admin2_totp_secret")
+                if os.path.exists(totp2_file):
+                    totp2_secret = open(totp2_file).read().strip()
+                    record2 = auth_service._accounts.get(admin2_username)
+                    if record2 and totp2_secret:
+                        record2.totp_secret = totp2_secret
+                        record2.force_totp_provision = False
+                        logger.info("Bootstrap: admin2 TOTP pre-provisioned from installer secret")
+                logger.info("Bootstrap: backup admin account created — %s", admin2_username)
 
     # ── Resource monitor ───────────────────────────────────────────────────
     resource_monitor = ResourceMonitor()
@@ -299,30 +321,40 @@ def _bootstrap():
         logger.warning("Response cache init failed (%s) — cache management disabled", exc)
 
     # ── PostgreSQL pool + inference logger + anomaly detector ───────────────
-    # v2.23.1: The async init (create_pool + logger.start) is deferred to the
-    # FastAPI lifespan in app.py. Reason: uvicorn imports this module inside
-    # its server loop, so calling loop.run_until_complete() here raises
-    # "this event loop is already running" and disables Postgres features.
-    # Here we only resolve the ${POSTGRES_PASSWORD} placeholder in the DSN;
-    # the lifespan picks up the resolved env var and does `await create_pool()`.
+    db_pool_ready = False
     inference_logger = None
     anomaly_detector = None
-    db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
-    if db_dsn and "${POSTGRES_PASSWORD}" in db_dsn:
-        pg_pwd_file = os.path.join(secrets_dir, "postgres_password")
-        try:
-            with open(pg_pwd_file) as f:
-                pg_password = f.read().strip()
-            db_dsn = db_dsn.replace("${POSTGRES_PASSWORD}", pg_password)
-            os.environ["YASHIGANI_DB_DSN"] = db_dsn
-        except OSError:
-            logger.warning("postgres_password secret not found — DB DSN unresolved")
-    if not db_dsn:
-        logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled in backoffice")
-    elif "${POSTGRES_PASSWORD}" in db_dsn:
-        logger.warning("YASHIGANI_DB_DSN contains unresolved ${POSTGRES_PASSWORD} — Postgres features disabled")
-    else:
-        logger.info("Backoffice: DB DSN resolved — pool creation deferred to lifespan")
+    try:
+        from yashigani.db import create_pool
+        from yashigani.inference import InferencePayloadLogger, AnomalyDetector
+
+        db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
+        if db_dsn and "${POSTGRES_PASSWORD}" in db_dsn:
+            pg_pwd_file = os.path.join(secrets_dir, "postgres_password")
+            try:
+                with open(pg_pwd_file) as f:
+                    pg_password = f.read().strip()
+                db_dsn = db_dsn.replace("${POSTGRES_PASSWORD}", pg_password)
+                os.environ["YASHIGANI_DB_DSN"] = db_dsn
+            except OSError:
+                logger.warning("postgres_password secret not found — DB DSN unresolved")
+        if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(create_pool())
+            db_pool_ready = True
+
+            inference_logger = InferencePayloadLogger()
+            asyncio.ensure_future(inference_logger.start())
+
+            import redis as _redis
+            redis_anomaly_url = _backoffice_redis_url(2)
+            redis_anomaly_client = _redis.from_url(redis_anomaly_url, decode_responses=False)
+            anomaly_detector = AnomalyDetector(redis_client=redis_anomaly_client)
+            logger.info("Backoffice: DB pool + inference logger + anomaly detector ready")
+        else:
+            logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled in backoffice")
+    except Exception as exc:
+        logger.warning("Backoffice DB/inference init failed (%s) — Postgres features disabled", exc)
 
     # ── License ──────────────────────────────────────────────────────────────
     from yashigani.licensing import load_license, set_license
@@ -337,8 +369,6 @@ def _bootstrap():
     )
 
     # ── Populate singleton state ────────────────────────────────────────────
-    # auth_service is populated from the FastAPI lifespan in app.py after
-    # create_pool() — see v2.23.1 P0-2 notes above.
     backoffice_state.auth_service = auth_service
     backoffice_state.session_store = session_store
     backoffice_state.audit_writer = audit_writer

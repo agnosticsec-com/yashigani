@@ -1,13 +1,10 @@
-# Last updated: 2026-05-02T06:58:47+01:00
 name: Security Scan
 
 on:
   schedule:
     - cron: '0 3 * * *'
-  push:
-    branches: [main, "release/**", "v2.23.*", "2.23.x"]
   pull_request:
-    branches: [main, "release/**", "v2.23.*", "2.23.x"]
+    branches: [main]
 
 permissions:
   security-events: write
@@ -43,19 +40,16 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-backoffice.sarif
-      # P0-5b: distinct category per upload — GitHub rejects duplicate tool+job combinations.
       - name: Upload SARIF results
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-gateway.sarif
-          category: trivy-gateway
       - name: Upload SARIF backoffice
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-backoffice.sarif
-          category: trivy-backoffice
       - name: Push CVE metrics
         if: always()
         run: |
@@ -75,14 +69,7 @@ jobs:
           python-version: "3.12"
       - run: pip install "bandit[toml]>=1.7"
       - name: Run Bandit
-        run: |
-          # Write JSON artifact (JSON format always exits 0 — separate baseline check below).
-          bandit -r src/yashigani/ -c pyproject.toml -f json -o bandit-report.json -ll || true
-          # P0-5d: baseline check exits 1 on any net-new finding not in .bandit baseline.
-          # .bandit baseline pins 12 triaged B310 findings with documented compensating
-          # controls (validate_siem_url, _assert_safe_owui_url, EX-231-02/04 exceptions).
-          # B324 SHA-1 findings closed by usedforsecurity=False in auth/password.py.
-          bandit -r src/yashigani/ -c pyproject.toml -ll -b .bandit
+        run: bandit -r src/yashigani/ -c pyproject.toml -f json -o bandit-report.json -ll
       - name: Upload report
         uses: actions/upload-artifact@v4
         if: always()
@@ -100,13 +87,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e "." "pip-audit>=2.7"
+      - run: pip install -e "." pip-audit
       - name: Run pip-audit
-        # P0-5c: --fail-on-cvss was removed in pip-audit 2.x (flag never existed in
-        # the OSS release; was confused with OWASP Dependency Check --failOnCVSS).
-        # pip-audit now exits non-zero on any found vulnerability by default.
-        # OSV provides broader CVE coverage than the default PyPI advisory database.
-        run: pip-audit --vulnerability-service osv --format json --output pip-audit-report.json
+        run: pip-audit --format json --output pip-audit-report.json --fail-on-cvss 7
       - name: Upload report
         uses: actions/upload-artifact@v4
         if: always()
@@ -115,156 +98,27 @@ jobs:
           path: pip-audit-report.json
           retention-days: 30
 
-  opengrep-full:
-    name: Opengrep Full Scan (scheduled only)
+  semgrep-full:
+    name: Semgrep Full Scan (scheduled only)
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     permissions:
       security-events: write
     steps:
       - uses: actions/checkout@v6
-      - name: Install Opengrep
-        # Opengrep is not on PyPI. Install via binary release from GitHub.
-        # Pinned to v1.20.0 (verified current 2026-05-02). ubuntu-latest = x86_64.
-        run: |
-          curl -sSfL "https://github.com/opengrep/opengrep/releases/download/v1.20.0/opengrep_manylinux_x86" \
-            -o /usr/local/bin/opengrep
-          chmod +x /usr/local/bin/opengrep
-          opengrep --version
-      - name: Run Opengrep full scan
-        # LAURA-2026-04-29-005 (P0-9): Semgrep replaced with Opengrep per standing ban.
-        # Four rule packs mirror the former semgrep-full config.
-        # --sarif-output writes to file (verified v1.20.0 — --sarif alone writes stdout).
-        # No --error flag: exit 0 on findings, exit 1 on scan infrastructure error only.
-        run: |
-          opengrep scan \
-            --config p/python \
-            --config p/owasp-top-ten \
-            --config p/secrets \
-            --config p/supply-chain \
-            --sarif-output opengrep.sarif \
-            src/yashigani/
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/python
+            p/owasp-top-ten
+            p/secrets
+            p/supply-chain
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: opengrep.sarif
-          # P0-5b: distinct category per upload — GitHub rejects duplicate tool+job combinations.
-          category: opengrep-full
-
-  opengrep-push:
-    name: Opengrep Push Scan
-    runs-on: ubuntu-latest
-    # Runs on every push/PR (not schedule-only). Uses the local ACS ruleset from
-    # opengrep-rules/ so that findings are deterministic and version-controlled.
-    # schedule event reuses opengrep-full (broader p/* rulesets); this job is
-    # the per-commit gate used by the release evidence archive.
-    if: github.event_name != 'schedule'
-    permissions:
-      security-events: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Opengrep
-        # Opengrep is not on PyPI. Install via binary release from GitHub.
-        # Pinned to v1.20.0 (verified current 2026-05-02). ubuntu-latest = x86_64.
-        run: |
-          curl -sSfL "https://github.com/opengrep/opengrep/releases/download/v1.20.0/opengrep_manylinux_x86" \
-            -o /usr/local/bin/opengrep
-          chmod +x /usr/local/bin/opengrep
-          opengrep --version
-
-      - name: Run Opengrep scan
-        id: run_opengrep
-        # opengrep scan exits 0 when findings exist (scan ran successfully with no error),
-        # exits 1 on scan infrastructure error. We don't use --error so the step doesn't
-        # abort before both output files are written.
-        # Per feedback_opengrep_not_semgrep.md: opengrep, never semgrep.
-        # --json-output / --sarif-output write to file (verified v1.20.0).
-        # Single scan produces both outputs; two separate scans would double the work.
-        run: |
-          opengrep scan \
-            --config opengrep-rules/ \
-            --json-output opengrep-results.json \
-            --sarif-output opengrep-push.sarif \
-            src/yashigani/
-          echo "done=true" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: Build Opengrep verdict
-        if: always()
-        run: |
-          python - <<'PYEOF'
-          import json, os, sys
-
-          json_path = "opengrep-results.json"
-          try:
-              data = json.load(open(json_path))
-              results = data.get("results", [])
-              errors  = data.get("errors", [])
-
-              severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-              for r in results:
-                  sev = r.get("extra", {}).get("severity", "INFO").upper()
-                  sev = sev if sev in severity_counts else "INFO"
-                  severity_counts[sev] += 1
-
-              scan_error = len(errors) > 0
-              blocking_findings = severity_counts["CRITICAL"] + severity_counts["HIGH"]
-              # PASS = scan ran cleanly AND no CRITICAL/HIGH findings.
-              # FAIL = scan error OR any CRITICAL/HIGH finding.
-              # WARN = scan clean but MEDIUM/LOW findings present (non-blocking).
-              if scan_error:
-                  status = "FAIL"
-              elif blocking_findings > 0:
-                  status = "FAIL"
-              else:
-                  status = "PASS"
-          except Exception as exc:
-              severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
-              errors = [str(exc)]
-              blocking_findings = 1
-              status = "FAIL"
-              print(f"[ERROR] could not parse opengrep json: {exc}", file=sys.stderr)
-
-          with open("opengrep-summary.txt", "w") as f:
-              f.write(f"Opengrep: {status}\n")
-              f.write(f"Critical: {severity_counts['CRITICAL']}\n")
-              f.write(f"High: {severity_counts['HIGH']}\n")
-              f.write(f"Medium: {severity_counts['MEDIUM']}\n")
-              f.write(f"Low: {severity_counts['LOW']}\n")
-              f.write(f"Info: {severity_counts['INFO']}\n")
-              f.write(f"Total findings: {sum(severity_counts.values())}\n")
-              f.write(f"Scan errors: {len(errors)}\n")
-              f.write(f"Commit: {os.environ.get('GITHUB_SHA', 'unknown')}\n")
-              f.write(f"Workflow: {os.environ.get('GITHUB_WORKFLOW', 'Security Scan')}\n")
-              f.write(f"Run: {os.environ.get('GITHUB_RUN_ID', 'unknown')}\n")
-          print(open("opengrep-summary.txt").read())
-          PYEOF
-
-      - name: Upload Opengrep artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: opengrep-${{ github.sha }}
-          path: |
-            opengrep-results.json
-            opengrep-summary.txt
-          retention-days: 90
-
-      - uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: opengrep-push.sarif
-          category: opengrep-push
-
-      - name: Fail if blocking findings or scan error
-        if: always()
-        run: |
-          STATUS=$(grep "^Opengrep:" opengrep-summary.txt | awk '{print $2}')
-          if [ "$STATUS" != "PASS" ]; then
-            echo "Opengrep gate FAIL — see opengrep-summary.txt artifact"
-            exit 1
-          fi
+          sarif_file: semgrep.sarif
 
   owasp-dep-check:
     name: OWASP Dependency Check (scheduled only)

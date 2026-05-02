@@ -1,6 +1,5 @@
 # Podman rootless overrides — applied automatically by install.sh when RUNTIME=podman
 # Usage: podman compose -f docker/docker-compose.yml -f docker/docker-compose.podman-override.yml up -d
-# Last updated: 2026-04-29T14:30:00+01:00
 #
 # Strategy:
 #   - Services that run as non-root (gateway UID 1001, backoffice UID 1001):
@@ -10,15 +9,6 @@
 #     automatically without keep-id. Volumes work because the container runs
 #     as the mapped root user.
 #   - All services: label=disable to prevent SELinux/AppArmor blocking volume access.
-#
-# EX-231-10 network topology (2026-04-29):
-#   Podman compose honours the four-network topology from docker-compose.yml
-#   (edge, caddy_internal, data, obs) without modification. Podman uses
-#   netavark + aardvark-dns for user-defined networks in rootless mode — the
-#   DNS scoping rules are identical to Docker (names only resolve on shared
-#   networks), so the isolation model holds.
-#   No network: overrides are needed here; the base compose file's assignments
-#   apply to both runtimes.
 
 services:
   # --- Non-root services (UID 1001) ---

@@ -1,16 +1,13 @@
 """
 Yashigani Backoffice — Admin account management routes.
 Enforces: min 2 total (delete guard), min 2 active (disable guard).
-High-value mutating actions (delete, disable, force-reset) require
-step-up TOTP re-verification (ASVS V6.8.4).
 """
-# Last updated: 2026-04-27T00:00:00+01:00
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 router = APIRouter()
@@ -32,7 +29,6 @@ class ForceResetRequest(BaseModel):
 @router.get("")
 async def list_admins(session: AdminSession):
     state = backoffice_state
-    all_accounts = await state.auth_service.list_accounts()
     accounts = [
         {
             "username": r.username,
@@ -42,11 +38,11 @@ async def list_admins(session: AdminSession):
             "force_totp_provision": r.force_totp_provision,
             "created_at": r.created_at,
         }
-        for r in all_accounts
+        for r in state.auth_service._accounts.values()
         if r.account_tier == "admin"
     ]
-    total = await state.auth_service.total_admin_count()
-    active = await state.auth_service.active_admin_count()
+    total = state.auth_service.total_admin_count()
+    active = state.auth_service.active_admin_count()
     return {
         "accounts": accounts,
         "total": total,
@@ -66,32 +62,19 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
     out-of-band. Admin must change password and provision TOTP at first login.
     """
     state = backoffice_state
-
-    # Enforce license tier admin seat limit
-    from yashigani.licensing.enforcer import check_admin_seat_limit, LicenseLimitExceeded
-    try:
-        check_admin_seat_limit(await state.auth_service.total_admin_count())
-    except LicenseLimitExceeded as exc:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "admin_seat_limit_exceeded", "limit": exc.max_val, "current": exc.current},
-        )
-
-    if await state.auth_service.get_account(body.username) is not None:
+    if body.username in state.auth_service._accounts:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": "username_taken"},
         )
-    record, temp_password = await state.auth_service.create_admin(
+    record, temp_password = state.auth_service.create_admin(
         username=body.username,
         auto_generate=True,
     )
 
-    # Generate TOTP secret for provisioning — installer-privileged path
-    # because another admin is onboarding this account out-of-band.
+    # Generate TOTP secret for provisioning
     from yashigani.auth.totp import generate_provisioning
     totp = generate_provisioning(account_name=body.username, issuer="Yashigani")
-    await state.auth_service.set_totp_secret_direct(body.username, totp.secret_b32)
     record.totp_secret = totp.secret_b32
     record.force_totp_provision = False  # pre-provisioned
 
@@ -109,16 +92,16 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
 
 
 @router.delete("/{username}")
-async def delete_admin(username: str, session: StepUpAdminSession):
+async def delete_admin(username: str, session: AdminSession):
     """Delete an admin account. Blocked if total would drop below 2."""
     state = backoffice_state
-    record = await state.auth_service.get_account(username)
+    record = state.auth_service._accounts.get(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
     # Guard: min 2 total (ADMIN_MINIMUM_VIOLATION)
-    if await state.auth_service.total_admin_count() <= state.admin_min_total:
+    if state.auth_service.total_admin_count() <= state.admin_min_total:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -127,7 +110,7 @@ async def delete_admin(username: str, session: StepUpAdminSession):
             },
         )
 
-    await state.auth_service.delete_account(username)
+    del state.auth_service._accounts[username]
     state.audit_writer.write(_config_event(
         session.account_id, "admin_account_deleted", username, ""
     ))
@@ -135,10 +118,10 @@ async def delete_admin(username: str, session: StepUpAdminSession):
 
 
 @router.post("/{username}/disable")
-async def disable_admin(username: str, session: StepUpAdminSession):
+async def disable_admin(username: str, session: AdminSession):
     """Disable account. Blocked if active count would drop below 2."""
     state = backoffice_state
-    record = await state.auth_service.get_account(username)
+    record = state.auth_service._accounts.get(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -146,7 +129,7 @@ async def disable_admin(username: str, session: StepUpAdminSession):
         return {"status": "ok", "message": "already_disabled"}
 
     # Guard: min 2 active (ADMIN_ACTIVE_MINIMUM_VIOLATION)
-    if await state.auth_service.active_admin_count() <= state.admin_min_active:
+    if state.auth_service.active_admin_count() <= state.admin_min_active:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -155,10 +138,8 @@ async def disable_admin(username: str, session: StepUpAdminSession):
             },
         )
 
-    await state.auth_service.disable(username)
+    state.auth_service.disable(username)
     state.session_store.invalidate_all_for_account(record.account_id)
-    # LF-DISABLE-PARTIAL: suspend identity-registry entries for this admin.
-    _suspend_identity_registry_for_account(record.account_id)
     state.audit_writer.write(_config_event(
         session.account_id, "admin_account_disabled", username, "disabled"
     ))
@@ -168,7 +149,7 @@ async def disable_admin(username: str, session: StepUpAdminSession):
 @router.post("/{username}/enable")
 async def enable_admin(username: str, session: AdminSession):
     state = backoffice_state
-    if not await state.auth_service.enable(username):
+    if not state.auth_service.enable(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
     state.audit_writer.write(_config_event(
@@ -178,59 +159,27 @@ async def enable_admin(username: str, session: AdminSession):
 
 
 @router.post("/{username}/force-reset")
-async def force_reset(username: str, body: ForceResetRequest, session: StepUpAdminSession):
+async def force_reset(username: str, body: ForceResetRequest, session: AdminSession):
     """Force password reset or TOTP reprovision for an admin account."""
     state = backoffice_state
-    record = await state.auth_service.get_account(username)
+    record = state.auth_service._accounts.get(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
     if body.action == "password_reset":
-        await state.auth_service.force_password_change(username)
+        record.force_password_change = True
         state.session_store.invalidate_all_for_account(record.account_id)
     elif body.action == "totp_reprovision":
-        await state.auth_service.force_totp_reprovision(username)
+        record.totp_secret = ""
+        record.recovery_codes = None
+        record.force_totp_provision = True
         state.session_store.invalidate_all_for_account(record.account_id)
 
     state.audit_writer.write(_config_event(
         session.account_id, f"admin_{body.action}", username, "forced"
     ))
     return {"status": "ok"}
-
-
-def _suspend_identity_registry_for_account(account_id: str) -> None:
-    """Suspend all identity-registry entries owned by account_id.
-
-    LF-DISABLE-PARTIAL (2026-04-27): mirrors users.py equivalent.
-    Fail-soft on registry unavailability.
-    """
-    registry = backoffice_state.identity_registry
-    if registry is None:
-        import logging as _log
-        _log.getLogger(__name__).warning(
-            "LF-DISABLE-PARTIAL: identity_registry not available — "
-            "API keys for account %s NOT suspended", account_id,
-        )
-        return
-    try:
-        all_ids = registry.list_all()
-        suspended = 0
-        for identity in all_ids:
-            if identity.get("org_id") == account_id:
-                registry.suspend(identity["identity_id"])
-                suspended += 1
-        import logging as _log
-        _log.getLogger(__name__).info(
-            "LF-DISABLE-PARTIAL: suspended %d identity-registry entries for account %s",
-            suspended, account_id,
-        )
-    except Exception as exc:
-        import logging as _log
-        _log.getLogger(__name__).error(
-            "LF-DISABLE-PARTIAL: failed to suspend identity-registry entries "
-            "for account %s: %s", account_id, exc,
-        )
 
 
 def _config_event(admin_id: str, setting: str, prev: str, new: str):

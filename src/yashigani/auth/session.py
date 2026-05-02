@@ -2,15 +2,13 @@
 Yashigani Auth — Session management.
 ASVS V3: 256-bit tokens, HttpOnly/Secure/SameSite=Strict,
 15-min idle timeout, 4-hour absolute maximum, Redis-backed.
-
-Last updated: 2026-04-27T00:00:00+01:00
 """
 from __future__ import annotations
 
 import ipaddress
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 _IDLE_TIMEOUT_SECONDS = 900       # 15 minutes
@@ -27,9 +25,6 @@ class Session:
     last_active_at: float
     expires_at: float               # absolute expiry
     ip_prefix: str                  # last octet masked for privacy
-    # V6.8.4 step-up auth: timestamp of last successful TOTP re-verification.
-    # None = no step-up performed this session; 0.0 = never.
-    last_totp_verified_at: Optional[float] = field(default=None)
 
 
 def _import_redis():
@@ -56,18 +51,6 @@ class SessionStore:
         self._session_prefix = "yashigani:session:"
 
     # -- Public API ----------------------------------------------------------
-
-    def record_totp_stepup(self, token: str) -> bool:
-        """
-        Record a successful step-up TOTP verification for a session.
-        Updates last_totp_verified_at to the current time.
-        Returns True if the session was found and updated, False otherwise.
-        """
-        key = f"{self._session_prefix}{token}"
-        if not self._redis.exists(key):
-            return False
-        self._redis.hset(key, "last_totp_verified_at", str(time.time()))
-        return True
 
     def create(
         self,
@@ -202,7 +185,7 @@ def _mask_ip(ip_str: str) -> str:
 
 
 def _session_to_dict(s: Session) -> dict:
-    d = {
+    return {
         "account_id": s.account_id,
         "account_tier": s.account_tier,
         "created_at": str(s.created_at),
@@ -210,14 +193,9 @@ def _session_to_dict(s: Session) -> dict:
         "expires_at": str(s.expires_at),
         "ip_prefix": s.ip_prefix,
     }
-    if s.last_totp_verified_at is not None:
-        d["last_totp_verified_at"] = str(s.last_totp_verified_at)
-    return d
 
 
 def _dict_to_session(token: str, d: dict) -> Session:
-    raw_stepup = d.get("last_totp_verified_at")
-    last_totp_verified_at: Optional[float] = float(raw_stepup) if raw_stepup else None
     return Session(
         token=token,
         account_id=d["account_id"],
@@ -226,5 +204,4 @@ def _dict_to_session(token: str, d: dict) -> Session:
         last_active_at=float(d["last_active_at"]),
         expires_at=float(d["expires_at"]),
         ip_prefix=d.get("ip_prefix", ""),
-        last_totp_verified_at=last_totp_verified_at,
     )

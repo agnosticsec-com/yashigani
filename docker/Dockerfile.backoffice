@@ -9,7 +9,7 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
     pip install --no-cache-dir build
 
 COPY pyproject.toml ./
@@ -35,7 +35,7 @@ WORKDIR /app
 
 # Install the wheel — pulls all pyproject.toml install_requires automatically.
 COPY --from=builder /dist/*.whl /tmp/
-RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)" && \
     rm /tmp/*.whl
 
@@ -47,11 +47,6 @@ COPY src/yashigani/backoffice/static/ /usr/local/lib/python3.12/site-packages/ya
 COPY alembic.ini /app/alembic.ini
 RUN sed -i 's|script_location = src/yashigani/db/migrations|script_location = /usr/local/lib/python3.12/site-packages/yashigani/db/migrations|' /app/alembic.ini
 
-# v2.23.1: DB bootstrap script — install.sh runs
-# `docker compose exec backoffice python scripts/bootstrap_postgres.py` after
-# service start. Missing this COPY caused step 11 to be silently skipped.
-COPY scripts/bootstrap_postgres.py /app/scripts/bootstrap_postgres.py
-
 RUN mkdir -p /data/audit /data/bootstrap /var/log/yashigani && \
     chown -R yashigani:yashigani /data /var/log/yashigani /app
 
@@ -59,9 +54,7 @@ USER yashigani
 
 EXPOSE 8443
 
-# mTLS healthcheck — Pattern A for Python ssl: trust anchor is the PUBLIC
-# ca_root.crt. Python 3.12/OpenSSL 3.0 strict-chain validation rejects
-# intermediate-only anchors (gate #58a evidence, 2026-04-28).
+# mTLS healthcheck — same pattern as gateway.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)"
 
@@ -70,8 +63,6 @@ ENV PYTHONUNBUFFERED=1 \
     YASHIGANI_SERVICE_NAME=backoffice
 
 # Internal mTLS (v2.23.1) — mutual TLS terminated by uvicorn.
-# Pattern A for Python ssl: ca_root.crt is the trust anchor; private root key
-# never enters this image (root.key is host-only 0400).
 CMD ["uvicorn", "yashigani.backoffice.entrypoint:app", \
      "--host", "0.0.0.0", \
      "--port", "8443", \
