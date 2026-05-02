@@ -35,7 +35,7 @@ spec:
     - name: test-backoffice-health
       # curl image — connects to Caddy:443. Skip TLS verify for self-signed / test.
       # The test validates HTTP 200 from the Caddy→backoffice path, not TLS cert identity.
-      image: "curlimages/curl:8.7.1"
+      image: "curlimages/curl:8.7.1@sha256:19370fb12f2774281640e6419d18f48e4e0df76354d04530302f690f0d5136f2"
       imagePullPolicy: IfNotPresent
       securityContext:
         allowPrivilegeEscalation: false
