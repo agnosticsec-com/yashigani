@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-01T23:47:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-02T01:15:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -369,8 +369,40 @@ data:
           import inject-caddy-verified
         }
       }
+      # ── Open WebUI — catch-all (LAURA-V231-010 fix) ──────────────────────────
+      # Strip any externally-supplied identity headers before auth runs.
+      # Prevents X-Forwarded-User spoofing: an unauthenticated client must
+      # not be able to forge the trusted-email header open-webui consumes.
+      # Mirrors docker/Caddyfile.selfsigned catch-all handle block exactly.
       handle {
-        reverse_proxy open-webui:8080
+        request_header -X-Forwarded-User
+        request_header -X-Forwarded-Name
+        request_header -X-Forwarded-Groups
+
+        # Forward auth: validate session cookie against backoffice.
+        # On 200: copies X-Forwarded-User/Name/Email from auth response.
+        # On 401: redirect to login page.
+        forward_auth https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+          uri /auth/verify
+          copy_headers X-Forwarded-User X-Forwarded-Name X-Forwarded-Email
+
+          @unauthorized status 401
+          handle_response @unauthorized {
+            redir * /login?next={http.request.uri} 302
+          }
+        }
+
+        reverse_proxy open-webui:8080 {
+          header_up X-Forwarded-Proto https
+          header_up X-Real-IP {remote_host}
+          header_up X-Forwarded-User {http.request.header.X-Forwarded-User}
+          header_up X-Forwarded-Name {http.request.header.X-Forwarded-Name}
+          header_up X-Forwarded-Email {http.request.header.X-Forwarded-Email}
+        }
       }
     }
     {{- if .Values.caddy.internalMetricsListener.enabled }}
