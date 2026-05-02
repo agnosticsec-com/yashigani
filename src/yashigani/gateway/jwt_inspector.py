@@ -99,7 +99,7 @@ class JWTInspector:
 
         try:
             signing_key = jwks_client.get_signing_key_from_jwt(token)
-            options = {}
+            options: dict[str, object] = {}
             decode_kwargs: dict = dict(
                 algorithms=self.ALLOWED_ALGORITHMS,
                 options=options,

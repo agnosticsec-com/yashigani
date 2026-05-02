@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from yashigani.kms.base import KSMProvider, KeyNotFoundError, ProviderError, SecretMetadata
 
@@ -26,7 +26,7 @@ class VaultKMSProvider(KSMProvider):
 
     def __init__(self, environment_scope: str = "production") -> None:
         self._environment_scope = environment_scope
-        self._client = None
+        self._client: Optional[Any] = None
         self._vault_addr = os.getenv("VAULT_ADDR", _VAULT_ADDR_DEFAULT)
         self._namespace = os.getenv("VAULT_NAMESPACE")
         self._token = os.getenv("VAULT_TOKEN")
@@ -69,6 +69,12 @@ class VaultKMSProvider(KSMProvider):
         self._client = client
         logger.info("Vault KMS provider initialised: addr=%s", self._vault_addr)
 
+    @property
+    def _authenticated_client(self) -> Any:
+        """Return the hvac client, guaranteed non-None after _ensure_authenticated()."""
+        assert self._client is not None, "Vault client not authenticated"
+        return self._client
+
     def _ensure_authenticated(self) -> None:
         if self._client is None or not self._client.is_authenticated():
             logger.info("Vault token expired — re-authenticating")
@@ -81,7 +87,7 @@ class VaultKMSProvider(KSMProvider):
         self._ensure_authenticated()
         key_name = key.split("/", 1)[-1] if "/" in key else key
         try:
-            resp = self._client.secrets.kv.v2.read_secret_version(
+            resp = self._authenticated_client.secrets.kv.v2.read_secret_version(
                 path=f"{_SECRET_PREFIX}/{key_name}", mount_point=_KV_MOUNT
             )
             return resp["data"]["data"].get("value") or ""
@@ -93,7 +99,7 @@ class VaultKMSProvider(KSMProvider):
         self._ensure_authenticated()
         key_name = key.split("/", 1)[-1] if "/" in key else key
         try:
-            self._client.secrets.kv.v2.create_or_update_secret(
+            self._authenticated_client.secrets.kv.v2.create_or_update_secret(
                 path=f"{_SECRET_PREFIX}/{key_name}",
                 secret={"value": value},
                 mount_point=_KV_MOUNT,
@@ -107,12 +113,12 @@ class VaultKMSProvider(KSMProvider):
         self._ensure_authenticated()
         key_name = key.split("/", 1)[-1] if "/" in key else key
         try:
-            self._client.secrets.kv.v2.create_or_update_secret(
+            self._authenticated_client.secrets.kv.v2.create_or_update_secret(
                 path=f"{_SECRET_PREFIX}/{key_name}",
                 secret={"value": new_value},
                 mount_point=_KV_MOUNT,
             )
-            resp = self._client.secrets.kv.v2.read_secret_version(
+            resp = self._authenticated_client.secrets.kv.v2.read_secret_version(
                 path=f"{_SECRET_PREFIX}/{key_name}", mount_point=_KV_MOUNT
             )
             version = str(resp["data"]["metadata"].get("version", "unknown"))
@@ -127,7 +133,7 @@ class VaultKMSProvider(KSMProvider):
         self._ensure_authenticated()
         key_name = key.split("/", 1)[-1] if "/" in key else key
         try:
-            self._client.secrets.kv.v2.delete_metadata_and_all_versions(
+            self._authenticated_client.secrets.kv.v2.delete_metadata_and_all_versions(
                 path=f"{_SECRET_PREFIX}/{key_name}", mount_point=_KV_MOUNT
             )
             logger.info("Vault token/secret revoked: %s/%s", _SECRET_PREFIX, key_name)
@@ -138,7 +144,7 @@ class VaultKMSProvider(KSMProvider):
         self._ensure_authenticated()
         try:
             list_path = f"{_SECRET_PREFIX}/{prefix}" if prefix else _SECRET_PREFIX
-            resp = self._client.secrets.kv.v2.list_secrets(
+            resp = self._authenticated_client.secrets.kv.v2.list_secrets(
                 path=list_path, mount_point=_KV_MOUNT
             )
             keys: list[str] = resp["data"]["keys"]
@@ -161,7 +167,7 @@ class VaultKMSProvider(KSMProvider):
         self._ensure_authenticated()
         key_name = key.split("/", 1)[-1] if "/" in key else key
         try:
-            self._client.secrets.kv.v2.delete_metadata_and_all_versions(
+            self._authenticated_client.secrets.kv.v2.delete_metadata_and_all_versions(
                 path=f"{_SECRET_PREFIX}/{key_name}", mount_point=_KV_MOUNT
             )
         except Exception as exc:
@@ -170,7 +176,7 @@ class VaultKMSProvider(KSMProvider):
     def health_check(self) -> bool:
         try:
             self._ensure_authenticated()
-            status = self._client.sys.read_health_status(method="GET")
+            status = self._authenticated_client.sys.read_health_status(method="GET")
             initialized = status.get("initialized", False)
             sealed = status.get("sealed", True)
             return bool(initialized and not sealed)

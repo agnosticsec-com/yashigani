@@ -54,6 +54,10 @@ class BackofficeState:
     event_bus: Optional[Any] = None                      # EventBus (v0.9.0)
     response_inspection_pipeline: Optional[Any] = None   # ResponseInspectionPipeline (v1.0)
     model_alias_store: Optional[Any] = None               # ModelAliasStore (v2.3)
+    # SIEM sink runtime config (updated via /admin/audit/siem/config)
+    siem_backend: str = "none"
+    siem_endpoint: Optional[str] = None
+    siem_wazuh_auto_deploy: bool = False
     opa_url: str = "http://policy:8181"
     ollama_url: str = "http://ollama:11434"
     # Admin minimum enforcement

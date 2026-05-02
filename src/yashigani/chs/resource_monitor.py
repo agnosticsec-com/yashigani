@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ class ResourceMonitor:
         ttl_ceiling_seconds: int = TTL_MAX_SECONDS,
         ttl_default_seconds: int = TTL_DEFAULT_SECONDS,
         ollama_base_url: Optional[str] = None,
-        on_critical: Optional[callable] = None,
+        on_critical: Optional[Callable[..., Any]] = None,
     ) -> None:
         self._poll_interval = poll_interval_seconds
         self._ttl_ceiling = ttl_ceiling_seconds
@@ -239,7 +239,7 @@ class ResourceMonitor:
             raise RuntimeError("No HOSTNAME env var — cannot query Docker stats")
 
         try:
-            import requests
+            import requests  # type: ignore[import-untyped]
             resp = requests.get(
                 f"http://localhost/containers/{container_id}/stats",
                 params={"stream": "false"},

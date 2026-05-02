@@ -601,7 +601,7 @@ class IPAllowlistViolationEvent(AuditEvent):
     masking_applied: bool = True
     agent_id: str = ""
     client_ip_hash: str = ""        # SHA-256 prefix — never raw IP
-    allowed_cidrs: list = None      # configured CIDR list (no sensitive data)
+    allowed_cidrs: list = None  # type: ignore[assignment]  # populated in __post_init__
 
     def __post_init__(self):
         if self.allowed_cidrs is None:

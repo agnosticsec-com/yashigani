@@ -103,6 +103,7 @@ async def set_model(body: ModelSelectRequest, session: AdminSession):
     prev_model = pipeline._classifier._model
     pipeline._classifier._model = body.model
 
+    assert state.audit_writer is not None  # set unconditionally at startup
     state.audit_writer.write(_config_event(
         session.account_id, "inspection.model", prev_model, body.model
     ))
@@ -147,6 +148,7 @@ async def set_threshold(body: ThresholdRequest, session: AdminSession):
             detail={"error": "invalid_threshold", "message": str(exc)},
         )
 
+    assert state.audit_writer is not None  # set unconditionally at startup
     state.audit_writer.write(_config_event(
         session.account_id,
         "inspection.threshold",
@@ -190,6 +192,7 @@ async def set_mode(body: ModeRequest, session: AdminSession):
     prev = getattr(pipeline, "_mode", "strict")
     pipeline._mode = body.mode  # type: ignore[attr-defined]
 
+    assert state.audit_writer is not None  # set unconditionally at startup
     state.audit_writer.write(_config_event(
         session.account_id, "inspection.mode", prev, body.mode
     ))

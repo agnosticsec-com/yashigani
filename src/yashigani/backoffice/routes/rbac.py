@@ -6,6 +6,8 @@ Mutations write-through to the RBACStore (Redis db/3) and immediately
 push the updated data document to OPA via opa_push.push_rbac_data().
 OPA push failures are logged and audited but do NOT fail the mutation —
 the store is always considered authoritative.
+
+Last updated: 2026-05-02T09:00:00+01:00
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.rbac.model import RBACGroup, ResourcePattern, RateLimitOverride
 
@@ -123,6 +125,7 @@ def _push(store, admin_account: str) -> None:
             outcome=outcome,
             error=error,
         )
+        assert backoffice_state.audit_writer is not None  # set unconditionally at startup
         backoffice_state.audit_writer.write(event)
     except Exception as exc:
         logger.error("RBAC push audit write failed: %s", exc)
@@ -133,7 +136,7 @@ def _push(store, admin_account: str) -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("/groups")
-async def list_groups(session: AdminSession = require_admin_session):
+async def list_groups(session: AdminSession):
     store = _get_store()
     return {"groups": [_group_to_response(g) for g in store.list_groups()]}
 
@@ -141,7 +144,7 @@ async def list_groups(session: AdminSession = require_admin_session):
 @router.post("/groups", status_code=status.HTTP_201_CREATED)
 async def create_group(
     body: CreateGroupRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     store = _get_store()
 
@@ -164,6 +167,7 @@ async def create_group(
     store.add_group(group)
 
     from yashigani.audit.schema import RBACGroupEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACGroupEvent(
         event_type=EventType.RBAC_GROUP_CREATED,
         group_id=group.id,
@@ -176,7 +180,7 @@ async def create_group(
 
 
 @router.get("/groups/{group_id}")
-async def get_group(group_id: str, session: AdminSession = require_admin_session):
+async def get_group(group_id: str, session: AdminSession):
     store = _get_store()
     group = store.get_group(group_id)
     if group is None:
@@ -188,7 +192,7 @@ async def get_group(group_id: str, session: AdminSession = require_admin_session
 async def update_group(
     group_id: str,
     body: UpdateGroupRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     store = _get_store()
     group = store.get_group(group_id)
@@ -215,6 +219,7 @@ async def update_group(
     store.add_group(group)  # write-through update
 
     from yashigani.audit.schema import RBACGroupEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACGroupEvent(
         event_type=EventType.RBAC_GROUP_UPDATED,
         group_id=group.id,
@@ -227,7 +232,7 @@ async def update_group(
 
 
 @router.delete("/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_group(group_id: str, session: AdminSession = require_admin_session):
+async def delete_group(group_id: str, session: AdminSession):
     store = _get_store()
     group = store.get_group(group_id)
     if group is None:
@@ -235,6 +240,7 @@ async def delete_group(group_id: str, session: AdminSession = require_admin_sess
     store.remove_group(group_id)
 
     from yashigani.audit.schema import RBACGroupEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACGroupEvent(
         event_type=EventType.RBAC_GROUP_DELETED,
         group_id=group_id,
@@ -249,7 +255,7 @@ async def delete_group(group_id: str, session: AdminSession = require_admin_sess
 async def add_member(
     group_id: str,
     body: AddMemberRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     store = _get_store()
     try:
@@ -258,6 +264,7 @@ async def add_member(
         raise HTTPException(status_code=404, detail={"error": "group_not_found"})
 
     from yashigani.audit.schema import RBACMemberEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACMemberEvent(
         event_type=EventType.RBAC_MEMBER_ADDED,
         group_id=group_id,
@@ -272,7 +279,7 @@ async def add_member(
 async def remove_member(
     group_id: str,
     email: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     store = _get_store()
     try:
@@ -281,6 +288,7 @@ async def remove_member(
         raise HTTPException(status_code=404, detail={"error": "group_not_found"})
 
     from yashigani.audit.schema import RBACMemberEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACMemberEvent(
         event_type=EventType.RBAC_MEMBER_REMOVED,
         group_id=group_id,
@@ -291,7 +299,7 @@ async def remove_member(
 
 
 @router.get("/users/{email}/groups")
-async def get_user_groups(email: str, session: AdminSession = require_admin_session):
+async def get_user_groups(email: str, session: AdminSession):
     store = _get_store()
     groups = store.get_user_groups(email)
     return {
@@ -301,7 +309,7 @@ async def get_user_groups(email: str, session: AdminSession = require_admin_sess
 
 
 @router.post("/policy/push")
-async def force_push(session: AdminSession = require_admin_session):
+async def force_push(session: AdminSession):
     store = _get_store()
     _push(store, session.account_id)
     doc = store.to_opa_document()

@@ -20,7 +20,7 @@ with audit_search.py's filtered /export endpoint. Both routers mount at prefix
 is the canonical user-facing export at /admin/audit/export. This unfiltered
 streaming export is now at /admin/audit/export/raw for operator/compliance dumps.
 
-Last updated: 2026-05-02T00:00:00+01:00
+Last updated: 2026-05-02T09:30:00+01:00
 """
 from __future__ import annotations
 
@@ -41,6 +41,13 @@ router = APIRouter()
 
 _VALID_SIEM_TYPES = {"webhook", "splunk_hec", "elastic_opensearch"}
 _VALID_AUTH_HEADERS = {"Authorization", "X-Splunk-HEC-Token", "X-API-Key"}
+
+
+def _audit_writer():
+    """Return the audit writer; assert non-None (set unconditionally at startup)."""
+    writer = backoffice_state.audit_writer
+    assert writer is not None  # set unconditionally at startup
+    return writer
 
 
 # ---------------------------------------------------------------------------
@@ -103,13 +110,7 @@ async def export_audit_log(
     """
     from yashigani.audit.export import AuditLogExporter
 
-    state = backoffice_state
-    if state.audit_writer is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": "audit_log_not_configured"},
-        )
-    exporter = AuditLogExporter(state.audit_writer._config)
+    exporter = AuditLogExporter(_audit_writer()._config)
 
     # AuditLogExporter.export() accepts 'json' (NDJSON) or 'csv'.
     # The route accepts 'ndjson' or 'csv' for user-facing clarity — map here.
@@ -161,8 +162,7 @@ async def export_audit_log(
 @router.get("/masking/scope")
 async def get_masking_scope(session: AdminSession):
     """Return the current masking scope configuration."""
-    state = backoffice_state
-    scope = state.audit_writer._masking_scope
+    scope = _audit_writer()._masking_scope
     return {
         "mask_all_by_default": scope.mask_all_by_default,
         "agent_overrides": scope.agent_overrides,
@@ -174,11 +174,11 @@ async def get_masking_scope(session: AdminSession):
 @router.put("/masking/scope")
 async def set_masking_default(body: MaskingScopeDefaultRequest, session: AdminSession):
     """Update the global masking default (mask all vs mask none by default)."""
-    state = backoffice_state
-    prev = state.audit_writer._masking_scope.mask_all_by_default
-    state.audit_writer._masking_scope.mask_all_by_default = body.mask_all_by_default
+    writer = _audit_writer()
+    prev = writer._masking_scope.mask_all_by_default
+    writer._masking_scope.mask_all_by_default = body.mask_all_by_default
 
-    state.audit_writer.write(_masking_config_event(
+    writer.write(_masking_config_event(
         session.account_id,
         "masking.default",
         str(prev),
@@ -193,9 +193,9 @@ async def set_masking_default(body: MaskingScopeDefaultRequest, session: AdminSe
 
 @router.post("/masking/scope/agent")
 async def set_agent_override(body: AgentOverrideRequest, session: AdminSession):
-    state = backoffice_state
-    state.audit_writer._masking_scope.agent_overrides[body.agent_id] = body.mask
-    state.audit_writer.write(_masking_config_event(
+    writer = _audit_writer()
+    writer._masking_scope.agent_overrides[body.agent_id] = body.mask
+    writer.write(_masking_config_event(
         session.account_id,
         f"masking.agent.{body.agent_id}",
         "",
@@ -206,12 +206,12 @@ async def set_agent_override(body: AgentOverrideRequest, session: AdminSession):
 
 @router.delete("/masking/scope/agent/{agent_id}")
 async def remove_agent_override(agent_id: str, session: AdminSession):
-    state = backoffice_state
-    removed = state.audit_writer._masking_scope.agent_overrides.pop(agent_id, None)
+    writer = _audit_writer()
+    removed = writer._masking_scope.agent_overrides.pop(agent_id, None)
     if removed is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "override_not_found"})
-    state.audit_writer.write(_masking_config_event(
+    writer.write(_masking_config_event(
         session.account_id, f"masking.agent.{agent_id}", str(removed), "removed"
     ))
     return {"status": "ok"}
@@ -223,9 +223,9 @@ async def remove_agent_override(agent_id: str, session: AdminSession):
 
 @router.post("/masking/scope/user")
 async def set_user_override(body: UserOverrideRequest, session: AdminSession):
-    state = backoffice_state
-    state.audit_writer._masking_scope.user_overrides[body.user_handle] = body.mask
-    state.audit_writer.write(_masking_config_event(
+    writer = _audit_writer()
+    writer._masking_scope.user_overrides[body.user_handle] = body.mask
+    writer.write(_masking_config_event(
         session.account_id,
         f"masking.user.{body.user_handle}",
         "",
@@ -236,12 +236,12 @@ async def set_user_override(body: UserOverrideRequest, session: AdminSession):
 
 @router.delete("/masking/scope/user/{handle}")
 async def remove_user_override(handle: str, session: AdminSession):
-    state = backoffice_state
-    removed = state.audit_writer._masking_scope.user_overrides.pop(handle, None)
+    writer = _audit_writer()
+    removed = writer._masking_scope.user_overrides.pop(handle, None)
     if removed is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "override_not_found"})
-    state.audit_writer.write(_masking_config_event(
+    writer.write(_masking_config_event(
         session.account_id, f"masking.user.{handle}", str(removed), "removed"
     ))
     return {"status": "ok"}
@@ -253,9 +253,9 @@ async def remove_user_override(handle: str, session: AdminSession):
 
 @router.post("/masking/scope/component")
 async def set_component_override(body: ComponentOverrideRequest, session: AdminSession):
-    state = backoffice_state
-    state.audit_writer._masking_scope.component_overrides[body.component] = body.mask
-    state.audit_writer.write(_masking_config_event(
+    writer = _audit_writer()
+    writer._masking_scope.component_overrides[body.component] = body.mask
+    writer.write(_masking_config_event(
         session.account_id,
         f"masking.component.{body.component}",
         "",
@@ -266,12 +266,12 @@ async def set_component_override(body: ComponentOverrideRequest, session: AdminS
 
 @router.delete("/masking/scope/component/{component}")
 async def remove_component_override(component: str, session: AdminSession):
-    state = backoffice_state
-    removed = state.audit_writer._masking_scope.component_overrides.pop(component, None)
+    writer = _audit_writer()
+    removed = writer._masking_scope.component_overrides.pop(component, None)
     if removed is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "override_not_found"})
-    state.audit_writer.write(_masking_config_event(
+    writer.write(_masking_config_event(
         session.account_id, f"masking.component.{component}", str(removed), "removed"
     ))
     return {"status": "ok"}
@@ -283,7 +283,6 @@ async def remove_component_override(component: str, session: AdminSession):
 
 @router.get("/siem")
 async def list_siem_targets(session: AdminSession):
-    state = backoffice_state
     targets = [
         {
             "name": t.name,
@@ -293,7 +292,7 @@ async def list_siem_targets(session: AdminSession):
             # auth_value never returned
             "enabled": t.enabled,
         }
-        for t in state.audit_writer._siem_targets
+        for t in _audit_writer()._siem_targets
     ]
     return {"siem_targets": targets, "total": len(targets)}
 
@@ -302,9 +301,9 @@ async def list_siem_targets(session: AdminSession):
 async def add_siem_target(body: SiemTargetRequest, session: AdminSession):
     from yashigani.audit.writer import SiemTarget
 
-    state = backoffice_state
+    writer = _audit_writer()
 
-    existing_names = {t.name for t in state.audit_writer._siem_targets}
+    existing_names = {t.name for t in writer._siem_targets}
     if body.name in existing_names:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -319,9 +318,9 @@ async def add_siem_target(body: SiemTargetRequest, session: AdminSession):
         auth_value=body.auth_value,
         enabled=body.enabled,
     )
-    state.audit_writer.add_siem_target(target)
+    writer.add_siem_target(target)
 
-    state.audit_writer.write(_config_event(
+    writer.write(_config_event(
         session.account_id, "siem_target_added", "", body.name
     ))
     return {"status": "ok", "name": body.name}
@@ -329,15 +328,15 @@ async def add_siem_target(body: SiemTargetRequest, session: AdminSession):
 
 @router.delete("/siem/{name}")
 async def remove_siem_target(name: str, session: AdminSession):
-    state = backoffice_state
-    targets = state.audit_writer._siem_targets
+    writer = _audit_writer()
+    targets = writer._siem_targets
     idx = next((i for i, t in enumerate(targets) if t.name == name), None)
     if idx is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "siem_target_not_found"})
 
     targets.pop(idx)
-    state.audit_writer.write(_config_event(
+    writer.write(_config_event(
         session.account_id, "siem_target_removed", name, ""
     ))
     return {"status": "ok"}
@@ -348,8 +347,8 @@ async def test_siem_target(name: str, session: AdminSession):
     """Send a synthetic test event to the named SIEM target."""
     import json, datetime, urllib.request, urllib.error
 
-    state = backoffice_state
-    targets = state.audit_writer._siem_targets
+    writer = _audit_writer()
+    targets = writer._siem_targets
     target = next((t for t in targets if t.name == name), None)
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -362,7 +361,7 @@ async def test_siem_target(name: str, session: AdminSession):
         "target_name": name,
     })
 
-    body_str, content_type = state.audit_writer._format_for_target(test_payload, target)
+    body_str, content_type = writer._format_for_target(test_payload, target)
 
     # Re-validate target URL at test-fire time — defence-in-depth against a
     # stored target whose URL pre-dates the SSRF validator (YSG-RISK-007.C #3ax).
@@ -398,7 +397,7 @@ async def test_siem_target(name: str, session: AdminSession):
             detail={"error": "siem_test_failed", "message": str(exc)},
         )
 
-    state.audit_writer.write(_config_event(
+    writer.write(_config_event(
         session.account_id, "siem_connection_test", name, f"http_{http_status}"
     ))
     return {"status": "ok", "http_status": http_status}

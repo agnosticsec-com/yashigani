@@ -132,7 +132,7 @@ async def _sse_generator(request: Request) -> AsyncIterator[str]:
             keepalive_task.cancel()
         # Drain the sub_gen to trigger cleanup
         try:
-            await sub_gen.aclose()
+            await sub_gen.aclose()  # type: ignore[attr-defined]
         except Exception:
             pass
 

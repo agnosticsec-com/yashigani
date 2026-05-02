@@ -230,7 +230,7 @@ def _safe_int(value: object, default: int) -> int:
         if not value:
             return default
     try:
-        result = int(value)
+        result = int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return default
 
@@ -374,13 +374,18 @@ def _verify_counter_signature(
 
     try:
         from cryptography.hazmat.primitives.serialization import load_pem_public_key
-        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
+        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, EllipticCurvePublicKey
         from cryptography.hazmat.primitives.hashes import SHA256
         from cryptography.exceptions import InvalidSignature
 
-        counter_public_key = load_pem_public_key(
+        _raw_counter_key = load_pem_public_key(
             _integrity.COUNTER_PUBLIC_KEY_PEM.encode("utf-8")
         )
+        if not isinstance(_raw_counter_key, EllipticCurvePublicKey):
+            raise ValueError(
+                f"Counter public key is not EC: {type(_raw_counter_key).__name__}"
+            )
+        counter_public_key: EllipticCurvePublicKey = _raw_counter_key
         message = _compute_counter_sig_message(payload_bytes, primary_public_key_pem)
         # message is already a 32-byte digest; sign/verify with Prehashed would
         # be cleaner but ECDSA(SHA256()) on a 32-byte input is also correct and

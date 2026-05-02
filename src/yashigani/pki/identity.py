@@ -39,10 +39,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 try:
-    import yaml  # PyYAML — present in base install (pydantic stack pulls it)
+    import yaml  # type: ignore[import-untyped]  # PyYAML — present in base install (pydantic stack pulls it)
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "PyYAML is required for the service manifest. Install with: pip install pyyaml"
@@ -193,9 +193,9 @@ def load_manifest(path: Optional[str] = None) -> Manifest:
     Raises :class:`ManifestError` on missing file, unknown schema version,
     or violated invariants.
     """
-    path = path or os.getenv("YASHIGANI_SERVICE_MANIFEST_PATH", _DEFAULT_MANIFEST_PATH)
+    resolved_path = cast(str, path or os.getenv("YASHIGANI_SERVICE_MANIFEST_PATH", _DEFAULT_MANIFEST_PATH))
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(resolved_path, "r", encoding="utf-8") as fh:
             doc = yaml.safe_load(fh)
     except FileNotFoundError as exc:
         raise ManifestError(f"Service manifest not found at {path}") from exc
@@ -429,7 +429,8 @@ def current_service(
             "refusing to start. Operator must un-revoke and rotate certs."
         )
 
-    secrets_dir_path = Path(secrets_dir or os.getenv("YASHIGANI_INTERNAL_CA_DIR", _DEFAULT_SECRETS_DIR))
+    _resolved_secrets_dir = cast(str, secrets_dir or os.getenv("YASHIGANI_INTERNAL_CA_DIR", _DEFAULT_SECRETS_DIR))
+    secrets_dir_path = Path(_resolved_secrets_dir)
     cert_path = secrets_dir_path / f"{name}_client.crt"
     key_path = secrets_dir_path / f"{name}_client.key"
     # Pattern A for Python ssl: trust anchor is the public root cert (NOT the

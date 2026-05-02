@@ -25,7 +25,7 @@ from typing import Optional, Any
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
-from yashigani.backoffice.middleware import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.backoffice.routes.rbac import _push
 from yashigani.rbac.model import RBACGroup, ResourcePattern
@@ -162,7 +162,7 @@ def _parse_filter_email(filter_str: str) -> Optional[str]:
 @router.get("/Users")
 async def scim_list_users(
     request: Request,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     store = _get_store()
     filter_param = request.query_params.get("filter", "")
@@ -192,7 +192,7 @@ async def scim_list_users(
 @router.post("/Users", status_code=status.HTTP_201_CREATED)
 async def scim_provision_user(
     body: ScimUserRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     Provision a user.  If the user is already a member of groups, this is
@@ -214,7 +214,7 @@ async def scim_provision_user(
 @router.delete("/Users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def scim_deprovision_user(
     user_id: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     Deprovision a user by removing them from all groups.
@@ -236,6 +236,7 @@ async def scim_deprovision_user(
             pass
 
     from yashigani.audit.schema import RBACMemberEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     for group in groups:
         backoffice_state.audit_writer.write(RBACMemberEvent(
             event_type=EventType.RBAC_MEMBER_REMOVED,
@@ -253,7 +254,7 @@ async def scim_deprovision_user(
 # ---------------------------------------------------------------------------
 
 @router.get("/Groups")
-async def scim_list_groups(session: AdminSession = require_admin_session):
+async def scim_list_groups(session: AdminSession):
     store = _get_store()
     return _list_response([_group_resource(g) for g in store.list_groups()])
 
@@ -261,7 +262,7 @@ async def scim_list_groups(session: AdminSession = require_admin_session):
 @router.post("/Groups", status_code=status.HTTP_201_CREATED)
 async def scim_create_group(
     body: ScimGroupRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     try:
         require_feature("scim")
@@ -287,6 +288,7 @@ async def scim_create_group(
     store.add_group(group)
 
     from yashigani.audit.schema import RBACGroupEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACGroupEvent(
         event_type=EventType.RBAC_GROUP_CREATED,
         group_id=group.id,
@@ -302,7 +304,7 @@ async def scim_create_group(
 async def scim_patch_group(
     group_id: str,
     body: ScimPatchRequest,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """
     SCIM PATCH — supports add/remove on the 'members' attribute.
@@ -379,6 +381,7 @@ async def scim_patch_group(
     group = store.get_group(group_id)
 
     from yashigani.audit.schema import RBACGroupEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     if added or removed:
         backoffice_state.audit_writer.write(RBACGroupEvent(
             event_type=EventType.RBAC_GROUP_UPDATED,
@@ -395,7 +398,7 @@ async def scim_patch_group(
 @router.delete("/Groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def scim_delete_group(
     group_id: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     try:
         require_feature("scim")
@@ -410,6 +413,7 @@ async def scim_delete_group(
     store.remove_group(group_id)
 
     from yashigani.audit.schema import RBACGroupEvent, EventType
+    assert backoffice_state.audit_writer is not None  # set unconditionally at startup
     backoffice_state.audit_writer.write(RBACGroupEvent(
         event_type=EventType.RBAC_GROUP_DELETED,
         group_id=group_id,

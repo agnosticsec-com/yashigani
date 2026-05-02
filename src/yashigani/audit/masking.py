@@ -112,7 +112,7 @@ class CredentialMasker:
     # -- Internal ------------------------------------------------------------
 
     def _mask_list(self, lst: list) -> list:
-        result = []
+        result: list = []
         for item in lst:
             if isinstance(item, str):
                 result.append(self.mask_string(item))

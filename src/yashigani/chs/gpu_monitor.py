@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def _try_nvml() -> GPUMetrics:
             pynvml.nvmlShutdown()
             return GPUMetrics(available=False, backend="unavailable")
 
-        devices = []
+        devices: list[dict[str, Any]] = []
         total_util = 0.0
         total_mem_pressure = 0.0
 
@@ -131,7 +131,7 @@ def _try_nvml() -> GPUMetrics:
 def _try_rocm_sysfs() -> GPUMetrics:
     try:
         cards = sorted(_ROCM_DRM_BASE.glob("card*")) if _ROCM_DRM_BASE.exists() else []
-        devices = []
+        devices: list[dict[str, Any]] = []
 
         for card in cards:
             busy_path = card / _ROCM_GPU_BUSY

@@ -274,6 +274,8 @@ def _write_sso_success_audit(
 ) -> None:
     from yashigani.audit.schema import SSOLoginSuccessEvent
     try:
+        if backoffice_state.audit_writer is None:
+            return
         backoffice_state.audit_writer.write(
             SSOLoginSuccessEvent(
                 idp_id=idp_id,
@@ -300,6 +302,8 @@ def _write_sso_failure_audit(
 ) -> None:
     from yashigani.audit.schema import SSOLoginFailureEvent
     try:
+        if backoffice_state.audit_writer is None:
+            return
         backoffice_state.audit_writer.write(
             SSOLoginFailureEvent(
                 idp_id=idp_id,
@@ -327,6 +331,8 @@ def _write_saml_success_audit(
     """V6.8.4 — write SAML-specific success event with AuthnContextClassRef."""
     from yashigani.audit.schema import SAMLLoginSuccessEvent
     try:
+        if backoffice_state.audit_writer is None:
+            return
         backoffice_state.audit_writer.write(
             SAMLLoginSuccessEvent(
                 idp_id=idp_id,
@@ -353,6 +359,8 @@ def _write_saml_failure_audit(
     """V6.8.4 — write SAML-specific failure event."""
     from yashigani.audit.schema import SAMLLoginFailureEvent
     try:
+        if backoffice_state.audit_writer is None:
+            return
         backoffice_state.audit_writer.write(
             SAMLLoginFailureEvent(
                 idp_id=idp_id,
@@ -716,6 +724,7 @@ async def oidc_callback(
         return response
 
     # 2FA not required — issue full session immediately
+    assert backoffice_state.session_store is not None  # set unconditionally at startup
     session = backoffice_state.session_store.create(
         account_id=identity_id,
         account_tier="user",
@@ -874,6 +883,7 @@ async def sso_2fa_verify(request: Request):
     r.delete(f"{_PENDING_2FA_PREFIX}{pending_token}")
 
     client_ip = pending.get("client_ip", "unknown")
+    assert backoffice_state.session_store is not None  # set unconditionally at startup
     session = backoffice_state.session_store.create(
         account_id=identity_id,
         account_tier="user",
@@ -946,8 +956,8 @@ async def saml_acs(idp_id: str, request: Request):
 
     # Build request_data for python3-saml
     form_data = await request.form()
-    saml_response = form_data.get("SAMLResponse", "")
-    relay_state = form_data.get("RelayState", "")
+    saml_response = str(form_data.get("SAMLResponse", ""))
+    relay_state = str(form_data.get("RelayState", ""))
 
     if not saml_response:
         _write_saml_failure_audit(idp_id, idp.name, "missing_saml_response", client_ip)
@@ -1067,6 +1077,7 @@ async def saml_acs(idp_id: str, request: Request):
         return response
 
     # Issue full session — write SAML-specific audit event.
+    assert backoffice_state.session_store is not None  # set unconditionally at startup
     session = backoffice_state.session_store.create(
         account_id=identity_id,
         account_tier="user",

@@ -246,6 +246,9 @@ async def login(body: LoginRequest, request: Request, response: Response):
     await _apply_auth_throttle(client_ip)
 
     state = backoffice_state
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
     try:
         success, record, reason = await state.auth_service.authenticate(
             body.username, body.password, body.totp_code
@@ -387,6 +390,9 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     ASVS V2.1: authenticated password reset without admin intervention.
     """
     state = backoffice_state
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
     record = await state.auth_service.get_account(body.username)
 
     # Same generic error for unknown user or wrong TOTP (prevent enumeration).
@@ -458,6 +464,8 @@ async def verify_session(request: Request):
     Checks both user cookie (__Host-yashigani_session) and admin cookie (__Host-yashigani_admin_session).
     """
     state = backoffice_state
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
     token = request.cookies.get(_USER_SESSION_COOKIE) or request.cookies.get(_SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -491,6 +499,8 @@ async def change_password(
 ):
     """Force-change password. Invalidates ALL sessions (ASVS V2.1.4)."""
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
     # Find account by account_id
     record = await _get_record_by_id(session.account_id)
     if record is None:
@@ -552,6 +562,7 @@ async def provision_totp_start(
     that returned the seed, which was impossible for a first-time client.
     """
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
     record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -589,6 +600,8 @@ async def provision_totp_confirm(
     (protects against time-drift and typo retries).
     """
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
     record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -632,6 +645,8 @@ async def provision_totp(
     (Ava Wave 2 Issue C).
     """
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
     record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -695,6 +710,8 @@ async def stepup_verify(
       no session.
     """
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
 
     # Resolve the admin record to get the TOTP secret.
     admin_record = await state.auth_service.get_account_by_id(session.account_id)

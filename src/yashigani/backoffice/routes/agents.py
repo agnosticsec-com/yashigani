@@ -17,14 +17,14 @@ Routes:
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-04-30T04:50:00+01:00
+Last updated: 2026-05-02T09:00:00+01:00
 """
 from __future__ import annotations
 
 import logging
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, status
@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 # ---------------------------------------------------------------------------
 _HTML_TAG_RE = re.compile(r"(?i)(?:javascript:|data:|vbscript:|<[a-zA-Z/!])")
 
-from yashigani.backoffice.middleware import require_admin_session, AdminSession, require_stepup_admin_session, StepUpAdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -480,7 +480,7 @@ def _push_opa() -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("/admin/agents", response_model=list[AgentResponse])
-async def list_agents(session: AdminSession = require_admin_session):
+async def list_agents(session: AdminSession):
     registry = _get_registry()
     return [_to_response(a) for a in registry.list_all()]
 
@@ -488,7 +488,7 @@ async def list_agents(session: AdminSession = require_admin_session):
 @router.post("/admin/agents", response_model=AgentRegisterResponse, status_code=201)
 async def register_agent(
     body: AgentRegisterRequest,
-    session: StepUpAdminSession = require_stepup_admin_session,
+    session: StepUpAdminSession,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
@@ -562,7 +562,7 @@ async def register_agent(
 @router.get("/admin/agents/{agent_id}", response_model=AgentResponse)
 async def get_agent(
     agent_id: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     registry = _get_registry()
     agent = registry.get(agent_id)
@@ -575,7 +575,7 @@ async def get_agent(
 async def update_agent(
     agent_id: str,
     body: AgentUpdateRequest,
-    session: StepUpAdminSession = require_stepup_admin_session,
+    session: StepUpAdminSession,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
@@ -586,7 +586,7 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     # Build update kwargs — only include fields actually provided
-    updates = {}
+    updates: dict[str, Any] = {}
     changed_fields = []
     if body.name is not None:
         updates["name"] = body.name
@@ -632,8 +632,8 @@ async def update_agent(
 @router.delete("/admin/agents/{agent_id}", status_code=204)
 async def deactivate_agent(
     agent_id: str,
-    body: AgentDeactivateRequest = None,
-    session: StepUpAdminSession = require_stepup_admin_session,
+    session: StepUpAdminSession,
+    body: Optional[AgentDeactivateRequest] = None,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
@@ -665,7 +665,7 @@ async def deactivate_agent(
 @router.post("/admin/agents/{agent_id}/token/rotate", response_model=AgentRotateResponse)
 async def rotate_agent_token(
     agent_id: str,
-    session: StepUpAdminSession = require_stepup_admin_session,
+    session: StepUpAdminSession,
 ):
     registry = _get_registry()
     audit = backoffice_state.audit_writer
@@ -699,7 +699,7 @@ async def rotate_agent_token(
 @router.get("/admin/agents/{agent_id}/quickstart", response_model=AgentQuickStartResponse)
 async def get_agent_quickstart(
     agent_id: str,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """Return copy-paste integration snippets for the agent detail page.
 

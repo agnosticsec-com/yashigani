@@ -152,8 +152,8 @@ def create_backend() -> Optional[ContainerBackend]:
     """
     # Try Docker SDK first
     try:
-        import docker
-        client = docker.from_env()
+        import docker  # type: ignore[import-untyped]
+        client = docker.from_env()  # type: ignore[attr-defined]
         client.ping()
         logger.info("Pool Manager: Docker SDK connected")
         return ContainerBackend(client, "docker")

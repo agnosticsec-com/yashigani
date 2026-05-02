@@ -60,7 +60,7 @@ import logging
 import os
 import time
 from threading import Lock
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Coroutine, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
@@ -237,7 +237,7 @@ def _reset_cache_for_tests() -> None:
         _LAST_GOOD_LOAD_AT = None
 
 
-def require_spiffe_id(path: str) -> Callable[[Request], str]:
+def require_spiffe_id(path: str) -> Callable[[Request], Coroutine[Any, Any, str]]:
     """Return a FastAPI dependency that enforces the SPIFFE URI ACL for *path*.
 
     Usage::
