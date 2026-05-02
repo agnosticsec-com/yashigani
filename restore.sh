@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-02T06:30:00+01:00 (fix: check_restore_preflight UID check accepts Podman rootless subuid mapping; mirrors install.sh fix)
+# Last updated: 2026-05-02T12:00:00+01:00 (fix RESTORE-1/2/3: unshare chmod fix, .env postgres password sync, secrets-dir ownership reset)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -391,6 +391,35 @@ restore_backup() {
   if [[ -d "${backup_dir}/secrets" ]]; then
     log_info "Restoring secrets..."
     mkdir -p "${WORK_DIR}/docker/secrets"
+
+    # RESTORE-3 (v2.23.1 gate): the secrets dir may be owned by a subuid-range UID
+    # left from a previous Podman rootless install (e.g. UID 363144 = container UID
+    # 1001 in the PKI issuer's namespace). If the current user does not own it,
+    # `chmod 751` below will fail with EPERM → restore aborts before touching any
+    # secrets. Fix: if Podman rootless mode AND the dir is not owned by the current
+    # user, use `podman unshare chown` (which maps the installer's UID to 0 inside
+    # the user namespace, giving it root-equivalent privilege over the subuid range).
+    # This mirrors the stale-install guard in install.sh.
+    # Never sudo here — restore.sh runs zero sudo (P0-14).
+    local _secrets_dir_owner
+    _secrets_dir_owner=$(stat -c '%u' "${WORK_DIR}/docker/secrets" 2>/dev/null || echo "")
+    if [[ -n "$_secrets_dir_owner" && "$_secrets_dir_owner" != "$(id -u)" ]]; then
+      if [[ "${RUNTIME}" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+        log_info "Secrets dir owned by UID ${_secrets_dir_owner} (not current user $(id -u)) — resetting via podman unshare"
+        # Chown dir to UID 0 inside the user namespace = current user on the host.
+        if ! podman unshare chown 0:0 "${WORK_DIR}/docker/secrets" 2>/dev/null; then
+          log_warn "podman unshare chown on secrets dir failed — chmod 751 may fail; pre-run: sudo chown $(id -un):$(id -gn) '${WORK_DIR}/docker/secrets'"
+        fi
+        # Also reset any existing files so cp -rp can overwrite them.
+        find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
+          -exec podman unshare chmod u+w {} \; 2>/dev/null || true
+      else
+        log_warn "Secrets dir owned by UID ${_secrets_dir_owner} (not current user $(id -u))."
+        log_warn "  chmod 751 will fail unless you fix it first:"
+        log_warn "    sudo chown $(id -un):$(id -gn) '${WORK_DIR}/docker/secrets'"
+      fi
+    fi
+
     # RC-6 (v2.23.1): secrets directory must be world-traversable (0751) so
     # container processes running as non-root UIDs (pgbouncer=70, redis=999,
     # etc.) can access individual files within it. restore.sh runs with
@@ -552,12 +581,27 @@ _pki_chown_client_keys() {
     fi
     case "$_chown_mode" in
       direct)
-        chown "${_uid}:${_uid}" "$_keyfile" \
-          || log_warn "chown failed on ${_svc} key — container may fail to start"
+        if ! chown "${_uid}:${_uid}" "$_keyfile"; then
+          log_warn "chown failed on ${_svc} key — container may fail to start"
+        else
+          chmod 0600 "$_keyfile" || log_warn "chmod 0600 failed on ${_svc} key (not fatal for direct mode)"
+        fi
         ;;
       unshare)
-        podman unshare chown "${_uid}:${_uid}" "$_keyfile" \
-          || log_warn "podman unshare chown failed on ${_svc} key — container may fail to start"
+        # RESTORE-1 (v2.23.1 gate): after `podman unshare chown ${_uid}:${_uid}`,
+        # the file is owned by a subuid-range UID on the host. A subsequent
+        # host-side `chmod` fails with EPERM because the calling user (su/UID 1004)
+        # does not own the file. Fix: do the chmod INSIDE the podman unshare
+        # namespace (where the chowned UID maps to 0 = the invoking user), alongside
+        # the chown. This matches the pattern used in install.sh's _do_chown.
+        local _key_basename
+        _key_basename=$(basename "$_keyfile")
+        local _key_dir
+        _key_dir=$(dirname "$_keyfile")
+        if ! podman unshare sh -c \
+              "chown ${_uid}:${_uid} '${_keyfile}' && chmod 0600 '${_keyfile}'" 2>/dev/null; then
+          log_warn "podman unshare chown/chmod failed on ${_svc} key — container may fail to start"
+        fi
         ;;
       warn)
         log_warn "Non-root Docker: cannot chown ${_svc} key to UID ${_uid} without sudo."
@@ -568,16 +612,20 @@ _pki_chown_client_keys() {
   done
 
   # Reapply canonical cert modes: certs are public material (0644); keys are 0600.
+  # Note: for 'unshare' mode, service keys were already chowned+chmod'd above
+  # inside the user namespace. These host-side find commands will fail silently
+  # on files owned by subuid-range UIDs (EPERM) — that is expected and harmless
+  # because the correct mode was already applied inside unshare.
   find "${_secrets_dir}" -maxdepth 1 -type f \
     \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
-    -exec chmod 0644 {} \;
+    -exec chmod 0644 {} \; 2>/dev/null || true
   find "${_secrets_dir}" -maxdepth 1 -type f -name '*.key' \
-    -exec chmod 0600 {} \;
+    -exec chmod 0600 {} \; 2>/dev/null || true
   # CA private keys are even tighter — only the PKI issuer (root/UID1001) reads
   # them. 0400 prevents accidental overwrite even by the owning UID.
   for _ca_key in ca_root.key ca_intermediate.key; do
     if [[ -f "${_secrets_dir}/${_ca_key}" ]]; then
-      chmod 0400 "${_secrets_dir}/${_ca_key}"
+      chmod 0400 "${_secrets_dir}/${_ca_key}" 2>/dev/null || true
     fi
   done
 
@@ -764,6 +812,49 @@ _restore_pg_role_password() {
     return 1
   fi
   log_success "Role ${_db_user} password updated on live cluster"
+
+  # RESTORE-2 (v2.23.1 gate): sync .env POSTGRES_PASSWORD + POSTGRES_PASSWORD_URLENC
+  # to match the restored postgres_password secret.
+  #
+  # Root cause: install.sh generates an initial password, writes it to both .env and
+  # docker/secrets/postgres_password. bootstrap_postgres.py (run by install.sh step 11)
+  # regenerates the password and writes only to docker/secrets/postgres_password — .env
+  # is NOT updated. After a restore, docker/secrets/postgres_password holds the backup's
+  # final password but .env still has the initial install-time password. The backoffice
+  # and gateway containers read YASHIGANI_DB_DSN from .env (which uses
+  # POSTGRES_PASSWORD_URLENC), while pgbouncer's auto-generated userlist.txt reads from
+  # the secrets file. These diverge → auth fails on every connection after compose up.
+  #
+  # Fix: after ALTER ROLE succeeds (live cluster authenticated against the secret),
+  # update POSTGRES_PASSWORD and POSTGRES_PASSWORD_URLENC in .env to match.
+  # URL-encode using Python (always available in backoffice image; or system python3).
+  local _env_file="${WORK_DIR}/docker/.env"
+  if [[ -f "$_env_file" ]]; then
+    local _pw_urlenc
+    _pw_urlenc=$(python3 -c \
+      "import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1],safe=''))" \
+      "$_new_pw" 2>/dev/null || echo "")
+    if [[ -n "$_pw_urlenc" ]]; then
+      # Update or append POSTGRES_PASSWORD
+      if grep -q "^POSTGRES_PASSWORD=" "$_env_file"; then
+        sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${_new_pw}|" "$_env_file"
+      else
+        printf 'POSTGRES_PASSWORD=%s\n' "$_new_pw" >> "$_env_file"
+      fi
+      # Update or append POSTGRES_PASSWORD_URLENC
+      if grep -q "^POSTGRES_PASSWORD_URLENC=" "$_env_file"; then
+        sed -i "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${_pw_urlenc}|" "$_env_file"
+      else
+        printf 'POSTGRES_PASSWORD_URLENC=%s\n' "$_pw_urlenc" >> "$_env_file"
+      fi
+      log_success ".env POSTGRES_PASSWORD[_URLENC] synced to match restored secret (RESTORE-2 fix)"
+    else
+      log_warn "Could not URL-encode postgres password — .env POSTGRES_PASSWORD_URLENC not updated."
+      log_warn "  Manual fix: update POSTGRES_PASSWORD and POSTGRES_PASSWORD_URLENC in ${_env_file}"
+      log_warn "  to match: $(cat "${_secret_file}" 2>/dev/null || echo '<read docker/secrets/postgres_password>')"
+    fi
+  fi
+
   # Note: ALTER ROLE on a missing role would have errored out via
   # ON_ERROR_STOP=1 above. A loopback verify (psql -h 127.0.0.1) would NOT
   # actually validate the new password because pg_hba.conf has
