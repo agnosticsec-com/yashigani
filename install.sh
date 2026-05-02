@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T01:30:00+01:00 (fix: BUG-1 generate_secrets idempotent per-secret for caddy_internal_hmac; BUG-2 chmod 0640 inside container for non-root installer)
+# last-updated: 2026-05-02T06:15:00+01:00 (fix: preflight check_installer_preflight UID check for Podman rootless subuid mapping; BUG-1 generate_secrets idempotent; BUG-2 chmod 0640)
+# 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
+# 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
 # =============================================================================
@@ -116,7 +118,9 @@ OPTIONS
   --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
   --agent-bundles  BUNDLES               Comma-separated opt-in agents: langflow,letta,openclaw (or "all")
-  --with-openwebui                        Include Open WebUI chat interface
+  --with-openwebui                        Enable optional integration with the open-source Open WebUI project
+                                          (image pulled unmodified from ghcr.io/open-webui/open-webui;
+                                           Open WebUI is governed by its own licence terms)
   --with-internal-ca                      Include Smallstep CA for internal service-to-service TLS
   --wazuh                                 Install Wazuh SIEM (manager + indexer + dashboard)
   --offline                               Air-gapped mode (no ACME, no image pulls)
@@ -1051,8 +1055,30 @@ check_installer_preflight() {
   # PKI issuer and backoffice services run as UID 1001 inside containers and
   # write to the bind-mounted secrets dir.  The installer no longer runs chown
   # via sudo — the operator must do this once before running the installer.
+  #
+  # Podman rootless: container UID 1001 maps to host UID (subuid_start + 1000).
+  # `podman unshare chown 1001:1001` is the correct operator command — the
+  # resulting host UID is the subuid-remapped value, not literal 1001. We
+  # accept either literal 1001 (Docker / rootful) or the subuid-mapped value
+  # (Podman rootless non-root install).
   local _bm_failed=0
   local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Compute the expected host UID for container UID 1001.
+  # Podman rootless: read /etc/subuid for the current user and add 1000.
+  # Docker / rootful: literal 1001.
+  local _expected_uid="1001"
+  local _is_rootless_podman=false
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]] && [[ "$(id -u)" != "0" ]]; then
+    _is_rootless_podman=true
+    local _subuid_start
+    _subuid_start="$(awk -F: -v u="$(id -un)" '$1==u{print $2; exit}' /etc/subuid 2>/dev/null || echo "")"
+    if [[ -n "$_subuid_start" ]]; then
+      # container UID 1001 = subuid_start + 1001 - 1
+      _expected_uid=$(( _subuid_start + 1001 - 1 ))
+    fi
+  fi
+
   for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
     if [[ ! -d "$_bm_dir" ]]; then
       _bm_failed=1
@@ -1061,7 +1087,7 @@ check_installer_preflight() {
     # shellcheck disable=SC2012
     local _uid
     _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
-    if [[ "$_uid" != "1001" ]]; then
+    if [[ "$_uid" != "1001" && "$_uid" != "$_expected_uid" ]]; then
       _bm_failed=1
       break
     fi
@@ -1069,8 +1095,17 @@ check_installer_preflight() {
 
   if [[ "$_bm_failed" -eq 1 ]]; then
     printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
-    printf "  mkdir -p data certs logs\n"
-    printf "  sudo chown -R 1001:1001 data certs logs\n\n"
+    if [[ "$_is_rootless_podman" == "true" ]]; then
+      printf "  cd %s/docker\n" "${WORK_DIR}"
+      printf "  mkdir -p data certs logs\n"
+      printf "  podman unshare chown 1001:1001 data certs logs\n\n"
+      printf "(Podman rootless: 'podman unshare chown' maps container UID 1001 to the\n"
+      printf " correct host subuid. Do NOT use 'sudo chown' for rootless Podman.)\n\n"
+    else
+      printf "  cd %s/docker\n" "${WORK_DIR}"
+      printf "  mkdir -p data certs logs\n"
+      printf "  sudo chown -R 1001:1001 data certs logs\n\n"
+    fi
     printf "Then re-run this installer.\n\n"
     exit 1
   fi
@@ -4293,11 +4328,13 @@ main() {
       COMPOSE_PROFILES+=("openwebui")
       log_success "Open WebUI enabled (--with-openwebui flag)"
     elif [[ "$NON_INTERACTIVE" != "true" ]]; then
-      printf "\n${C_BOLD}Include Open WebUI chat interface?${C_RESET}\n"
-      printf "    Provides a browser-based AI chat UI for end users.\n"
-      printf "    Without it, Yashigani runs as API-only (gateway + admin panel).\n"
-      printf "    ${C_YELLOW}Can be added later from the admin panel.${C_RESET}\n"
-      printf "\n${C_BOLD}  Include Open WebUI? [y/N]: ${C_RESET}"
+      printf "\n${C_BOLD}Enable integration with the open-source Open WebUI project?${C_RESET}\n"
+      printf "    Pulls the upstream image (ghcr.io/open-webui/open-webui) and deploys it\n"
+      printf "    unmodified to provide a browser-based chat UI for your end users. Open\n"
+      printf "    WebUI is governed by its own licence terms; review them before enabling.\n"
+      printf "    Without this, Yashigani runs as API-only (gateway + admin panel).\n"
+      printf "    ${C_YELLOW}Can be enabled later from the admin panel.${C_RESET}\n"
+      printf "\n${C_BOLD}  Enable Open WebUI integration? [y/N]: ${C_RESET}"
       local owui_choice
       read -r owui_choice </dev/tty 2>/dev/null || owui_choice="n"
       if [[ "${owui_choice,,}" == "y" || "${owui_choice,,}" == "yes" ]]; then
