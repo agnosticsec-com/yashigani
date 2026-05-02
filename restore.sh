@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-01T17:45:00+01:00 (fix: P0-14 pre-flight docker group + remove sudo from restore body; mirrors P0-12 in install.sh)
+# Last updated: 2026-05-02T06:30:00+01:00 (fix: check_restore_preflight UID check accepts Podman rootless subuid mapping; mirrors install.sh fix)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -138,7 +138,23 @@ check_restore_preflight() {
   # PKI issuer and backoffice services run as UID 1001 inside containers and
   # write to bind-mounted host dirs.  restore.sh no longer runs chown via sudo —
   # the operator must do this once before running the restore.
+  #
+  # Podman rootless: container UID 1001 maps to host UID (subuid_start + 1000).
+  # `podman unshare chown 1001:1001` is the correct operator command; the
+  # resulting host UID is the subuid-remapped value, not literal 1001. Accept
+  # either literal 1001 (Docker / rootful) or the subuid-remapped UID.
   local _bm_failed=0
+  local _expected_uid="1001"
+  local _is_rootless_podman=false
+  if [[ "${RUNTIME}" == "podman" ]] && [[ "$(id -u)" != "0" ]]; then
+    _is_rootless_podman=true
+    local _subuid_start
+    _subuid_start="$(awk -F: -v u="$(id -un)" '$1==u{print $2; exit}' /etc/subuid 2>/dev/null || echo "")"
+    if [[ -n "$_subuid_start" ]]; then
+      _expected_uid=$(( _subuid_start + 1001 - 1 ))
+    fi
+  fi
+
   for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
     if [[ ! -d "$_bm_dir" ]]; then
       _bm_failed=1
@@ -147,7 +163,7 @@ check_restore_preflight() {
     # shellcheck disable=SC2012
     local _uid
     _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
-    if [[ "$_uid" != "1001" ]]; then
+    if [[ "$_uid" != "1001" && "$_uid" != "$_expected_uid" ]]; then
       _bm_failed=1
       break
     fi
@@ -155,8 +171,15 @@ check_restore_preflight() {
 
   if [[ "$_bm_failed" -eq 1 ]]; then
     printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
-    printf "  mkdir -p docker/data docker/certs docker/logs\n"
-    printf "  sudo chown -R 1001:1001 docker/data docker/certs docker/logs\n\n"
+    if [[ "$_is_rootless_podman" == "true" ]]; then
+      printf "  cd %s\n" "${WORK_DIR}"
+      printf "  mkdir -p docker/data docker/certs docker/logs\n"
+      printf "  podman unshare chown 1001:1001 docker/data docker/certs docker/logs\n\n"
+      printf "(Podman rootless: use 'podman unshare chown', not 'sudo chown -R 1001:1001'.)\n\n"
+    else
+      printf "  mkdir -p docker/data docker/certs docker/logs\n"
+      printf "  sudo chown -R 1001:1001 docker/data docker/certs docker/logs\n\n"
+    fi
     printf "Then re-run this restore script.\n\n"
     exit 1
   fi
