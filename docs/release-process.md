@@ -136,14 +136,16 @@ The script:
 Run this one-liner before cutting any release tag. Every line must exit 0.
 
 ```sh
-SHA=ec46ab4
+# Artifact dir names embed the full SHA. Use glob to match regardless of
+# whether SHA is short or full. Resolve with git rev-parse first.
+SHA=$(git rev-parse ec46ab4)
 VER=2.23.1
 BASE="/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VER}/ci-evidence/${SHA}"
 
-grep -q "Unit tests: PASS" "${BASE}/unit-tests-py3.12-${SHA}/verdict-3.12.txt" \
-  && grep -q "Unit tests: PASS" "${BASE}/unit-tests-py3.13-${SHA}/verdict-3.13.txt" \
-  && grep -q "Type check: PASS" "${BASE}/mypy-${SHA}/mypy-summary.txt" \
-  && grep -q "Opengrep: PASS"   "${BASE}/opengrep-${SHA}/opengrep-summary.txt" \
+grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \
+  && grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.13-*/verdict-3.13.txt \
+  && grep -q "Type check: PASS" "${BASE}"/mypy-*/mypy-summary.txt \
+  && grep -q "Opengrep: PASS"   "${BASE}"/opengrep-*/opengrep-summary.txt \
   && echo "ALL CI GATES PASS — safe to tag" \
   || echo "FAIL — one or more gates not green"
 ```

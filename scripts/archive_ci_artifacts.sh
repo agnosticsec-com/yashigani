@@ -32,12 +32,15 @@
 #   └── archive-manifest.txt          # summary of all downloaded artifacts
 #
 # Pre-flight grep-check (run before tagging a release):
-#   SHA=ec46ab4 VER=2.23.1
+# NOTE: artifact dirs embed the full SHA; use glob to match regardless of
+# whether COMMIT_SHA is short or full.
+#
+#   SHA=$(git rev-parse ec46ab4) VER=2.23.1
 #   BASE=/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VER}/ci-evidence/${SHA}
-#   grep -q "Unit tests: PASS" "${BASE}/unit-tests-py3.12-${SHA}/verdict-3.12.txt" \
-#     && grep -q "Unit tests: PASS" "${BASE}/unit-tests-py3.13-${SHA}/verdict-3.13.txt" \
-#     && grep -q "Type check: PASS" "${BASE}/mypy-${SHA}/mypy-summary.txt" \
-#     && grep -q "Opengrep: PASS"   "${BASE}/opengrep-${SHA}/opengrep-summary.txt" \
+#   grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \
+#     && grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.13-*/verdict-3.13.txt \
+#     && grep -q "Type check: PASS" "${BASE}"/mypy-*/mypy-summary.txt \
+#     && grep -q "Opengrep: PASS"   "${BASE}"/opengrep-*/opengrep-summary.txt \
 #     && echo "ALL CI GATES PASS — safe to tag" \
 #     || echo "FAIL — one or more gates not green"
 
@@ -52,14 +55,27 @@ if [[ $# -lt 2 ]]; then
     exit 1
 fi
 
-COMMIT_SHA="$1"
+COMMIT_SHA_INPUT="$1"
 VERSION="$2"
+
+# ---------------------------------------------------------------------------
+# Resolve full SHA (GitHub artifact names embed the full 40-char SHA)
+# ---------------------------------------------------------------------------
+# Accept either short (7+) or full (40) SHA. Expand to full via git rev-parse
+# so artifact directory matching works regardless of input length.
+COMMIT_SHA=$(git rev-parse "${COMMIT_SHA_INPUT}" 2>/dev/null) || {
+    echo "[WARN] git rev-parse failed for '${COMMIT_SHA_INPUT}' — using as-is" >&2
+    COMMIT_SHA="${COMMIT_SHA_INPUT}"
+}
+COMMIT_SHA_SHORT="${COMMIT_SHA:0:7}"
+echo "[info] Commit: ${COMMIT_SHA} (short: ${COMMIT_SHA_SHORT})"
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+# Archive directory uses the full SHA to match artifact names from CI.
 ARCHIVE_BASE="/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VERSION}/ci-evidence/${COMMIT_SHA}"
-DOWNLOAD_TMP="/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VERSION}/ci-evidence/.tmp-download-${COMMIT_SHA}"
+DOWNLOAD_TMP="/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VERSION}/ci-evidence/.tmp-download-${COMMIT_SHA_SHORT}"
 
 # ---------------------------------------------------------------------------
 # Preflight
@@ -233,32 +249,36 @@ GATE_PASS=true
 
 check_verdict() {
     local label="$1"
-    local path="$2"
-    local pattern="$3"
-    if [[ -f "${path}" ]] && grep -q "${pattern}" "${path}"; then
-        echo "  [PASS] ${label}"
+    local glob_pattern="$2"
+    local grep_pattern="$3"
+    # Use glob expansion — artifact dirs embed full SHA which may differ from
+    # the COMMIT_SHA variable if the caller passed a short SHA that resolved.
+    local match
+    match=$(find "${ARCHIVE_BASE}" -path "${glob_pattern}" -type f 2>/dev/null | head -1)
+    if [[ -n "${match}" ]] && grep -q "${grep_pattern}" "${match}"; then
+        echo "  [PASS] ${label} (${match##${ARCHIVE_BASE}/})"
     else
         echo "  [FAIL] ${label} — file not found or verdict not PASS"
-        echo "         Expected pattern: ${pattern}"
-        echo "         Path: ${path}"
+        echo "         Expected pattern: ${grep_pattern}"
+        echo "         Expected glob: ${glob_pattern}"
         GATE_PASS=false
     fi
 }
 
 check_verdict "Unit tests (py3.12)" \
-    "${ARCHIVE_BASE}/unit-tests-py3.12-${COMMIT_SHA}/verdict-3.12.txt" \
+    "${ARCHIVE_BASE}/unit-tests-py3.12-*/verdict-3.12.txt" \
     "Unit tests: PASS"
 
 check_verdict "Unit tests (py3.13)" \
-    "${ARCHIVE_BASE}/unit-tests-py3.13-${COMMIT_SHA}/verdict-3.13.txt" \
+    "${ARCHIVE_BASE}/unit-tests-py3.13-*/verdict-3.13.txt" \
     "Unit tests: PASS"
 
 check_verdict "Type check (mypy)" \
-    "${ARCHIVE_BASE}/mypy-${COMMIT_SHA}/mypy-summary.txt" \
+    "${ARCHIVE_BASE}/mypy-*/mypy-summary.txt" \
     "Type check: PASS"
 
 check_verdict "Opengrep" \
-    "${ARCHIVE_BASE}/opengrep-${COMMIT_SHA}/opengrep-summary.txt" \
+    "${ARCHIVE_BASE}/opengrep-*/opengrep-summary.txt" \
     "Opengrep: PASS"
 
 echo ""
@@ -270,10 +290,10 @@ if [[ "${GATE_PASS}" == "true" ]]; then
     cat <<ONELINER
   SHA=${COMMIT_SHA} VER=${VERSION}
   BASE=/Users/max/Documents/Claude/Internal/Compliance/yashigani/v\${VER}/ci-evidence/\${SHA}
-  grep -q "Unit tests: PASS" "\${BASE}/unit-tests-py3.12-\${SHA}/verdict-3.12.txt" \\
-    && grep -q "Unit tests: PASS" "\${BASE}/unit-tests-py3.13-\${SHA}/verdict-3.13.txt" \\
-    && grep -q "Type check: PASS" "\${BASE}/mypy-\${SHA}/mypy-summary.txt" \\
-    && grep -q "Opengrep: PASS"   "\${BASE}/opengrep-\${SHA}/opengrep-summary.txt" \\
+  grep -q "Unit tests: PASS" "\${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \\
+    && grep -q "Unit tests: PASS" "\${BASE}"/unit-tests-py3.13-*/verdict-3.13.txt \\
+    && grep -q "Type check: PASS" "\${BASE}"/mypy-*/mypy-summary.txt \\
+    && grep -q "Opengrep: PASS"   "\${BASE}"/opengrep-*/opengrep-summary.txt \\
     && echo "ALL CI GATES PASS — safe to tag" \\
     || echo "FAIL — one or more gates not green"
 ONELINER
