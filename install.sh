@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-01T15:30:00+01:00 (fix: P0-12 docker-group preflight + bind-mount ownership preflight + remove all sudo from installer body; P0-13 chmod 600 on all TOTP + secret files; v2.23.2)
+# last-updated: 2026-05-02T01:30:00+01:00 (fix: BUG-1 generate_secrets idempotent per-secret for caddy_internal_hmac; BUG-2 chmod 0640 inside container for non-root installer)
 set -euo pipefail
 
 # =============================================================================
@@ -2902,6 +2902,40 @@ generate_secrets() {
     GEN_WAZUH_API_PASSWORD="$(cat "${secrets_dir}/wazuh_api_password" 2>/dev/null || echo "")"
     GEN_WAZUH_DASHBOARD_PASSWORD="$(cat "${secrets_dir}/wazuh_dashboard_password" 2>/dev/null || echo "")"
 
+    # BUG-1 (v2.23.1): caddy_internal_hmac was silently skipped on the upgrade
+    # path because this early-return block never reached the generation code below.
+    # A partial install (e.g. K8s first, then Docker) leaves postgres_password in
+    # .env but omits caddy_internal_hmac, so the gateway cannot start.
+    # Fix: check + generate each new secret independently, regardless of whether
+    # core secrets (postgres/redis) already exist.
+    local hmac_file="${secrets_dir}/caddy_internal_hmac"
+    if [[ ! -s "$hmac_file" ]] || [[ "${REINSTALL:-false}" == "true" ]]; then
+      local _hmac_secret
+      if command -v openssl >/dev/null 2>&1; then
+        _hmac_secret="$(openssl rand -hex 32)"
+      elif command -v python3 >/dev/null 2>&1; then
+        _hmac_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+      else
+        log_error "Cannot generate caddy_internal_hmac: neither openssl nor python3 found"
+        return 1
+      fi
+      printf "%s" "$_hmac_secret" > "$hmac_file"
+      chmod 0440 "$hmac_file"
+      log_info "Generated caddy_internal_hmac → ${hmac_file} (mode 0440, upgrade path)"
+    else
+      log_info "caddy_internal_hmac already present — preserving (use REINSTALL=true to rotate)"
+    fi
+    # Always sync CADDY_INTERNAL_HMAC into .env (may be absent if secret was just created).
+    local _hmac_val
+    _hmac_val="$(cat "$hmac_file")"
+    if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
+      local tmp_env; tmp_env="$(mktemp)"
+      sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
+      mv "$tmp_env" "$env_file"
+    else
+      echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+    fi
+
     return 0
   fi
 
@@ -3810,14 +3844,28 @@ _pki_chown_client_keys() {
   local _secrets_dir="${WORK_DIR}/docker/secrets"
 
   # Helper: chown a single file to <uid>:<uid> using the active strategy.
+  # Optional 4th arg: _extra_chmod — an octal mode string (e.g. "0640") to
+  # apply AFTER chown. For docker_run and podman_run modes the chmod is
+  # performed INSIDE the container alongside the chown (BUG-2 fix: a non-root
+  # host caller cannot chmod a file it does not own after the in-container
+  # chown transfers ownership to a different UID). For direct/unshare modes the
+  # caller IS root (direct) or owns the file in the mapped namespace (unshare
+  # with root in container), so a host-side chmod is safe; we still do it
+  # inside the container for direct consistency.
   # On error: log_error + propagate non-zero (fail-closed, SOP 1).
   _do_chown() {
-    local _uid="$1" _file="$2" _label="$3"
+    local _uid="$1" _file="$2" _label="$3" _extra_chmod="${4:-}"
     case "$_chown_mode" in
       direct)
         if ! chown "${_uid}:${_uid}" "$_file"; then
           log_error "chown ${_uid}:${_uid} failed on ${_label} — aborting (fix file ownership manually)"
           return 1
+        fi
+        if [[ -n "$_extra_chmod" ]]; then
+          if ! chmod "$_extra_chmod" "$_file"; then
+            log_error "chmod ${_extra_chmod} failed on ${_label} — aborting"
+            return 1
+          fi
         fi
         ;;
       unshare)
@@ -3825,17 +3873,35 @@ _pki_chown_client_keys() {
           log_error "podman unshare chown ${_uid}:${_uid} failed on ${_label} — aborting"
           return 1
         fi
+        # BUG-2 fix: after podman unshare chown, the file is owned by the
+        # mapped UID in the user namespace. From the host, this appears as a
+        # subuid-range UID that the non-root caller does not own, so host-side
+        # chmod would fail with EPERM. Apply chmod inside the same unshare.
+        if [[ -n "$_extra_chmod" ]]; then
+          if ! podman unshare chmod "$_extra_chmod" "$_file"; then
+            log_error "podman unshare chmod ${_extra_chmod} failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
         ;;
       docker_run)
-        # Bind-mount the secrets dir into a minimal container; chown the
+        # BUG-2 fix: combine chown + chmod into one docker run invocation so
+        # both ops execute as root inside the container. After the container
+        # exits, the file is owned by uid/gid <_uid> on the host; a non-root
+        # installer (e.g. uid 1003) cannot chmod a file owned by uid 1001.
+        # Bind-mount the secrets dir into a minimal container; chown+chmod the
         # specific file path relative to the mount root /s.
         # The container is rm'd immediately; no persistent state.
         local _rel_file="${_file#"${_secrets_dir}/"}"
+        local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
+        if [[ -n "$_extra_chmod" ]]; then
+          _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
+        fi
         if ! docker run --rm \
                --volume "${_secrets_dir}:/s:rw" \
                "$_alpine_image" \
-               chown "${_uid}:${_uid}" "/s/${_rel_file}"; then
-          log_error "docker run chown ${_uid}:${_uid} failed on ${_label} — aborting"
+               sh -c "$_container_cmd"; then
+          log_error "docker run chown/chmod failed on ${_label} — aborting"
           return 1
         fi
         ;;
@@ -3844,6 +3910,8 @@ _pki_chown_client_keys() {
         # supported. Use an ephemeral container instead — same approach as
         # docker_run but invoking `podman run`. The Podman VM provides root
         # inside the container, so it can chown to any UID.
+        # BUG-2 fix: same rationale as docker_run — chmod must be inside the
+        # container, not on the host, to avoid EPERM for non-root callers.
         #
         # WARN-not-ABORT: macOS Podman virtiofs may not expose the secrets path
         # (~/Documents/ can be blocked by macOS TCC Privacy settings after a
@@ -3857,11 +3925,15 @@ _pki_chown_client_keys() {
         # TM-V231-005: upgrade chown to hard-requirement in v2.23.2 by requiring
         # the admin to grant Podman Full Disk Access before install.
         local _rel_file="${_file#"${_secrets_dir}/"}"
+        local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
+        if [[ -n "$_extra_chmod" ]]; then
+          _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
+        fi
         if ! podman run --rm \
                --volume "${_secrets_dir}:/s:rw" \
                "$_alpine_image" \
-               chown "${_uid}:${_uid}" "/s/${_rel_file}" 2>/dev/null; then
-          log_warn "podman run chown ${_uid}:${_uid} failed on ${_label} (macOS TCC Privacy may block virtiofs access)"
+               sh -c "$_container_cmd" 2>/dev/null; then
+          log_warn "podman run chown/chmod failed on ${_label} (macOS TCC Privacy may block virtiofs access)"
           log_warn "  virtiofs UID remapping should compensate — verifying at service start"
           log_warn "  To fix permanently: grant Podman Full Disk Access in System Settings > Privacy"
         fi
@@ -3898,12 +3970,10 @@ _pki_chown_client_keys() {
   log_info "Setting prometheus_client.key to 0640 (group 1001 — Laura EX-231-10 fix)"
   local _prom_key="${_secrets_dir}/prometheus_client.key"
   if [[ -f "$_prom_key" ]]; then
-    _do_chown "1001" "$_prom_key" "prometheus_client.key" || return 1
-    # chmod 0640 is runtime-agnostic (mode bits only, no UID mapping needed).
-    if ! chmod 0640 "$_prom_key"; then
-      log_error "chmod 0640 failed on prometheus_client.key"
-      return 1
-    fi
+    # BUG-2 fix: pass "0640" as the 4th arg so chmod runs inside the container
+    # alongside chown. A non-root installer (e.g. uid 1003) cannot chmod a file
+    # owned by uid 1001 from the host shell after the in-container chown exits.
+    _do_chown "1001" "$_prom_key" "prometheus_client.key" "0640" || return 1
   fi
 }
 
