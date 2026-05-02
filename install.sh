@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T00:00:00+01:00 (fix: separate mount opts for manifest vs secrets in _pki_run_issuer for Podman rootless — gate #ROOTLESS-9)
 # last-updated: 2026-05-02T21:55:00+01:00 (fix: guard podman unshare data/audit mkdir on rootful installs — gate #ROOTFUL-1)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
@@ -3923,12 +3924,36 @@ _pki_run_issuer() {
   #   - ":U" (podman-only) recursively chowns the mount source to the
   #     container's user/group, so a non-root USER inside the image can
   #     write. Docker has no equivalent and errors on ":U".
-  # Without ":U", rootful podman fails with EACCES when the image runs as
-  # a non-root user (the image sets `USER yashigani`), since the host dir
-  # is owned by root. Retro: v2.23.1 Ubuntu podman clean-slate failure.
-  local _mount_opts="rw,Z"
+  # Without ":U" on secrets_dir, rootful podman fails with EACCES when the
+  # image runs as a non-root user (the image sets `USER yashigani`), since
+  # the host dir is owned by root. Retro: v2.23.1 Ubuntu podman clean-slate.
+  #
+  # gate #ROOTLESS-9: ":U" MUST NOT be applied to the manifest file mount.
+  # ":U" calls lchown on the mount source. For directories this is recursive;
+  # for a single file it is still called. On Podman rootless, the lchown
+  # target UID (subuid-mapped 1001 = e.g. 428680) is outside the host
+  # user's UID (1005), so the kernel rejects lchown with EPERM even though
+  # the user owns the file and is namespace-root inside the container.
+  # The secrets dir is pre-chowned to the remapped UID by
+  # _prepare_secrets_dir_for_pki(), so it does not need :U; but keeping :U
+  # on secrets_dir is harmless and helps rootful Podman. The manifest is
+  # pre-chowned via podman unshare (rootless) or plain chown (docker) so the
+  # container can write back bootstrap_token_sha256 fields. ":U" is NOT
+  # applied to the manifest mount on any path.
+  local _secrets_mount_opts="rw,Z"
+  local _manifest_mount_opts="rw,Z"
   if [[ "$runtime" == "podman" ]]; then
-    _mount_opts="rw,Z,U"
+    _secrets_mount_opts="rw,Z,U"
+    # Manifest: pre-chown to container UID so the issuer can write back.
+    # Use podman unshare for rootless (non-root caller); direct chown for rootful.
+    if [[ "$(id -u)" != "0" ]]; then
+      # Rootless: map container UID 1001 → host subuid-remapped UID via unshare.
+      podman unshare chown 1001:1001 "$manifest_in" 2>/dev/null \
+        || log_warn "Could not chown manifest via podman unshare — PKI may fail to write bootstrap_token_sha256"
+    else
+      # Rootful Podman: direct chown is safe.
+      chown 1001:1001 "$manifest_in" 2>/dev/null || true
+    fi
   else
     # Docker: no :U support — manually chown the secrets dir to the container
     # UID (1001 = yashigani user in our image) so the issuer can write.
@@ -3938,23 +3963,20 @@ _pki_run_issuer() {
     # Retro #3ah (v2.23.1): the issuer also writes back to
     # service_identities.yaml (bootstrap_token_sha256 fields) via the
     # /manifest.yaml bind mount. Without ownership match the write fails
-    # with PermissionError and the whole PKI bootstrap aborts. Podman's
-    # :U handles this automatically, but Docker doesn't, so chown the
-    # manifest to UID 1001 too. Restored after the run by _pki_persist_env's
-    # callers (manifest is regenerated on rotation).
+    # with PermissionError and the whole PKI bootstrap aborts.
     chown 1001:1001 "$manifest_in" 2>/dev/null || true
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "$runtime run --rm --network=none -v ${secrets_in}:/secrets:${_mount_opts} -v ${manifest_in}:/manifest.yaml:${_mount_opts} $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
+    dry_print "$runtime run --rm --network=none -v ${secrets_in}:/secrets:${_secrets_mount_opts} -v ${manifest_in}:/manifest.yaml:${_manifest_mount_opts} $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
     return 0
   fi
 
   # --network=none: issuer does no network I/O, and cutting the network
   # prevents any accidental telemetry exfil.
   "$runtime" run --rm --network=none \
-    -v "${secrets_in}:/secrets:${_mount_opts}" \
-    -v "${manifest_in}:/manifest.yaml:${_mount_opts}" \
+    -v "${secrets_in}:/secrets:${_secrets_mount_opts}" \
+    -v "${manifest_in}:/manifest.yaml:${_manifest_mount_opts}" \
     "$image" \
     python -m yashigani.pki.issuer \
       --secrets-dir /secrets \
