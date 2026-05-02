@@ -272,7 +272,7 @@ def build_intermediate(
             critical=False,
         )
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(root_cert.public_key()),
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(root_cert.public_key()),  # type: ignore[arg-type]
             critical=False,
         )
         .sign(root_key, hashes.SHA256())
@@ -331,7 +331,7 @@ def build_leaf(
         )
         .add_extension(x509.SubjectAlternativeName(sans), critical=False)
         .add_extension(
-            x509.AuthorityKeyIdentifier.from_issuer_public_key(intermediate_cert.public_key()),
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(intermediate_cert.public_key()),  # type: ignore[arg-type]
             critical=False,
         )
         .sign(intermediate_key, hashes.SHA256())

@@ -174,12 +174,12 @@ def _mask_ip(ip_str: str) -> str:
         addr = ipaddress.ip_address(ip_str)
         if isinstance(addr, ipaddress.IPv4Address):
             # Mask last octet: 192.168.1.100 -> 192.168.1.0/24
-            network = ipaddress.IPv4Network(f"{ip_str}/24", strict=False)
-            return str(network.network_address)
+            net4 = ipaddress.IPv4Network(f"{ip_str}/24", strict=False)
+            return str(net4.network_address)
         else:
             # Mask last 80 bits: keep first 48 bits (site prefix)
-            network = ipaddress.IPv6Network(f"{ip_str}/48", strict=False)
-            return str(network.network_address)
+            net6 = ipaddress.IPv6Network(f"{ip_str}/48", strict=False)
+            return str(net6.network_address)
     except ValueError:
         return "unknown"
 

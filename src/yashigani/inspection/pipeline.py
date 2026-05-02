@@ -8,7 +8,7 @@ import hashlib
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 
 from yashigani.audit.masking import CredentialMasker
 from yashigani.inspection.classifier import (
@@ -86,6 +86,7 @@ class InspectionPipeline:
             masked_query = raw_query
 
         # Step 2: Classify — use backend_registry if available, else legacy classifier
+        result: Any
         if self._backend_registry is not None:
             backend_result = self._backend_registry.classify(masked_query, request_id=request_id)
             # Adapt BackendRegistry ClassifierResult to the legacy classifier shape
@@ -470,6 +471,7 @@ class ResponseInspectionPipeline:
                 )
 
         # Classify — backend_registry takes precedence over legacy classifier
+        classifier_result: Any
         if self._backend_registry is not None:
             backend_result = self._backend_registry.classify(
                 response_body, request_id=request_id

@@ -41,7 +41,13 @@ class OIDCConfig:
     client_secret: str
     discovery_url: str          # e.g. https://accounts.google.com/.well-known/openid-configuration
     redirect_uri: str
-    scopes: list[str] = None
+    scopes: list[str] = None  # type: ignore[assignment]  # populated in __post_init__
+    # YSG-RISK-003 #3at: optional override for OIDC endpoint host validation.
+    # None = endpoint hostname must equal the discovery_url hostname.
+    # Non-None = a fully-qualified hostname or *.example.com suffix glob
+    # (fnmatch, case-insensitive) — when set, endpoints whose hostname matches
+    # this pattern AND have scheme == "https" are permitted.
+    allowed_auth_endpoint_pattern: Optional[str] = None
 
     def __post_init__(self):
         if self.scopes is None:

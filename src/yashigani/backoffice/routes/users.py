@@ -33,6 +33,8 @@ class CreateUserRequest(BaseModel):
 @router.get("")
 async def list_users(session: AdminSession):
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    accounts = await state.auth_service.list_accounts()
     users = [
         {
             "username": r.username,
@@ -62,6 +64,8 @@ async def create_user(body: CreateUserRequest, session: AdminSession):
     TOTP at first login.
     """
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
 
     if body.username in state.auth_service._accounts:
         raise HTTPException(
@@ -97,7 +101,10 @@ async def create_user(body: CreateUserRequest, session: AdminSession):
 async def delete_user(username: str, session: AdminSession):
     """Delete a user. Blocked if last user (USER_MINIMUM_VIOLATION)."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "user":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -131,6 +138,9 @@ async def full_reset_user(
     Retains: username, UUID, audit history.
     """
     state = backoffice_state
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
 
     # Resolve admin record for TOTP verification
     admin_record = None
@@ -179,7 +189,11 @@ async def full_reset_user(
 @router.post("/{username}/disable")
 async def disable_user(username: str, session: AdminSession):
     state = backoffice_state
-    if not state.auth_service.disable(username):
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
+    record = await state.auth_service.get_account(username)
+    if record is None or record.account_tier != "user":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
     state.audit_writer.write(_config_event(
@@ -191,7 +205,9 @@ async def disable_user(username: str, session: AdminSession):
 @router.post("/{username}/enable")
 async def enable_user(username: str, session: AdminSession):
     state = backoffice_state
-    if not state.auth_service.enable(username):
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+    if not await state.auth_service.enable(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
     state.audit_writer.write(_config_event(

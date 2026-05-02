@@ -235,6 +235,9 @@ async def login(body: LoginRequest, request: Request, response: Response):
     await _apply_auth_throttle(client_ip)
 
     state = backoffice_state
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
     try:
         success, record, reason = state.auth_service.authenticate(
             body.username, body.password, body.totp_code
@@ -337,7 +340,10 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     ASVS V2.1: authenticated password reset without admin intervention.
     """
     state = backoffice_state
-    record = state.auth_service._accounts.get(body.username)
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
+    record = await state.auth_service.get_account(body.username)
 
     # Same generic error for unknown user or wrong TOTP (prevent enumeration).
     # Ava Wave 2 Issue 7 — self-service password reset is unauthenticated by
@@ -394,6 +400,8 @@ async def verify_session(request: Request):
     Checks both user cookie (__Host-yashigani_session) and admin cookie (__Host-yashigani_admin_session).
     """
     state = backoffice_state
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
     token = request.cookies.get(_USER_SESSION_COOKIE) or request.cookies.get(_SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -431,6 +439,8 @@ async def change_password(
 ):
     """Force-change password. Invalidates ALL sessions (ASVS V2.1.4)."""
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
     # Find account by account_id
     record = _get_record_by_id(session.account_id)
     if record is None:
@@ -483,7 +493,8 @@ async def provision_totp_start(
     that returned the seed, which was impossible for a first-time client.
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    assert state.auth_service is not None  # set unconditionally at startup
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -520,7 +531,9 @@ async def provision_totp_confirm(
     (protects against time-drift and typo retries).
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -563,7 +576,9 @@ async def provision_totp(
     (Ava Wave 2 Issue C).
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -593,6 +608,92 @@ async def provision_totp(
         "recovery_codes": prov.recovery_codes,  # shown once — client must acknowledge
         "recovery_codes_count": len(prov.recovery_codes),
         "message": "Store these recovery codes securely. They will not be shown again.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step-up TOTP verification (ASVS V6.8.4)
+# ---------------------------------------------------------------------------
+
+class StepUpRequest(BaseModel):
+    totp_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+@router.post("/stepup")
+async def stepup_verify(
+    body: StepUpRequest,
+    session: AdminSession,
+    store=Depends(get_session_store),
+):
+    """
+    Step-up TOTP verification for high-value admin flows (ASVS V6.8.4).
+
+    The admin submits their current TOTP code.  On success, the session's
+    last_totp_verified_at is updated.  The caller may then retry the
+    high-value endpoint that returned step_up_required.  The verification
+    window is YASHIGANI_STEPUP_TTL_SECONDS (default 300 s / 5 min).
+
+    Security guarantees:
+    - Replay prevention: codes are checked against the Postgres-backed
+      used_totp_codes table (same mechanism as login TOTP).
+    - Wrong code: 401, session is NOT updated, TOTP failure counter is
+      incremented on the session prefix.
+    - No credential enumeration: same HTTP 401 body for wrong code or
+      no session.
+    """
+    state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+
+    # Resolve the admin record to get the TOTP secret.
+    admin_record = await state.auth_service.get_account_by_id(session.account_id)
+    if admin_record is None or not admin_record.totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "totp_not_configured"},
+        )
+
+    # Check per-session step-up failure counter (simple in-memory dict,
+    # keyed on session token prefix — limits to 3 wrong codes then lock).
+    session_prefix = session.token[:8]
+    failure_count = _totp_failures.get(session_prefix, 0)
+    if failure_count >= _TOTP_FAILURE_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "stepup_attempts_exceeded",
+                "message": "Too many failed step-up attempts. Please log out and log in again.",
+            },
+        )
+
+    # Verify against Postgres-backed replay cache (same path as login).
+    async with _pg_tenant_transaction() as conn:
+        ok = await state.auth_service._verify_totp_with_replay(
+            conn, admin_record.totp_secret, body.totp_code
+        )
+
+    if not ok:
+        _totp_failures[session_prefix] = failure_count + 1
+        state.audit_writer.write(_make_stepup_event(admin_record.username, "failure"))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": "invalid_totp_code",
+                "hint": "Ensure your device clock is synchronised.",
+            },
+        )
+
+    # Success — record step-up timestamp in Redis session, clear failure counter.
+    _totp_failures.pop(session_prefix, None)
+    store.record_totp_stepup(session.token)
+    state.audit_writer.write(_make_stepup_event(admin_record.username, "success"))
+
+    from yashigani.auth.stepup import STEPUP_TTL_SECONDS
+    return {
+        "status": "ok",
+        "stepup_verified": True,
+        "ttl_seconds": STEPUP_TTL_SECONDS,
+        "message": "Step-up verified. You may now retry the high-value action.",
     }
 
 

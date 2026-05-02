@@ -40,6 +40,11 @@ _HOP_BY_HOP_HEADERS = frozenset({
 })
 
 
+def _content_hash(content: str) -> str:
+    """SHA-256 hex digest of a string — used for privacy-safe hashing."""
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Gateway configuration
 # ---------------------------------------------------------------------------

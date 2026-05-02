@@ -1,6 +1,8 @@
 """
 Yashigani Backoffice — Infrastructure management routes.
 
+Last updated: 2026-05-02T09:00:00+01:00
+
 Provides admin control over:
   - Availability zone topology configuration
   - KEDA autoscaling parameters per workload
@@ -10,7 +12,7 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
-from yashigani.backoffice.middleware import require_admin_session, AdminSession
+from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ class AutoscalingConfig(BaseModel):
 
 
 @router.get("/topology")
-async def get_topology(session: AdminSession = require_admin_session):
+async def get_topology(session: AdminSession):
     """Return current AZ topology info and warnings."""
     az_count = getattr(backoffice_state, "cluster_az_count", 1)
     warnings = []
@@ -54,7 +56,7 @@ async def get_topology(session: AdminSession = require_admin_session):
 @router.put("/topology")
 async def update_topology(
     body: TopologyConfig,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """Update topology spread configuration."""
     az_count = len(set(body.zones))
@@ -70,14 +72,14 @@ async def update_topology(
     backoffice_state.cluster_az_count = az_count  # type: ignore[attr-defined]
     backoffice_state.topology_spread_policy = body.spread_policy  # type: ignore[attr-defined]
 
-    from yashigani.audit.schema import EventType
     try:
-        from yashigani.audit.schema import AuditEvent
-        # Write generic audit event
-        backoffice_state.audit_writer.write(AuditEvent(
-            event_type=EventType.ADMIN_ACTION,
-            detail=f"topology updated: zones={body.zones}, policy={body.spread_policy}",
+        from yashigani.audit.schema import ConfigChangedEvent
+        assert backoffice_state.audit_writer is not None  # set unconditionally at startup
+        backoffice_state.audit_writer.write(ConfigChangedEvent(
             admin_account=session.account_id,
+            setting="topology",
+            previous_value="",
+            new_value=f"zones={body.zones}, policy={body.spread_policy}",
         ))
     except Exception as exc:
         logger.warning("Audit write failed: %s", exc)
@@ -91,7 +93,7 @@ async def update_topology(
 
 
 @router.get("/autoscaling")
-async def get_autoscaling(session: AdminSession = require_admin_session):
+async def get_autoscaling(session: AdminSession):
     """Return current autoscaling config for all workloads."""
     return {
         "keda_enabled": True,
@@ -109,7 +111,7 @@ async def get_autoscaling(session: AdminSession = require_admin_session):
 async def update_autoscaling(
     workload: str,
     body: AutoscalingConfig,
-    session: AdminSession = require_admin_session,
+    session: AdminSession,
 ):
     """Update autoscaling parameters for a workload."""
     valid_workloads = {"gateway", "backoffice", "policy", "ollama"}

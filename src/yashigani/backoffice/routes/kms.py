@@ -93,6 +93,7 @@ async def update_schedule(body: ScheduleUpdateRequest, session: AdminSession):
 
     scheduler.set_schedule(body.cron_expr)
 
+    assert state.audit_writer is not None  # set unconditionally at startup
     state.audit_writer.write(_config_event(
         session.account_id,
         "kms_rotation_schedule",
@@ -123,6 +124,7 @@ async def rotate_now(session: AdminSession):
             detail={"error": "rotation_failed", "message": str(exc)},
         )
 
+    assert state.audit_writer is not None  # set unconditionally at startup
     state.audit_writer.write(_config_event(
         session.account_id,
         "kms_manual_rotation",

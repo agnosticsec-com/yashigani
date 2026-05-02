@@ -1,11 +1,27 @@
 """
 Admin API for audit sink configuration.
 
-GET  /admin/audit/sinks         — list all sinks + last write timestamp
-GET  /admin/audit/siem          — get current SIEM config
-PUT  /admin/audit/siem          — update SIEM config
-POST /admin/audit/siem/test     — send a test event
-DELETE /admin/audit/sinks/queue — drain the audit queue (admin flush)
+GET    /admin/audit/sinks            — list all sinks + last write timestamp
+GET    /admin/audit/siem/config      — get current SIEM backend config
+PUT    /admin/audit/siem/config      — update SIEM backend config [step-up required]
+POST   /admin/audit/siem/config/test — send a test event to the configured SIEM backend
+DELETE /admin/audit/sinks/queue      — drain the audit queue (admin flush)
+
+Path note (2026-05-02): The three SIEM backend-config endpoints were renamed
+from /admin/audit/siem (GET/PUT) and /admin/audit/siem/test (POST) to
+/admin/audit/siem/config and /admin/audit/siem/config/test respectively.
+
+Reason: audit.py (mounted at prefix /admin/audit) registers GET /siem for the
+named SIEM target list. When audit_sinks_router (no prefix — full paths baked
+in) also registered GET /admin/audit/siem, FastAPI silently resolved to the
+sinks handler (registered later in app.py), leaving the audit.py target-list
+handler as unreachable dead code. The two endpoints serve different purposes:
+  - /admin/audit/siem       (audit.py)        — CRUD for named SIEM targets
+  - /admin/audit/siem/config (audit_sinks.py) — single active backend config
+
+SIEM endpoint URL changes still require step-up TOTP (ASVS V6.8.4).
+
+Last updated: 2026-05-02T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -45,7 +61,7 @@ async def list_sinks(session=Depends(require_admin_session)):
     return {"sinks": status}
 
 
-@audit_sinks_router.get("/admin/audit/siem", response_model=SiemConfigResponse)
+@audit_sinks_router.get("/admin/audit/siem/config", response_model=SiemConfigResponse)
 async def get_siem_config(session=Depends(require_admin_session)):
     from yashigani.backoffice.state import backoffice_state
     state = backoffice_state
@@ -56,7 +72,7 @@ async def get_siem_config(session=Depends(require_admin_session)):
     )
 
 
-@audit_sinks_router.put("/admin/audit/siem")
+@audit_sinks_router.put("/admin/audit/siem/config")
 async def update_siem_config(
     body: SiemConfigRequest,
     session=Depends(require_admin_session),
@@ -77,7 +93,7 @@ async def update_siem_config(
     return {"status": "updated", "backend": body.backend}
 
 
-@audit_sinks_router.post("/admin/audit/siem/test")
+@audit_sinks_router.post("/admin/audit/siem/config/test")
 async def test_siem(session=Depends(require_admin_session)):
     from yashigani.backoffice.state import backoffice_state
     from yashigani.audit.sinks import SiemSink

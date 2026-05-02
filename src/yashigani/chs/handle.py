@@ -11,7 +11,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from yashigani.chs.resource_monitor import ResourceMonitor, TTL_FLOOR_SECONDS
 
@@ -45,7 +45,7 @@ class CredentialHandleService:
         self,
         kms_provider,                   # KSMProvider instance
         resource_monitor: ResourceMonitor,
-        on_audit: Optional[callable] = None,
+        on_audit: Optional[Callable[..., Any]] = None,
         max_ttl_seconds: int = 14400,   # 4-hour admin-configured ceiling
     ) -> None:
         self._kms = kms_provider

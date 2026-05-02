@@ -109,7 +109,7 @@ class AnthropicBackend(ClassifierBackend):
                     {"role": "user", "content": content},
                 ],
             )
-            raw = response.content[0].text
+            raw = response.content[0].text  # type: ignore[union-attr]
         except _anthropic_sdk.APIConnectionError as exc:
             raise BackendUnavailableError(
                 f"Anthropic API unreachable: {exc}"

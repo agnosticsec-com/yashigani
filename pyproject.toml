@@ -1,3 +1,4 @@
+# Last updated: 2026-05-02T09:00:00+01:00
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -114,6 +115,22 @@ omit = [
 [tool.bandit]
 targets = ["src/yashigani"]
 skips = ["B101", "B601"]   # B101=assert, B601=paramiko (not used)
+
+[tool.mypy]
+python_version = "3.12"
+# Ignore missing stubs for third-party packages that don't ship them.
+# We suppress [import-untyped] and [import-not-found] globally here and
+# handle them per-module where finer control is needed.
+ignore_missing_imports = true
+# Show error codes so CI can categorise failures.
+show_error_codes = true
+# Do NOT enable strict — we're cleaning up a legacy codebase incrementally.
+# strict = false is the default; stated explicitly for clarity.
+strict = false
+# Exclude generated / vendored code that we don't own.
+exclude = [
+    "src/yashigani/db/migrations/",
+]
 
 [tool.ruff]
 # Lint configuration (ASVS 16.6.1 log-injection defence — Ava Wave 2 #48).

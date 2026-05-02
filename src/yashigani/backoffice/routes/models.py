@@ -1,6 +1,8 @@
 """
 Yashigani Backoffice — Model & Alias management routes.
 
+# Last updated: 2026-05-02T09:00:00+01:00
+
 CRUD for model aliases and model allocation to users/groups/orgs.
   GET     /admin/models                  — List all model aliases
   POST    /admin/models                  — Create a model alias
@@ -18,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 from yashigani.models.alias_store import ModelAlias
 
@@ -78,7 +80,7 @@ async def list_aliases(session: AdminSession):
 
 
 @router.post("", status_code=201)
-async def create_alias(body: AliasRequest, session: AdminSession):
+async def create_alias(body: AliasRequest, session: StepUpAdminSession):
     store = _alias_store()
     if store.get(body.alias) is not None:
         raise HTTPException(status_code=409, detail={"error": "alias_exists"})
@@ -94,7 +96,7 @@ async def create_alias(body: AliasRequest, session: AdminSession):
 
 
 @router.delete("/{alias}")
-async def delete_alias(alias: str, session: AdminSession):
+async def delete_alias(alias: str, session: StepUpAdminSession):
     store = _alias_store()
     deleted = store.delete(alias)
     if not deleted:
@@ -130,7 +132,7 @@ async def list_allocations(session: AdminSession):
 
 
 @router.post("/allocations", status_code=201)
-async def create_allocation(body: AllocationRequest, session: AdminSession):
+async def create_allocation(body: AllocationRequest, session: StepUpAdminSession):
     global _alloc_counter
     store = _alias_store()
     if store.get(body.model_alias) is None:
@@ -147,7 +149,7 @@ async def create_allocation(body: AllocationRequest, session: AdminSession):
 
 
 @router.delete("/allocations/{alloc_id}")
-async def delete_allocation(alloc_id: str, session: AdminSession):
+async def delete_allocation(alloc_id: str, session: StepUpAdminSession):
     global _allocations
     before = len(_allocations)
     _allocations = [a for a in _allocations if a["id"] != alloc_id]

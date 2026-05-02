@@ -249,9 +249,9 @@ class IdentityRegistry:
                 return self._r.scard(f"identity:index:kind:{kind.value}") or 0
             return self._r.scard("identity:index:all") or 0
         # inactive
-        total = self._r.scard("identity:index:all") or 0
-        active = self._r.scard("identity:index:active") or 0
-        return max(0, total - active)
+        total_count: int = self._r.scard("identity:index:all") or 0  # type: ignore[assignment]
+        active_count: int = self._r.scard("identity:index:active") or 0  # type: ignore[assignment]
+        return max(0, total_count - active_count)
 
     # ── Mutations ────────────────────────────────────────────────────────
 

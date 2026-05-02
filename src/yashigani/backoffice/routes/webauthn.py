@@ -304,6 +304,8 @@ def _write_audit(
             WebAuthnCredentialUsedEvent,
             WebAuthnCredentialDeletedEvent,
         )
+        from yashigani.audit.schema import AuditEvent as _AuditEvent
+        event: _AuditEvent
         if event_label == "WEBAUTHN_CREDENTIAL_REGISTERED":
             event = WebAuthnCredentialRegisteredEvent(
                 admin_account=account_id,

@@ -13,18 +13,31 @@ Invariants enforced by this API:
   - Sum of group budgets <= org cap
   - New identity added to group: prompt admin to adjust
   - Group budget cannot be set below sum of individuals
+
+Auth note (2026-05-02): Added router-level require_admin_session dependency.
+All endpoints were previously unauthenticated (OWASP API3:2023 / ASVS V4.1.1).
+No middleware covered /admin/budget/* paths. The router-level Depends() protects
+all current and future endpoints in this file with a single declaration.
+
+Last updated: 2026-05-02T00:00:00+01:00
 """
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+
+from yashigani.backoffice.middleware import require_admin_session
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin/budget", tags=["budget"])
+router = APIRouter(
+    prefix="/admin/budget",
+    tags=["budget"],
+    dependencies=[Depends(require_admin_session)],
+)
 
 
 # ── Request/Response Models ──────────────────────────────────────────────

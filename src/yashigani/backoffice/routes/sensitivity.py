@@ -1,6 +1,8 @@
 """
 Yashigani Backoffice — Sensitivity pattern management routes.
 
+# Last updated: 2026-05-02T09:00:00+01:00
+
 CRUD for detection patterns used by the sensitivity classifier pipeline.
   GET     /admin/sensitivity/patterns    — List all patterns
   POST    /admin/sensitivity/patterns    — Create a pattern
@@ -16,7 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ async def list_patterns(session: AdminSession):
 
 
 @router.post("/patterns", status_code=201)
-async def create_pattern(body: PatternRequest, session: AdminSession):
+async def create_pattern(body: PatternRequest, session: StepUpAdminSession):
     global _pattern_counter
     _pattern_counter += 1
     pattern = {
@@ -72,7 +74,7 @@ async def create_pattern(body: PatternRequest, session: AdminSession):
 
 
 @router.delete("/patterns/{pattern_id}")
-async def delete_pattern(pattern_id: str, session: AdminSession):
+async def delete_pattern(pattern_id: str, session: StepUpAdminSession):
     global _patterns
     before = len(_patterns)
     _patterns = [p for p in _patterns if p["id"] != pattern_id]

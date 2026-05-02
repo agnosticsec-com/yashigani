@@ -64,6 +64,7 @@ def push_rbac_data(
     if raw_document is not None:
         opa_doc = raw_document
     else:
+        assert store is not None, "push_rbac_data: store is required when raw_document is None"
         opa_doc = store.to_opa_document()
 
     # Build agents sub-document from registry (active agents only)

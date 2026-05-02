@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-02T21:55:00+01:00 (fix: guard podman unshare data/audit mkdir on rootful installs — gate #ROOTFUL-1)
+# 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
+# 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
+# 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
+# 2026-05-02: stale-partial-install guard in compose_up() must not wipe when ca_root.crt already present (gate #ROOTLESS-5 blocker)
+# 2026-05-02: license_key placeholder created at step 7 (before PKI chown) in demo mode; compose_up placeholder write is non-fatal for Podman rootless (gate #ROOTLESS-6 blocker)
+# 2026-05-02: _pki_chown_client_keys mode probe replaced with static /etc/subuid check; unshare case falls back to podman_run before aborting (gate #ROOTLESS-7 blocker)
+# 2026-05-02: step-7 license_key placeholder write made non-fatal when secrets_dir owned by stale UID (gate #ROOTLESS-8 blocker)
+# 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
 # =============================================================================
@@ -1837,7 +1846,86 @@ compose_up() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
-  mkdir -p "${data_dir}/audit"
+  # Podman rootless stale-partial-install guard (gate #ROOTLESS-5):
+  # If secrets_dir exists but is owned by a different UID (subuid-mapped 1001, e.g.
+  # 363144), a previous partial install got far enough to chown the dir before
+  # failing. The installer (e.g. UID 1004) cannot write into it. Since
+  # check_existing_installation() already confirmed no containers are running,
+  # it's safe to wipe and regenerate — no live data is at risk.
+  # Only applies when not explicitly upgrading (UPGRADE=false) and when
+  # the dir is NOT owned by the current user AND PKI certs have NOT been generated
+  # yet (ca_root.crt absent). If ca_root.crt is present, PKI bootstrap already ran
+  # and chowned the dir legitimately — do NOT wipe it.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" && "${UPGRADE:-false}" != "true" ]]; then
+    local _secrets_uid
+    # shellcheck disable=SC2012
+    _secrets_uid="$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ -n "$_secrets_uid" && "$_secrets_uid" != "$(id -u)" && ! -f "${secrets_dir}/ca_root.crt" ]]; then
+      log_warn "secrets_dir owned by UID ${_secrets_uid} (not installer UID $(id -u)) — stale partial install detected"
+      log_warn "Wiping secrets_dir for clean regeneration (no containers running)"
+      # Use podman unshare rm -rf so we can remove files owned by the mapped UID
+      # without needing sudo. Falls back to plain rm (which works if we have perms).
+      if podman unshare rm -rf "$secrets_dir" 2>/dev/null; then
+        log_info "secrets_dir wiped via podman unshare"
+      else
+        log_warn "Could not wipe via podman unshare — trying direct rm"
+        rm -rf "$secrets_dir" 2>/dev/null \
+          || { log_error "Cannot wipe stale secrets_dir ${secrets_dir}. Run: sudo rm -rf \"${secrets_dir}\" then re-run."; exit 1; }
+      fi
+      mkdir -p "$secrets_dir"
+      log_info "secrets_dir recreated fresh"
+    fi
+  fi
+  # PKI issuer runs as UID 1001 inside the gateway image and writes cert/key files
+  # to the bind-mounted secrets dir. The directory must be writable by UID 1001
+  # (or its subuid-mapped equivalent) BEFORE the PKI issuer container runs.
+  #
+  # For Docker / rootful Podman: chown 1001:1001 now. The installer runs as
+  # root (or a user that can chown to 1001), so subsequent writes by the
+  # installer process also work because it runs as root.
+  #
+  # For Podman rootless: the installer runs as a non-root user (e.g. UID 1004).
+  # If we chown secrets_dir to UID 363144 (subuid-mapped 1001) NOW, the installer
+  # can no longer write to it (1004 is "other", no write bit). DEFER the chown
+  # to _prepare_secrets_dir_for_pki(), called just before bootstrap_internal_pki().
+  # All installer-side writes happen in this function; by the time PKI bootstrap
+  # runs, the chown will have been applied and the container can write its certs.
+  #
+  # Retro v2.23.1 item #3ad + gate #ROOTLESS-3.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    # Deferred to _prepare_secrets_dir_for_pki() — see comment above.
+    log_info "secrets_dir chown deferred to PKI bootstrap (Podman rootless)"
+  else
+    if chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+      log_info "secrets_dir chown 1001:1001 applied"
+    else
+      log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
+      log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
+      log_error "Fix (run once as root, then re-run installer as your user):"
+      log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
+      exit 1
+    fi
+    # Defensive assertion: secrets dir must be owned by UID 1001 before proceeding.
+    # (Skipped for Podman rootless — subuid remapping means host UID != 1001.)
+    # shellcheck disable=SC2012
+    _actual_uid=$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')
+    if [[ "$_actual_uid" != "1001" ]]; then
+      log_error "secrets_dir UID is ${_actual_uid}, expected 1001. Aborting PKI bootstrap."
+      exit 1
+    fi
+  fi
+  # For Podman rootless, data_dir is owned by the subuid-remapped UID (e.g. 363144).
+  # mkdir as the installer user (e.g. UID 1004) would fail with Permission denied.
+  # Use `podman unshare` to create the subdirectory inside the user namespace.
+  # Gate #ROOTFUL-1: podman unshare is a rootless-only primitive — calling it as
+  # UID 0 (rootful install) prints "please use unshare with rootless" and aborts.
+  # Guard on id -u != 0 so rootful installs use the plain mkdir -p path instead.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" ]]; then
+    podman unshare mkdir -p "${data_dir}/audit" \
+      || { log_error "Cannot create ${data_dir}/audit via podman unshare"; exit 1; }
+  else
+    mkdir -p "${data_dir}/audit"
+  fi
   mkdir -p "${WORK_DIR}/docker/tls"
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
@@ -1882,10 +1970,17 @@ compose_up() {
 
   if [[ "$UPGRADE" == "true" ]]; then
     log_info "Starting services (upgrade — removing orphaned containers)..."
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans
+    # ROOTLESS-9 (v2.23.1): podman-compose up -d returns non-zero when optional
+    # services (otel-collector, promtail, grafana) fail to start — even if all
+    # core services (gateway, backoffice, pgbouncer, postgres, redis, caddy) are
+    # healthy. With set -euo pipefail this caused install to abort before
+    # bootstrap_postgres, leaving admin accounts unseeded. Core service health is
+    # validated by run_health_check (step 12); this non-zero is non-fatal here.
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans || true
   else
     log_info "Starting services..."
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d
+    # ROOTLESS-9: same rationale as upgrade path above.
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d || true
   fi
 
   log_success "Services started"
@@ -3181,6 +3276,21 @@ main() {
     # Step 7: License key (skipped in demo — Community, no key needed)
     if [[ "$DEPLOY_MODE" == "demo" ]]; then
       log_step "7/${TOTAL_STEPS}" "Skipping licence key (demo mode — Community tier)"
+      # gate #ROOTLESS-6: create placeholder NOW (before PKI bootstrap chowns secrets_dir)
+      # so compose_up() doesn't need to write it after the chown.
+      # gate #ROOTLESS-8: if secrets_dir is owned by a foreign UID from a stale
+      # install (e.g. rootful PKI ran and chowned to 1001 before disk-full abort),
+      # the write will fail with EPERM. The stale-partial-install guard in
+      # compose_up() will clean it up later; treat EPERM here as non-fatal so
+      # the installer continues to the guard rather than aborting at step 7.
+      local _lic="${WORK_DIR}/docker/secrets/license_key"
+      if [[ ! -s "$_lic" ]]; then
+        if ! echo "# community — no licence key required" > "$_lic" 2>/dev/null; then
+          log_warn "Could not create license_key placeholder at step 7 (secrets_dir may be owned by stale UID — stale-install guard will handle this in compose_up)"
+        else
+          chmod 600 "$_lic" 2>/dev/null || true
+        fi
+      fi
     else
       handle_license
     fi

@@ -8,7 +8,7 @@ import logging
 import secrets
 import threading
 from collections.abc import Callable
-from typing import Optional
+from typing import Any, Optional
 
 from yashigani.kms.base import KSMProvider, ProviderError, RotationError
 
@@ -85,7 +85,7 @@ class KSMRotationScheduler:
         self._cron_expr = cron_expr
         self._on_event = on_event or (lambda name, data: None)
         self._lock = threading.Lock()
-        self._scheduler: Optional[object] = None
+        self._scheduler: Optional[Any] = None
 
     # -- Public API ----------------------------------------------------------
 

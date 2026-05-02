@@ -29,6 +29,8 @@ class ForceResetRequest(BaseModel):
 @router.get("")
 async def list_admins(session: AdminSession):
     state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    all_accounts = await state.auth_service.list_accounts()
     accounts = [
         {
             "username": r.username,
@@ -62,7 +64,20 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
     out-of-band. Admin must change password and provision TOTP at first login.
     """
     state = backoffice_state
-    if body.username in state.auth_service._accounts:
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+
+    # Enforce license tier admin seat limit
+    from yashigani.licensing.enforcer import check_admin_seat_limit, LicenseLimitExceeded
+    try:
+        check_admin_seat_limit(await state.auth_service.total_admin_count())
+    except LicenseLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"error": "admin_seat_limit_exceeded", "limit": exc.max_val, "current": exc.current},
+        )
+
+    if await state.auth_service.get_account(body.username) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": "username_taken"},
@@ -95,7 +110,9 @@ async def create_admin(body: CreateAdminRequest, session: AdminSession):
 async def delete_admin(username: str, session: AdminSession):
     """Delete an admin account. Blocked if total would drop below 2."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -121,7 +138,10 @@ async def delete_admin(username: str, session: AdminSession):
 async def disable_admin(username: str, session: AdminSession):
     """Disable account. Blocked if active count would drop below 2."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -149,7 +169,9 @@ async def disable_admin(username: str, session: AdminSession):
 @router.post("/{username}/enable")
 async def enable_admin(username: str, session: AdminSession):
     state = backoffice_state
-    if not state.auth_service.enable(username):
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+    if not await state.auth_service.enable(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
     state.audit_writer.write(_config_event(
@@ -162,7 +184,10 @@ async def enable_admin(username: str, session: AdminSession):
 async def force_reset(username: str, body: ForceResetRequest, session: AdminSession):
     """Force password reset or TOTP reprovision for an admin account."""
     state = backoffice_state
-    record = state.auth_service._accounts.get(username)
+    assert state.auth_service is not None   # set unconditionally at startup
+    assert state.session_store is not None  # set unconditionally at startup
+    assert state.audit_writer is not None   # set unconditionally at startup
+    record = await state.auth_service.get_account(username)
     if record is None or record.account_tier != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})

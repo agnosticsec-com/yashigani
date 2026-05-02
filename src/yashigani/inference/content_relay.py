@@ -104,7 +104,7 @@ class ContentRelayDetector:
 
         total_windows = max(1, len(windows))
         confidence = min(1.0, matches / total_windows)
-        top_agent = max(source_agents, key=source_agents.get) if source_agents else ""
+        top_agent = max(source_agents, key=lambda k: source_agents.get(k, 0)) if source_agents else ""
 
         detected = matches >= _ALERT_THRESHOLD
         if detected:

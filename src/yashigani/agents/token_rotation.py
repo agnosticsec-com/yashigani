@@ -26,7 +26,7 @@ import datetime
 import logging
 import secrets
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 import bcrypt
 
@@ -262,7 +262,7 @@ class AgentTokenRotationScheduler:
         self._kms_provider = kms_provider
         self._audit_writer = audit_writer
         self._grace_period_hours = grace_period_hours
-        self._scheduler: Optional[object] = None
+        self._scheduler: Optional[Any] = None
         self._last_token: Optional[str] = None
 
         # Persist schedule to Redis

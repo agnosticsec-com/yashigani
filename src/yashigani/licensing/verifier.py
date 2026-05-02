@@ -181,6 +181,58 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(value)
 
 
+# Sentinel used by enterprise tier to signal "unlimited".  -1 is the documented
+# value; we preserve it through _safe_int so enforcer can treat it specially.
+_UNLIMITED_SENTINEL = -1
+
+# Sanity ceiling: no license should grant more than 10 million seats of any type.
+# A value above this (other than the -1 unlimited sentinel) indicates a corrupt
+# or adversarially crafted payload and is clamped to COMMUNITY defaults.
+_SEAT_CEILING = 10_000_000
+
+
+def _safe_int(value: object, default: int) -> int:
+    """
+    Coerce *value* to int; return *default* on any failure.
+
+    Handles:
+      - None / missing field
+      - Empty string or whitespace-only string
+      - Non-numeric strings ("abc", "null", etc.)
+      - Float (truncated to int via int())
+      - Negative values other than the documented -1 unlimited sentinel
+        → returned as-is so the caller can decide (enforcer treats -1 as unlimited)
+      - Values above _SEAT_CEILING that are not -1 → clamp to *default*
+
+    Never raises. Prevents LAURA-V231-002 DoS-on-boot via null seat fields.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return default
+    try:
+        result = int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return default
+
+    # Preserve the -1 unlimited sentinel without clamping.
+    if result == _UNLIMITED_SENTINEL:
+        return result
+
+    # Reject implausibly large values (corrupt / adversarial payload).
+    if result > _SEAT_CEILING:
+        logger.warning(
+            "License verifier: seat field value %d exceeds ceiling %d — "
+            "using tier default %d",
+            result, _SEAT_CEILING, default,
+        )
+        return default
+
+    return result
+
+
 def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None) -> LicenseState:
     tier_str = payload.get("tier", "community")
     try:
@@ -289,13 +341,18 @@ def _verify_counter_signature(
 
     try:
         from cryptography.hazmat.primitives.serialization import load_pem_public_key
-        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA
+        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, EllipticCurvePublicKey
         from cryptography.hazmat.primitives.hashes import SHA256
         from cryptography.exceptions import InvalidSignature
 
-        counter_public_key = load_pem_public_key(
+        _raw_counter_key = load_pem_public_key(
             _integrity.COUNTER_PUBLIC_KEY_PEM.encode("utf-8")
         )
+        if not isinstance(_raw_counter_key, EllipticCurvePublicKey):
+            raise ValueError(
+                f"Counter public key is not EC: {type(_raw_counter_key).__name__}"
+            )
+        counter_public_key: EllipticCurvePublicKey = _raw_counter_key
         message = _compute_counter_sig_message(payload_bytes, primary_public_key_pem)
         # message is already a 32-byte digest; sign/verify with Prehashed would
         # be cleaner but ECDSA(SHA256()) on a 32-byte input is also correct and
