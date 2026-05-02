@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T10:30:00+01:00
+# last-updated: 2026-05-02T10:45:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -242,10 +242,14 @@ vm_sudo() {
 # Run a script remotely via heredoc
 vm_run_script() {
     # Usage: vm_run_script <<'SCRIPT' ... SCRIPT
+    # ServerAliveInterval=60 prevents TCP keepalive timeout during long-running
+    # remote commands (e.g. image pulls + install.sh, which can take 10–20 min).
     ssh -i "$VM_KEY" \
         -o StrictHostKeyChecking=no \
         -o BatchMode=yes \
         -o ConnectTimeout=30 \
+        -o ServerAliveInterval=60 \
+        -o ServerAliveCountMax=10 \
         "$VM_USER@$VM_HOST" bash -s
 }
 
