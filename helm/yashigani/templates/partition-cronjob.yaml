@@ -43,6 +43,12 @@ spec:
             app.kubernetes.io/name: {{ include "yashigani.name" . }}
             app.kubernetes.io/instance: {{ .Release.Name }}
             app.kubernetes.io/component: db-maintenance
+          {{- if .Values.mtls.enabled }}
+          annotations:
+            # Trigger re-creation of CronJob pods when PKI Secret changes.
+            # See gateway.yaml for full rationale.
+            checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+          {{- end }}
         spec:
           serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
           # automountServiceAccountToken disabled: /run/secrets is mounted

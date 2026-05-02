@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-04-30T21:38:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-02T02:32:22+01:00 */ -}}
 {{- if .Values.gateway.enabled }}
 ---
 apiVersion: apps/v1
@@ -21,6 +21,15 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-gateway
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger a rolling update of all cert-consuming workloads when the PKI
+        # Secret changes (e.g. after helm upgrade rotates leaves under a new run
+        # of the bootstrap Job).  lookup returns nil on fresh install (Secret not
+        # yet created by the bootstrap Job hook); default "" prevents template
+        # errors and the empty annotation is harmless on first deploy.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       # /run/secrets mount collision — see redis.yaml note.

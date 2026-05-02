@@ -21,6 +21,12 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-budget-redis
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger rolling update when PKI Secret resourceVersion changes.
+        # See gateway.yaml for full rationale.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       # /run/secrets mount collision — see redis.yaml note.
