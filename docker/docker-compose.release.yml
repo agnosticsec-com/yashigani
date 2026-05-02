@@ -1,0 +1,136 @@
+---
+# Yashigani v2.23.1 — Release digest overlay
+# Last updated: 2026-04-27T21:59:11+01:00
+#
+# Purpose: overrides every `image:` field in docker-compose.yml to pin the
+# exact digest verified at release time. This closes ASVS V10.3.1 (H-02
+# from Iris design-drift audit): the dev compose uses mutable tags; this
+# overlay locks every upstream image to its sha256 digest so a compromised
+# registry tag cannot silently replace a deployed image.
+#
+# Usage (deploy with digest pins):
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.release.yml \
+#                  up -d
+#
+# Usage (Podman):
+#   podman compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.release.yml \
+#                  up -d
+#
+# Mirror plan: per feedback_image_pinning.md, release images must also be
+# mirrored to registry.agnosticsec.com. Digests below are upstream-registry
+# verified (2026-04-27). Mirror task is tracked as v2.23.2 P0 retro item
+# RETRO-H02-MIRROR: "push digest-pinned images to registry.agnosticsec.com
+# and update this file to use the mirrored refs". Until that lands, this file
+# uses upstream registries with digest pinning.
+#
+# Digest inventory (verified 2026-04-27 via Docker Hub/GHCR/Quay registry API,
+# Content-Digest response header — index-level digest for multi-arch images):
+#
+#   caddy:2-alpine                              sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
+#   redis:7-alpine                              sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+#   openpolicyagent/opa:1.15.1                  sha256:c3e940a236811f34a9bdf1b98e1a441db7f1ef81151a0bb4a9706467a11c8cd9
+#   ollama/ollama:0.6.2                         sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721
+#   prom/prometheus:v3.2.1                      sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
+#   grafana/grafana:11.5.2                      sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+#   pgvector/pgvector:pg16                      sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
+#   edoburu/pgbouncer:v1.23.1-p0                sha256:09454d066b2b2a220c8f95690be542079b89dfde09a6a4d72eb65cdfdb493426
+#   prom/alertmanager:v0.27.0                   sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
+#   grafana/loki:3.0.0                          sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253
+#   grafana/promtail:3.0.0                      sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
+#   otel/opentelemetry-collector-contrib:0.100.0  sha256:cea61bd39d318b3ec7664794f6be9ed0cce9321059a08b4ec5d3b8d310a4b609
+#   jaegertracing/all-in-one:1.57               sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9
+#   hashicorp/vault:1.16                        sha256:c5e04689611cb864b8b6247a6a845e0bdc059998f39b5c8a659562287379525c
+#   smallstep/step-ca:0.30.2                    sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
+#   ghcr.io/open-webui/open-webui:v0.9.1        sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978
+#   langflowai/langflow:1.9.0                   sha256:01b48149017d0a211cb4dd0b7454bd4ff68870937b9037c0c2c0928d24868ce1
+#   letta/letta:0.16.7                          sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c
+#   ghcr.io/openclaw/openclaw:2026.3.1          sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
+#   wazuh/wazuh-manager:4.9.2                   sha256:b906ebfc77d78446e9b676e1a0b3cd78e2bf3ac2341688f1726b09c29e0aa826
+#   wazuh/wazuh-indexer:4.9.2                   sha256:654bd546b92627974ac65f97836665a387647d6a299bc4c55614620bec1b56de
+#   wazuh/wazuh-dashboard:4.9.2                 sha256:7622129f46c44f9fceb06a5e3ef7366f965e45aac60da1bafd828705e582100a
+#   quay.io/keycloak/keycloak:26.0              sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+#
+# NOTE: yashigani/gateway and yashigani/backoffice are our own images (built
+# from this repo). They are pinned to digest at push time when mirrored to
+# registry.agnosticsec.com. Their image: fields here are intentionally omitted
+# — the dev compose's build: stanza applies in overlay mode, and the release
+# pipeline sets the image reference (with digest) in the deployment job.
+
+services:
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
+
+  budget-redis:
+    image: docker.io/library/redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+
+  policy:
+    image: docker.io/openpolicyagent/opa:1.15.1@sha256:c3e940a236811f34a9bdf1b98e1a441db7f1ef81151a0bb4a9706467a11c8cd9
+
+  ollama:
+    image: docker.io/ollama/ollama:0.6.2@sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721
+
+  ollama-init:
+    image: docker.io/ollama/ollama:0.6.2@sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721
+
+  prometheus:
+    image: docker.io/prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
+
+  grafana:
+    image: docker.io/grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16@sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
+
+  pgbouncer:
+    image: docker.io/edoburu/pgbouncer:v1.23.1-p0@sha256:09454d066b2b2a220c8f95690be542079b89dfde09a6a4d72eb65cdfdb493426
+
+  alertmanager:
+    image: docker.io/prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
+
+  loki:
+    image: docker.io/grafana/loki:3.0.0@sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253
+
+  promtail:
+    image: docker.io/grafana/promtail:3.0.0@sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
+
+  otel-collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.100.0@sha256:cea61bd39d318b3ec7664794f6be9ed0cce9321059a08b4ec5d3b8d310a4b609
+
+  jaeger:
+    image: docker.io/jaegertracing/all-in-one:1.57@sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9
+
+  vault:
+    image: docker.io/hashicorp/vault:1.16@sha256:c5e04689611cb864b8b6247a6a845e0bdc059998f39b5c8a659562287379525c
+
+  step-ca:
+    image: docker.io/smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
+
+  redis:
+    image: docker.io/library/redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.9.1@sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978
+
+  langflow:
+    image: docker.io/langflowai/langflow:1.9.0@sha256:01b48149017d0a211cb4dd0b7454bd4ff68870937b9037c0c2c0928d24868ce1
+
+  letta:
+    image: docker.io/letta/letta:0.16.7@sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c
+
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:2026.3.1@sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
+
+  wazuh-manager:
+    image: docker.io/wazuh/wazuh-manager:4.9.2@sha256:b906ebfc77d78446e9b676e1a0b3cd78e2bf3ac2341688f1726b09c29e0aa826
+
+  wazuh-indexer:
+    image: docker.io/wazuh/wazuh-indexer:4.9.2@sha256:654bd546b92627974ac65f97836665a387647d6a299bc4c55614620bec1b56de
+
+  wazuh-dashboard:
+    image: docker.io/wazuh/wazuh-dashboard:4.9.2@sha256:7622129f46c44f9fceb06a5e3ef7366f965e45aac60da1bafd828705e582100a
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858

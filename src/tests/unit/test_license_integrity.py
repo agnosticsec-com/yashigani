@@ -3,14 +3,22 @@ Tests for license anti-tampering: counter-signature (v4) and self-integrity chec
 
 Covers:
   - valid v4 license with correct counter-signature → accepted
-  - valid v3 license (no counter-sig) → accepted (backwards compatibility)
+  - v3 license (2-segment, no counter-sig) → REJECTED: license_format_too_old (LAURA-V231-003)
   - v4 license with wrong counter-signature → rejected (counter_signature_invalid)
   - v4 license with replaced primary public key → counter-sig fails
   - integrity check detects modified verifier.py source (VERIFIER_HASH mismatch)
   - integrity check passes with correct hash
   - integrity violation forces COMMUNITY tier on all verify_license() calls
-  - placeholder VERIFIER_HASH skips integrity check (fail-open)
-  - placeholder COUNTER_PUBLIC_KEY_PEM skips counter-sig check (fail-open)
+  - placeholder VERIFIER_HASH in dev → skip (fail-open permitted)
+  - placeholder VERIFIER_HASH in prod → violation flag set (fail-closed, #104)
+  - placeholder COUNTER_PUBLIC_KEY_PEM in dev → skip (fail-open permitted)
+  - placeholder COUNTER_PUBLIC_KEY_PEM in prod → counter-sig fails (fail-closed, #103)
+  - domain-bound license with matching YASHIGANI_TLS_DOMAIN → accepted (#102)
+  - domain-bound license with mismatched YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
+  - domain-bound license with unset YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
+  - wildcard org_domain ("*") → no domain check (#102)
+
+Last updated: 2026-05-01T00:37:01+01:00
 """
 from __future__ import annotations
 
@@ -258,33 +266,48 @@ class TestV4License:
 
 
 # ---------------------------------------------------------------------------
-# v3 backwards compatibility
+# v3 format rejection (LAURA-V231-003)
+# Counter-signature is now mandatory; v3 (2-segment) licenses are rejected.
 # ---------------------------------------------------------------------------
 
 class TestV3BackwardsCompat:
-    def test_valid_v3_license_accepted(self, patched_verifier):
+    """
+    LAURA-V231-003: v3 format (2-segment, no counter-signature) must be rejected.
+
+    These tests were previously named "backwards compatibility" and asserted that
+    v3 was accepted.  They have been updated to assert rejection.  The class name
+    is preserved to maintain continuity with the test history.
+    """
+
+    def test_valid_v3_license_rejected_format_too_old(self, patched_verifier):
+        """A validly-signed 2-segment license is rejected: license_format_too_old."""
         primary_priv_pem, _, _, _ = patched_verifier
         from yashigani.licensing.verifier import verify_license
         from yashigani.licensing.model import LicenseTier
 
         payload = _make_payload()
         lic_str = _build_v3_license(payload, primary_priv_pem)
+        assert len(lic_str.split(".")) == 2, "v3 builder must produce 2-segment string"
 
         result = verify_license(lic_str)
-        assert result.valid is True
-        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.valid is False
+        assert result.error == "license_format_too_old"
+        # Must fall back to COMMUNITY tier — not the payload's claimed tier
+        assert result.tier == LicenseTier.COMMUNITY
 
-    def test_v3_invalid_primary_sig_rejected(self, patched_verifier):
+    def test_v3_rejected_even_with_valid_primary_sig(self, patched_verifier):
+        """Primary-sig validity is irrelevant — v3 is always rejected before sig check."""
         primary_priv_pem, _, _, _ = patched_verifier
         from yashigani.licensing.verifier import verify_license
 
         payload = _make_payload()
         lic_str = _build_v3_license(payload, primary_priv_pem)
-        parts = lic_str.split(".")
-        corrupted = parts[0] + ".AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        result = verify_license(corrupted)
-        assert result.valid is False
-        assert result.error == "invalid_signature"
+        # Both the valid-sig and corrupted-sig 2-segment licenses return the same error
+        result_valid = verify_license(lic_str)
+        corrupted = lic_str.split(".")[0] + ".AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        result_corrupt = verify_license(corrupted)
+        assert result_valid.error == "license_format_too_old"
+        assert result_corrupt.error == "license_format_too_old"
 
 
 # ---------------------------------------------------------------------------
@@ -294,8 +317,9 @@ class TestV3BackwardsCompat:
 class TestCounterKeyPlaceholder:
     def test_v4_accepted_when_counter_key_is_placeholder(self, primary_keys, monkeypatch):
         """
-        If COUNTER_PUBLIC_KEY_PEM is still a placeholder, counter-sig check is
-        skipped and v4 licenses are accepted (fail-open for dev / CI builds).
+        If COUNTER_PUBLIC_KEY_PEM is still a placeholder AND YASHIGANI_ENV=dev,
+        counter-sig check is skipped and v4 licenses are accepted (dev/CI builds).
+        (#103: in prod mode placeholder is fail-closed — see test below.)
         """
         primary_priv_pem, primary_pub_pem = primary_keys
         _, counter_priv_pem, _ = _make_keypair()
@@ -303,6 +327,7 @@ class TestCounterKeyPlaceholder:
         import yashigani.licensing.verifier as verifier_mod
         import yashigani.licensing._integrity as integrity_mod
 
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")  # #103: permit placeholder skip in dev
         monkeypatch.setattr(verifier_mod, "_PUBLIC_KEY_PEM", primary_pub_pem)
         monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
         monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
@@ -328,6 +353,44 @@ class TestCounterKeyPlaceholder:
         result = verify_license(lic_str)
         assert result.valid is True
         assert result.tier == LicenseTier.PROFESSIONAL
+
+    def test_v4_counter_key_placeholder_fails_closed_in_prod(self, primary_keys, monkeypatch):
+        """
+        #103 (LICENSE-2024-001 / CVSS 9.1): In non-dev environments, a
+        placeholder COUNTER_PUBLIC_KEY_PEM must NOT skip the counter-sig check.
+        The verification must fail (counter_signature_invalid), not accept the
+        license, because a placeholder means the build pipeline failed to embed
+        the real counter key.
+        """
+        primary_priv_pem, primary_pub_pem = primary_keys
+        _, counter_priv_pem, _ = _make_keypair()
+
+        import yashigani.licensing.verifier as verifier_mod
+        import yashigani.licensing._integrity as integrity_mod
+
+        # Explicitly unset YASHIGANI_ENV to simulate prod
+        monkeypatch.delenv("YASHIGANI_ENV", raising=False)
+        monkeypatch.setattr(verifier_mod, "_PUBLIC_KEY_PEM", primary_pub_pem)
+        monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
+        monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
+        monkeypatch.setattr(
+            integrity_mod,
+            "COUNTER_PUBLIC_KEY_PEM",
+            integrity_mod._PLACEHOLDER_INTEGRITY + "_COUNTER_KEY",
+        )
+        # VERIFIER_HASH is real (non-placeholder) so integrity doesn't interfere
+        monkeypatch.setattr(integrity_mod, "VERIFIER_HASH", "a" * 64)
+
+        # The verifier will try to load the placeholder PEM as a real key, which
+        # will fail, so the counter_sig check returns False → counter_signature_invalid.
+        from yashigani.licensing.verifier import verify_license
+
+        payload = _make_payload()
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+
+        result = verify_license(lic_str)
+        assert result.valid is False
+        assert result.error == "counter_signature_invalid"
 
 
 # ---------------------------------------------------------------------------
@@ -402,12 +465,14 @@ class TestSelfIntegrity:
 
     def test_placeholder_verifier_hash_skips_integrity_check(self, monkeypatch):
         """
-        When VERIFIER_HASH is a placeholder, the self-integrity check is
-        skipped and _integrity_violated must remain False.
+        When VERIFIER_HASH is a placeholder AND YASHIGANI_ENV=dev, the
+        self-integrity check is skipped and _integrity_violated must stay False.
+        (#104: in prod mode placeholder sets the violation flag — see test below.)
         """
         import yashigani.licensing.verifier as verifier_mod
         import yashigani.licensing._integrity as integrity_mod
 
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")  # #104: only permit skip in dev
         monkeypatch.setattr(
             integrity_mod,
             "VERIFIER_HASH",
@@ -418,6 +483,29 @@ class TestSelfIntegrity:
         verifier_mod._check_self_integrity()
 
         assert verifier_mod._integrity_violated is False
+
+    def test_placeholder_verifier_hash_sets_violation_in_prod(self, monkeypatch):
+        """
+        #104 (LICENSE-2024-002 / CVSS 9.1): In non-dev environments, a
+        placeholder VERIFIER_HASH means the build pipeline did not embed the
+        real hash.  This is treated as a tamper event: _integrity_violated must
+        be set to True (fail-closed), ensuring verify_license() returns COMMUNITY
+        tier for all subsequent calls.
+        """
+        import yashigani.licensing.verifier as verifier_mod
+        import yashigani.licensing._integrity as integrity_mod
+
+        monkeypatch.delenv("YASHIGANI_ENV", raising=False)  # simulate prod
+        monkeypatch.setattr(
+            integrity_mod,
+            "VERIFIER_HASH",
+            integrity_mod._PLACEHOLDER_INTEGRITY + "_VERIFIER_HASH",
+        )
+        monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
+
+        verifier_mod._check_self_integrity()
+
+        assert verifier_mod._integrity_violated is True
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +535,132 @@ class TestIntegrityModule:
 
 
 # ---------------------------------------------------------------------------
+# Domain binding tests (#102 / LICENSE-2024-003 / CVSS 9.3)
+# ---------------------------------------------------------------------------
+
+class TestDomainBinding:
+    """
+    loader.load_license() must enforce org_domain binding.
+
+    A license with org_domain != "*" is only accepted when YASHIGANI_TLS_DOMAIN
+    matches exactly.  Mismatch or absence of the env var must downgrade to
+    COMMUNITY tier (fail-closed) regardless of signature validity.
+    """
+
+    def _write_license_file(self, tmp_path, content: str) -> str:
+        """Write license content to a temp file and return its path."""
+        p = tmp_path / "license.ysg"
+        p.write_text(content, encoding="utf-8")
+        return str(p)
+
+    def _setup_verifier(self, monkeypatch):
+        """Patch verifier to use ephemeral test keys."""
+        _, primary_priv_pem, primary_pub_pem = _make_keypair()
+        _, counter_priv_pem, counter_pub_pem = _make_keypair()
+
+        import yashigani.licensing.verifier as verifier_mod
+        import yashigani.licensing._integrity as integrity_mod
+
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")
+        monkeypatch.setattr(verifier_mod, "_PUBLIC_KEY_PEM", primary_pub_pem)
+        monkeypatch.setattr(verifier_mod, "_placeholder_warned", False)
+        monkeypatch.setattr(verifier_mod, "_integrity_violated", False)
+        monkeypatch.setattr(integrity_mod, "COUNTER_PUBLIC_KEY_PEM", counter_pub_pem)
+        monkeypatch.setattr(
+            integrity_mod, "VERIFIER_HASH",
+            integrity_mod._PLACEHOLDER_INTEGRITY + "_VERIFIER_HASH",
+        )
+        return primary_priv_pem, primary_pub_pem, counter_priv_pem
+
+    def test_domain_bound_license_accepted_when_domain_matches(self, tmp_path, monkeypatch):
+        """
+        A domain-bound license (org_domain = "acme.example.com") is accepted
+        when YASHIGANI_TLS_DOMAIN="acme.example.com".
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "acme.example.com"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.setenv("YASHIGANI_TLS_DOMAIN", "acme.example.com")
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.valid is True
+        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.org_domain == "acme.example.com"
+
+    def test_domain_bound_license_rejected_when_domain_mismatches(self, tmp_path, monkeypatch):
+        """
+        #102: A license bound to "acme.example.com" must be rejected (→ COMMUNITY)
+        when YASHIGANI_TLS_DOMAIN="other.example.com".
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "acme.example.com"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.setenv("YASHIGANI_TLS_DOMAIN", "other.example.com")
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY
+
+    def test_domain_bound_license_rejected_when_domain_env_unset(self, tmp_path, monkeypatch):
+        """
+        #102: A domain-bound license must be rejected (→ COMMUNITY) when
+        YASHIGANI_TLS_DOMAIN is not set in the environment.
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "acme.example.com"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.tier == LicenseTier.COMMUNITY
+
+    def test_wildcard_org_domain_skips_domain_check(self, tmp_path, monkeypatch):
+        """
+        A license with org_domain="*" is accepted regardless of
+        YASHIGANI_TLS_DOMAIN (wildcard = not domain-bound).
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload()
+        payload["org_domain"] = "*"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)  # unset — must still work
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        assert result.valid is True
+        assert result.tier == LicenseTier.PROFESSIONAL
+
+
+# ---------------------------------------------------------------------------
 # sign_license.py v4 integration roundtrip
 # ---------------------------------------------------------------------------
 
@@ -464,6 +678,12 @@ class TestSignLicenseV4Roundtrip:
         try:
             import sign_license
             return sign_license
+        except ModuleNotFoundError:
+            # scripts/sign_license.py is gitignored (internal signing tool) and
+            # will not be present in CI checkouts.  Skip the test class cleanly.
+            # v2.23.2 P0-5a: CI infrastructure fix.
+            pytest.skip("scripts/sign_license.py not available in this checkout — "
+                        "internal signing tool is gitignored (P0-5a)")
         finally:
             sys.path.pop(0)
 
@@ -490,10 +710,12 @@ class TestSignLicenseV4Roundtrip:
         assert result.valid is True
         assert result.tier == LicenseTier.PROFESSIONAL
 
-    def test_v3_roundtrip_still_works(self, patched_verifier):
+    def test_v3_sign_payload_produces_valid_format(self, patched_verifier):
+        """sign_license.sign_payload() produces v3 format (1 dot). LAURA-V231-003:
+        v3 licenses are now REJECTED by verify_license() — sign_payload() is kept
+        for offline tooling parity only; new issuance must use sign_payload_v4()."""
         primary_priv_pem, _, _, _ = patched_verifier
         from yashigani.licensing.verifier import verify_license
-        from yashigani.licensing.model import LicenseTier
 
         sl = self._import_sign_license()
         payload = _make_payload()
@@ -501,6 +723,7 @@ class TestSignLicenseV4Roundtrip:
         lic_str = sl.sign_payload(payload, primary_priv_pem)
         assert lic_str.count(".") == 1, "v3 license must have exactly 1 dot"
 
+        # v3 is now rejected — verify_license returns license_format_too_old.
         result = verify_license(lic_str)
-        assert result.valid is True
-        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.valid is False
+        assert result.error == "license_format_too_old"

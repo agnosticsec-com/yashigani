@@ -7,16 +7,20 @@ PKCE (RFC 7636) — ASVS 10.4.6:
   Every authorization request includes code_challenge (S256).
   The code_verifier is returned to the caller (stored in session state)
   and sent back during the token exchange.
+
+Last updated: 2026-04-28T00:00:00+01:00
 """
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hashlib
 import logging
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 from yashigani.licensing.enforcer import require_feature
 
@@ -159,12 +163,132 @@ class OIDCProvider:
 
     # -- Internal ------------------------------------------------------------
 
+    def _assert_safe_discovery_url(self, url: str) -> None:
+        """Validate the OIDC discovery_url before fetching it (B1 — CWE-918).
+
+        Rules (YSG-RISK-007.B #3ax):
+        1. Scheme MUST be ``https``.
+        2. Hostname must either:
+           a. Be in the YASHIGANI_OIDC_DISCOVERY_HOSTS env allowlist
+              (comma-separated, case-insensitive; "*" means any hostname allowed), OR
+           b. If the env var is not set/empty, any hostname is allowed (operator
+              responsibility — env var is the opt-in tightening control).
+
+        Raises ``HTTPException(502)`` on any violation.
+        """
+        import os
+        from fastapi import HTTPException
+
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+
+        if scheme != "https":
+            logger.warning(
+                "OIDC discovery_url has unsafe scheme %r — URL: %r",
+                repr(scheme),
+                repr(url),
+            )
+            raise HTTPException(status_code=502, detail="oidc_discovery_invalid")
+
+        raw = os.getenv("YASHIGANI_OIDC_DISCOVERY_HOSTS", "").strip()
+        if not raw:
+            # No allowlist configured — any https host is permitted.
+            return
+
+        allowed = {h.strip().lower() for h in raw.split(",") if h.strip()}
+        if "*" in allowed:
+            return  # wildcard: any host
+
+        # fnmatch-style glob matching (e.g. *.example.com)
+        import fnmatch as _fnmatch
+        for entry in allowed:
+            if _fnmatch.fnmatch(host, entry):
+                return
+
+        logger.warning(
+            "OIDC discovery_url hostname %r not in YASHIGANI_OIDC_DISCOVERY_HOSTS — blocked",
+            repr(host),
+        )
+        raise HTTPException(status_code=502, detail="oidc_discovery_invalid")
+
+    def _assert_oidc_endpoint(self, endpoint_name: str, endpoint_url: str) -> None:
+        """Validate that an OIDC discovery endpoint URL is safe.
+
+        Rules (YSG-RISK-003 #3at, CWE-601):
+        1. Scheme MUST be ``https``.
+        2. Hostname must match the registered ``discovery_url`` hostname OR,
+           when ``allowed_auth_endpoint_pattern`` is set, must match that
+           fnmatch glob (case-insensitive).
+
+        Raises ``HTTPException(502)`` on any violation so the caller never
+        issues a redirect or outbound fetch to an attacker-controlled host.
+        The rejected hostname is logged via ``repr()`` to prevent log injection.
+        """
+        from fastapi import HTTPException
+
+        parsed = urlparse(endpoint_url)
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+
+        if scheme != "https":
+            logger.warning(
+                "OIDC discovery: %s has unsafe scheme %r — discovery_url=%r",
+                endpoint_name,
+                repr(scheme),
+                repr(self._config.discovery_url),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="oidc_discovery_invalid",
+            )
+
+        discovery_host = (urlparse(self._config.discovery_url).hostname or "").lower()
+        pattern = self._config.allowed_auth_endpoint_pattern
+
+        if pattern is not None:
+            # Caller-supplied glob: must match the endpoint hostname.
+            if not fnmatch.fnmatch(host, pattern.lower()):
+                logger.warning(
+                    "OIDC discovery: %s hostname %r does not match "
+                    "allowed_auth_endpoint_pattern %r — rejecting",
+                    endpoint_name,
+                    repr(host),
+                    repr(pattern),
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="oidc_discovery_invalid",
+                )
+        else:
+            # Default: endpoint hostname must equal the discovery_url hostname.
+            if host != discovery_host:
+                logger.warning(
+                    "OIDC discovery: %s hostname %r does not match "
+                    "discovery_url hostname %r — rejecting",
+                    endpoint_name,
+                    repr(host),
+                    repr(discovery_host),
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="oidc_discovery_invalid",
+                )
+
     def _get_metadata(self) -> dict:
         if self._metadata:
             return self._metadata
         import urllib.request, json
+        # B1: assert the discovery_url itself is safe before fetching
+        # (YSG-RISK-007.B #3ax, CWE-918).
+        self._assert_safe_discovery_url(self._config.discovery_url)
         with urllib.request.urlopen(self._config.discovery_url, timeout=10) as resp:
             self._metadata = json.loads(resp.read())
+        # B2 / YSG-RISK-003: validate mandatory endpoints from the discovery
+        # document before any call site uses them (CWE-601 + CWE-918).
+        for field_name in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
+            value = self._metadata.get(field_name, "")
+            self._assert_oidc_endpoint(field_name, value)
         return self._metadata
 
     def _get_jwks(self) -> dict:
@@ -172,6 +296,10 @@ class OIDCProvider:
             return self._jwks
         import urllib.request, json
         meta = self._get_metadata()
+        # jwks_uri is already validated by _get_metadata(); re-assert here as a
+        # defence-in-depth guard in case _get_jwks() is ever called with a
+        # pre-populated _metadata that bypassed validation (YSG-RISK-007.B B2).
+        self._assert_oidc_endpoint("jwks_uri", meta.get("jwks_uri", ""))
         with urllib.request.urlopen(meta["jwks_uri"], timeout=10) as resp:
             self._jwks = json.loads(resp.read())
         return self._jwks

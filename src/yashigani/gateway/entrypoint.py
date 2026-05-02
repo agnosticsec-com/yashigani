@@ -2,6 +2,8 @@
 Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
+
+Last updated: 2026-04-29T17:45:00+01:00
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ from yashigani.metrics.middleware import PrometheusMiddleware
 from yashigani.gateway.proxy import GatewayConfig, create_gateway_app
 from yashigani.gateway.agent_auth import AgentAuthMiddleware
 from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
+from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -114,23 +118,33 @@ def _build_app():
     if redis_use_tls:
         # redis-py reads ssl_* params from the URL query string when scheme
         # is rediss://. Client cert is gateway_client.{crt,key}; trust anchor
-        # is ca_root.crt.
+        # is ca_root.crt — redis-py goes through Python ssl which on
+        # Python 3.12 / OpenSSL 3.0 / Ubuntu 24.04 does not auto-set
+        # X509_V_FLAG_PARTIAL_CHAIN, so the intermediate-only anchor fails
+        # (gate #58a evidence, 2026-04-28). Public ca_root.crt is in the
+        # workload trust store; the private ca_root.key never leaves the host.
+        # IMPORTANT: redis_base must NOT include the query string — each
+        # call site appends `/{db}` which must precede the `?`. Keep the
+        # query portion separate and format as f"{redis_base}/{db}{redis_query}".
         _ca = f"{secrets_dir}/ca_root.crt"
         _crt = f"{secrets_dir}/gateway_client.crt"
         _key = f"{secrets_dir}/gateway_client.key"
         redis_base = (
             f"rediss://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
+        )
+        redis_query = (
             f"?ssl_cert_reqs=required&ssl_ca_certs={_ca}"
             f"&ssl_certfile={_crt}&ssl_keyfile={_key}"
         )
     else:
         redis_base = f"redis://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
+        redis_query = ""
 
     # Rate limiter — Redis DB 2
     rate_limiter = None
     try:
         import redis as _redis
-        redis_client_rl = _redis.from_url(f"{redis_base}/2", decode_responses=False)
+        redis_client_rl = _redis.from_url(f"{redis_base}/2{redis_query}", decode_responses=False)
         redis_client_rl.ping()
         rate_limiter = RateLimiter(
             redis_client=redis_client_rl,
@@ -145,7 +159,7 @@ def _build_app():
     try:
         import redis as _redis
         from yashigani.gateway.endpoint_ratelimit import EndpointRateLimiter
-        redis_client_ep = _redis.from_url(f"{redis_base}/2", decode_responses=False)
+        redis_client_ep = _redis.from_url(f"{redis_base}/2{redis_query}", decode_responses=False)
         redis_client_ep.ping()
         endpoint_rate_limiter = EndpointRateLimiter(redis_client=redis_client_ep)
         logger.info("Endpoint rate limiter ready")
@@ -157,7 +171,7 @@ def _build_app():
     try:
         import redis as _redis
         from yashigani.gateway.response_cache import ResponseCache
-        redis_client_cache = _redis.from_url(f"{redis_base}/4", decode_responses=False)
+        redis_client_cache = _redis.from_url(f"{redis_base}/4{redis_query}", decode_responses=False)
         redis_client_cache.ping()
         response_cache = ResponseCache(redis_client=redis_client_cache)
         logger.info("Response cache ready (Redis DB 4)")
@@ -170,7 +184,7 @@ def _build_app():
     redis_client_rbac = None
     try:
         import redis as _redis
-        redis_client_rbac = _redis.from_url(f"{redis_base}/3", decode_responses=False)
+        redis_client_rbac = _redis.from_url(f"{redis_base}/3{redis_query}", decode_responses=False)
         redis_client_rbac.ping()
         rbac_store = RBACStore(redis_client=redis_client_rbac)
         logger.info("Gateway RBAC store ready: %d group(s)", len(rbac_store.list_groups()))
@@ -189,7 +203,7 @@ def _build_app():
     try:
         import redis as _redis
         from yashigani.gateway.jwt_inspector import JWTInspector
-        redis_client_jwt = _redis.from_url(f"{redis_base}/1", decode_responses=False)
+        redis_client_jwt = _redis.from_url(f"{redis_base}/1{redis_query}", decode_responses=False)
         redis_client_jwt.ping()
         jwt_inspector = JWTInspector(redis_client=redis_client_jwt)
         logger.info(
@@ -200,10 +214,17 @@ def _build_app():
         logger.warning("JWT inspector unavailable (%s) — JWT validation disabled", exc)
 
     # PostgreSQL pool + inference logger + anomaly detector — Phases 1, 2
+    # M-02 (SOP 1 fail-closed): if YASHIGANI_DB_DSN is configured and DB init
+    # fails, re-raise so the container exits non-zero.  A warn-and-continue here
+    # produces a healthy-looking zombie: container reports healthy but every
+    # request that touches inference/audit/anomaly fails with AttributeError.
+    # Not having a DSN set is legitimate (community / dev deploy without DB) and
+    # does not raise — only a configured-but-broken DB is fatal.
     db_pool = None
     inference_logger = None
     anomaly_detector = None
     content_relay_detector = None
+    _db_dsn_configured = False
     try:
         from yashigani.db import create_pool, run_migrations
         from yashigani.inference import InferencePayloadLogger, AnomalyDetector
@@ -219,6 +240,7 @@ def _build_app():
             except OSError:
                 logger.warning("postgres_password secret not found — DB DSN unresolved")
         if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
+            _db_dsn_configured = True
             run_migrations()
             # Pool creation deferred to _db_startup() — called from lifespan
             os.environ["_YASHIGANI_DB_READY"] = "1"
@@ -227,7 +249,7 @@ def _build_app():
             inference_logger = InferencePayloadLogger()
 
             import redis as _redis
-            redis_client_anomaly = _redis.from_url(f"{redis_base}/2", decode_responses=False)
+            redis_client_anomaly = _redis.from_url(f"{redis_base}/2{redis_query}", decode_responses=False)
             redis_client_anomaly.ping()
             anomaly_detector = AnomalyDetector(redis_client=redis_client_anomaly)
             from yashigani.inference.content_relay import ContentRelayDetector
@@ -236,6 +258,17 @@ def _build_app():
         else:
             logger.warning("YASHIGANI_DB_DSN not set — Postgres features disabled")
     except Exception as exc:
+        if _db_dsn_configured:
+            # DB DSN was set but init failed — this is a fatal misconfiguration,
+            # not a graceful degradation.  Re-raise so the process exits non-zero
+            # and the orchestrator surfaces the real fault (M-02 / SOP 1).
+            logger.exception(
+                "Gateway DB/inference init FAILED with YASHIGANI_DB_DSN configured "
+                "— refusing to start in degraded mode (M-02). "
+                "Fix the DB connection before restarting."
+            )
+            raise
+        # No DSN configured: DB features simply unavailable, not a fatal error.
         logger.warning("DB/inference init failed (%s) — Postgres features disabled", exc)
 
     # ── v1.0: Unified Identity Registry (Redis DB 3, same as agents) ────────
@@ -382,6 +415,21 @@ def _build_app():
         pii_detector=pii_detector,
     )
     logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
+
+    # Layer B: Caddy-verified shared-secret middleware (EX-231-10 Layer B).
+    # Checks X-Caddy-Verified-Secret on every non-healthcheck request. Must run
+    # second from outermost — added BEFORE SpiffePeerCertMiddleware so that in
+    # Starlette LIFO order, Spiffe runs outermost and CaddyVerified runs second.
+    # load_caddy_secret() is called in the gateway _lifespan (proxy.py), not here,
+    # so the module-level secret is populated before any request dispatch.
+    gateway_app.add_middleware(CaddyVerifiedMiddleware)
+
+    # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE fix (V10.3.5).
+    # Extracts the TLS peer cert URI SAN from the ASGI handshake scope and
+    # injects it as X-SPIFFE-ID-Peer-Cert.  This is a server-controlled header
+    # that cannot be forged by the client, closing the direct-to-gateway bypass.
+    # Must run outermost (added last = executed first in starlette middleware stack).
+    gateway_app.add_middleware(SpiffePeerCertMiddleware)
 
     # Agent auth middleware — must run before Prometheus middleware so agent
     # requests are authenticated before metrics are emitted.

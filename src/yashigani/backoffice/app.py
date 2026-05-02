@@ -11,11 +11,13 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+from yashigani.auth.spiffe import require_spiffe_id
 
 try:
     from prometheus_client import (
@@ -77,8 +79,209 @@ from yashigani.backoffice.routes import (
 )
 
 
+async def _bootstrap_admin_accounts(auth_service, state) -> None:
+    """
+    Seed admin1 (+ optional admin2) from installer secrets on first boot.
+
+    Replaces the old in-memory `if not auth_service._accounts` guard with
+    a Postgres-backed count so restarts never trigger a re-seed — rotated
+    passwords and re-enrolled TOTPs persist.
+
+    Resolves P0-2 (YCS-20260423-v2.23.1-OWASP-3X).
+    """
+    import logging as _lg
+    import os as _os
+
+    _log = _lg.getLogger("yashigani.backoffice.auth_bootstrap")
+    ctx = getattr(state, "_auth_bootstrap", None)
+    if ctx is None:
+        return
+
+    if await auth_service.total_admin_count() != 0:
+        _log.info("Bootstrap: admin accounts already present — skipping seed")
+        return
+
+    admin_username = ctx["admin_username"]
+    initial_admin_password = ctx["initial_admin_password"]
+    secrets_dir = ctx["secrets_dir"]
+
+    await auth_service.create_admin(
+        username=admin_username,
+        auto_generate=False,
+        plaintext_password=initial_admin_password,
+    )
+    totp_file = _os.path.join(secrets_dir, "admin1_totp_secret")
+    if _os.path.exists(totp_file):
+        totp_secret = open(totp_file).read().strip()
+        if totp_secret:
+            # installer-privileged bootstrap path — see docstring on
+            # PostgresLocalAuthService.set_totp_secret_direct
+            await auth_service.set_totp_secret_direct(admin_username, totp_secret)
+            _log.info("Bootstrap: TOTP pre-provisioned from installer secret")
+    _log.info("Bootstrap: initial admin account created — %s", admin_username)
+
+    # --- Admin 2 (backup — anti-lockout) -------------------------------------
+    admin2_user_file = _os.path.join(secrets_dir, "admin2_username")
+    admin2_pwd_file = _os.path.join(secrets_dir, "admin2_password")
+    if _os.path.exists(admin2_user_file) and _os.path.exists(admin2_pwd_file):
+        admin2_username = open(admin2_user_file).read().strip()
+        admin2_password = open(admin2_pwd_file).read().strip()
+        if admin2_username and admin2_password:
+            await auth_service.create_admin(
+                username=admin2_username,
+                auto_generate=False,
+                plaintext_password=admin2_password,
+            )
+            totp2_file = _os.path.join(secrets_dir, "admin2_totp_secret")
+            if _os.path.exists(totp2_file):
+                totp2_secret = open(totp2_file).read().strip()
+                if totp2_secret:
+                    await auth_service.set_totp_secret_direct(
+                        admin2_username, totp2_secret
+                    )
+                    _log.info(
+                        "Bootstrap: admin2 TOTP pre-provisioned from installer secret"
+                    )
+            _log.info("Bootstrap: backup admin account created — %s", admin2_username)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # v2.23.1: Async DB pool + inference logger + anomaly detector init.
+    # Moved from _bootstrap() because uvicorn imports the entrypoint module
+    # inside its running server loop, so sync loop.run_until_complete() raises
+    # "this event loop is already running" and disables Postgres features.
+    import logging as _logging
+    import os
+    from urllib.parse import quote
+    _log = _logging.getLogger("yashigani.backoffice.lifespan")
+
+    # Layer B: load the per-install caddy_internal_hmac secret.
+    # Must be first so _caddy_secret is populated before any request reaches
+    # CaddyVerifiedMiddleware. Raises RuntimeError if secret is missing
+    # (fail-closed per SOP 1 / CLAUDE.md §3).
+    from yashigani.auth.caddy_verified import load_caddy_secret as _load_caddy_secret
+    _load_caddy_secret()
+
+    db_dsn = os.getenv("YASHIGANI_DB_DSN", "")
+    if db_dsn and "${POSTGRES_PASSWORD}" not in db_dsn:
+        try:
+            from yashigani.db import create_pool, get_pool, run_migrations
+            from yashigani.db import _BOOTSTRAP_ADVISORY_LOCK_KEY
+            from yashigani.inference import InferencePayloadLogger, AnomalyDetector
+            from yashigani.backoffice.state import backoffice_state
+
+            # v2.23.1 P0-2: alembic must run BEFORE the pool opens so the
+            # admin_accounts + used_totp_codes tables exist when the auth
+            # service first reads/writes. run_migrations() is sync and uses
+            # its own psycopg2 connection. Multi-replica safety: alembic
+            # acquires a postgres advisory lock internally — see
+            # yashigani/db/__init__.py:run_migrations() (Captain #58c #3bv).
+            run_migrations()
+
+            await create_pool()
+
+            # --- v2.23.1 P0-2: bootstrap PostgresLocalAuthService -------------
+            # Seed admin accounts from installer secrets ONLY if the DB has
+            # zero admins. Previously the guard was `if not auth_service._accounts`
+            # (in-memory dict); now we consult the durable store so restarts
+            # never clobber rotated passwords / re-enrolled TOTP.
+            #
+            # K8s multi-replica race: replicas 1 and 2 both check
+            # total_admin_count() concurrently before either commits the
+            # admin1 row -> both pass the != 0 guard -> second insert hits a
+            # unique-constraint violation and the pod CrashLoopBackOff's.
+            # Hold the same advisory lock as run_migrations() across the
+            # bootstrap so replica 2 only enters the bootstrap block AFTER
+            # replica 1 has committed the admin rows; replica 2 then sees
+            # count != 0 and skips.
+            #
+            # CRITICAL (Captain #58c #3bw + #3bx, 2026-04-29): the lock
+            # connection MUST go direct to postgres, NOT through pgbouncer.
+            # pgbouncer in txn-pool mode routes each new connection to a
+            # different postgres backend, and pg_advisory_lock is session-
+            # scoped (per-backend). Replicas land on different backends ->
+            # both "acquire" the same key independently -> no serialisation.
+            # Plus the asyncpg pool's command_timeout=10 was making replica 2
+            # raise TimeoutError before replica 1 finished bootstrap.
+            # Use bare psycopg2 with YASHIGANI_DB_DSN_DIRECT (env var set in
+            # the K8s Helm chart pointing at yashigani-postgres:5432). Falls
+            # back to YASHIGANI_DB_DSN for compose (single-replica = no race).
+            from yashigani.auth.pg_auth import PostgresLocalAuthService
+            auth_service = PostgresLocalAuthService(pool=get_pool())
+            backoffice_state.auth_service = auth_service
+
+            import asyncio as _asyncio
+            import psycopg2 as _psycopg2
+            direct_dsn = os.environ.get("YASHIGANI_DB_DSN_DIRECT") or db_dsn
+
+            def _acquire_lock_sync():
+                conn = _psycopg2.connect(direct_dsn)
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_lock(%s)", (_BOOTSTRAP_ADVISORY_LOCK_KEY,))
+                return conn
+
+            def _release_lock_sync(conn):
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(%s)", (_BOOTSTRAP_ADVISORY_LOCK_KEY,))
+                finally:
+                    conn.close()
+
+            _lock_conn = await _asyncio.to_thread(_acquire_lock_sync)
+            _log.info("Bootstrap: acquired admin advisory lock %s", hex(_BOOTSTRAP_ADVISORY_LOCK_KEY))
+            try:
+                await _bootstrap_admin_accounts(auth_service, backoffice_state)
+            finally:
+                await _asyncio.to_thread(_release_lock_sync, _lock_conn)
+                _log.info("Bootstrap: released admin advisory lock")
+
+            inference_logger = InferencePayloadLogger()
+            inference_logger.start()
+            backoffice_state.inference_logger = inference_logger
+
+            # Anomaly detector Redis client (DB 2), mirrors _bootstrap URL logic.
+            redis_host = os.getenv("REDIS_HOST", "redis")
+            redis_port = os.getenv("REDIS_PORT", "6380")
+            redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
+            secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
+            redis_pwd_file = os.path.join(secrets_dir, "redis_password")
+            redis_password = (
+                open(redis_pwd_file).read().strip()
+                if os.path.exists(redis_pwd_file)
+                else os.getenv("REDIS_PASSWORD", "")
+            )
+            _q = quote(redis_password, safe="")
+            if redis_use_tls:
+                anomaly_redis_url = (
+                    f"rediss://:{_q}@{redis_host}:{redis_port}/2"
+                    f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
+                    f"&ssl_certfile={secrets_dir}/backoffice_client.crt"
+                    f"&ssl_keyfile={secrets_dir}/backoffice_client.key"
+                )
+            else:
+                anomaly_redis_url = f"redis://:{_q}@{redis_host}:{redis_port}/2"
+
+            import redis as _redis
+            anomaly_client = _redis.from_url(anomaly_redis_url, decode_responses=False)
+            backoffice_state.anomaly_detector = AnomalyDetector(redis_client=anomaly_client)
+            _log.info("Backoffice: DB pool + inference logger + anomaly detector ready (lifespan)")
+        except Exception as exc:
+            # Retro #3ar — fail-closed on lifespan init failure (CLAUDE.md §3).
+            # The previous behaviour was to log a warning and continue with
+            # auth_service=None, which left the container in a "healthy"
+            # but unauthenticatable zombie state — every /auth/login returned
+            # HTTP 500 with `AttributeError: 'NoneType' object has no attribute
+            # 'authenticate'`. Caught only by gate #58a restore test.
+            # Log the full traceback so the failing dependency is identifiable,
+            # then re-raise so the container exits non-zero and orchestrator
+            # surfaces the real fault instead of the secondary 500.
+            _log.exception(
+                "Backoffice lifespan init FAILED — refusing to start with auth_service=None"
+            )
+            raise
+
     # Startup — schedule daily licence expiry check (v0.7.1)
     scheduler = None
     try:
@@ -122,6 +325,35 @@ def create_backoffice_app() -> FastAPI:
         openapi_url=None,       # never expose schema externally
         lifespan=lifespan,
     )
+
+    # Layer B: Caddy-verified shared-secret middleware (EX-231-10 Layer B).
+    # Checks X-Caddy-Verified-Secret on every non-healthcheck request. Must run
+    # second from outermost — added BEFORE SpiffePeerCertMiddleware so that in
+    # Starlette LIFO order, Spiffe runs outermost and CaddyVerified runs second.
+    # load_caddy_secret() is called in lifespan() above.
+    from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
+    app.add_middleware(CaddyVerifiedMiddleware)
+
+    # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE backoffice leg (Lu F-1B
+    # EX-231-10, 2026-04-29). Extracts the TLS peer cert URI SAN from the ASGI
+    # handshake scope and injects it as X-SPIFFE-ID-Peer-Cert. This is a
+    # server-controlled header that cannot be forged by the client.
+    #
+    # Why backoffice needs this: backoffice listens on 0.0.0.0:8443 with
+    # `--ssl-cert-reqs 2` (mutual TLS required). Any internal-mesh peer holding
+    # a CA-minted client cert can connect direct to https://backoffice:8443/
+    # internal/metrics, present its own cert, and forge `X-SPIFFE-ID:
+    # spiffe://yashigani.internal/prometheus` to bypass the SPIFFE allowlist
+    # on Prometheus metrics. Same bypass shape as the gateway leg that was
+    # closed at a054877 — the fix here is the same middleware on the
+    # backoffice ASGI app, written deliberately as the OUTERMOST middleware
+    # so it sets the trustworthy header BEFORE any application code reads
+    # x-spiffe-id (auth/spiffe.py:73).
+    #
+    # Must run outermost (added last = executed first in starlette middleware
+    # stack), matching gateway/entrypoint.py placement.
+    from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+    app.add_middleware(SpiffePeerCertMiddleware)
 
     # CORS: backoffice serves its own frontend — no cross-origin needed
     app.add_middleware(
@@ -193,6 +425,7 @@ def create_backoffice_app() -> FastAPI:
         ("/auth/password/change",       8 * 1024),
         ("/auth/password/self-reset",   4 * 1024),
         ("/auth/totp/provision",        4 * 1024),    # start + confirm variants
+        ("/auth/stepup",                4 * 1024),    # 6-digit TOTP code only
         # /v1/chat/completions is intentionally not limited here — LLM prompts
         # can legitimately be large; the global 4 MB limit still applies.
     ]
@@ -260,10 +493,16 @@ def create_backoffice_app() -> FastAPI:
     async def healthz():
         return {"status": "ok"}
 
-    # Internal Prometheus metrics endpoint — scraped by Prometheus on internal network only.
-    # No auth required: reachable only within the internal Docker/Podman network.
-    # ASVS V9.1.1: network-layer isolation replaces endpoint auth here.
-    @app.get("/internal/metrics")
+    # Internal Prometheus metrics endpoint — Caddy-gated with SPIFFE URI ACL.
+    # EX-231-08 (v2.23.1, zero-trust default): Prometheus scrapes via Caddy's
+    # :8444 internal listener; Caddy validates the peer cert and sets
+    # X-SPIFFE-ID from the URI SAN. require_spiffe_id enforces the allowlist
+    # defined in service_identities.yaml endpoint_acls. Bridge-network
+    # isolation is now a defence-in-depth measure, not the sole control.
+    @app.get(
+        "/internal/metrics",
+        dependencies=[Depends(require_spiffe_id("/internal/metrics"))],
+    )
     async def internal_metrics():
         if not _PROM_AVAILABLE:
             return PlainTextResponse("# prometheus_client not installed\n")

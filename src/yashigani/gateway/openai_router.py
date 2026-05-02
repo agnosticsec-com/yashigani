@@ -34,6 +34,7 @@ Streaming limitations
   response-path inspection. This adds ~2-3s latency but ensures PII
   cannot leak through streamed responses.
 """
+# Last updated: 2026-04-23T11:36:14+01:00
 from __future__ import annotations
 
 import json
@@ -495,6 +496,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         and _state.streaming_enabled
         and not is_agent_call
     )
+
+    # OPA enforcement: stream=false when OPA policies are active.
+    # All response content must be inspected before delivery to the user
+    # (human or non-human). Streaming bypasses response-path OPA checks.
+    if use_streaming and _state.opa_url:
+        use_streaming = False
+        logger.info("Streaming disabled: OPA policies active — response inspection required")
 
     # PII block/redact modes require full response inspection — force buffered
     if use_streaming and _state.pii_detector is not None:
@@ -967,7 +975,32 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
 @router.get("/models", response_model=ModelListResponse)
 async def list_models(request: Request):
-    """List available models (for Open WebUI model picker)."""
+    """List available models (for Open WebUI model picker).
+
+    AUTH REQUIRED. Ava #59 / FINDING-59-01 (2026-04-29): unauthenticated
+    callers were receiving the full Ollama model list + every active service
+    identity slug + every active agent slug — internal-topology disclosure
+    (OWASP API9 Improper Inventory Management, A01 Broken Access Control).
+    Caddy's `/v1/*` block does not gate via `forward_auth`; the gate is here.
+    Open WebUI carries the admin session cookie (it lives at /chat/* behind
+    the same Caddy auth) so the picker still populates after login. MCP
+    clients that hit `/v1/models` directly must present a valid Bearer
+    token or X-Forwarded-User header to enumerate.
+    """
+    identity = _resolve_identity(request)
+    if not identity:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "AUTHENTICATION_REQUIRED",
+                "detail": (
+                    "GET /v1/models requires an authenticated identity. "
+                    "Provide Authorization: Bearer <api_key> or authenticate "
+                    "via the admin SSO flow."
+                ),
+            },
+        )
+
     models = []
 
     # Add local Ollama models
@@ -1051,7 +1084,50 @@ def _resolve_identity(request: Request) -> Optional[dict]:
             return {"identity_id": "internal", "status": "active", "kind": "service",
                     "groups": [], "allowed_models": [], "sensitivity_ceiling": "RESTRICTED"}
         if key:
-            return _state.identity_registry.get_by_api_key(key)
+            identity = _state.identity_registry.get_by_api_key(key)
+            if identity is None:
+                return None
+            # V10.3.5 — sender-constrained token check (LF-SPIFFE-FORGE fix).
+            # When the identity has a bound_spiffe_uri set, the bearer key is
+            # SPIFFE-URI-bound.  The SPIFFE URI is resolved in priority order:
+            #
+            #   1. X-SPIFFE-ID-Peer-Cert (set by SpiffePeerCertMiddleware from
+            #      the actual TLS handshake peer cert URI SAN — cannot be forged
+            #      by the client even on a direct-to-gateway connection).
+            #   2. X-SPIFFE-ID (set by Caddy from the peer cert when the request
+            #      is routed through Caddy; Caddy strips any inbound value first).
+            #
+            # The Caddy path (2) is the normal path for external callers.
+            # The direct-gateway path (1) covers internal-mesh peers that bypass
+            # Caddy — those connections must present their OWN cert, so the
+            # middleware extracts the real URI from the handshake.
+            #
+            # LF-SPIFFE-FORGE threat: a compromised internal peer connects
+            # directly to gateway:8080 and sets X-SPIFFE-ID: <stolen bound_uri>.
+            # Without the middleware, only check (2) runs and the stolen header
+            # passes.  With the middleware, check (1) runs first — the peer's
+            # OWN cert URI SAN (e.g. spiffe://…/wazuh-agent) replaces the
+            # forged header, and the binding check rejects the mismatch.
+            #
+            # If no binding is set (empty string) the check is skipped —
+            # community agents and Open WebUI internal traffic are unaffected.
+            bound_uri = identity.get("bound_spiffe_uri", "")
+            if bound_uri:
+                # Prefer the server-extracted cert URI (cryptographically bound).
+                peer_cert_uri = request.headers.get("x-spiffe-id-peer-cert", "")
+                presented_uri = peer_cert_uri if peer_cert_uri else request.headers.get("X-SPIFFE-ID", "")
+                if presented_uri != bound_uri:
+                    # Fail-closed: stolen/replayed token without matching cert.
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "V10.3.5 LF-SPIFFE-FORGE: SPIFFE-URI mismatch for identity %s — "
+                        "bound=%r presented=%r (peer_cert=%r x-spiffe-id=%r) — rejecting",
+                        identity.get("identity_id"), bound_uri, presented_uri,
+                        peer_cert_uri,
+                        request.headers.get("X-SPIFFE-ID", ""),
+                    )
+                    return None
+            return identity
 
     return None
 

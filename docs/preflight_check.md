@@ -1,7 +1,7 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v2.23
-**Last updated:** 2026-04-12
+**Version:** v2.23.1
+**Last updated:** 2026-04-23
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
 ---
@@ -939,7 +939,7 @@ The current agent lineup is: Lala (Langflow), Julietta (Letta), Scout (OpenClaw)
 [ ] Image versions pinned in docker-compose.yml
 [ ] Monitoring/alerting receivers configured
 [ ] Budget tiers configured and tested
-[ ] Pre-release gate passed: python3 scripts/owasp_prerelease_check.py
+[ ] Pre-release OWASP review completed (manual review of ASVS, API Security, Agentic AI controls against current code)
 [ ] Fail2ban auth throttle verified (x5 escalation -> permanent IP block)
 [ ] IP allowlist + blocklist configured (IPv4/IPv6/CIDR)
 ```

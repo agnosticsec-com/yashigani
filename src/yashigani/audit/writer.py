@@ -7,20 +7,25 @@ v0.9.0 (F-12): Every event carries a ``prev_event_hash`` field — SHA-384 of
 the preceding event's canonical JSON, forming a tamper-evident hash chain.
 The first event of each calendar day anchors with SHA-384 of the date string
 "YYYY-MM-DD".  The chain can be verified offline with scripts/audit_verify.py.
+
+Last updated: 2026-04-28T00:00:00+01:00
 """
 from __future__ import annotations
 
 import dataclasses
 import hashlib
+import ipaddress
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from yashigani.audit.config import AuditConfig
 from yashigani.audit.masking import CredentialMasker
@@ -59,6 +64,70 @@ def _day_anchor(date_str: str) -> str:
 
 class AuditWriteError(Exception):
     """Raised when the volume sink write fails. Callers must abort the operation."""
+
+
+# ---------------------------------------------------------------------------
+# SIEM target URL validation (YSG-RISK-007.C #3ax, CWE-918)
+# ---------------------------------------------------------------------------
+
+def validate_siem_url(url: str) -> str:
+    """Validate a SIEM target URL to prevent SSRF (CWE-918, YSG-RISK-007.C).
+
+    Rules:
+    1. Scheme MUST be ``https``.
+    2. Unless YASHIGANI_TEST_MODE=1, the host must not resolve to an RFC 1918 /
+       loopback / link-local / multicast address.
+    3. Hosts in YASHIGANI_SIEM_HOSTNAMES (comma-separated) bypass the DNS
+       resolution check (explicit allowlist for known SIEM SaaS endpoints).
+    4. DNS lookup is skipped when YASHIGANI_TEST_MODE=1 but https is still
+       enforced.
+
+    Raises ``ValueError`` on any violation.  Callers in the Pydantic model
+    surface this as HTTP 422; callers in the writer surface it as a delivery
+    error so the event is dropped with a logged SIEM failure rather than
+    silently forwarded to an unsafe URL.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+
+    if scheme != "https":
+        raise ValueError(
+            f"SIEM target URL must use https:// — got scheme {scheme!r} "
+            "(CWE-918, YSG-RISK-007.C)"
+        )
+
+    if not host:
+        raise ValueError("SIEM target URL must contain a hostname.")
+
+    # Explicit allowlist bypasses DNS resolution.
+    raw_allowlist = os.getenv("YASHIGANI_SIEM_HOSTNAMES", "").strip()
+    allowed = {h.strip().lower() for h in raw_allowlist.split(",") if h.strip()}
+    if host in allowed:
+        return url
+
+    # Skip DNS / IP-range gate in test mode (https is still required).
+    if os.getenv("YASHIGANI_TEST_MODE") == "1":
+        return url
+
+    # Resolve hostname and reject private / loopback / link-local ranges.
+    try:
+        ip = ipaddress.ip_address(socket.gethostbyname(host))
+    except OSError:
+        # DNS failure — fail closed.
+        raise ValueError(
+            f"SIEM target URL hostname {host!r} could not be resolved — "
+            "DNS failure treated as unsafe (CWE-918)."
+        )
+
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+        raise ValueError(
+            f"SIEM target URL hostname {host!r} resolves to {ip!s} "
+            "(private / loopback / link-local / multicast) — "
+            "SSRF to internal infrastructure blocked (CWE-918)."
+        )
+
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +339,10 @@ class AuditLogWriter:
     def _send_to_target(self, raw_json: str, target: SiemTarget) -> None:
         import urllib.request
         import urllib.error
+
+        # Re-assert SSRF safety at send time — the URL may have been stored
+        # before the validator was in place (YSG-RISK-007.C #3ax, CWE-918).
+        validate_siem_url(target.url)
 
         body, content_type = self._format_for_target(raw_json, target)
         req = urllib.request.Request(

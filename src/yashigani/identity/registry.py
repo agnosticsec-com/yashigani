@@ -15,6 +15,7 @@ Redis namespace (db/3):
   identity:index:kind:service     Set: service identity_ids
   identity:slug:{slug}            String: identity_id (slug -> id lookup)
 """
+# Last updated: 2026-04-28T00:00:00+01:00
 from __future__ import annotations
 
 import datetime
@@ -78,6 +79,11 @@ class IdentityRecord:
     updated_at: str = ""
     last_seen_at: str = ""
     token_rotation_schedule: str = ""
+    # V10.3.5 — sender-constrained token binding.
+    # When non-empty, the bearer token is SPIFFE-URI-bound: the caller must
+    # present a client cert whose URI SAN (passed by Caddy as X-SPIFFE-ID)
+    # exactly matches this value.  Empty = no binding (community/legacy agents).
+    bound_spiffe_uri: str = ""
 
 
 class IdentityRegistry:
@@ -116,6 +122,7 @@ class IdentityRegistry:
         allowed_paths: list[str] | None = None,
         allowed_cidrs: list[str] | None = None,
         org_id: str = "",
+        spiffe_uri: str = "",
     ) -> tuple[str, str]:
         """
         Register a new identity.
@@ -156,6 +163,7 @@ class IdentityRegistry:
             "allowed_paths": json.dumps(allowed_paths or []),
             "allowed_cidrs": json.dumps(allowed_cidrs or []),
             "org_id": org_id,
+            "bound_spiffe_uri": spiffe_uri,
             "status": "active",
             "created_at": now,
             "updated_at": now,
@@ -263,7 +271,7 @@ class IdentityRegistry:
             "container_image", "container_config", "capabilities",
             "allowed_tools", "allowed_models", "icon_url", "groups",
             "allowed_callers", "allowed_paths", "allowed_cidrs",
-            "org_id", "token_rotation_schedule",
+            "org_id", "token_rotation_schedule", "bound_spiffe_uri",
         }
         reg_key = f"identity:reg:{identity_id}"
         mapping = {}
@@ -414,6 +422,7 @@ class IdentityRegistry:
             "allowed_paths": _j("allowed_paths"),
             "allowed_cidrs": _j("allowed_cidrs"),
             "org_id": _s("org_id"),
+            "bound_spiffe_uri": _s("bound_spiffe_uri"),
             "status": _s("status"),
             "created_at": _s("created_at"),
             "updated_at": _s("updated_at"),

@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-04-29T16:04:58+01:00 */ -}}
 {{- if .Values.caddy.enabled }}
 ---
 apiVersion: apps/v1
@@ -20,6 +21,12 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-caddy
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger rolling update when PKI Secret resourceVersion changes.
+        # See gateway.yaml for full rationale.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       securityContext:
@@ -41,21 +48,46 @@ spec:
             - name: https
               containerPort: 443
               protocol: TCP
+            {{- if .Values.caddy.internalMetricsListener.enabled }}
+            - name: metrics-gw
+              containerPort: {{ .Values.caddy.internalMetricsListener.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+            - name: metrics-bo
+              containerPort: {{ .Values.caddy.internalMetricsListenerBackoffice.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
+            {{- if .Values.mtls.enabled }}
+            # EX-231-10 Layer B: CADDY_INTERNAL_HMAC is read from the same
+            # pki-certs Secret that carries the mTLS leaf certs. Caddy injects
+            # it as X-Caddy-Verified-Secret on every upstream proxy call.
+            - name: CADDY_INTERNAL_HMAC
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+                  key: caddy_internal_hmac
+            {{- end }}
+          # Retro #3al — probe the public :80 listener instead of the admin
+          # endpoint at :2019. Caddy's admin API is bound to localhost only;
+          # exposing it on 0.0.0.0 to satisfy the kubelet would expose the
+          # entire config-mutation surface. Use the dedicated /healthz on
+          # :80 introduced in the configmaps.yaml :80 block (returns 204).
           readinessProbe:
             httpGet:
-              path: /config/
-              port: 2019
+              path: /healthz
+              port: 80
             initialDelaySeconds: 5
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /config/
-              port: 2019
+              path: /healthz
+              port: 80
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
@@ -71,6 +103,22 @@ spec:
               mountPath: /etc/caddy/Caddyfile
               subPath: Caddyfile
               readOnly: true
+            {{- if .Values.mtls.enabled }}
+            # Mesh mTLS — Caddy presents caddy_client.{crt,key} to gateway/
+            # backoffice/policy upstreams and validates them against ca_root.
+            # Required for the public :443 listener (Option B parity with
+            # Docker/Podman) AND for the SPIFFE-gated :8444/:8445 metrics
+            # listeners. Read-only, mode 0440 so UID 65532 (caddy) can read.
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      # /run/secrets PKI mount collides with SA-token at
+      # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+      # Caddy doesn't talk to the K8s API, so dropping the SA token is fine.
+      automountServiceAccountToken: false
+      {{- end }}
       volumes:
         - name: caddy-data
           emptyDir: {}
@@ -79,6 +127,12 @@ spec:
         - name: caddyfile
           configMap:
             name: yashigani-caddy-config
+        {{- if .Values.mtls.enabled }}
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -1,9 +1,14 @@
 """
 Offline license verifier — ECDSA P-256 (migrating to ML-DSA-65 when cryptography ships FIPS 204).
 
+Last updated: 2026-04-27T21:53:12+01:00
+
 License file format:
-    v3 (legacy):  {base64url(utf8(json_payload))}.{base64url(primary_signature)}
     v4 (current): {base64url(utf8(json_payload))}.{base64url(primary_signature)}.{base64url(counter_signature)}
+
+v3 format (2-segment, primary signature only) is NO LONGER ACCEPTED.
+LAURA-V231-003: dropping v3 support makes the counter-signature mandatory — an
+attacker with primary-key compromise cannot issue accepted licenses.
 
 Current key algorithm: ECDSA P-256 (SHA-256).
 Future: ML-DSA-65 (FIPS 204 / CRYSTALS-Dilithium Level 3) — pending cryptography library support.
@@ -16,10 +21,11 @@ Payload versions:
 
 Backwards compat: v1/v2 payloads missing new fields fall back to
 TIER_DEFAULTS[tier] so existing customer license files keep working.
+(These are payload versions, distinct from the license-file format version above.)
 
 Fail-open on corrupt/unparseable licenses; fail-closed on invalid signatures.
-v3 licenses (no counter-signature) are accepted for backwards compatibility.
-v4 licenses with a counter-signature mismatch are always rejected.
+All licenses must be in v4 format (3-segment). 2-segment licenses are rejected
+with error "license_format_too_old".
 
 Self-integrity check
 --------------------
@@ -83,7 +89,18 @@ def _check_self_integrity() -> None:
     global _integrity_violated
 
     if _integrity.is_verifier_hash_placeholder():
-        return  # build-time hash not set; skip check (dev / CI mode)
+        # #104 (LICENSE-2024-002 / CVSS 9.1) — placeholder skip is only
+        # permitted in dev/CI builds (YASHIGANI_ENV=dev).  In any other
+        # environment a placeholder hash means the build pipeline failed to
+        # embed the real hash; treat that as a tamper event (fail-closed).
+        if os.environ.get("YASHIGANI_ENV") != "dev":
+            _integrity_violated = True
+            logger.critical(
+                "LICENSE INTEGRITY VIOLATION: VERIFIER_HASH is still a placeholder "
+                "in a non-dev environment — build pipeline did not embed hash; "
+                "forcing COMMUNITY tier (LICENSE-2024-002)"
+            )
+        return
 
     try:
         source_path = Path(__file__)
@@ -258,12 +275,14 @@ def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None
     issued_at = _parse_datetime(payload.get("issued_at")) or datetime(2020, 1, 1, tzinfo=timezone.utc)
     expires_at = _parse_datetime(payload.get("expires_at"))
 
-    # Resolve limits with backwards-compat fallback to tier defaults
+    # Resolve limits with backwards-compat fallback to tier defaults.
+    # _safe_int guards against null/None/empty/non-numeric values in any field
+    # (LAURA-V231-002: null seat fields previously caused TypeError → DoS on boot).
     defaults = TIER_DEFAULTS.get(tier_str, TIER_DEFAULTS["community"])
-    max_agents      = int(payload.get("max_agents",      defaults["max_agents"]))
-    max_end_users   = int(payload.get("max_end_users",   payload.get("max_users", defaults["max_end_users"])))
-    max_admin_seats = int(payload.get("max_admin_seats", defaults["max_admin_seats"]))
-    max_orgs        = int(payload.get("max_orgs",        defaults["max_orgs"]))
+    max_agents      = _safe_int(payload.get("max_agents"),                                       defaults["max_agents"])       # line 270
+    max_end_users   = _safe_int(payload.get("max_end_users", payload.get("max_users")),          defaults["max_end_users"])    # line 271
+    max_admin_seats = _safe_int(payload.get("max_admin_seats"),                                  defaults["max_admin_seats"])  # line 272
+    max_orgs        = _safe_int(payload.get("max_orgs"),                                         defaults["max_orgs"])         # line 273
 
     return LicenseState(
         tier=tier,
@@ -337,7 +356,21 @@ def _verify_counter_signature(
     counter-signing key.
     """
     if _integrity.is_counter_key_placeholder():
-        return True  # placeholder mode — skip (fail-open for dev)
+        # #103 (LICENSE-2024-001 / CVSS 9.1) — placeholder skip is only
+        # permitted in dev/CI builds (YASHIGANI_ENV=dev).  In any other
+        # environment a placeholder counter key means the build pipeline
+        # failed to embed the real key; fail-closed so that unsigned prod
+        # images cannot pass v4 counter-signature verification.
+        if os.environ.get("YASHIGANI_ENV") == "dev":
+            return True  # dev mode: skip counter-sig check
+        # Non-dev: log critical and fall through to key-load failure path.
+        logger.critical(
+            "License verifier: COUNTER_PUBLIC_KEY_PEM is still a placeholder "
+            "in a non-dev environment — build pipeline did not embed counter key; "
+            "failing counter-signature (LICENSE-2024-001)"
+        )
+        # Fall through — attempt to parse placeholder string as PEM,
+        # which will raise an exception and trigger the return-False path.
 
     try:
         from cryptography.hazmat.primitives.serialization import load_pem_public_key
@@ -434,19 +467,22 @@ def verify_license(content: str) -> LicenseState:
     Verify a license string and return a LicenseState.
 
     Format detection:
-        3 dot-separated segments → v4 (payload + primary sig + counter sig)
-        2 dot-separated segments → v3 (payload + primary sig, backwards compat)
+        3 dot-separated segments → v4 (payload + primary sig + counter sig) — ONLY accepted format
+        2 dot-separated segments → rejected: "license_format_too_old" (LAURA-V231-003)
         Anything else            → fail-open (COMMUNITY_LICENSE)
 
     Security behaviour:
         - v4 licenses: both primary and counter-signature must pass.
           A counter-signature failure returns LicenseState(valid=False,
           error="counter_signature_invalid") — never falls back to v3.
-        - v3 licenses: accepted without counter-signature check.
+        - 2-segment (v3) licenses are always rejected — counter-signature is mandatory.
+          This closes the LAURA-V231-003 bypass: primary-key compromise alone is not
+          sufficient to issue accepted licenses.
         - Tampered verifier (integrity violation at module load): all licenses
           are downgraded to COMMUNITY tier regardless of signature validity.
 
     Returns COMMUNITY_LICENSE if the public key is a placeholder.
+    Returns LicenseState(valid=False, error="license_format_too_old") for 2-segment licenses.
     Returns LicenseState(valid=False, error="invalid_signature") for bad primary sigs.
     Returns LicenseState(valid=False, error="counter_signature_invalid") for bad counter sigs.
     Returns LicenseState(valid=False, error="license_expired") for expired licenses.
@@ -469,38 +505,17 @@ def verify_license(content: str) -> LicenseState:
     if len(segments) == 3:
         return _verify_v4(segments[0], segments[1], segments[2])
     elif len(segments) == 2:
-        return _verify_v3(segments[0], segments[1])
+        # LAURA-V231-003: v3 format (2-segment, no counter-signature) is no longer
+        # accepted. Counter-signature is mandatory; reject clearly so tooling can
+        # report a useful error to the admin.
+        logger.warning(
+            "License verifier: rejected 2-segment license — v3 format is no longer "
+            "supported; re-issue license in v4 format (LAURA-V231-003)"
+        )
+        return _community_invalid("license_format_too_old")
     else:
         logger.warning("License verifier: unexpected segment count (%d) in license content", len(segments))
         return COMMUNITY_LICENSE
-
-
-def _verify_v3(payload_b64: str, sig_b64: str) -> LicenseState:
-    """Verify a v3 license (primary signature only)."""
-    try:
-        payload_bytes = base64url_decode(payload_b64)
-        sig_bytes = base64url_decode(sig_b64)
-    except Exception as exc:
-        logger.warning("License verifier: base64url decode failed: %s", exc)
-        return COMMUNITY_LICENSE
-
-    try:
-        from cryptography.exceptions import InvalidSignature  # noqa: F401
-
-        valid_sig = _verify_primary_signature(payload_bytes, sig_bytes)
-    except Exception as exc:
-        logger.warning("License verifier: unexpected error during verification: %s", exc)
-        return COMMUNITY_LICENSE
-
-    if not valid_sig:
-        logger.warning("License verifier: primary signature verification failed (v3)")
-        try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
-            return _build_license_state(payload, valid=False, error="invalid_signature")
-        except Exception:
-            return _community_invalid("invalid_signature")
-
-    return _parse_and_finalise(payload_bytes)
 
 
 def _verify_v4(payload_b64: str, sig_b64: str, counter_sig_b64: str) -> LicenseState:
@@ -547,7 +562,17 @@ def _parse_and_finalise(payload_bytes: bytes) -> LicenseState:
         logger.warning("License verifier: JSON parse error after valid signature: %s", exc)
         return COMMUNITY_LICENSE
 
-    license_state = _build_license_state(payload, valid=True)
+    try:
+        license_state = _build_license_state(payload, valid=True)
+    except Exception as exc:
+        # Defensive catch: _build_license_state should not raise with _safe_int in place,
+        # but guard against any future field additions or model changes (LAURA-V231-002).
+        logger.warning(
+            "License verifier: unexpected error building license state after valid signature: %s "
+            "— failing to COMMUNITY tier",
+            exc,
+        )
+        return COMMUNITY_LICENSE
 
     if license_state.is_expired():
         return LicenseState(

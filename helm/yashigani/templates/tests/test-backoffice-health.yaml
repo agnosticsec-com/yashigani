@@ -1,5 +1,15 @@
 {{- /*
-Helm test: verify the backoffice /healthz endpoint returns HTTP 200.
+Helm test: verify the backoffice /healthz endpoint returns HTTP 200 via Caddy.
+
+EX-231-10 (2026-04-29): test pods connect through Caddy (:443), NOT direct
+to backoffice:8443. This validates both:
+  (a) the legitimate traffic path works end-to-end, and
+  (b) test pods cannot reach backoffice directly (NetworkPolicy enforce this).
+
+F2 fix (2026-04-29): /admin/healthz is session-gated → 401; /healthz is
+unauthenticated → 200. Test must probe the unauthenticated path.
+
+Last updated: 2026-04-29T23:20:00+01:00
 Run with: helm test <release-name> -n <namespace>
 */ -}}
 apiVersion: v1
@@ -15,6 +25,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  automountServiceAccountToken: false
   securityContext:
     runAsNonRoot: true
     runAsUser: 65534
@@ -22,6 +33,8 @@ spec:
       type: RuntimeDefault
   containers:
     - name: test-backoffice-health
+      # curl image — connects to Caddy:443. Skip TLS verify for self-signed / test.
+      # The test validates HTTP 200 from the Caddy→backoffice path, not TLS cert identity.
       image: "curlimages/curl:8.7.1"
       imagePullPolicy: IfNotPresent
       securityContext:
@@ -34,16 +47,17 @@ spec:
         - -c
         - |
           set -e
-          echo "Testing backoffice /healthz..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          echo "Testing backoffice /healthz via Caddy (EX-231-10: Caddy-centric path)..."
+          STATUS=$(curl -sk -o /dev/null -w "%{http_code}" \
             --max-time 10 \
-            http://yashigani-backoffice:{{ .Values.backoffice.service.port }}/healthz)
-          echo "Backoffice /healthz returned HTTP ${STATUS}"
+            https://yashigani-caddy:443/healthz)
+          echo "Caddy-proxied backoffice /healthz returned HTTP ${STATUS}"
           if [ "${STATUS}" != "200" ]; then
             echo "FAIL: expected 200, got ${STATUS}"
+            echo "Check: (1) Caddy is running, (2) backoffice is healthy, (3) NetworkPolicy allows Caddy→backoffice"
             exit 1
           fi
-          echo "PASS"
+          echo "PASS — backoffice reachable via Caddy"
       resources:
         requests:
           cpu: "10m"

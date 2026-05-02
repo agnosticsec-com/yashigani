@@ -71,6 +71,24 @@ detect_runtime() {
     return
   fi
 
+  # Honour explicit override — same env var as install.sh uses.
+  # Prevents auto-detection from picking Docker when Podman containers are
+  # running (both daemons present on the same host, e.g. CI / test VMs).
+  if [[ "${YSG_RUNTIME:-}" == "podman" ]]; then
+    RUNTIME="podman"
+    if command -v docker-compose &>/dev/null; then
+      COMPOSE_CMD=("docker-compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
+    else
+      COMPOSE_CMD=("podman" "compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
+    fi
+    return
+  fi
+  if [[ "${YSG_RUNTIME:-}" == "docker" ]]; then
+    RUNTIME="docker"
+    COMPOSE_CMD=("docker" "compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
+    return
+  fi
+
   if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
     RUNTIME="docker"
     COMPOSE_CMD=("docker" "compose" "-f" "${WORK_DIR}/docker/docker-compose.yml")
@@ -85,6 +103,85 @@ detect_runtime() {
   else
     RUNTIME="none"
     COMPOSE_CMD=()
+  fi
+}
+
+# =============================================================================
+# Pre-flight hard-stop (P0-14 — mirrors check_installer_preflight in install.sh)
+#
+# The restore body runs zero sudo.  These two checks ensure the operator has
+# done any required privileged setup before we touch the live secrets dir.
+# Exits non-zero with a copy-pasteable remediation block on first failure.
+# Skipped for Kubernetes (K8s manages its own RBAC and bind-mounts).
+# =============================================================================
+check_restore_preflight() {
+  # K8s restore path does not use Docker group or host bind-mount dirs.
+  if [[ "$K8S_MODE" == "true" ]]; then
+    return 0
+  fi
+
+  # --- Check 1: docker group membership (Docker runtime only) ----------------
+  # restore.sh body never runs sudo, so the current user must reach the Docker
+  # daemon without elevated privilege.
+  if [[ "${RUNTIME}" == "docker" ]]; then
+    if ! docker info >/dev/null 2>&1; then
+      printf "\nPre-flight failed: your user cannot run docker without sudo.\n\n"
+      printf "  sudo groupadd docker          # creates the group if it doesn't exist\n"
+      printf "  sudo usermod -aG docker \$USER # adds you to the group\n"
+      printf "  newgrp docker                 # activate without logout (or log out and back in)\n\n"
+      printf "Then re-run this restore script.\n\n"
+      exit 1
+    fi
+  fi
+
+  # --- Check 2: bind-mount directory ownership (UID 1001) --------------------
+  # PKI issuer and backoffice services run as UID 1001 inside containers and
+  # write to bind-mounted host dirs.  restore.sh no longer runs chown via sudo —
+  # the operator must do this once before running the restore.
+  #
+  # Podman rootless: container UID 1001 maps to host UID (subuid_start + 1000).
+  # `podman unshare chown 1001:1001` is the correct operator command; the
+  # resulting host UID is the subuid-remapped value, not literal 1001. Accept
+  # either literal 1001 (Docker / rootful) or the subuid-remapped UID.
+  local _bm_failed=0
+  local _expected_uid="1001"
+  local _is_rootless_podman=false
+  if [[ "${RUNTIME}" == "podman" ]] && [[ "$(id -u)" != "0" ]]; then
+    _is_rootless_podman=true
+    local _subuid_start
+    _subuid_start="$(awk -F: -v u="$(id -un)" '$1==u{print $2; exit}' /etc/subuid 2>/dev/null || echo "")"
+    if [[ -n "$_subuid_start" ]]; then
+      _expected_uid=$(( _subuid_start + 1001 - 1 ))
+    fi
+  fi
+
+  for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
+    if [[ ! -d "$_bm_dir" ]]; then
+      _bm_failed=1
+      break
+    fi
+    # shellcheck disable=SC2012
+    local _uid
+    _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ "$_uid" != "1001" && "$_uid" != "$_expected_uid" ]]; then
+      _bm_failed=1
+      break
+    fi
+  done
+
+  if [[ "$_bm_failed" -eq 1 ]]; then
+    printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
+    if [[ "$_is_rootless_podman" == "true" ]]; then
+      printf "  cd %s\n" "${WORK_DIR}"
+      printf "  mkdir -p docker/data docker/certs docker/logs\n"
+      printf "  podman unshare chown 1001:1001 docker/data docker/certs docker/logs\n\n"
+      printf "(Podman rootless: use 'podman unshare chown', not 'sudo chown -R 1001:1001'.)\n\n"
+    else
+      printf "  mkdir -p docker/data docker/certs docker/logs\n"
+      printf "  sudo chown -R 1001:1001 docker/data docker/certs docker/logs\n\n"
+    fi
+    printf "Then re-run this restore script.\n\n"
+    exit 1
   fi
 }
 
@@ -174,31 +271,73 @@ validate_backup() {
   local backup_dir="$1"
   local errors=0
 
-  if [[ ! -d "${backup_dir}/secrets" ]] && [[ ! -f "${backup_dir}/.env" ]]; then
-    log_error "Backup is empty — no secrets directory and no .env file"
+  # Hard fail: backup must have at minimum secrets/ AND .env
+  if [[ ! -d "${backup_dir}/secrets" ]]; then
+    log_error "Backup missing required directory: secrets/"
+    errors=$((errors + 1))
+  fi
+  if [[ ! -f "${backup_dir}/.env" ]]; then
+    log_error "Backup missing required file: .env"
+    errors=$((errors + 1))
+  fi
+
+  # If structural fails, no point checking contents.
+  if [[ "$errors" -gt 0 ]]; then
     return 1
   fi
 
-  # Check secrets have content (not empty files)
-  if [[ -d "${backup_dir}/secrets" ]]; then
-    local empty_count
-    empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$empty_count" -gt 0 ]]; then
-      log_warn "${empty_count} secret file(s) are empty — may indicate a corrupt backup"
+  # Hard fail: v2.23.1-mtls backups MUST carry the CA keypair and at least
+  # one service leaf key. Without these, restoring and then running install.sh
+  # will regenerate a NEW CA that does not match any surviving leaves — every
+  # mTLS peer breaks silently. See CLAUDE.md §4 Docker+Podman+Helm parity.
+  for ca_file in ca_root.key ca_root.crt ca_intermediate.key ca_intermediate.crt; do
+    if [[ ! -f "${backup_dir}/secrets/${ca_file}" ]]; then
+      log_error "Backup missing required CA material: secrets/${ca_file}"
       errors=$((errors + 1))
     fi
+  done
+  # At least one *_client.key must exist (proves leaves were backed up)
+  local leaf_count
+  leaf_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -name '*_client.key' 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$leaf_count" -lt 1 ]]; then
+    log_error "Backup contains no *_client.key leaves — service mTLS certs missing"
+    errors=$((errors + 1))
   fi
 
-  # Check .env has required keys
-  if [[ -f "${backup_dir}/.env" ]]; then
-    for key in YASHIGANI_TLS_DOMAIN POSTGRES_PASSWORD YASHIGANI_DB_AES_KEY; do
-      if ! grep -q "^${key}=" "${backup_dir}/.env" 2>/dev/null; then
-        log_warn "Missing ${key} in backup .env — may cause startup issues"
-        errors=$((errors + 1))
-      fi
-    done
+  # Hard fail: empty secret files indicate corruption.
+  local empty_count
+  empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$empty_count" -gt 0 ]]; then
+    log_error "${empty_count} secret file(s) are empty — backup is corrupt"
+    errors=$((errors + 1))
   fi
 
+  # Hard fail: .env must carry the env keys the app NEEDs to boot.
+  for key in YASHIGANI_TLS_DOMAIN POSTGRES_PASSWORD YASHIGANI_DB_AES_KEY; do
+    if ! grep -q "^${key}=" "${backup_dir}/.env" 2>/dev/null; then
+      log_error "Backup .env missing required key: ${key}"
+      errors=$((errors + 1))
+    fi
+  done
+
+  # Soft: postgres_dump.sql is optional (backup may predate DB data), but if
+  # present it must be non-trivial (>100 bytes — empty file is suspicious).
+  if [[ -f "${backup_dir}/postgres_dump.sql" ]]; then
+    local dump_bytes
+    dump_bytes=$(wc -c < "${backup_dir}/postgres_dump.sql" 2>/dev/null | tr -d ' ')
+    if [[ -z "$dump_bytes" || "$dump_bytes" -lt 100 ]]; then
+      log_error "postgres_dump.sql present but empty or truncated (${dump_bytes} bytes) — backup is corrupt"
+      errors=$((errors + 1))
+    fi
+  else
+    log_warn "No postgres_dump.sql in backup — DB will start empty post-restore"
+  fi
+
+  if [[ "$errors" -gt 0 ]]; then
+    log_error "Backup validation: ${errors} failure(s) detected"
+    return 1
+  fi
+  log_success "Backup validation passed"
   return 0
 }
 
@@ -220,23 +359,35 @@ restore_backup() {
   fi
   printf "\n"
 
-  # Validate backup before restoring
-  validate_backup "$backup_dir" || {
-    log_error "Backup validation failed. Use --force to restore anyway."
-    exit 1
-  }
+  # Pre-flight hard-stop (P0-14): docker group + bind-mount ownership.
+  # Mirrors check_installer_preflight in install.sh.  Exits with a
+  # copy-pasteable remediation block if the operator environment is not ready.
+  check_restore_preflight
+
+  # Validate backup before restoring. --force bypasses validation for
+  # genuine recovery scenarios (e.g. manually-assembled partial backup).
+  if ! validate_backup "$backup_dir"; then
+    if [[ "$FORCE" == "true" ]]; then
+      log_warn "Backup validation failed but --force specified. Proceeding at operator risk."
+    else
+      log_error "Backup validation failed. Use --force to restore anyway (NOT recommended for production)."
+      exit 1
+    fi
+  fi
 
   # Safety: snapshot current state before overwriting
   local pre_restore_dir="${BACKUPS_DIR}/pre-restore-$(date +%Y%m%d_%H%M%S)"
   if [[ -d "${WORK_DIR}/docker/secrets" ]]; then
     log_info "Saving current state to ${pre_restore_dir}..."
     mkdir -p "${pre_restore_dir}"
-    cp -r "${WORK_DIR}/docker/secrets" "${pre_restore_dir}/secrets" 2>/dev/null || true
+    # BUG-3 (v2.23.1): preserve ownership/mode in pre-restore snapshot so a
+    # rollback restores the original uids the containers expect, not root:root.
+    cp -rp "${WORK_DIR}/docker/secrets" "${pre_restore_dir}/secrets" 2>/dev/null || true
     cp "${WORK_DIR}/docker/.env" "${pre_restore_dir}/.env" 2>/dev/null || true
     log_success "Pre-restore snapshot saved"
   fi
 
-  # 1. Restore secrets
+  # 1. Restore secrets (preserve source mode; reapply canonical modes after copy)
   if [[ -d "${backup_dir}/secrets" ]]; then
     log_info "Restoring secrets..."
     mkdir -p "${WORK_DIR}/docker/secrets"
@@ -315,16 +466,37 @@ restore_backup() {
     log_warn "No .env file in backup — skipping"
   fi
 
-  # 3. Restore Postgres dump
+  # 3. BUG-4 / BUG-58B-04c (v2.23.1): refresh PGDATA-cached CA + server cert
+  #    BEFORE the Postgres dump replay. The replay reconnects through pgbouncer;
+  #    without this refresh the restored secrets/ CA differs from the in-PGDATA
+  #    CA and every reconnect fails mTLS handshake.
+  _refresh_pgdata_ca || log_warn "PGDATA CA refresh failed -- postgres mTLS may be broken until manual fix"
+
+  # 4. Restore Postgres dump
   if [[ -f "${backup_dir}/postgres_dump.sql" ]]; then
     _restore_postgres "${backup_dir}/postgres_dump.sql"
   else
     log_info "No Postgres dump in backup — skipping database restore"
   fi
 
-  # 4. For K8s: update secrets in the cluster
+  # 5. BUG-58B-04d (v2.23.1): update the live yashigani_app role password to
+  #    match the restored secret. After a restore, docker/secrets/postgres_password
+  #    now contains the backup's password but the cluster was initialised with the
+  #    fresh-install password. Every subsequent DB connection from the app fails
+  #    with "password authentication failed". Fix: ALTER ROLE idempotently.
+  _restore_pg_role_password
+
+  # 6. For K8s: update secrets in the cluster
   if [[ "$K8S_MODE" == "true" && -d "${backup_dir}/secrets" ]]; then
     _restore_k8s_secrets "${backup_dir}/secrets"
+    # 6b. Patch yashigani-postgres-secrets with the restored postgres_password.
+    #     backoffice/gateway/pgbouncer deployments read POSTGRES_PASSWORD via
+    #     valueFrom.secretKeyRef(name=yashigani-postgres-secrets, key=postgres_password).
+    #     _restore_k8s_secrets recreates the flat yashigani-secrets generic secret
+    #     but does NOT touch yashigani-postgres-secrets, so the fresh-install
+    #     password remains live and every post-restore pod startup fails with
+    #     "password authentication failed". (retro #3ca)
+    _restore_k8s_postgres_secrets "${backup_dir}/secrets"
   fi
 
   printf "\n${C_GREEN}${C_BOLD}Restore complete.${C_RESET}\n\n"
@@ -702,11 +874,16 @@ _restore_pg_role_password() {
 # ---------------------------------------------------------------------------
 _restore_postgres() {
   local dump_file="$1"
-  local dump_size
+  local dump_size dump_bytes
   dump_size=$(du -h "$dump_file" 2>/dev/null | awk '{print $1}')
+  dump_bytes=$(wc -c < "$dump_file" 2>/dev/null | tr -d ' ')
+  if [[ -z "$dump_bytes" || "$dump_bytes" -lt 100 ]]; then
+    log_error "Postgres dump is empty or truncated (${dump_bytes} bytes) — refusing to restore"
+    return 1
+  fi
   log_info "Postgres dump found (${dump_size}). Attempting restore..."
 
-  # Read DB user from .env if available
+  # Read DB user/name from .env if available (preserve existing parse)
   local db_user="yashigani_app"
   local db_name="yashigani"
   if [[ -f "${WORK_DIR}/docker/.env" ]]; then
@@ -719,24 +896,66 @@ _restore_postgres() {
     fi
   fi
 
+  # Read postgres superuser password from docker/secrets/postgres_password.
+  # docker-compose.yml runs postgres as POSTGRES_USER=yashigani_app with
+  # POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password, so yashigani_app
+  # IS the superuser for this container — no separate super account.
+  local pg_password=""
+  if [[ -f "${WORK_DIR}/docker/secrets/postgres_password" ]]; then
+    pg_password=$(<"${WORK_DIR}/docker/secrets/postgres_password")
+  fi
+  if [[ -z "$pg_password" ]]; then
+    log_error "Cannot read docker/secrets/postgres_password — required for drop+recreate. Abort."
+    return 1
+  fi
+
   local pg_container
   pg_container=$(find_pg_container)
 
   if [[ -z "$pg_container" ]]; then
     log_warn "Postgres not running — dump saved for manual restore:"
     log_warn "  ${dump_file}"
-    log_warn "  Manual: cat ${dump_file} | docker exec -i <postgres_container> psql -U ${db_user} -d ${db_name}"
+    log_warn "  Manual (after 'compose up -d postgres'):"
+    log_warn "    cat ${dump_file} | <runtime> exec -i <postgres_container> psql --single-transaction -v ON_ERROR_STOP=1 -U ${db_user} -d ${db_name}"
     return 0
   fi
 
   log_info "Found Postgres: ${pg_container}"
-  log_info "Restoring as user '${db_user}' into database '${db_name}'..."
+  log_info "Preparing target database '${db_name}' (terminate connections, drop, recreate)..."
 
-  if cat "$dump_file" | pg_exec "$pg_container" psql -U "$db_user" -d "$db_name" 2>/dev/null; then
-    log_success "Postgres database restored"
+  # Step 1: drop + recreate the target DB to guarantee clean schema-free state.
+  # Connect to the 'postgres' system DB (always exists). Terminate any existing
+  # connections to the target first, else DROP DATABASE hangs.
+  #
+  # Risk: this IS destructive — existing app state in "${db_name}" is wiped.
+  # That is the intended semantics of a restore ("replace with backup").
+  if ! pg_exec "$pg_container" env PGPASSWORD="$pg_password" \
+        psql -U "$db_user" -d postgres -v ON_ERROR_STOP=1 -q <<EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+  WHERE datname = '${db_name}' AND pid <> pg_backend_pid();
+DROP DATABASE IF EXISTS "${db_name}";
+CREATE DATABASE "${db_name}" OWNER "${db_user}";
+EOF
+  then
+    log_error "Failed to drop+recreate '${db_name}'. Target DB may still have active connections from app containers."
+    log_error "Remediation: stop app containers first (e.g. 'podman compose stop gateway backoffice'), then re-run restore."
+    return 1
+  fi
+  log_success "Target database '${db_name}' recreated clean"
+
+  # Step 2: feed dump with --single-transaction + ON_ERROR_STOP=1.
+  # Any error aborts the whole transaction — no silent partial restore.
+  # Do NOT swallow stderr with 2>/dev/null; surface errors to the operator.
+  log_info "Loading dump into ${db_name} (single-transaction, fail-fast)..."
+  if pg_exec "$pg_container" env PGPASSWORD="$pg_password" \
+       psql --single-transaction -v ON_ERROR_STOP=1 \
+            -U "$db_user" -d "$db_name" < "$dump_file"; then
+    log_success "Postgres database restored (single-transaction, fail-fast)"
   else
-    log_warn "Postgres restore had errors — this may be normal if tables already exist"
-    log_warn "Check manually: review ${dump_file} and compare with running database"
+    log_error "Postgres restore failed. Transaction was rolled back — database is back to the recreated-empty state."
+    log_error "Review dump at: ${dump_file}"
+    log_error "To investigate: cat ${dump_file} | <runtime> exec -i ${pg_container} psql -U ${db_user} -d ${db_name}"
+    return 1
   fi
 }
 
@@ -768,6 +987,61 @@ _restore_k8s_secrets() {
     log_success "Kubernetes secrets restored (${#from_files[@]} files)"
   else
     log_error "Failed to create Kubernetes secret — check permissions"
+  fi
+}
+
+# Patch the yashigani-postgres-secrets K8s secret with the restored postgres_password.
+# This is separate from yashigani-secrets (the flat generic secret that holds all
+# backup secret files) because the backoffice/gateway/pgbouncer deployments reference
+# postgres_password via secretKeyRef on yashigani-postgres-secrets specifically.
+# Without this patch the fresh-install password persists and all pods crash with
+# "password authentication failed" after restore. (retro #3ca, gate #58c Round 12)
+_restore_k8s_postgres_secrets() {
+  local secrets_dir="$1"
+  local pw_file="${secrets_dir}/postgres_password"
+
+  if [[ ! -f "$pw_file" ]]; then
+    log_warn "_restore_k8s_postgres_secrets: ${pw_file} not found — skipping yashigani-postgres-secrets patch"
+    return 0
+  fi
+
+  local pw
+  pw=$(<"$pw_file")
+  if [[ -z "$pw" ]]; then
+    log_warn "_restore_k8s_postgres_secrets: postgres_password is empty — skipping"
+    return 0
+  fi
+
+  local pw_b64
+  pw_b64=$(printf '%s' "$pw" | base64)
+
+  log_info "Patching yashigani-postgres-secrets with restored postgres_password..."
+  if kubectl -n "$K8S_NAMESPACE" patch secret yashigani-postgres-secrets \
+      --type='json' \
+      -p="[{\"op\":\"replace\",\"path\":\"/data/postgres_password\",\"value\":\"${pw_b64}\"}]"; then
+    log_success "yashigani-postgres-secrets patched"
+  else
+    log_error "Failed to patch yashigani-postgres-secrets — post-restore pods will fail to connect to postgres"
+  fi
+
+  # retro #3cc (gate #58c Round 13): The K8s pre-existing chart bug workaround
+  # (BUG-K1) patches the pgbouncer deployment's DATABASE_URL env to a LITERAL
+  # password string (via kubectl set env). After a restore the secret is updated
+  # but the deployment spec still carries the old literal, so pgbouncer userlist.txt
+  # is populated with the stale password → postgres auth fails.
+  # Fix: after patching the secret, also update DATABASE_URL in the pgbouncer
+  # deployment spec to the restored password, so the next rollout gets the right
+  # password regardless of whether BUG-K1 was previously applied.
+  local db_user="yashigani_app"
+  local pg_host="yashigani-postgres"
+  local pg_db="yashigani"
+  local new_db_url="postgresql://${db_user}:${pw}@${pg_host}:5432/${pg_db}"
+  log_info "Updating pgbouncer DATABASE_URL to restored password..."
+  if kubectl -n "$K8S_NAMESPACE" set env deployment/yashigani-pgbouncer \
+      "DATABASE_URL=${new_db_url}" 2>/dev/null; then
+    log_success "pgbouncer DATABASE_URL updated (restored password)"
+  else
+    log_warn "kubectl set env on pgbouncer failed — pgbouncer may not accept restored password. Manual: kubectl set env deployment/yashigani-pgbouncer -n ${K8S_NAMESPACE} 'DATABASE_URL=${new_db_url}'"
   fi
 }
 

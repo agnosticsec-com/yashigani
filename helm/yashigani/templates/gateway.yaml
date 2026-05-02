@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-05-02T02:32:22+01:00 */ -}}
 {{- if .Values.gateway.enabled }}
 ---
 apiVersion: apps/v1
@@ -20,12 +21,26 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-gateway
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger a rolling update of all cert-consuming workloads when the PKI
+        # Secret changes (e.g. after helm upgrade rotates leaves under a new run
+        # of the bootstrap Job).  lookup returns nil on fresh install (Secret not
+        # yet created by the bootstrap Job hook); default "" prevents template
+        # errors and the empty annotation is harmless on first deploy.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets mount collision — see redis.yaml note.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         runAsGroup: 1001
+        # fsGroup triggers chgrp on Secret volumes so UID 1001 can read
+        # /run/secrets/*. Without this, mode 0440 files stay root:root.
+        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -48,6 +63,8 @@ spec:
               value: {{ .Values.global.environment | quote }}
             - name: YASHIGANI_KSM_PROVIDER
               value: "docker"
+            - name: YASHIGANI_SERVICE_NAME
+              value: "gateway"
             - name: YASHIGANI_UPSTREAM_URL
               value: {{ .Values.gateway.env.upstreamUrl | quote }}
             - name: YASHIGANI_OPA_URL
@@ -57,7 +74,21 @@ spec:
             - name: REDIS_HOST
               value: {{ .Values.gateway.env.redisHost | quote }}
             - name: REDIS_PORT
-              value: {{ .Values.gateway.env.redisPort | quote }}
+              value: {{ if .Values.mtls.enabled }}"6380"{{ else }}{{ .Values.gateway.env.redisPort | quote }}{{ end }}
+            # Budget Redis — separate instance, code default "budget-redis"
+            # wouldn't resolve in-cluster. K8s service is yashigani-budget-redis.
+            - name: BUDGET_REDIS_HOST
+              value: "yashigani-budget-redis"
+            - name: BUDGET_REDIS_PORT
+              value: {{ if .Values.mtls.enabled }}"6380"{{ else }}"6379"{{ end }}
+            {{- if .Values.mtls.enabled }}
+            - name: REDIS_USE_TLS
+              value: "true"
+            - name: YASHIGANI_SERVICE_MANIFEST_PATH
+              value: "/etc/yashigani/service_identities.yaml"
+            - name: YASHIGANI_INTERNAL_CA_DIR
+              value: "/run/secrets"
+            {{- end }}
             - name: YASHIGANI_AGENT_ROUTING_ENABLED
               value: {{ .Values.gateway.env.agentRoutingEnabled | quote }}
             - name: YASHIGANI_AGENT_PATH_PREFIX
@@ -66,25 +97,103 @@ spec:
               value: {{ .Values.gateway.env.agentTokenMinLength | quote }}
             - name: YASHIGANI_DEPLOYMENT_STREAM
               value: {{ .Values.gateway.env.deploymentStream | quote }}
+            {{- if .Values.mtls.enabled }}
+            # M-01 fix: mTLS OTLP endpoint (grpcs://). Gateway presents its
+            # leaf cert. Python OTEL exporter goes through Python ssl —
+            # Pattern A trust anchor (ca_root.crt) per gate #58a evidence.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "grpcs://otel-collector:4317"
+            - name: OTEL_EXPORTER_OTLP_CERTIFICATE
+              value: "/run/secrets/ca_root.crt"
+            - name: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE
+              value: "/run/secrets/gateway_client.crt"
+            - name: OTEL_EXPORTER_OTLP_CLIENT_KEY
+              value: "/run/secrets/gateway_client.key"
+            {{- else }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.gateway.env.otelEndpoint | quote }}
+            {{- end }}
             - name: FASTTEXT_MODEL_PATH
               value: {{ .Values.gateway.env.fasttextModelPath | quote }}
             - name: YASHIGANI_SECRETS_DIR
               value: "/run/secrets"
-            - name: YASHIGANI_DB_DSN
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
+            {{- if .Values.mtls.enabled }}
+            # mTLS DSN — verify-ca + client cert, via pgbouncer.
+            - name: YASHIGANI_DB_DSN
+              # ca_bundle.crt: libpq (psycopg2) used by run_migrations() advisory
+              # lock can't verify chain-bundle certs with ca_root.crt alone.
+              # openssl error 20 "unable to get local issuer certificate".
+              # ca_bundle.crt = ca_root.crt + ca_intermediate.crt concatenated.
+              # Captain R4 K8s gate finding 2026-04-30.
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+            - name: YASHIGANI_DB_DSN_DIRECT
+              # Direct-to-postgres DSN, bypassing pgbouncer. Used by run_migrations()
+              # advisory lock. pgbouncer transaction-pool routes each connection to
+              # a different postgres backend — session-scoped pg_advisory_lock
+              # cannot serialise across replicas via pgbouncer. Direct connection
+              # puts both replicas on the same backend. Captain #58c #3bw (2026-04-29).
+              # ca_bundle.crt: same libpq chain-verify fix as YASHIGANI_DB_DSN.
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
+            {{- else }}
+            - name: YASHIGANI_DB_DSN
+              value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani"
+            {{- end }}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
+            {{- if .Values.mtls.enabled }}
+            # EX-231-10 Layer B: Tom's middleware reads CADDY_INTERNAL_HMAC at
+            # lifespan startup and rejects requests without a matching
+            # X-Caddy-Verified-Secret header → 401. Secret is in pki-certs.
+            - name: CADDY_INTERNAL_HMAC
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+                  key: caddy_internal_hmac
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.gateway.existingSecretName | default "yashigani-gateway-secrets" }}
+          {{- if .Values.mtls.enabled }}
+          # Startup probe: grants up to 30×10s = 5min for FastText + OTEL +
+          # uvicorn TLS bind to come up before liveness starts. Cheap socket
+          # connect (no TLS handshake) so we just confirm uvicorn is bound.
+          startupProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',8080))"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import ssl,urllib.request;c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt');c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key');urllib.request.urlopen('https://localhost:8080/healthz',context=c)"
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -101,6 +210,7 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
           volumeMounts:
@@ -110,6 +220,12 @@ spec:
               mountPath: /var/log/yashigani
             - name: secrets
               mountPath: /run/secrets
+              readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: service-manifest
+              mountPath: /etc/yashigani
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -118,8 +234,20 @@ spec:
           emptyDir:
             sizeLimit: 50Mi
         - name: secrets
+          {{- if .Values.mtls.enabled }}
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            # 0440 + fsGroup: pod (1001) can read, others blocked.
+            defaultMode: 0440
+          {{- else }}
           emptyDir:
             sizeLimit: 10Mi
+          {{- end }}
+        {{- if .Values.mtls.enabled }}
+        - name: service-manifest
+          configMap:
+            name: yashigani-pki-manifest
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

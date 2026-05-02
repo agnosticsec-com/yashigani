@@ -3,16 +3,70 @@ Yashigani Audit — Streaming log exporter.
 Reads from volume sink log files and streams JSON or CSV output.
 Never buffers the full result set in memory.
 """
+# Last updated: 2026-04-27T00:00:00+01:00
 from __future__ import annotations
 
 import csv
 import io
 import json
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Optional
 
 from yashigani.audit.config import AuditConfig
+
+
+# ---------------------------------------------------------------------------
+# V1.2.10 — CSV formula injection prevention (CWE-1236)
+# LF-CSV-BYPASS fix: leading-whitespace bypass closed (2026-04-27).
+#
+# Excel / LibreOffice strip leading whitespace BEFORE evaluating cell content,
+# so " =cmd..." is treated as "=cmd..." and executed as a formula.
+# The original fix normalised \n/\r to space BEFORE the trigger check, which
+# converted "\r=cmd..." into " =cmd..." — bypassing startswith("=").
+#
+# Fix: strip leading whitespace from a copy of the string first, then test
+# the stripped copy for formula triggers.  The original (with embedded spaces
+# preserved for readability) is what gets returned with the single-quote prefix.
+#
+# Triggers: = + - @ \t \r  and their BOM-prefixed variants (﻿= ﻿+ ﻿- ﻿@).
+# Leading whitespace class: space, \t, \n, \r, \v, \f, BOM (U+FEFF).
+# ---------------------------------------------------------------------------
+
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "﻿=", "﻿+", "﻿-", "﻿@")
+_LEADING_WHITESPACE = re.compile(r"^[\s﻿]+")
+
+
+def escape_csv_cell(v: object) -> str:
+    """
+    Sanitise a single CSV cell value.
+
+    - Replaces embedded \\n and \\r with a space (prevents row-splitting
+      injection, i.e. an attacker inserting a newline to inject a new CSV row).
+    - Prefixes formula-trigger characters with a single quote so spreadsheet
+      applications (Excel, LibreOffice, Google Sheets) do not execute the cell
+      as a formula.
+
+    LF-CSV-BYPASS (2026-04-27): the trigger test is performed on a *stripped*
+    copy of the string — leading whitespace (space, \\t, \\n, \\r, \\v, \\f,
+    BOM) is removed before the startswith check.  This closes the bypass where
+    "\\r=cmd..." was normalised to " =cmd..." and then passed the trigger check
+    because startswith("=") returned False on the space-prefixed string.
+
+    The returned value always carries the leading whitespace from the original
+    string so the cell content is not silently modified beyond the safety prefix.
+
+    Safe for all non-trigger values: returned unchanged after newline
+    normalisation.
+    """
+    s = str(v).replace("\n", " ").replace("\r", " ")
+    # Strip leading whitespace/BOM before the trigger check — this is what
+    # spreadsheet engines do before deciding whether to evaluate a formula.
+    s_stripped = _LEADING_WHITESPACE.sub("", s)
+    if s_stripped.startswith(_FORMULA_TRIGGERS):
+        return "'" + s
+    return s
 
 
 class AuditLogExporter:
@@ -106,11 +160,8 @@ class AuditLogExporter:
                 header_written = True
                 yield buf.getvalue().encode("utf-8")
 
-            # Sanitise values: replace newlines to prevent CSV injection
-            clean = {
-                k: str(v).replace("\n", " ").replace("\r", " ")
-                for k, v in record.items()
-            }
+            # Sanitise values: escape formula triggers + strip newlines (V1.2.10)
+            clean = {k: escape_csv_cell(v) for k, v in record.items()}
             buf = io.StringIO()
             writer = csv.DictWriter(
                 buf,

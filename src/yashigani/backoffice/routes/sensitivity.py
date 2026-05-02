@@ -5,10 +5,14 @@ Yashigani Backoffice — Sensitivity pattern management routes.
 
 CRUD for detection patterns used by the sensitivity classifier pipeline.
   GET     /admin/sensitivity/patterns    — List all patterns
-  POST    /admin/sensitivity/patterns    — Create a pattern
-  DELETE  /admin/sensitivity/patterns/{id} — Delete a pattern
+  POST    /admin/sensitivity/patterns    — Create a pattern (step-up required)
+  DELETE  /admin/sensitivity/patterns/{id} — Delete a pattern (step-up required)
   GET     /admin/sensitivity/status      — Pipeline status (layers active/inactive)
   POST    /admin/sensitivity/test        — Test classify a text sample
+
+LF-STEPUP-AGENT-CREATE (2026-04-27): POST and DELETE /patterns added step-up
+gate — DLP rule mutation is a policy-sensitive operation; a hijacked admin
+session must not bypass TOTP to neutralise detection patterns.
 """
 from __future__ import annotations
 

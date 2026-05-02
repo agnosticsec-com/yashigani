@@ -31,7 +31,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, HttpUrl
 
-from yashigani.backoffice.middleware import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session, require_stepup_admin_session
 
 logger = logging.getLogger(__name__)
 audit_sinks_router = APIRouter(tags=["audit-sinks"])
@@ -75,7 +75,7 @@ async def get_siem_config(session=Depends(require_admin_session)):
 @audit_sinks_router.put("/admin/audit/siem/config")
 async def update_siem_config(
     body: SiemConfigRequest,
-    session=Depends(require_admin_session),
+    session=Depends(require_stepup_admin_session),
 ):
     from yashigani.backoffice.state import backoffice_state
 

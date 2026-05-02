@@ -16,7 +16,7 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir build
 
 COPY pyproject.toml ./
@@ -33,7 +33,7 @@ FROM python:3.12-slim AS trainer
 
 WORKDIR /train
 
-RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir "numpy<2.0" "fasttext-wheel>=0.9.2"
 
 # Copy training corpus and training script
@@ -69,7 +69,7 @@ WORKDIR /app
 # Install the wheel — pulls all pyproject.toml install_requires automatically.
 # fasttext extra pulled explicitly; vault extra skipped (gateway uses docker KMS).
 COPY --from=builder /dist/*.whl /tmp/
-RUN pip install --no-cache-dir --upgrade "pip==24.3.1" && \
+RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)[fasttext]" && \
     rm /tmp/*.whl
 
@@ -88,6 +88,9 @@ EXPOSE 8080
 
 # Image-level healthcheck — talks through the mTLS port using the container's
 # own client cert (same material the service presents for inbound mTLS).
+# Pattern A for Python ssl: trust anchor is the public ca_root.crt. Python
+# 3.12/OpenSSL 3.0 strict-chain validation rejects intermediate-only anchors
+# (gate #58a evidence, 2026-04-28). Private ca_root.key never enters workload.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/gateway_client.crt','/run/secrets/gateway_client.key'); urllib.request.urlopen('https://localhost:8080/healthz', context=c)"
 
@@ -100,7 +103,9 @@ ENV PYTHONUNBUFFERED=1 \
 # to present a cert signed by our internal CA. Certs land in /run/secrets via
 # a bind-mount configured by docker-compose.
 #   --ssl-cert-reqs=2  → ssl.CERT_REQUIRED (stdlib constant, mutual TLS)
-#   --ssl-ca-certs      → the trust anchor for peer verification
+#   --ssl-ca-certs     → Pattern A for Python ssl: anchor on the PUBLIC ca_root.crt.
+#                         uvicorn is Python ssl, so partial-chain rejection on
+#                         intermediate-only anchors applies (gate #58a evidence).
 CMD ["uvicorn", "yashigani.gateway.entrypoint:app", \
      "--host", "0.0.0.0", \
      "--port", "8080", \

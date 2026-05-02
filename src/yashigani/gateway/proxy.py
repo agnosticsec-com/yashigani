@@ -29,8 +29,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from yashigani.auth.spiffe import require_spiffe_id
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,14 @@ def create_gateway_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
+        # Layer B: load the per-install caddy_internal_hmac secret.
+        # Must be the FIRST thing in startup so the module-level _caddy_secret
+        # is populated before any request reaches CaddyVerifiedMiddleware.
+        # Raises RuntimeError → uvicorn exits non-zero if secret is missing
+        # (fail-closed per SOP 1 / CLAUDE.md §3).
+        from yashigani.auth.caddy_verified import load_caddy_secret as _load_caddy_secret
+        _load_caddy_secret()
+
         # Startup: create shared HTTP client for upstream proxying
         _state["http_client"] = httpx.AsyncClient(
             base_url=config.upstream_base_url,
@@ -159,8 +169,15 @@ def create_gateway_app(
     async def healthz():
         return {"status": "ok"}
 
-    # Internal Prometheus metrics endpoint (scraped by Prometheus on internal network)
-    @app.get("/internal/metrics")
+    # Internal Prometheus metrics endpoint — Caddy-gated with SPIFFE URI ACL.
+    # EX-231-08 (v2.23.1): Prometheus must scrape via Caddy's :8444 internal
+    # listener; Caddy validates the peer cert and sets X-SPIFFE-ID from the
+    # URI SAN. require_spiffe_id enforces the allowlist from
+    # service_identities.yaml endpoint_acls.
+    @app.get(
+        "/internal/metrics",
+        dependencies=[Depends(require_spiffe_id("/internal/metrics"))],
+    )
     async def internal_metrics():
         from fastapi.responses import PlainTextResponse
         try:

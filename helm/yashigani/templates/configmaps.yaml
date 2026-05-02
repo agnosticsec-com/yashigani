@@ -1,3 +1,4 @@
+{{- /* Last updated: 2026-05-02T01:15:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -40,13 +41,33 @@ metadata:
     {{- include "yashigani.labels" . | nindent 4 }}
 data:
   otel-collector.yml: |
+    # M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS.
+    # Trust anchor: ca_bundle.crt (root+intermediate). Go x509 (OTEL Collector)
+    # verifies client certs (leaf+intermediate chain bundles) against the CA pool.
+    # Captain R4 K8s gate 2026-04-30: using ca_bundle.crt for consistency with
+    # all other Go/libssl consumers (pgbouncer, Caddy).
+    {{- if .Values.mtls.enabled }}
+    # mTLS enabled: receivers require client cert auth.
+    {{- end }}
     receivers:
       otlp:
         protocols:
           grpc:
             endpoint: "0.0.0.0:4317"
+            {{- if .Values.mtls.enabled }}
+            tls:
+              cert_file: /run/secrets/otel-collector_client.crt
+              key_file: /run/secrets/otel-collector_client.key
+              client_ca_file: /run/secrets/ca_bundle.crt
+            {{- end }}
           http:
             endpoint: "0.0.0.0:4318"
+            {{- if .Values.mtls.enabled }}
+            tls:
+              cert_file: /run/secrets/otel-collector_client.crt
+              key_file: /run/secrets/otel-collector_client.key
+              client_ca_file: /run/secrets/ca_bundle.crt
+            {{- end }}
     processors:
       memory_limiter:
         check_interval: 1s
@@ -159,8 +180,112 @@ data:
         }
       }
     }
-    https://{{ .Values.global.tlsDomain }}:443 {
-      tls internal
+    # Retro #3al — explicit :80 listener so kubelet probes (which target
+    # pod-IP, not the global tlsDomain) get a deterministic answer. Caddy's
+    # admin endpoint at :2019 is bound to localhost-only and therefore
+    # refuses pod-IP probes; opening it to 0.0.0.0 would expose the entire
+    # admin API. The :80 listener gives kubelet a cheap GET / -> 308 plus a
+    # /healthz that returns 204 No Content for a tighter probe.
+    :80 {
+      handle /healthz {
+        respond "" 204
+      }
+      handle {
+        redir https://{host}{uri} permanent
+      }
+    }
+    # ────────────────────────────────────────────────────────────────────────
+    # Internal mTLS snippet — used by every reverse_proxy that targets a
+    # service terminating mTLS (gateway:8080, backoffice:8443). Caddy
+    # presents caddy_client.{crt,key} and verifies the upstream against
+    # ca_bundle.crt (root+intermediate). Captain R4 K8s gate 2026-04-30:
+    # Caddy Go TLS also fails to verify chain-bundle upstreams with only
+    # ca_intermediate.crt as the trust anchor — x509: certificate signed by
+    # unknown authority. ca_bundle.crt (root+intermediate) resolves this.
+    # ────────────────────────────────────────────────────────────────────────
+    {{- if .Values.mtls.enabled }}
+    # K8s service names (yashigani-gateway / yashigani-backoffice) don't
+    # match the cert SANs (gateway / backoffice — sourced from
+    # service_identities.yaml). Override SNI via tls_server_name so the
+    # handshake validates against the right SAN. Two snippets, one per
+    # upstream, since Caddy snippets can't take parameters in v2.
+    (internal-mtls-gateway) {
+      transport http {
+        tls
+        tls_trusted_ca_certs /run/secrets/ca_bundle.crt
+        tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+        tls_server_name gateway
+      }
+    }
+    (internal-mtls-backoffice) {
+      transport http {
+        tls
+        tls_trusted_ca_certs /run/secrets/ca_bundle.crt
+        tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+        tls_server_name backoffice
+      }
+    }
+    {{- end }}
+    # ────────────────────────────────────────────────────────────────────────
+    # EX-231-10 Layer B — Caddy HMAC shared-secret marker.
+    # Last updated: 2026-04-29T17:45:00+01:00
+    #
+    # caddy_internal_hmac is written by the mtls-bootstrap Job into the
+    # yashigani-pki-certs Secret and mounted at /run/secrets/caddy_internal_hmac
+    # in Caddy, gateway, and backoffice pods. Caddy reads it via the
+    # CADDY_INTERNAL_HMAC env var (sourced from the K8s Secret via envFrom or
+    # explicit env mapping in caddy.yaml). See compose-side design rationale in
+    # docker/Caddyfile.selfsigned.
+    # IMPORTANT: {$CADDY_INTERNAL_HMAC} is parse-time env substitution. Do NOT
+    # use {env.CADDY_INTERNAL_HMAC} — request-time placeholder, not resolved in
+    # header_up directives (Round 1 failure root cause, 2026-04-29).
+    # ────────────────────────────────────────────────────────────────────────
+    (inject-caddy-verified) {
+      # Inject the per-install shared secret via parse-time env substitution.
+      # NOTE: `header_up -X-Caddy-Verified-Secret` (delete) is intentionally
+      # absent. In Caddy v2, header_up operations apply in order: set, then
+      # delete — meaning delete runs AFTER set and removes the injected value.
+      # `header_up X val` (without + prefix) is a SET operation that replaces
+      # any existing client-supplied value, which is the correct behaviour.
+      # Parity with docker/Caddyfile.selfsigned (lines 97-117) and
+      # docker/Caddyfile.acme (lines 76-84). Bug introduced in Helm-only
+      # Caddyfile during #58c — fixed at b85aad1 closure (2026-04-30).
+      header_up X-Caddy-Verified-Secret {$CADDY_INTERNAL_HMAC}
+    }
+    # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
+    # work regardless of how the cluster operator routes the public domain.
+    # Captain #58c #3by (2026-04-29): use explicit PKI cert (caddy_client.crt/key)
+    # instead of `tls internal`. Caddy's internal CA issued a cert bound to
+    # 'localhost', causing HTTP 421 Misdirected Request for IP-based connections
+    # (e.g. port-forward to 127.0.0.1). caddy_client.crt has IP Address:127.0.0.1
+    # in its SANs (mtls-bootstrap Job generates it with that SAN via service_identities.yaml).
+    :443 {
+      {{- if .Values.mtls.enabled }}
+      # Site-level mTLS (Caddy v2 requires `client_auth` at the server block,
+      # not inside `handle`). `verify_if_given` accepts non-mTLS browser
+      # connections AND extracts SPIFFE URI from a presented client cert when
+      # one is given. Per-path SPIFFE forwarding stays in `handle` blocks.
+      # Captain #58c #3br evidence (2026-04-28).
+      # #3by: explicit cert (not `tls internal`) — Caddy internal auto-cert
+      # binds to 'localhost' only; our PKI cert has IP Address:127.0.0.1 SAN.
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
+        # Closes Ava R3 finding. Consistent with docker/Caddyfile.acme.
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
+        client_auth {
+          mode verify_if_given
+          trust_pool file /run/secrets/ca_bundle.crt
+        }
+      }
+      {{- else }}
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
+      }
+      {{- end }}
       header {
         X-Content-Type-Options    "nosniff"
         X-Frame-Options           "DENY"
@@ -170,31 +295,385 @@ data:
         -Server
       }
       handle /healthz {
-        reverse_proxy yashigani-gateway:8080
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
+      # V10.3.5 sender-constrained tokens: client cert is verified at the
+      # site-level `tls` block (above). Per-path: extract SPIFFE URI from the
+      # validated peer cert and forward it as a header to the gateway.
       handle /v1/* {
-        reverse_proxy yashigani-gateway:8080
+        {{- if .Values.mtls.enabled }}
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        {{- end }}
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
       handle /agents/* {
-        reverse_proxy yashigani-gateway:8080
+        {{- if .Values.mtls.enabled }}
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        {{- end }}
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
       handle /mcp/* {
-        reverse_proxy yashigani-gateway:8080
+        reverse_proxy https://yashigani-gateway:8080 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-gateway
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
       handle /admin/* {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
       handle /auth/* {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
       handle /static/* {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
       handle /login {
-        reverse_proxy yashigani-backoffice:8443
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+        }
       }
+      # ── Open WebUI — catch-all (LAURA-V231-010 fix) ──────────────────────────
+      # Strip any externally-supplied identity headers before auth runs.
+      # Prevents X-Forwarded-User spoofing: an unauthenticated client must
+      # not be able to forge the trusted-email header open-webui consumes.
+      # Mirrors docker/Caddyfile.selfsigned catch-all handle block exactly.
       handle {
-        reverse_proxy open-webui:8080
+        request_header -X-Forwarded-User
+        request_header -X-Forwarded-Name
+        request_header -X-Forwarded-Groups
+
+        # Forward auth: validate session cookie against backoffice.
+        # On 200: copies X-Forwarded-User/Name/Email from auth response.
+        # On 401: redirect to login page.
+        forward_auth https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+          uri /auth/verify
+          copy_headers X-Forwarded-User X-Forwarded-Name X-Forwarded-Email
+
+          @unauthorized status 401
+          handle_response @unauthorized {
+            redir * /login?next={http.request.uri} 302
+          }
+        }
+
+        reverse_proxy open-webui:8080 {
+          header_up X-Forwarded-Proto https
+          header_up X-Real-IP {remote_host}
+          header_up X-Forwarded-User {http.request.header.X-Forwarded-User}
+          header_up X-Forwarded-Name {http.request.header.X-Forwarded-Name}
+          header_up X-Forwarded-Email {http.request.header.X-Forwarded-Email}
+        }
       }
     }
+    {{- if .Values.caddy.internalMetricsListener.enabled }}
+    # ────────────────────────────────────────────────────────────────────────
+    # EX-231-08 (+ #81) — SPIFFE-gated internal observability listeners.
+    # Last updated: 2026-04-24T13:47:12+01:00
+    # See docker/Caddyfile.acme for the full comment block.
+    # Requires ca_intermediate.crt + caddy_client.{crt,key} mounted at /run/secrets.
+    #
+    # NOTE (retro #81-b): this Helm ConfigMap hand-codes a stripped Caddyfile
+    # that is deliberately NOT full-parity with docker/Caddyfile.acme. Full
+    # parity is a separate v2.23.2 work item (#76) — do not merge the two
+    # files until that item lands.
+    #
+    # Split-listener design (was: single :8444 with Host-header matcher):
+    #   :8444 -> yashigani-gateway:8080
+    #   :8445 -> yashigani-backoffice:8443
+    # Prometheus v3.x rejects setting Host via http_headers, so each upstream
+    # gets its own port. Both listeners enforce the identical SPIFFE URI gate.
+    # ────────────────────────────────────────────────────────────────────────
+    :{{ .Values.caddy.internalMetricsListener.port }} {
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        client_auth {
+          mode require_and_verify
+          trust_pool file /run/secrets/ca_bundle.crt
+        }
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
+      }
+      @metrics path /internal/metrics
+      handle @metrics {
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        reverse_proxy https://yashigani-gateway:8080 {
+          transport http {
+            tls
+            tls_trusted_ca_certs /run/secrets/ca_bundle.crt
+            tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+            tls_server_name gateway
+          }
+          import inject-caddy-verified
+        }
+      }
+      handle {
+        respond "Not Found" 404
+      }
+    }
+    {{- end }}
+    {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+    # Parallel listener for the backoffice upstream — identical SPIFFE gate,
+    # identical strip-before-set header discipline. #81 split-listener design.
+    :{{ .Values.caddy.internalMetricsListenerBackoffice.port }} {
+      tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
+        client_auth {
+          mode require_and_verify
+          trust_pool file /run/secrets/ca_bundle.crt
+        }
+        protocols tls1.3
+        ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
+        curves x25519mlkem768 x25519 secp384r1 secp256r1
+      }
+      @metrics path /internal/metrics
+      handle @metrics {
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID {http.request.tls.client.san.uris.0}
+        reverse_proxy https://yashigani-backoffice:8443 {
+          transport http {
+            tls
+            tls_trusted_ca_certs /run/secrets/ca_bundle.crt
+            tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
+            tls_server_name backoffice
+          }
+          import inject-caddy-verified
+        }
+      }
+      handle {
+        respond "Not Found" 404
+      }
+    }
+    {{- end }}
 {{- end }}
+
+{{/*
+── Partition maintenance script ConfigMap ──────────────────────────────────────
+  The partition_maintenance.py script is NOT baked into the gateway image
+  (only the gateway service entrypoint lives there). Mount it via ConfigMap so
+  the CronJob can invoke it without requiring an image rebuild.
+  See: partition-cronjob.yaml for mount and command usage.
+  Finding D regression fix 2026-05-01.
+*/}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "yashigani.fullname" . }}-partition-script
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-maintenance
+data:
+  partition_maintenance.py: |
+    #!/usr/bin/env python3
+    """
+    Yashigani DB Partition Maintenance
+    ====================================
+    Ensures the current month + next `months_ahead` months of audit_events and
+    inference_events partitions exist.
+
+    Safe to run repeatedly — CREATE TABLE IF NOT EXISTS semantics.
+    Called from pg_cron or the Kubernetes CronJob on the 1st of each month at 00:05 UTC.
+
+    Usage:
+        DATABASE_URL=postgresql://user:pass@host/db python scripts/partition_maintenance.py
+        python scripts/partition_maintenance.py --months-ahead 6
+
+    Last updated: 2026-05-01T16:50:00+01:00
+    mTLS fix: extract sslrootcert/sslcert/sslkey from DSN, build ssl.SSLContext
+    for asyncpg (asyncpg does not parse libpq ssl params from DSN query string).
+    """
+    from __future__ import annotations
+
+    import argparse
+    import asyncio
+    import logging
+    import os
+    import re
+    import ssl
+    import sys
+    from datetime import date
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+    logger = logging.getLogger(__name__)
+
+    # Identifier quoting: only allow identifiers that are safe ASCII alphanumeric +
+    # underscore, matching the naming convention enforced by _PARTITIONED_TABLES and
+    # _partition_name().  This is a defence-in-depth guard — asyncpg DDL params
+    # bind date literals; we use safe quoting for the identifier tokens.
+    _SAFE_IDENT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+    def _quote_ident(name: str) -> str:
+        """Quote a PostgreSQL identifier safely."""
+        if not _SAFE_IDENT_RE.match(name):
+            raise ValueError(
+                f"Identifier {name!r} contains characters outside [a-zA-Z0-9_] "
+                "and cannot be safely quoted — possible injection attempt."
+            )
+        escaped = name.replace('"', '""')
+        return f'"{escaped}"'
+
+
+    _PARTITIONED_TABLES = ["audit_events", "inference_events"]
+
+
+    def _partition_range(year: int, month: int) -> tuple[date, date]:
+        """Return (start_inclusive, end_exclusive) for a monthly partition."""
+        start = date(year, month, 1)
+        if month == 12:
+            end = date(year + 1, 1, 1)
+        else:
+            end = date(year, month + 1, 1)
+        return start, end
+
+
+    def _partition_name(table: str, year: int, month: int) -> str:
+        return f"{table}_{year}_{month:02d}"
+
+
+    def _build_ssl_context(dsn: str) -> tuple[str, ssl.SSLContext | None]:
+        """Extract libpq SSL params from DSN query string, build ssl.SSLContext.
+
+        asyncpg does not parse sslrootcert/sslcert/sslkey from the DSN query
+        string — it expects an ssl.SSLContext object or the string 'require'.
+        This helper pulls the params out and returns a clean DSN + context.
+        """
+        parsed = urlparse(dsn)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        sslmode = params.pop("sslmode", [None])[0]
+        sslrootcert = params.pop("sslrootcert", [None])[0]
+        sslcert = params.pop("sslcert", [None])[0]
+        sslkey = params.pop("sslkey", [None])[0]
+
+        # Rebuild DSN without the extracted params
+        new_query = urlencode({k: v[0] for k, v in params.items()})
+        clean_dsn = urlunparse(parsed._replace(query=new_query))
+
+        if sslmode is None or sslmode == "disable":
+            return clean_dsn, None
+
+        ctx = ssl.create_default_context(cafile=sslrootcert)
+        if sslcert and sslkey:
+            ctx.load_cert_chain(certfile=sslcert, keyfile=sslkey)
+        if sslmode in ("require", "verify-ca"):
+            ctx.check_hostname = False
+            if sslmode == "require":
+                ctx.verify_mode = ssl.CERT_NONE
+        return clean_dsn, ctx
+
+
+    async def ensure_partitions(conn_dsn: str, months_ahead: int = 3) -> dict[str, list[str]]:
+        """
+        Ensure partitions exist for the current month through months_ahead months forward.
+        Returns a dict mapping table name to list of partition names ensured.
+        """
+        try:
+            import asyncpg
+        except ImportError:
+            logger.error("asyncpg is required. pip install asyncpg")
+            sys.exit(1)
+
+        clean_dsn, ssl_ctx = _build_ssl_context(conn_dsn)
+        conn_kwargs: dict = {"ssl": ssl_ctx} if ssl_ctx is not None else {}
+        conn = await asyncpg.connect(clean_dsn, **conn_kwargs)
+        created: dict[str, list[str]] = {t: [] for t in _PARTITIONED_TABLES}
+
+        try:
+            today = date.today().replace(day=1)
+            for i in range(months_ahead + 1):
+                month_offset = today.month - 1 + i
+                year = today.year + month_offset // 12
+                month = month_offset % 12 + 1
+                start, end = _partition_range(year, month)
+
+                for table in _PARTITIONED_TABLES:
+                    name = _partition_name(table, year, month)
+                    q_name = _quote_ident(name)
+                    q_table = _quote_ident(table)
+                    await conn.execute(
+                        f"CREATE TABLE IF NOT EXISTS {q_name}"
+                        f" PARTITION OF {q_table}"
+                        f" FOR VALUES FROM ('{start.isoformat()}') TO ('{end.isoformat()}')"
+                    )
+                    created[table].append(name)
+                    logger.info("Partition %s: OK", name)
+        finally:
+            await conn.close()
+
+        return created
+
+
+    def main() -> None:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+        )
+
+        parser = argparse.ArgumentParser(
+            description="Create missing audit/inference log partitions"
+        )
+        parser.add_argument(
+            "--months-ahead",
+            type=int,
+            default=3,
+            help="Number of future months to pre-create (default: 3)",
+        )
+        args = parser.parse_args()
+
+        dsn = os.environ.get("DATABASE_URL")
+        if not dsn:
+            logger.error("DATABASE_URL environment variable is required")
+            sys.exit(1)
+
+        created = asyncio.run(ensure_partitions(dsn, months_ahead=args.months_ahead))
+
+        total = sum(len(v) for v in created.values())
+        print(f"Partition maintenance complete: {total} partition(s) ensured.")
+        for table, names in created.items():
+            for name in names:
+                print(f"  {name}: OK")
+
+
+    if __name__ == "__main__":
+        main()

@@ -5,12 +5,15 @@ Yashigani Backoffice — Model & Alias management routes.
 
 CRUD for model aliases and model allocation to users/groups/orgs.
   GET     /admin/models                  — List all model aliases
-  POST    /admin/models                  — Create a model alias
-  DELETE  /admin/models/{alias}          — Delete a model alias
+  POST    /admin/models                  — Create a model alias (step-up required)
+  DELETE  /admin/models/{alias}          — Delete a model alias (step-up required)
   GET     /admin/models/available        — List models from Ollama
   GET     /admin/models/allocations      — List all model allocations
-  POST    /admin/models/allocations      — Allocate a model to user/group/org
-  DELETE  /admin/models/allocations/{id} — Remove an allocation
+  POST    /admin/models/allocations      — Allocate a model to user/group/org (step-up required)
+  DELETE  /admin/models/allocations/{id} — Remove an allocation (step-up required)
+
+LF-STEPUP-AGENT-CREATE (2026-04-27): mutation endpoints now require step-up auth.
+Model alias and allocation changes affect routing policy and sensitivity ceilings.
 """
 from __future__ import annotations
 

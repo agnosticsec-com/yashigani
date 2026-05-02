@@ -1,4 +1,12 @@
 {{- if .Values.otelCollector.enabled }}
+{{- /*
+  M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS (Pattern B).
+  The PKI Secret (yashigani-pki-certs) already contains otel-collector_client.crt/key
+  because otel-collector is listed as mtls_capable:true in service_identities.yaml.
+  Trust anchor: ca_intermediate.crt (Pattern B — never ca_root.crt).
+  Clients (gateway, backoffice) must present valid leaf certs; unauthenticated
+  OTLP connections are refused at the TLS handshake.
+*/ -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -20,10 +28,20 @@ spec:
       labels:
         app.kubernetes.io/name: otel-collector
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger rolling update when PKI Secret resourceVersion changes.
+        # See gateway.yaml for full rationale.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -31,6 +49,8 @@ spec:
           image: "{{ .Values.otelCollector.image.repository }}:{{ .Values.otelCollector.image.tag }}"
           imagePullPolicy: {{ .Values.otelCollector.image.pullPolicy }}
           securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -68,10 +88,29 @@ spec:
             - name: config
               mountPath: /etc/otel
               readOnly: true
+            {{- if .Values.mtls.enabled }}
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: yashigani-otel-collector-config
+        {{- if .Values.mtls.enabled }}
+        # PKI certs: collector server cert + ca_intermediate.crt for client-cert auth.
+        # otel-collector is mtls_capable:true in service_identities.yaml so the
+        # bootstrap job issues otel-collector_client.crt/key into this Secret.
+        - name: secrets
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 50Mi
 ---
 apiVersion: v1
 kind: Service

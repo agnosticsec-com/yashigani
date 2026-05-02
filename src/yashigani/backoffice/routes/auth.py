@@ -1,10 +1,13 @@
 """
 Yashigani Backoffice — Authentication routes.
-POST /auth/login       — username + password + TOTP
-POST /auth/logout      — invalidate session
-GET  /auth/status      — check session validity
-POST /auth/password/change — forced change on first login
-POST /auth/totp/provision  — TOTP + recovery codes provisioning
+POST /auth/login            — username + password + TOTP
+POST /auth/logout           — invalidate session
+GET  /auth/status           — check session validity
+POST /auth/password/change  — forced change on first login
+POST /auth/totp/provision   — TOTP + recovery codes provisioning
+POST /auth/stepup           — V6.8.4 step-up TOTP verification for high-value flows
+
+Last updated: 2026-04-30T04:45:00+01:00
 """
 from __future__ import annotations
 
@@ -20,6 +23,14 @@ from pydantic import BaseModel, Field
 from yashigani.backoffice.middleware import AdminSession, AnySession, get_session_store, _SESSION_COOKIE
 from yashigani.backoffice.state import backoffice_state
 from yashigani.auth.totp import verify_totp, generate_provisioning, generate_recovery_code_set
+from yashigani.db.postgres import tenant_transaction as _pg_tenant_transaction_impl
+
+_PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+
+
+def _pg_tenant_transaction():
+    """Shorthand: open a platform-scoped transaction on the shared pool."""
+    return _pg_tenant_transaction_impl(_PLATFORM_TENANT_ID)
 
 router = APIRouter()
 
@@ -239,7 +250,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
     assert state.session_store is not None  # set unconditionally at startup
     assert state.audit_writer is not None   # set unconditionally at startup
     try:
-        success, record, reason = state.auth_service.authenticate(
+        success, record, reason = await state.auth_service.authenticate(
             body.username, body.password, body.totp_code
         )
     except (ValueError, TypeError):
@@ -266,6 +277,45 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     # Success — reset per-IP failure counter (global decays via TTL)
     _reset_ip_auth_failures(client_ip)
+
+    # LAURA-V232-003: when force_totp_provision=True, authenticate() returns
+    # reason="totp_provision_required" meaning the account has NOT yet set up
+    # TOTP (or has been reset). Issue a RESTRICTED session with
+    # account_tier="totp_provisioning" — accepted by require_any_session
+    # (for /auth/totp/provision/* and /auth/password/change) but REJECTED by
+    # require_admin_session (account_tier must be "admin"). This prevents an
+    # attacker from using the provisioning-state bypass to gain a full admin
+    # session before completing TOTP setup.
+    #
+    # The client must:
+    #   1. POST /auth/totp/provision/start → QR code + seed
+    #   2. POST /auth/totp/provision/confirm {totp_code} → clears flag
+    #   3. Log out and log in again → authenticates with full TOTP → gets admin session
+    if reason == "totp_provision_required":
+        session = state.session_store.create(
+            account_id=record.account_id,
+            account_tier="totp_provisioning",
+            client_ip=client_ip,
+        )
+        state.audit_writer.write(
+            _make_login_event(body.username, "totp_provision_restricted", None)
+        )
+        _log.info(
+            "TOTP provisioning session issued for %s (force_totp_provision=True). "
+            "Full admin access blocked until TOTP is provisioned.",
+            body.username,
+        )
+        _set_session_cookie(response, session.token, "totp_provisioning")
+        return {
+            "status": "totp_provision_required",
+            "force_password_change": record.force_password_change,
+            "force_totp_provision": True,
+            "message": (
+                "Your account requires TOTP provisioning before you can "
+                "access admin functions. POST to /auth/totp/provision/start "
+                "to begin enrolment."
+            ),
+        }
 
     # Check password age against admin-configurable policy.
     #
@@ -362,20 +412,34 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     if not record.totp_secret:
         raise generic_error
 
-    if not verify_totp(record.totp_secret, body.totp_code, state.auth_service._used_totp_codes):
-        raise generic_error
+    # Use the auth service's Postgres-backed replay cache so the self-service
+    # path can't be abused for TOTP replay.
+    # pylint: disable=protected-access
+    async with _pg_tenant_transaction() as conn:
+        if not await state.auth_service._verify_totp_with_replay(
+            conn, record.totp_secret, body.totp_code
+        ):
+            raise generic_error
 
-    # TOTP valid — generate new temporary password
+    # TOTP valid — generate new temporary password and persist via the
+    # Postgres-backed auth service so the reset survives restart (P0-2).
     from yashigani.auth.password import generate_password, hash_password
     temp_password = generate_password(36)
     try:
-        record.password_hash = hash_password(temp_password)
+        new_hash = hash_password(temp_password)
     except (ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "invalid_credentials_format"},
         )
-    record.force_password_change = True
+    # Apply the new password hash + force-change flag durably.
+    async with _pg_tenant_transaction() as conn:
+        await conn.execute(
+            "UPDATE admin_accounts SET password_hash = $1, "
+            "force_password_change = true, password_changed_at = $2 "
+            "WHERE username = $3",
+            new_hash, time.time(), record.username,
+        )
 
     # Invalidate all sessions
     state.session_store.invalidate_all_for_account(record.account_id)
@@ -411,11 +475,7 @@ async def verify_session(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     # Resolve account from account_id
-    record = None
-    for r in state.auth_service._accounts.values():
-        if r.account_id == session.account_id:
-            record = r
-            break
+    record = await state.auth_service.get_account_by_id(session.account_id)
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -442,7 +502,7 @@ async def change_password(
     assert state.auth_service is not None  # set unconditionally at startup
     assert state.audit_writer is not None  # set unconditionally at startup
     # Find account by account_id
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail={"error": "account_not_found"})
@@ -454,11 +514,20 @@ async def change_password(
 
     old_hash_tail = record.password_hash[-8:] if record.password_hash else ""
     try:
-        record.password_hash = hash_password(body.new_password)
+        new_hash = hash_password(body.new_password)
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "password_rejected"})
-    new_hash_tail = record.password_hash[-8:]
+    new_hash_tail = new_hash[-8:]
+    # Durable update via Postgres — replaces in-memory field mutation.
+    async with _pg_tenant_transaction() as conn:
+        await conn.execute(
+            "UPDATE admin_accounts SET "
+            "password_hash = $1, force_password_change = false, "
+            "password_changed_at = $2 WHERE username = $3",
+            new_hash, time.time(), record.username,
+        )
+    record.password_hash = new_hash
     record.force_password_change = False
     record.password_changed_at = time.time()
 
@@ -499,7 +568,7 @@ async def provision_totp_start(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+    prov, _code_set = await state.auth_service.provision_totp_start(record.username)
 
     return {
         "status": "pending_confirmation",
@@ -538,7 +607,7 @@ async def provision_totp_confirm(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    ok, reason = state.auth_service.provision_totp_confirm(
+    ok, reason = await state.auth_service.provision_totp_confirm(
         record.username, body.totp_code
     )
     if not ok:
@@ -583,18 +652,17 @@ async def provision_totp(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+    prov, _code_set = await state.auth_service.provision_totp_start(record.username)
 
     # Verify the user-supplied code against the freshly-stored seed.
-    ok, reason = state.auth_service.provision_totp_confirm(
+    ok, reason = await state.auth_service.provision_totp_confirm(
         record.username, body.totp_code
     )
     if not ok:
-        # Rollback — remove the newly set seed so the account is back to
-        # its pre-call state and the client can retry cleanly.
-        record.totp_secret = ""
-        record.recovery_codes = None
-        record.force_totp_provision = True
+        # Rollback — clear the newly-set seed in the durable store so the
+        # account is back to its pre-call state and the client can retry
+        # cleanly.
+        await state.auth_service.force_totp_reprovision(record.username)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "invalid_totp_code",
                                     "message": "TOTP code did not match. Re-scan the QR code."})
@@ -854,12 +922,11 @@ async def remove_allowed_ip(ip_or_cidr: str, session: AdminSession):
     raise HTTPException(status_code=404, detail={"error": "entry_not_found"})
 
 
-def _get_record_by_id(account_id: str):
+async def _get_record_by_id(account_id: str):
     state = backoffice_state
-    for record in state.auth_service._accounts.values():
-        if record.account_id == account_id:
-            return record
-    return None
+    if state.auth_service is None:
+        return None
+    return await state.auth_service.get_account_by_id(account_id)
 
 
 def _make_login_event(username: str, outcome: str, reason):
@@ -888,4 +955,14 @@ def _make_provision_event(username: str):
     return TotpProvisionCompletedEvent(
         account_tier="admin",
         user_handle=username,
+    )
+
+
+def _make_stepup_event(username: str, outcome: str):
+    from yashigani.audit.schema import AdminLoginEvent
+    return AdminLoginEvent(
+        account_tier="admin",
+        admin_account=username,
+        outcome=f"stepup_{outcome}",
+        failure_reason=None if outcome == "success" else "invalid_totp",
     )

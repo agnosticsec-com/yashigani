@@ -5,6 +5,8 @@ Tests the three-tier budget system against running budget-redis.
 Simulates budget exhaustion and verifies routing degrades to local.
 
 Requires: running Yashigani stack with budget-redis healthy.
+
+Last updated: 2026-04-24T22:45:00+01:00
 """
 from __future__ import annotations
 
@@ -14,13 +16,27 @@ from tests.e2e.conftest import runtime_exec, runtime_run
 
 
 def _exec_in_budget_redis(cmd: str) -> str:
-    """Execute a Redis command in budget-redis."""
+    """Execute a Redis command in budget-redis.
+
+    Post-mTLS: budget-redis listens on port 6380 with TLS.
+    We use redis-cli --tls with the budget-redis client cert.
+    """
     pw_result = runtime_exec(
         "docker-budget-redis-1", "cat", "/run/secrets/redis_password", timeout=5,
     )
     pw = pw_result.stdout.strip()
     result = runtime_exec(
-        "docker-budget-redis-1", "redis-cli", "-a", pw, *cmd.split(), timeout=5,
+        "docker-budget-redis-1",
+        "redis-cli",
+        "--tls",
+        "--cert", "/run/secrets/budget-redis_client.crt",
+        "--key",  "/run/secrets/budget-redis_client.key",
+        "--cacert", "/run/secrets/ca_root.crt",
+        "-h", "localhost",
+        "-p", "6380",
+        "-a", pw,
+        *cmd.split(),
+        timeout=10,
     )
     return result.stdout.strip()
 
@@ -44,11 +60,21 @@ class TestBudgetEnforcement:
     def test_record_and_check_budget(self):
         """Record usage and verify budget state changes."""
         output = runtime_run("docker-gateway-1", """
-import redis, os, json
+import redis, os, json, ssl
 from urllib.parse import quote
 
 pw = open('/run/secrets/redis_password').read().strip()
-r = redis.from_url(f"redis://:{quote(pw, safe='')}@budget-redis:6379/0", decode_responses=False)
+# Post-mTLS: budget-redis requires TLS on port 6380 with mutual auth.
+ssl_ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
+ssl_ctx.load_cert_chain('/run/secrets/gateway_client.crt', '/run/secrets/gateway_client.key')
+r = redis.from_url(
+    f"rediss://:{quote(pw, safe='')}@budget-redis:6380/0",
+    decode_responses=False,
+    ssl_cert_reqs=ssl.CERT_REQUIRED,
+    ssl_ca_certs='/run/secrets/ca_root.crt',
+    ssl_certfile='/run/secrets/gateway_client.crt',
+    ssl_keyfile='/run/secrets/gateway_client.key',
+)
 r.ping()
 
 from yashigani.billing.budget_enforcer import BudgetEnforcer, BudgetSignal
@@ -91,11 +117,19 @@ print("cleanup:done")
     def test_three_tier_recording(self):
         """Verify usage recorded at identity, group, and org levels."""
         output = runtime_run("docker-gateway-1", """
-import redis, os
+import redis, os, ssl
 from urllib.parse import quote
 
 pw = open('/run/secrets/redis_password').read().strip()
-r = redis.from_url(f"redis://:{quote(pw, safe='')}@budget-redis:6379/0", decode_responses=False)
+# Post-mTLS: budget-redis requires TLS on port 6380 with mutual auth.
+r = redis.from_url(
+    f"rediss://:{quote(pw, safe='')}@budget-redis:6380/0",
+    decode_responses=False,
+    ssl_cert_reqs=ssl.CERT_REQUIRED,
+    ssl_ca_certs='/run/secrets/ca_root.crt',
+    ssl_certfile='/run/secrets/gateway_client.crt',
+    ssl_keyfile='/run/secrets/gateway_client.key',
+)
 
 from yashigani.billing.budget_enforcer import BudgetEnforcer, _period_key
 
