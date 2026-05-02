@@ -1,9 +1,20 @@
 """
 Yashigani Backoffice — Rate limit management routes.
-GET  /ratelimit/config        — current rate limit configuration
-PUT  /ratelimit/config        — update rate limit configuration
-GET  /ratelimit/status        — live multiplier, current RPI, bucket counters
-POST /ratelimit/reset/{key}   — reset a specific rate limit bucket (unblock a client)
+GET    /ratelimit/config           — current rate limit configuration
+PUT    /ratelimit/config           — update rate limit configuration
+GET    /ratelimit/status           — live multiplier, current RPI, bucket counters
+POST   /ratelimit/reset/{key}      — reset a specific rate limit bucket (unblock a client)
+GET    /ratelimit/endpoints        — list per-endpoint rate limit overrides
+POST   /ratelimit/endpoints        — set a per-endpoint rate limit override
+DELETE /ratelimit/endpoints/{hash} — remove a per-endpoint rate limit override
+
+Path note (2026-05-02): Fixed three decorator paths. The router is mounted at prefix
+/admin/ratelimit. The decorators previously used the full absolute path
+/admin/ratelimit/endpoints which FastAPI concatenated to the doubled path
+/admin/ratelimit/admin/ratelimit/endpoints (unreachable). Changed to relative
+paths: /endpoints and /endpoints/{endpoint_hash}.
+
+Last updated: 2026-05-02T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -186,7 +197,7 @@ class EndpointRLRequest(_BaseModel):
     window_seconds: int = 1
 
 
-@router.get("/admin/ratelimit/endpoints")
+@router.get("/endpoints")
 async def list_endpoint_overrides(session=Depends(require_admin_session)):
     from yashigani.backoffice.state import backoffice_state
     ep_rl = getattr(backoffice_state, "endpoint_rate_limiter", None)
@@ -195,7 +206,7 @@ async def list_endpoint_overrides(session=Depends(require_admin_session)):
     return {"endpoints": ep_rl.list_configs()}
 
 
-@router.post("/admin/ratelimit/endpoints")
+@router.post("/endpoints")
 async def set_endpoint_override(
     body: EndpointRLRequest,
     session=Depends(require_admin_session),
@@ -210,7 +221,7 @@ async def set_endpoint_override(
     return {"status": "updated", "endpoint_hash": ep_hash, "endpoint_template": body.endpoint_template}
 
 
-@router.delete("/admin/ratelimit/endpoints/{endpoint_hash}")
+@router.delete("/endpoints/{endpoint_hash}")
 async def delete_endpoint_override(
     endpoint_hash: str,
     session=Depends(require_admin_session),
