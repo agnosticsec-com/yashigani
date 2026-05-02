@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T06:15:00+01:00 (fix: preflight check_installer_preflight UID check for Podman rootless subuid mapping; BUG-1 generate_secrets idempotent; BUG-2 chmod 0640)
+# last-updated: 2026-05-02T07:05:00+01:00 (fix: data/audit mkdir via podman unshare for Podman rootless subuid-mapped data dir)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
+# 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
@@ -2330,7 +2331,15 @@ compose_up() {
       exit 1
     fi
   fi
-  mkdir -p "${data_dir}/audit"
+  # For Podman rootless, data_dir is owned by the subuid-remapped UID (e.g. 363144).
+  # mkdir as the installer user (e.g. UID 1004) would fail with Permission denied.
+  # Use `podman unshare` to create the subdirectory inside the user namespace.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    podman unshare mkdir -p "${data_dir}/audit" \
+      || { log_error "Cannot create ${data_dir}/audit via podman unshare"; exit 1; }
+  else
+    mkdir -p "${data_dir}/audit"
+  fi
   mkdir -p "${WORK_DIR}/docker/tls"
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
