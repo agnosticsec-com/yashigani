@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # scripts/health-check.sh — Yashigani v2.1.0
+# last-updated: 2026-05-02T22:10:00+01:00 (fix: honour YSG_RUNTIME/YSG_PODMAN_RUNTIME in compose detection — gate #ROOTFUL-2)
 # Post-install health verification with retries and spinner.
 
 set -euo pipefail
@@ -166,17 +167,36 @@ _check_http() {
 }
 
   # Detect compose command (Docker or Podman)
+# Gate #ROOTFUL-2: honour YSG_RUNTIME / YSG_PODMAN_RUNTIME so the health-check
+# uses the same compose backend as the install. Without this, _compose_cmd()
+# picks docker compose when docker CLI is installed (even without a running
+# daemon), and then _check_compose_exec fails silently for every service
+# when the stack was started under rootful/rootless Podman.
 _compose_cmd() {
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  # Honour explicit runtime override first.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+    if command -v podman-compose >/dev/null 2>&1; then
+      echo "podman-compose"; return
+    fi
+    if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+      echo "podman compose"; return
+    fi
+  fi
+  if [[ "${YSG_RUNTIME:-}" == "docker" ]]; then
+    echo "docker compose"; return
+  fi
+  # Auto-detect: prefer Docker when available and daemon is reachable;
+  # fall back to Podman compose variants.
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     echo "docker compose"
-  elif command -v docker-compose >/dev/null 2>&1; then
+  elif command -v docker-compose >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     echo "docker-compose"
   elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
     echo "podman compose"
   elif command -v podman-compose >/dev/null 2>&1; then
     echo "podman-compose"
   else
-    echo "docker compose"  # fallback
+    echo "docker compose"  # last-resort fallback
   fi
 }
 COMPOSE_CMD="$(_compose_cmd)"
