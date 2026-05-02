@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T11:00:00+01:00 (fix: step-7 license_key write non-fatal when secrets_dir owned by stale UID — gate #ROOTLESS-8)
+# last-updated: 2026-05-02T10:00:00+01:00 (fix: _pki_chown_client_keys mode probe replaced with static subuid check; unshare fallback to podman_run on failure — gate #ROOTLESS-7)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
 # 2026-05-02: stale-partial-install guard in compose_up() must not wipe when ca_root.crt already present (gate #ROOTLESS-5 blocker)
 # 2026-05-02: license_key placeholder created at step 7 (before PKI chown) in demo mode; compose_up placeholder write is non-fatal for Podman rootless (gate #ROOTLESS-6 blocker)
 # 2026-05-02: _pki_chown_client_keys mode probe replaced with static /etc/subuid check; unshare case falls back to podman_run before aborting (gate #ROOTLESS-7 blocker)
-# 2026-05-02: step-7 license_key placeholder write made non-fatal when secrets_dir owned by stale UID (gate #ROOTLESS-8 blocker)
 # 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
@@ -4585,18 +4584,10 @@ main() {
       log_step "7/${TOTAL_STEPS}" "Skipping licence key (demo mode — Community tier)"
       # gate #ROOTLESS-6: create placeholder NOW (before PKI bootstrap chowns secrets_dir)
       # so compose_up() doesn't need to write it after the chown.
-      # gate #ROOTLESS-8: if secrets_dir is owned by a foreign UID from a stale
-      # install (e.g. rootful PKI ran and chowned to 1001 before disk-full abort),
-      # the write will fail with EPERM. The stale-partial-install guard in
-      # compose_up() will clean it up later; treat EPERM here as non-fatal so
-      # the installer continues to the guard rather than aborting at step 7.
       local _lic="${WORK_DIR}/docker/secrets/license_key"
       if [[ ! -s "$_lic" ]]; then
-        if ! echo "# community — no licence key required" > "$_lic" 2>/dev/null; then
-          log_warn "Could not create license_key placeholder at step 7 (secrets_dir may be owned by stale UID — stale-install guard will handle this in compose_up)"
-        else
-          chmod 600 "$_lic" 2>/dev/null || true
-        fi
+        echo "# community — no licence key required" > "$_lic"
+        chmod 600 "$_lic"
       fi
     else
       handle_license
