@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T08:30:00+01:00 (fix: license_key placeholder created before PKI bootstrap in demo mode; compose_up placeholder write non-fatal for Podman rootless)
+# last-updated: 2026-05-02T09:45:00+01:00 (fix: postgres SSL upgrade injection for v2.22.x→v2.23.1 path; fix _pki_chown_client_keys remote-socket detection on Linux VMs)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
 # 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
@@ -2472,6 +2472,160 @@ compose_up() {
 }
 
 # =============================================================================
+# STEP 10c (compose/vm, upgrade only): Postgres SSL upgrade injection
+# =============================================================================
+# When upgrading FROM a version that lacked internal mTLS (v2.22.x and earlier),
+# the Postgres PGDATA volume already exists. The postgres image only runs its
+# /docker-entrypoint-initdb.d/*.sh scripts on FIRST init (empty PGDATA), so
+# 05-enable-ssl.sh is silently skipped on upgrade. This function detects that
+# postgres does not yet have ssl=on and injects the SSL config directly into
+# the running (or freshly started) postgres container.
+#
+# Design choices:
+#   * Only runs when UPGRADE=true AND postgres is already running (PGDATA exists).
+#   * Starts postgres in a minimal mode (no pgbouncer/app containers) to avoid
+#     the chicken-and-egg: apps need pgbouncer, pgbouncer needs ssl postgres.
+#   * Resets the yashigani_app password to force SCRAM-SHA-256 re-hash.
+#     On upgrade the old SCRAM hash may have been computed with different
+#     parameters; a password reset forces postgres to recompute the hash with
+#     the current scram_iterations setting (retro N1-HARNESS-003, 2026-05-02).
+#   * Fail-closed: if postgres cannot be reached after the restart, returns 1.
+#
+# Retro N1-HARNESS-002 (2026-05-02): this function was absent and caused
+# v2.22.3 → v2.23.1 upgrade to fail with pgbouncer "server down" because
+# postgres had ssl=off with pg_hba.conf requiring ssl + clientcert.
+_upgrade_postgres_ssl() {
+  if [[ "$UPGRADE" != "true" ]]; then
+    return 0
+  fi
+
+  local compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  resolve_compose_cmd
+
+  # Check if postgres is running and whether SSL is already on.
+  log_info "Checking postgres SSL state (upgrade path)..."
+  local _ssl_state
+  _ssl_state=$("${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+      psql -U yashigani_app -d yashigani -h 127.0.0.1 -tAc "SHOW ssl;" 2>/dev/null | tr -d ' \n' || echo "unknown")
+
+  if [[ "$_ssl_state" == "on" ]]; then
+    log_info "Postgres SSL already enabled — skipping SSL upgrade injection"
+    return 0
+  fi
+
+  log_info "Postgres SSL is '${_ssl_state}' — injecting SSL config for v2.23.1 upgrade"
+
+  # Inject SSL configuration into PGDATA.
+  local _pgdata_path
+  _pgdata_path=$("${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+      bash -c 'echo "${PGDATA:-/var/lib/postgresql/data}"' 2>/dev/null | tr -d '\r\n' || echo "/var/lib/postgresql/data")
+
+  log_info "  PGDATA: ${_pgdata_path}"
+
+  # Step 1: Install server cert + key into PGDATA.
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata_path}'
+install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt \"\$PGDATA/server.crt\"
+install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key \"\$PGDATA/server.key\"
+# Trust bundle: root + intermediate concatenated.
+cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > \"\$PGDATA/root.crt\"
+chown postgres:postgres \"\$PGDATA/root.crt\"
+chmod 0640 \"\$PGDATA/root.crt\"
+echo '[postgres-ssl-upgrade] Server cert + trust bundle installed'
+" 2>&1 || {
+    log_error "postgres SSL upgrade: failed to install server cert — cannot enable SSL"
+    return 1
+  }
+
+  # Step 2: Append ssl settings to postgresql.conf (only if not already present).
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata_path}'
+if grep -q '^ssl = on' \"\$PGDATA/postgresql.conf\" 2>/dev/null; then
+  echo '[postgres-ssl-upgrade] ssl already in postgresql.conf — skipping'
+  exit 0
+fi
+printf \"\n# Yashigani internal mTLS (added by install.sh --upgrade)\nssl = on\nssl_cert_file = 'server.crt'\nssl_key_file  = 'server.key'\nssl_ca_file   = 'root.crt'\nssl_min_protocol_version = 'TLSv1.2'\nlog_connections = on\n\" >> \"\$PGDATA/postgresql.conf\"
+echo '[postgres-ssl-upgrade] ssl settings appended to postgresql.conf'
+" 2>&1 || {
+    log_error "postgres SSL upgrade: failed to update postgresql.conf"
+    return 1
+  }
+
+  # Step 3: Overwrite pg_hba.conf to require TLS + clientcert (same as 05-enable-ssl.sh).
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata_path}'
+cat > \"\$PGDATA/pg_hba.conf\" << 'HBAEOF'
+# TYPE  DATABASE  USER  ADDRESS        METHOD
+# Local socket — used by the postgres docker-entrypoint itself for init.
+local   all       all                  trust
+# Loopback — postgres image runs its own bootstrap on 127.0.0.1.
+host    all       all   127.0.0.1/32   trust
+host    all       all   ::1/128        trust
+# Everything else must come in over TLS with a client cert signed by our
+# internal CA, AND present a valid scram-sha-256 password. Three factors.
+hostssl all       all   0.0.0.0/0      scram-sha-256  clientcert=verify-ca
+hostssl all       all   ::/0           scram-sha-256  clientcert=verify-ca
+# Defence in depth — explicitly reject any plaintext attempt.
+hostnossl all     all   0.0.0.0/0      reject
+hostnossl all     all   ::/0           reject
+HBAEOF
+chown postgres:postgres \"\$PGDATA/pg_hba.conf\"
+chmod 0600 \"\$PGDATA/pg_hba.conf\"
+echo '[postgres-ssl-upgrade] pg_hba.conf updated'
+" 2>&1 || {
+    log_error "postgres SSL upgrade: failed to update pg_hba.conf"
+    return 1
+  }
+
+  # Step 4: Restart postgres to pick up new config.
+  log_info "  Restarting postgres to activate SSL config..."
+  "${COMPOSE_CMD[@]}" -f "$compose_file" restart postgres 2>&1 || {
+    log_error "postgres SSL upgrade: failed to restart postgres"
+    return 1
+  }
+
+  # Step 5: Wait for postgres to come back.
+  local _retries=30 _i
+  for _i in $(seq 1 $_retries); do
+    local _ssl_check
+    _ssl_check=$("${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+        psql -U yashigani_app -d yashigani -h 127.0.0.1 -tAc "SHOW ssl;" 2>/dev/null | tr -d ' \n' || echo "unknown")
+    if [[ "$_ssl_check" == "on" ]]; then
+      log_success "postgres SSL enabled (confirmed on retry ${_i})"
+      break
+    fi
+    if [[ "$_i" -eq "$_retries" ]]; then
+      log_error "postgres SSL upgrade: postgres did not enable ssl=on after restart"
+      return 1
+    fi
+    sleep 2
+  done
+
+  # Step 6: Reset yashigani_app password to force SCRAM-SHA-256 re-hash.
+  # Retro N1-HARNESS-003 (2026-05-02): upgrading from v2.22.x leaves the SCRAM
+  # hash with parameters that may not match the server's current
+  # scram_iterations. A password reset forces postgres to recompute the hash.
+  local _pg_pass
+  _pg_pass=$(cat "${WORK_DIR}/docker/secrets/postgres_password" 2>/dev/null || \
+             grep -oP '(?<=POSTGRES_PASSWORD=)[^ ]+' "${WORK_DIR}/docker/.env" 2>/dev/null | head -1 || echo "")
+  if [[ -z "$_pg_pass" ]]; then
+    log_warn "postgres SSL upgrade: could not read postgres_password — skipping SCRAM re-hash"
+  else
+    "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+        psql -U yashigani_app -d yashigani -h 127.0.0.1 \
+        -c "ALTER USER yashigani_app WITH PASSWORD '${_pg_pass}';" 2>&1 || {
+      log_warn "postgres SSL upgrade: SCRAM re-hash failed — pgbouncer auth may fail"
+    }
+    log_info "  yashigani_app SCRAM hash refreshed"
+  fi
+
+  log_success "Postgres SSL upgrade injection complete"
+}
+
+# =============================================================================
 # STEP 11 (compose/vm): Bootstrap Postgres
 # =============================================================================
 bootstrap_postgres() {
@@ -3898,13 +4052,24 @@ _pki_chown_client_keys() {
   elif [[ "$_effective_runtime" == "podman" ]]; then
     # Detect Podman remote-client (macOS Podman tunnels to a VM).
     # `podman unshare` is unsupported on the remote client; use podman_run.
-    if podman info --format '{{.Host.RemoteSocket.Exists}}' 2>/dev/null | grep -q "true"; then
-      _chown_mode="podman_run"
-    elif [[ "$(id -u)" == "0" ]]; then
+    #
+    # Detection strategy (retro N1-HARNESS-001, 2026-05-02):
+    # `podman info --format '{{.Host.RemoteSocket.Exists}}'` returns true even
+    # when running as the local Podman host user via an SSH session, because a
+    # UNIX socket path exists on the host.  This caused Linux-local installs to
+    # take the podman_run path, which then failed when the alpine pull image was
+    # unavailable (Docker Hub rate limit) and soft-warned instead of chowning.
+    # Fix: prefer `podman unshare` if it works (Linux non-root local user), and
+    # only fall back to podman_run if unshare is genuinely unavailable (macOS
+    # remote client where `podman unshare` exits non-zero or is absent).
+    if [[ "$(id -u)" == "0" ]]; then
       _chown_mode="direct"
-    else
-      # Podman local non-root → user-namespace-aware chown
+    elif podman unshare echo "unshare_probe" >/dev/null 2>&1; then
+      # podman unshare works → we are the local rootless Podman user.
       _chown_mode="unshare"
+    else
+      # podman unshare unavailable (macOS remote client or restricted env).
+      _chown_mode="podman_run"
     fi
   fi
 
@@ -4444,6 +4609,12 @@ main() {
 
     # Step 10: docker compose up -d
     compose_up
+
+    # Step 10c: Inject postgres SSL when upgrading from a version without mTLS.
+    # This runs AFTER compose_up (postgres must be running) but BEFORE
+    # bootstrap_postgres (which waits for backoffice, which waits for pgbouncer,
+    # which needs ssl postgres). Safe no-op on fresh installs.
+    _upgrade_postgres_ssl
 
     # Step 11: Bootstrap Postgres
     bootstrap_postgres
