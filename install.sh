@@ -2415,10 +2415,17 @@ compose_up() {
 
   if [[ "$UPGRADE" == "true" ]]; then
     log_info "Starting services (upgrade — removing orphaned containers)..."
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans
+    # ROOTLESS-9 (v2.23.1): podman-compose up -d returns non-zero when optional
+    # services (otel-collector, promtail, grafana) fail to start — even if all
+    # core services (gateway, backoffice, pgbouncer, postgres, redis, caddy) are
+    # healthy. With set -euo pipefail this caused install to abort before
+    # bootstrap_postgres, leaving admin accounts unseeded. Core service health is
+    # validated by run_health_check (step 12); this non-zero is non-fatal here.
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans || true
   else
     log_info "Starting services..."
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d
+    # ROOTLESS-9: same rationale as upgrade path above.
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d || true
   fi
 
   log_success "Services started"
