@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # sign_image.sh — Sign container images with cosign and attach SBOM attestation
+# Last updated: 2026-04-25T21:43:38+01:00
 #
 # Usage:
 #   bash scripts/sign_image.sh IMAGE [IMAGE ...]
 #
 # Examples:
-#   bash scripts/sign_image.sh ghcr.io/org/yashigani-gateway:2.2 ghcr.io/org/yashigani-backoffice:2.2
+#   bash scripts/sign_image.sh ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
 #
 # Signing modes (detected automatically):
 #   1. Keyless  — OIDC token available (GitHub Actions / Workload Identity)
@@ -42,7 +43,7 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 if [[ $# -eq 0 ]]; then
     echo "Usage: bash scripts/sign_image.sh IMAGE [IMAGE ...]" >&2
-    echo "Example: bash scripts/sign_image.sh ghcr.io/org/yashigani-gateway:2.2" >&2
+    echo "Example: bash scripts/sign_image.sh ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1" >&2
     exit 1
 fi
 

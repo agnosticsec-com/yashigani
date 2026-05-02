@@ -15,7 +15,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from yashigani.backoffice.middleware import require_admin_session
+from yashigani.backoffice.middleware import require_admin_session, require_stepup_admin_session
 
 logger = logging.getLogger(__name__)
 jwt_config_router = APIRouter(tags=["jwt-config"])
@@ -60,7 +60,7 @@ async def list_jwt_configs(session=Depends(require_admin_session)):
 
 
 @jwt_config_router.put("/admin/jwt/config")
-async def set_jwt_config(body: JWTConfigRequest, session=Depends(require_admin_session)):
+async def set_jwt_config(body: JWTConfigRequest, session=Depends(require_stepup_admin_session)):
     deployment_stream = os.getenv("YASHIGANI_DEPLOYMENT_STREAM", "opensource")
     if deployment_stream == "opensource" and body.scope == "tenant":
         raise HTTPException(
@@ -92,7 +92,7 @@ async def set_jwt_config(body: JWTConfigRequest, session=Depends(require_admin_s
 
 
 @jwt_config_router.delete("/admin/jwt/config/{tenant_id}")
-async def delete_jwt_config(tenant_id: str, session=Depends(require_admin_session)):
+async def delete_jwt_config(tenant_id: str, session=Depends(require_stepup_admin_session)):
     try:
         import uuid
         from yashigani.db.postgres import get_pool

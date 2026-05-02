@@ -1,13 +1,14 @@
-# Yashigani v0.9.3 — Umbrella Chart Top-Level Values
+# Yashigani v2.23.1 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
+# Last updated: 2026-05-01T09:45:00+01:00
 
 global:
   imageRegistry: "ghcr.io"
-  imageOwner: "yashigani"
+  imageOwner: "agnosticsec-com"
   # REQUIRED: Replace with your actual domain before deployment
   tlsDomain: "yashigani.example.com"
   # tlsMode: caddy | nginx (cert-manager + nginx-ingress)
-  tlsMode: "nginx"
+  tlsMode: "caddy"
   certManagerIssuer: "letsencrypt-prod"
   acmeEmail: "admin@example.com"
   environment: "production"
@@ -25,22 +26,178 @@ global:
     enabled: true
 
 # ---------------------------------------------------------------------------
+# Internal mTLS (v2.23.1) — core-plane mutual TLS between gateway, backoffice,
+# postgres, pgbouncer, redis, budget-redis.
+#
+# On install/upgrade a Helm pre-install hook Job boots the two-tier PKI
+# (root → intermediate → per-service leaves) using the gateway image's
+# `python -m yashigani.pki.issuer` CLI, then writes the resulting certs and
+# trust bundle into a namespace-scoped Secret (yashigani-pki-certs) that
+# every core-plane pod mounts at /run/secrets.
+#
+# A CronJob rotates leaf certs weekly (default Sun 02:00). Pods pick up
+# the new cert on the next roll/restart — no in-place reload in v2.23.1.
+#
+# OPA (policy) stays on plaintext HTTP; mtls_capable:false in the manifest.
+# Observability-plane mTLS lands in v2.23.2 (task #54).
+#
+# UPGRADE NOTE — plaintext → mTLS on an existing PVC:
+# The postgres init script (05-enable-ssl.sh) only runs on a fresh initdb.
+# If you are upgrading a running release whose postgres PVC is non-empty,
+# after the upgrade:
+#   1) kubectl exec into the postgres pod,
+#   2) append the hostssl rules to $PGDATA/pg_hba.conf by hand (the script
+#      is available at /docker-entrypoint-initdb.d/05-enable-ssl.sh as a
+#      reference),
+#   3) psql --host /var/run/postgresql -c "SELECT pg_reload_conf();"
+# Alternatively: uninstall the release + delete the PVC + fresh install.
+# Automated in-place migration for existing data is tracked as task #54.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Network Policies (EX-231-10 — Caddy-centric isolation)
+# ---------------------------------------------------------------------------
+# When enabled (default), the chart renders NetworkPolicy resources that
+# enforce the Caddy-sole-ingress posture: backoffice and gateway only accept
+# connections from yashigani-caddy pods. Prometheus scrapes go through Caddy's
+# SPIFFE-gated listeners (:8444/:8445) only.
+#
+# Set to false ONLY in CNI environments that do not support NetworkPolicy
+# (e.g. plain kind without Calico/Cilium, or specific managed K8s tiers).
+# In that case you accept that the Caddy-centric isolation control is
+# network-layer absent; application-layer mTLS + SPIFFE gate remain active.
+# Document any disablement in the risk register with Tiago's sign-off.
+# ---------------------------------------------------------------------------
+networkPolicies:
+  enabled: true
+
+mtls:
+  # Hard-off switch. When false the chart renders the pre-v2.23.1 plaintext
+  # topology (no PKI job, no cert mounts). Intended for deliberate testing
+  # only — production deployments MUST keep this enabled.
+  enabled: true
+
+  # Image used by the applier container that materialises the Secret from
+  # the issuer output. alpine/k8s ships kubectl + sh in a single image —
+  # necessary because we shell-wrap the apply pipeline. registry.k8s.io/
+  # kubectl is distroless (no sh) and therefore won't work here. Override
+  # to your internal mirror if air-gapped.
+  kubectlImage:
+    repository: "alpine/k8s"
+    tag: "1.29.4"
+    pullPolicy: IfNotPresent
+
+  # Two-tier PKI lifetime policy. Must sit inside the bounds declared in
+  # docker/service_identities.yaml cert_policy.* — the issuer enforces them.
+  rootLifetimeYears: 10
+  intermediateLifetimeDays: 180
+  leafLifetimeDays: 90
+
+  # Weekly rotation of leaf certs. Keeps every service <7 days away from a
+  # fresh cert; aligns with PCI DSS 4.0 4.2.1.1 guidance. Cron in UTC.
+  rotation:
+    enabled: true
+    schedule: "0 2 * * 0"
+    # Keep the last N rotation CronJob runs in history for audit trail.
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    # Backoff before the rotation CronJob gives up on a failing run.
+    backoffLimit: 2
+
+  # Name of the leaves-Secret the bootstrap job writes into. Every core-plane
+  # Deployment/StatefulSet mounts this at /run/secrets. After retro #3aj this
+  # Secret contains LEAF material only:
+  #   * <service>_client.crt + <service>_client.key (the per-service leaves)
+  #   * ca_root.crt + ca_intermediate.crt (public certs — workloads use intermediate only, Pattern B)
+  #   * caddy_internal_hmac (EX-231-10 Layer B) — per-install shared secret
+  #     injected by Caddy as X-Caddy-Verified-Secret on every upstream proxy.
+  #     backoffice and gateway verify it via Tom's middleware. The bootstrap Job
+  #     generates it fresh on install; on upgrade it reuses the existing value
+  #     from the Secret (idempotent) so a live stack isn't disrupted mid-apply.
+  # It deliberately does NOT contain the CA private keys — those live in
+  # caKeysSecretName below and are mounted only by the bootstrap Job and
+  # rotation CronJob. Name retained as `yashigani-pki-certs` for upgrade
+  # compatibility (the bootstrap-job applier rewrites the contents in place).
+  # Do NOT set existingSecretName unless you're running the issuer
+  # out-of-band and materialising the Secret yourself.
+  secretName: "yashigani-pki-certs"
+  existingSecretName: ""
+
+  # Retro #3aj — separate Secret for the CA private keys (root + intermediate).
+  # Mounted ONLY by the PKI bootstrap Job and rotation CronJob; workload pods
+  # never see ca_root.key or ca_intermediate.key. RBAC restricts mutation of
+  # this Secret to the yashigani-pki ServiceAccount used by those Jobs only.
+  caKeysSecretName: "yashigani-pki-ca-keys"
+
+  # Bootstrap job resources — small, single-shot, short-lived.
+  bootstrapResources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ---------------------------------------------------------------------------
+# Admin Bootstrap (retro #3ap) — primary + backup admin + dual TOTP.
+#
+# Mirrors install.sh _gen_admin_credentials in compose: produces admin1 and
+# admin2 usernames, passwords, and TOTP secrets, and stores them in a Secret
+# that the backoffice mounts into /run/secrets. This is the K8s parity for
+# feedback_admin_bootstrap_both_admins.md — every install must yield TWO
+# admin accounts with TOTP pre-provisioned, never a single-admin install.
+#
+# Disable ONLY if you intend to seed admins out-of-band by pre-creating
+# `existingSecretName` with the same key schema (admin1_username,
+# admin1_initial_password, admin1_totp_secret, admin2_username,
+# admin2_password, admin2_totp_secret).
+# ---------------------------------------------------------------------------
+adminBootstrap:
+  enabled: true
+  # Name of the Secret the bootstrap Job writes into and the backoffice
+  # mounts at /run/secrets (alongside the PKI leaves).
+  secretName: "yashigani-admin-bootstrap"
+  # Skip the chart-managed Job and use a Secret you have pre-created out of
+  # band. Must contain the six keys listed above.
+  existingSecretName: ""
+  # Image used to mint passwords + TOTP secrets. The gateway image already
+  # bundles python3 + pyotp + secrets which is everything we need; reusing
+  # it avoids another image pull.
+  image:
+    # Resolves to global.imageRegistry/global.imageOwner/<repo>:<tag>.
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
+    repository: yashigani-gateway
+    tag: "2.23.1@sha256:e3dfc6b4a38f44ccbf6ec965d32140ab621bc15cd360c2953c9a2545962a630a"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# ---------------------------------------------------------------------------
 # Gateway — MCP reverse proxy (data plane)
 # ---------------------------------------------------------------------------
 gateway:
   enabled: true
   image:
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-gateway
-    tag: "0.9.3"
+    tag: "2.23.1@sha256:e3dfc6b4a38f44ccbf6ec965d32140ab621bc15cd360c2953c9a2545962a630a"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit (scheduler sizing).
+  # Limits match compose sizing baseline (retro #3au / risk register).
   resources:
     requests:
-      cpu: "250m"
-      memory: "256Mi"
-    limits:
-      cpu: "1"
+      cpu: "500m"
       memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1024Mi"
   service:
     port: 8080
     type: ClusterIP
@@ -56,15 +213,17 @@ gateway:
     minAvailable: 1
   env:
     upstreamUrl: ""
-    opaUrl: "http://policy:8181"
-    ollamaUrl: "http://ollama:11434"
-    redisHost: "redis"
+    opaUrl: "http://yashigani-policy:8181"
+    ollamaUrl: "http://yashigani-ollama:11434"
+    redisHost: "yashigani-redis"
     redisPort: "6379"
     agentRoutingEnabled: "true"
     agentPathPrefix: "/agents"
     agentTokenMinLength: "64"
     # v0.5.0
     deploymentStream: "opensource"
+    # M-01 fix: overridden to grpcs:// by gateway.yaml when mtls.enabled=true.
+    # This value applies only when mTLS is disabled (non-default, testing only).
     otelEndpoint: "http://otel-collector:4317"
     fasttextModelPath: "/app/models/fasttext_classifier.bin"
 
@@ -74,17 +233,20 @@ gateway:
 backoffice:
   enabled: true
   image:
+    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-backoffice
-    tag: "0.9.3"
+    tag: "2.23.1@sha256:542680c17071e15e8f9453fd7e676d9f15e67655e45143f6be2f62b5f131e153"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
       cpu: "500m"
-      memory: "256Mi"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1024Mi"
   service:
     port: 8443
     type: ClusterIP
@@ -109,12 +271,13 @@ policy:
     tag: "1.15.1"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
+      cpu: "125m"
       memory: "128Mi"
     limits:
-      cpu: "500m"
+      cpu: "250m"
       memory: "256Mi"
   service:
     port: 8181
@@ -138,13 +301,14 @@ redis:
     tag: "7-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
+      cpu: "125m"
       memory: "128Mi"
     limits:
-      cpu: "500m"
-      memory: "512Mi"
+      cpu: "250m"
+      memory: "256Mi"
   service:
     port: 6379
     type: ClusterIP
@@ -167,13 +331,16 @@ ollama:
     tag: "0.6.2"
     pullPolicy: IfNotPresent
   replicaCount: 2
+  # YSG-RISK-005 #3av: requests = 50% of limit.
+  # LLM inference — high memory requirement, 2 CPUs to keep inference
+  # from starving other services. Increase on GPU hosts.
   resources:
     requests:
-      cpu: "500m"
-      memory: "2Gi"
+      cpu: "1000m"
+      memory: "2048Mi"
     limits:
-      cpu: "4"
-      memory: "8Gi"
+      cpu: "2000m"
+      memory: "4096Mi"
   service:
     port: 11434
     type: ClusterIP
@@ -199,13 +366,14 @@ prometheus:
     tag: "v3.2.1"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
       cpu: "250m"
       memory: "512Mi"
     limits:
-      cpu: "1"
-      memory: "2Gi"
+      cpu: "500m"
+      memory: "1024Mi"
   service:
     port: 9090
     type: ClusterIP
@@ -225,12 +393,13 @@ grafana:
     tag: "11.5.2"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
+      cpu: "125m"
+      memory: "256Mi"
     limits:
-      cpu: "500m"
+      cpu: "250m"
       memory: "512Mi"
   service:
     port: 3000
@@ -252,10 +421,11 @@ alertmanager:
     tag: "v0.27.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
+      cpu: "125m"
+      memory: "128Mi"
     limits:
       cpu: "250m"
       memory: "256Mi"
@@ -277,13 +447,14 @@ loki:
     tag: "3.0.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
+      cpu: "125m"
       memory: "256Mi"
     limits:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "250m"
+      memory: "512Mi"
   service:
     port: 3100
     type: ClusterIP
@@ -302,10 +473,11 @@ jaeger:
     tag: "1.57"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
+      cpu: "250m"
+      memory: "256Mi"
     limits:
       cpu: "500m"
       memory: "512Mi"
@@ -323,10 +495,11 @@ otelCollector:
     tag: "0.100.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "100m"
-      memory: "128Mi"
+      cpu: "250m"
+      memory: "256Mi"
     limits:
       cpu: "500m"
       memory: "512Mi"
@@ -337,28 +510,53 @@ otelCollector:
     type: ClusterIP
 
 # ---------------------------------------------------------------------------
-# Caddy — TLS edge proxy (optional in K8s — prefer nginx-ingress + cert-manager)
+# Caddy — TLS edge proxy (K8s front door, Option B parity with Docker/Podman)
+# ---------------------------------------------------------------------------
+# Caddy is the K8s front door for Yashigani. It terminates the public TLS
+# session and speaks mTLS upstream to gateway/backoffice/policy — exact
+# parity with Docker/Podman compose. Cluster operators MAY layer
+# nginx-ingress + cert-manager (or any L7) in front of Caddy at the cluster
+# edge for ACME automation, WAF, or multi-tenant routing — Caddy stays.
+#
+# Disabling caddy here will break the in-cluster mTLS plane: gateway and
+# backoffice both terminate mTLS internally, so a plaintext upstream from
+# any other reverse proxy will be refused at the TLS handshake. Use the
+# layered-edge pattern instead.
 # ---------------------------------------------------------------------------
 caddy:
-  enabled: false
-  # note: "In Kubernetes, consider using nginx-ingress + cert-manager instead of Caddy.
-  #        Set caddy.enabled=false and configure an Ingress resource."
+  enabled: true
   image:
     repository: caddy
     tag: "2-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
-    limits:
       cpu: "250m"
       memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
   service:
     port: 443
     httpPort: 80
     type: LoadBalancer
+  # v2.23.1 EX-231-08 — Caddy-centric SPIFFE URI ACL on /internal/metrics.
+  # When enabled, Caddy terminates an additional internal-only listener on
+  # :8444 that requires peer-cert auth, validates the URI SAN, and forwards
+  # it as X-SPIFFE-ID to the gateway/backoffice upstream. Prometheus scrapes
+  # go through this listener instead of hitting the pods directly.
+  # Requires the mesh mTLS plane (caddy_client.{crt,key} + ca_intermediate.crt) to
+  # be mounted into the caddy pod — Pattern B: intermediate only, not root.
+  internalMetricsListener:
+    enabled: true
+    port: 8444
+  # #81 fix parallel backoffice listener (Prom v3 rejects Host via http_headers).
+  # Toggle in lockstep with internalMetricsListener.enabled.
+  internalMetricsListenerBackoffice:
+    enabled: true
+    port: 8445
 
 # ---------------------------------------------------------------------------
 # Optional Agent Bundles (v0.8.0)
@@ -383,13 +581,14 @@ agentBundles:
     replicaCount: 1
     env:
       LANGGRAPH_YASHIGANI_URL: "http://yashigani-gateway:8080"
+    # YSG-RISK-005 #3av: requests = 50% of limit.
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
         cpu: "500m"
         memory: "512Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1024Mi"
     # Secret name that holds the agent registration token
     tokenSecretName: "yashigani-langgraph-token"
     tokenSecretKey: "token"
@@ -419,13 +618,14 @@ agentBundles:
       # Expose OpenClaw's own gateway port for incoming messaging webhooks
       port: 18789
       type: ClusterIP
+    # YSG-RISK-005 #3av: requests = 50% of limit.
     resources:
       requests:
-        cpu: "200m"
+        cpu: "500m"
         memory: "512Mi"
       limits:
         cpu: "1000m"
-        memory: "1Gi"
+        memory: "1024Mi"
     tokenSecretName: "yashigani-openclaw-token"
     tokenSecretKey: "token"
 
@@ -440,13 +640,23 @@ openWebui:
     tag: "main"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # Retro #3ar — open-webui OOMKilled (exit 137) with 512Mi limit on K8s.
+  # The bundled SvelteKit + Python embedding + LangChain stack consistently
+  # peaks at ~1.2-1.5 GiB on first boot. 512Mi was guesswork carried over
+  # from the docker-compose default; insufficient for the K8s pod where
+  # there is no host page cache to lean on.
+  # Retro #3as — OOMKilled again at 2Gi limit. LangChain + sentence-transformers
+  # stack imports during startup push peak RSS above 2Gi even with
+  # HF_HUB_OFFLINE=1 (which eliminates download wait but not model-graph init).
+  # 3Gi limit gives stable headroom on Docker Desktop single-node cluster.
+  # YSG-RISK-005 #3av: requests = 50% of limit (risk register sizing: 3072m/1.0).
   resources:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
-    limits:
       cpu: "500m"
-      memory: "512Mi"
+      memory: "1536Mi"
+    limits:
+      cpu: "1000m"
+      memory: "3072Mi"
   service:
     port: 8080
     type: ClusterIP
@@ -479,13 +689,14 @@ budgetRedis:
     tag: "7-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
+      cpu: "125m"
+      memory: "128Mi"
     limits:
       cpu: "250m"
-      memory: "384Mi"
+      memory: "256Mi"
   service:
     port: 6379
     type: ClusterIP
@@ -505,13 +716,14 @@ postgres:
     tag: "16-alpine"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "250m"
-      memory: "256Mi"
+      cpu: "500m"
+      memory: "512Mi"
     limits:
-      cpu: "1"
-      memory: "1Gi"
+      cpu: "1000m"
+      memory: "1024Mi"
   service:
     port: 5432
     type: ClusterIP
@@ -531,13 +743,14 @@ pgbouncer:
     tag: "v1.23.1-p0"
     pullPolicy: IfNotPresent
   replicaCount: 1
+  # YSG-RISK-005 #3av: requests = 50% of limit.
   resources:
     requests:
-      cpu: "50m"
-      memory: "64Mi"
+      cpu: "125m"
+      memory: "128Mi"
     limits:
       cpu: "250m"
-      memory: "128Mi"
+      memory: "256Mi"
   service:
     port: 5432
     type: ClusterIP
@@ -545,6 +758,19 @@ pgbouncer:
     poolMode: transaction
     maxClientConn: "100"
     defaultPoolSize: "20"
+
+# ---------------------------------------------------------------------------
+# Partition maintenance CronJob — DB partition pre-creation (runs monthly)
+# ---------------------------------------------------------------------------
+partitionCronjob:
+  # YSG-RISK-005 #3av: requests = 50% of limit. Single-shot job, low resource.
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
 
 # ---------------------------------------------------------------------------
 # v2.2 Feature Flags

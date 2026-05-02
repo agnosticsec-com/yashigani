@@ -1,6 +1,6 @@
 # Yashigani — Kubernetes Deployment Guide
 
-Version: v2.23 | Chart version: 2.23.0 | Last updated: 2026-04-12
+Version: v2.23.1 | Chart version: 2.23.1 | Last updated: 2026-05-01T00:09:28+01:00
 
 ---
 
@@ -98,7 +98,7 @@ helm test yashigani -n yashigani --logs
 | Key | Default | Description |
 |-----|---------|-------------|
 | `global.imageRegistry` | `ghcr.io` | Container registry prefix |
-| `global.imageOwner` | `yashigani` | Registry namespace/org |
+| `global.imageOwner` | `agnosticsec-com` | Registry namespace/org |
 | `global.tlsDomain` | `yashigani.example.com` | **REQUIRED** — your public domain |
 | `global.tlsMode` | `nginx` | `nginx` (cert-manager) or `caddy` (edge proxy) |
 | `global.certManagerIssuer` | `letsencrypt-prod` | ClusterIssuer name for TLS |
@@ -289,7 +289,20 @@ This deploys Smallstep step-ca as an internal CA. Certificates are issued automa
 
 ## Kubernetes Deployment Status
 
-> **Important:** Kubernetes deployment has not yet been validated end-to-end for the v2.23 release. This is tracked as risk R-015 in the risk register. Docker Compose (single-node) is the validated deployment path. Use this Helm chart for development and pre-production only until R-015 is resolved.
+Kubernetes deployment was validated end-to-end for v2.23.1 on Docker Desktop K8s (aarch64). All five clean-slate gates GREEN: macOS Podman, macOS Docker, Linux Podman, Linux Docker, and K8s Helm. Risk R-015 is closed.
+
+### v2.23.1 Helm requirements
+
+Three requirements were added to the chart during the v2.23.1 release cycle (tip 7023360 / 1a6db9f) that operators must be aware of:
+
+**NetworkPolicy: gateway → postgres and backoffice → postgres**
+The chart now includes `NetworkPolicy` rules permitting gateway and backoffice pods to reach the `yashigani-postgres` pod on port 5432. These policies are required for Alembic migrations to run at startup. If you have cluster-level default-deny policies that supersede Helm-managed NetworkPolicies, ensure equivalent allow rules exist before installing.
+
+**ca_bundle.crt trust anchor**
+A `ConfigMap` containing `ca_bundle.crt` (the intermediate + root certificate chain) is mounted into gateway and backoffice pods. Python's `ssl` module requires the full chain in the trust store for mTLS verification — an intermediate-only bundle is rejected. This bundle is generated at install time by the in-tree PKI issuer and baked into the `yashigani-pki-config` ConfigMap by the mTLS bootstrap Job. No manual action required for new installs; for upgrades from pre-v2.23.1 charts, run `helm upgrade` and let the bootstrap Job re-execute.
+
+**YASHIGANI_DB_DSN_DIRECT (gateway pod)**
+The gateway pod now receives `YASHIGANI_DB_DSN_DIRECT` pointing directly at `yashigani-postgres:5432` (bypassing PgBouncer). This is required because Alembic migrations must run in session mode, not PgBouncer's default transaction-pool mode. The value is injected automatically from the `yashigani-postgres-secrets` Secret; no additional action is required unless you override the postgres service name.
 
 ---
 

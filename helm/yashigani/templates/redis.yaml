@@ -21,8 +21,18 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-redis
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger rolling update when PKI Secret resourceVersion changes.
+        # See gateway.yaml for full rationale.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets Secret mount collides with SA-token mount at
+      # /var/run/secrets/kubernetes.io/serviceaccount (since /var/run→/run).
+      # Redis doesn't call the K8s API, so disable the automount.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -39,6 +49,32 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          {{- if .Values.mtls.enabled }}
+          # v2.23.1 — plaintext 6379 disabled, TLS-only on 6380 with
+          # client-cert auth. Mirrors docker-compose.yml redis service.
+          # trust anchor: ca_root.crt — libssl strict-mode (error:0A000086 with intermediate)
+          command:
+            - "sh"
+            - "-c"
+            - |
+              redis-server \
+                --port 0 \
+                --tls-port 6380 \
+                --tls-cert-file /run/secrets/redis_client.crt \
+                --tls-key-file /run/secrets/redis_client.key \
+                --tls-ca-cert-file /run/secrets/ca_bundle.crt \
+                --tls-auth-clients yes \
+                --tls-protocols "TLSv1.2 TLSv1.3" \
+                --save "" \
+                --appendonly no \
+                --maxmemory 256mb \
+                --maxmemory-policy allkeys-lru \
+                --requirepass "$(REDIS_PASSWORD)"
+          ports:
+            - name: redis-tls
+              containerPort: 6380
+              protocol: TCP
+          {{- else }}
           command:
             - "sh"
             - "-c"
@@ -53,12 +89,43 @@ spec:
             - name: redis
               containerPort: 6379
               protocol: TCP
+          {{- end }}
           env:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
+          {{- if .Values.mtls.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - |
+                  redis-cli --tls --cert /run/secrets/redis_client.crt \
+                    --key /run/secrets/redis_client.key \
+                    --cacert /run/secrets/ca_bundle.crt \
+                    -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - |
+                  redis-cli --tls --cert /run/secrets/redis_client.crt \
+                    --key /run/secrets/redis_client.key \
+                    --cacert /run/secrets/ca_bundle.crt \
+                    -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             exec:
               command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
@@ -73,11 +140,24 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.mtls.enabled }}
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+      {{- end }}
   {{- if .Values.redis.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -108,8 +188,15 @@ spec:
     app.kubernetes.io/name: yashigani-redis
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
+    {{- if .Values.mtls.enabled }}
+    - name: redis-tls
+      port: 6380
+      targetPort: 6380
+      protocol: TCP
+    {{- else }}
     - name: redis
       port: {{ .Values.redis.service.port }}
       targetPort: 6379
       protocol: TCP
+    {{- end }}
 {{- end }}

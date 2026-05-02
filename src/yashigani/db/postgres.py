@@ -40,15 +40,30 @@ _AES_KEY_ENV = "YASHIGANI_DB_AES_KEY"
 async def create_pool() -> Pool:
     dsn = os.environ["YASHIGANI_DB_DSN"]
     global _pool
+    # statement_cache_size=0 is REQUIRED when connecting through pgbouncer in
+    # transaction-pool mode (the only mode we run in). pgbouncer reuses backend
+    # connections across clients on every transaction boundary, so a prepared
+    # statement created by client A may be served back to client B which then
+    # tries to PREPARE the same name and gets:
+    #   asyncpg.exceptions.DuplicatePreparedStatementError:
+    #     prepared statement "__asyncpg_stmt_1__" already exists
+    # This bites multi-replica K8s deployments (replicaCount: 2 by default for
+    # gateway + backoffice) but not single-replica compose. Captain #58c #3bu
+    # evidence (2026-04-29). Cost: every query is parsed each time (no plan
+    # cache reuse), but pgbouncer in transaction mode would invalidate the
+    # cache anyway — disabling it explicitly is the documented fix.
+    # Refs: https://magicstack.github.io/asyncpg/current/api/index.html#asyncpg.connection.Connection
+    #       https://www.pgbouncer.org/faq.html#how-to-use-prepared-statements-with-transaction-pooling
     _pool = await asyncpg.create_pool(
         dsn=dsn,
         min_size=2,
         max_size=10,
         max_inactive_connection_lifetime=300,
         command_timeout=10,
+        statement_cache_size=0,
         init=_init_connection,
     )
-    logger.info("Postgres pool created (PgBouncer DSN)")
+    logger.info("Postgres pool created (PgBouncer DSN, statement_cache_size=0 for txn-pool)")
     return _pool
 
 

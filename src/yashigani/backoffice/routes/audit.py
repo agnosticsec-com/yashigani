@@ -1,6 +1,6 @@
 """
 Yashigani Backoffice — Audit log management routes.
-GET    /audit/export                 — stream NDJSON or CSV log export
+GET    /audit/export                 — stream NDJSON (format=ndjson) or CSV (format=csv) log export
 GET    /audit/masking/scope          — current masking scope config
 PUT    /audit/masking/scope          — update masking scope (default + overrides)
 POST   /audit/masking/scope/agent    — set per-agent masking override
@@ -13,15 +13,21 @@ GET    /audit/siem                   — list SIEM targets
 POST   /audit/siem                   — add a SIEM target
 DELETE /audit/siem/{name}            — remove a SIEM target
 POST   /audit/siem/{name}/test       — send a test event to a SIEM target
+
+Last updated: 2026-04-29T22:58:39+01:00
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+logger = logging.getLogger(__name__)
+
+from yashigani.audit.writer import validate_siem_url
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
 
@@ -62,6 +68,12 @@ class SiemTargetRequest(BaseModel):
     auth_value: str = Field(min_length=1, max_length=512)
     enabled: bool = True
 
+    @field_validator("url", mode="before")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        """Enforce SSRF-safe URL on registration (YSG-RISK-007.C #3ax, CWE-918)."""
+        return validate_siem_url(v)
+
 
 # ---------------------------------------------------------------------------
 # Log export
@@ -74,26 +86,60 @@ async def export_audit_log(
     date_from: Optional[str] = Query(default=None, description="ISO 8601 prefix, e.g. 2025-01"),
     date_to: Optional[str] = Query(default=None, description="ISO 8601 prefix, e.g. 2025-03"),
 ):
-    """Stream the audit log as NDJSON or CSV. Never buffers the full file in memory."""
+    """Stream the audit log as NDJSON or CSV. Never buffers the full file in memory.
+
+    AVA-2026-04-29-002 fix (ASVS V7.1.3):
+    - AuditLogExporter.export() is the canonical method; export_ndjson() / export_csv()
+      never existed and caused AttributeError mid-stream (HTTP 200 then 502 cascade).
+    - ndjson maps to AuditLogExporter format 'json' (newline-delimited JSON).
+    - Mid-stream exceptions are caught inside the generator and logged; the response
+      is closed cleanly so keep-alive connections are not corrupted.
+    """
     from yashigani.audit.export import AuditLogExporter
 
     state = backoffice_state
+    if state.audit_writer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "audit_log_not_configured"},
+        )
     exporter = AuditLogExporter(state.audit_writer._config)
+
+    # AuditLogExporter.export() accepts 'json' (NDJSON) or 'csv'.
+    # The route accepts 'ndjson' or 'csv' for user-facing clarity — map here.
+    internal_format = "json" if output_format == "ndjson" else "csv"
 
     if output_format == "csv":
         media_type = "text/csv"
         filename = "yashigani-audit.csv"
-
-        async def stream():
-            async for chunk in exporter.export_csv(date_from=date_from, date_to=date_to):
-                yield chunk
     else:
         media_type = "application/x-ndjson"
         filename = "yashigani-audit.ndjson"
 
-        async def stream():
-            async for chunk in exporter.export_ndjson(date_from=date_from, date_to=date_to):
+    # Resolve date range (both endpoints accept None = unbounded).
+    _date_from = date_from or "0000-01-01"
+    _date_to = date_to or "9999-12-31"
+
+    async def stream():
+        """Wrap exporter with mid-stream exception guard (AVA-2026-04-29-002).
+
+        If export() raises after the HTTP 200 header is sent, we catch it here,
+        log it, and return without yielding further — the generator closes cleanly.
+        A corrupted partial body is far less harmful than a dangling connection
+        that triggers keep-alive 502 cascades on subsequent admin requests.
+        """
+        try:
+            async for chunk in exporter.export(_date_from, _date_to, format=internal_format):
                 yield chunk
+        except Exception as exc:  # pragma: no cover — defence-in-depth catch
+            logger.error(
+                "audit export stream error (format=%s, from=%s, to=%s): %s",
+                internal_format, _date_from, _date_to, exc,
+            )
+            # Do NOT re-raise — just stop yielding. The HTTP response is already
+            # open (200 sent); re-raising here would leave the ASGI connection in
+            # an undefined state on some Uvicorn/Starlette versions. Log + close is
+            # the safest path (closes the generator, Starlette closes the socket).
 
     return StreamingResponse(
         stream(),
@@ -311,6 +357,16 @@ async def test_siem_target(name: str, session: AdminSession):
     })
 
     body_str, content_type = state.audit_writer._format_for_target(test_payload, target)
+
+    # Re-validate target URL at test-fire time — defence-in-depth against a
+    # stored target whose URL pre-dates the SSRF validator (YSG-RISK-007.C #3ax).
+    try:
+        validate_siem_url(target.url)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "siem_url_blocked", "message": str(exc)},
+        )
 
     req = urllib.request.Request(
         url=target.url,

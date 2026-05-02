@@ -1,6 +1,8 @@
 """
 Yashigani Audit — Event schema definitions.
 All audit events extend AuditEvent. Fields are immutable after creation.
+
+Last updated: 2026-04-28T23:58:36+01:00
 """
 from __future__ import annotations
 
@@ -104,6 +106,10 @@ class EventType(str, Enum):
     # v2.1 — SSO / OIDC
     SSO_LOGIN_SUCCESS = "SSO_LOGIN_SUCCESS"
     SSO_LOGIN_FAILURE = "SSO_LOGIN_FAILURE"
+    # V6.8.4 — SAML-specific success/failure (mirrors OIDC events, separate
+    # type so forensic queries can easily filter by protocol)
+    SSO_SAML_LOGIN_SUCCESS = "SSO_SAML_LOGIN_SUCCESS"
+    SSO_SAML_LOGIN_FAILURE = "SSO_SAML_LOGIN_FAILURE"
 
 
 # ---------------------------------------------------------------------------
@@ -752,9 +758,13 @@ class WebAuthnCredentialDeletedEvent(AuditEvent):
 @dataclass
 class SSOLoginSuccessEvent(AuditEvent):
     """
-    Written when a user authenticates successfully via an SSO IdP.
+    Written when a user authenticates successfully via an OIDC IdP.
     Email is stored here because it is the observable identity claim;
     masking_applied=True suppresses it in lower-assurance audit sinks.
+
+    V6.8.4 — acr/amr/auth_time added for forensic visibility (ASVS V6.3.3).
+    Supports the query: "list all admin sessions where amr did NOT include
+    'mfa' in the last 30 days".
     """
     event_type: str = EventType.SSO_LOGIN_SUCCESS
     account_tier: str = AccountTier.USER
@@ -762,19 +772,62 @@ class SSOLoginSuccessEvent(AuditEvent):
     idp_id: str = ""
     idp_name: str = ""
     identity_id: str = ""          # Yashigani identity_id (resolved or created)
-    email_hash: str = ""           # SHA-256 hex of email — raw email never stored
+    email_hash: str = ""           # HMAC-SHA256 hex of email — raw email never stored
     groups: list = field(default_factory=list)
     client_ip_prefix: str = ""     # Last octet masked
+    # V6.8.4 — IdP-supplied authentication-context claims
+    acr: str = ""                  # acr claim value (empty if not present)
+    amr: list = field(default_factory=list)   # amr claim list (empty if not present)
+    auth_time: Optional[int] = None           # auth_time epoch seconds (None if absent)
+    iss: str = ""                  # iss claim from the ID token
 
 
 @dataclass
 class SSOLoginFailureEvent(AuditEvent):
     """
-    Written when an SSO callback cannot be completed.
+    Written when an SSO callback cannot be completed (OIDC path).
     Failure reason is stored verbatim (no user-supplied values leak here
     because the reason comes from internal validation, not the IdP response body).
     """
     event_type: str = EventType.SSO_LOGIN_FAILURE
+    account_tier: str = AccountTier.USER
+    masking_applied: bool = True
+    idp_id: str = ""
+    idp_name: str = ""
+    failure_reason: str = ""
+    client_ip_prefix: str = ""
+
+
+@dataclass
+class SAMLLoginSuccessEvent(AuditEvent):
+    """
+    Written when a user authenticates successfully via a SAML v2 IdP.
+
+    V6.8.4 — mirrors SSOLoginSuccessEvent but carries SAML-specific fields:
+    authn_context_class_ref (maps to OIDC acr), authn_instant (maps to auth_time).
+    SAML has no direct amr equivalent; AuthnContextClassRef suffices.
+    """
+    event_type: str = EventType.SSO_SAML_LOGIN_SUCCESS
+    account_tier: str = AccountTier.USER
+    masking_applied: bool = True
+    idp_id: str = ""
+    idp_name: str = ""
+    identity_id: str = ""
+    email_hash: str = ""
+    groups: list = field(default_factory=list)
+    client_ip_prefix: str = ""
+    # SAML-specific authentication-context claims
+    authn_context_class_ref: str = ""   # AuthnContextClassRef URI (maps to acr)
+    authn_instant: str = ""             # AuthnInstant ISO 8601 string
+    issuer: str = ""                    # Issuer entity ID
+
+
+@dataclass
+class SAMLLoginFailureEvent(AuditEvent):
+    """
+    Written when a SAML ACS callback cannot be completed.
+    """
+    event_type: str = EventType.SSO_SAML_LOGIN_FAILURE
     account_tier: str = AccountTier.USER
     masking_applied: bool = True
     idp_id: str = ""

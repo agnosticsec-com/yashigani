@@ -1,4 +1,5 @@
-# Yashigani v0.9.4 — Wazuh SIEM auto-deploy override
+# Yashigani v2.23.1 — Wazuh SIEM auto-deploy override
+# Last updated: 2026-04-29T14:30:00+01:00
 #
 # Activate: docker compose -f docker-compose.yml -f docker-compose.wazuh.yml up -d
 # Or set via Admin → Audit → SIEM Integration → Wazuh (Auto-deploy)
@@ -20,6 +21,8 @@ services:
   wazuh-indexer:
     image: wazuh/wazuh-indexer:4.7.3
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
     environment:
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
       bootstrap.memory_lock: "true"
@@ -41,12 +44,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # EX-231-10: wazuh-indexer receives from manager; obs-plane.
     networks:
-      - internal
+      - obs
 
   wazuh-manager:
     image: wazuh/wazuh-manager:4.7.3
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
     environment:
       WAZUH_MANAGER_MASTER_NODE_NAME: wazuh-master
       INDEXER_URL: http://wazuh-indexer:9200
@@ -65,12 +71,17 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
+    # EX-231-10: wazuh-manager receives audit events from backoffice/gateway
+    # (data-plane push) and sends to indexer (obs). Joins both.
     networks:
-      - internal
+      - data
+      - obs
 
   wazuh-dashboard:
     image: wazuh/wazuh-dashboard:4.7.3
     restart: unless-stopped
+    mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
+    cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}
     environment:
       OPENSEARCH_HOSTS: http://wazuh-indexer:9200
       WAZUH_API_URL: http://wazuh-manager
@@ -89,8 +100,9 @@ services:
         condition: service_healthy
       wazuh-manager:
         condition: service_healthy
+    # EX-231-10: wazuh-dashboard is obs-plane only.
     networks:
-      - internal
+      - obs
 
 volumes:
   wazuh_indexer_data:

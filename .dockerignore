@@ -1,0 +1,21 @@
+# Last updated: 2026-04-27T22:05:00Z
+# Exclude paths from Docker build context.
+# Security: secrets dir contains private keys and must NEVER be sent to the
+# Docker daemon. Backups and test artefacts increase context size needlessly.
+docker/secrets/
+docker/data/
+docker/tls/
+backups/
+.git/
+.github/
+.claude/
+.claude-tmp/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+*.log
+node_modules/
+Internal/

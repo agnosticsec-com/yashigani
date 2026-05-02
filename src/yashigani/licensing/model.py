@@ -1,4 +1,5 @@
 """License model — tiers, state, community defaults."""
+# Last updated: 2026-04-23T11:36:14+01:00
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -56,21 +57,22 @@ class LicenseState:
 # Per-tier limit defaults — used by verifier for backwards-compat with
 # v1/v2 license payloads that pre-date the max_end_users / max_admin_seats fields.
 TIER_DEFAULTS: dict[str, dict] = {
-    "community":          {"max_agents": 5,     "max_end_users": 10,     "max_admin_seats": 2,   "max_orgs": 1},
-    "starter":            {"max_agents": 100,   "max_end_users": 250,    "max_admin_seats": 25,  "max_orgs": 1},
-    "professional":       {"max_agents": 500,   "max_end_users": 1000,   "max_admin_seats": 50,  "max_orgs": 1},
-    "professional_plus":  {"max_agents": 2000,  "max_end_users": 10000,  "max_admin_seats": 200, "max_orgs": 5},
+    "community":          {"max_agents": 20,    "max_end_users": 5,      "max_admin_seats": 2,   "max_orgs": 1},
+    "starter":            {"max_agents": 300,   "max_end_users": 100,    "max_admin_seats": 10,  "max_orgs": 1},
+    "professional":       {"max_agents": 1500,  "max_end_users": 500,    "max_admin_seats": 25,  "max_orgs": 1},
+    "professional_plus":  {"max_agents": 15000, "max_end_users": 5000,   "max_admin_seats": 100, "max_orgs": 5},
     "enterprise":         {"max_agents": -1,    "max_end_users": -1,     "max_admin_seats": -1,  "max_orgs": -1},
     "academic_nonprofit": {"max_agents": 50,    "max_end_users": 500,    "max_admin_seats": 10,  "max_orgs": 1},
 }
 
 
-# Community hardcoded defaults — no license file needed (v0.8.4 limits)
+# Community hardcoded defaults — no license file needed
+# v2.23.2 canonical: 20 agents / 5 end users / 2 admin seats / 1 org
 COMMUNITY_LICENSE = LicenseState(
     tier=LicenseTier.COMMUNITY,
     org_domain="*",
-    max_agents=5,
-    max_end_users=10,
+    max_agents=20,
+    max_end_users=5,
     max_admin_seats=2,
     max_orgs=1,
     features=frozenset(),

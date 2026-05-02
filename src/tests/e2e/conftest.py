@@ -5,12 +5,56 @@ These tests require a running Yashigani stack (docker/podman compose up).
 Skip if the stack is not running.
 
 Run with: pytest src/tests/e2e/ -v
+
+Last updated: 2026-04-27T21:53:12+01:00
 """
+from __future__ import annotations
+
 import os
 import shutil
 import subprocess
+from pathlib import Path
+from typing import Optional
 import pytest
 import httpx
+
+
+# ---------------------------------------------------------------------------
+# TLS trust anchor — M-04 (CLAUDE.md §3: no verify=False ever)
+# ---------------------------------------------------------------------------
+# Pattern A for Python ssl: workloads trust ca_root.crt (refined post gate
+# #58a evidence — Python 3.12/OpenSSL 3.0/Ubuntu 24.04 strict-chain validation
+# rejects intermediate-only anchors). httpx + the test harness use Python ssl,
+# so they get ca_root.crt. Caddy/postgres/Go consumers stay on Pattern B
+# elsewhere in the codebase.
+# Resolution order:
+#   1. YASHIGANI_CA_CERT env var (explicit override for custom deploys / CI)
+#   2. docker/secrets/ca_root.crt          (macOS local deploy)
+#   3. /run/secrets/ca_root.crt            (container / linux deploy)
+#
+# If none of the candidates exist the probe falls through to a socket error
+# (httpx raises on missing CA file), which causes _stack_running() to return
+# False — the test suite skips correctly.  TLS misconfiguration is no longer
+# silently hidden (M-04).
+def _resolve_ca_cert() -> Optional[str]:
+    """Return path to the public root CA cert, or None if not found."""
+    explicit = os.getenv("YASHIGANI_CA_CERT")
+    if explicit:
+        return explicit
+    candidates = [
+        # macOS local deploy: docker/secrets relative to repo root
+        Path(__file__).parents[4] / "docker" / "secrets" / "ca_root.crt",
+        # Linux container or VM deploy
+        Path("/run/secrets/ca_root.crt"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
+
+
+# Resolved once at import — all health-check probes in this module use this value.
+_CA_CERT_PATH: str | None = _resolve_ca_cert()
 
 
 def _detect_runtime() -> str:
@@ -147,9 +191,15 @@ def _stack_running() -> bool:
         "https://localhost:8443/healthz",
         "http://localhost:8080/healthz",
     ])
+    # M-04: use the real CA intermediate cert so TLS misconfiguration is not
+    # invisible to the harness.  _CA_CERT_PATH is resolved from env or the
+    # repo's docker/secrets/ directory at import time.  http:// URLs skip TLS.
+    # If _CA_CERT_PATH is None (CA file not yet deployed) httpx raises on
+    # https:// URLs and we fall through to the http:// fallback or container exec.
     for url in candidates:
         try:
-            r = httpx.get(url, verify=False, timeout=3)
+            verify = _CA_CERT_PATH if url.startswith("https://") else False  # type: ignore[assignment]
+            r = httpx.get(url, verify=verify, timeout=3)
             if r.status_code == 200:
                 return True
         except Exception:

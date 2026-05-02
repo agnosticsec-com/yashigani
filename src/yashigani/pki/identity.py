@@ -1,16 +1,31 @@
 """
 Service identity + manifest loader for Yashigani internal PKI.
 
+Last updated: 2026-04-28T20:30:00+00:00
+
 This module is import-safe from any service entrypoint. It does no network
 I/O, no cryptographic operations beyond SHA-256 (stdlib hashlib), and does
 not depend on the heavier ``cryptography`` package. The cryptography package
 is only required by :mod:`yashigani.pki.issuer` which runs inside install.sh
 and admin-API rotation endpoints.
 
+Refined PKI trust pattern (2026-04-28, post gate #58a evidence):
+  * Python ssl consumers      → trust anchor = ca_root.crt (Pattern A).
+                                  Python 3.12 / OpenSSL 3.0 / Ubuntu 24.04 does
+                                  not auto-set X509_V_FLAG_PARTIAL_CHAIN, so an
+                                  intermediate-only anchor fails strict chain
+                                  validation. The PUBLIC ca_root.crt is loaded
+                                  into the workload container; the PRIVATE
+                                  ca_root.key never leaves the host (0400).
+  * postgres / libpq          → sslrootcert = ca_intermediate.crt (Pattern B,
+                                  partial-chain capable).
+  * Caddy / Go crypto/tls     → ca_intermediate.crt (Pattern B).
+  * pgbouncer / Redis libssl  → ca_root.crt (Pattern A; libssl-direct strict).
+
 Environment inputs at runtime:
     YASHIGANI_SERVICE_NAME          — e.g. "gateway", "backoffice" (required)
-    YASHIGANI_INTERNAL_CA_DIR       — where ca_root.crt + <svc>_client.{crt,key}
-                                       + <svc>_bootstrap_token live.
+    YASHIGANI_INTERNAL_CA_DIR       — where ca_root.crt + ca_intermediate.crt +
+                                       <svc>_client.{crt,key} + <svc>_bootstrap_token live.
                                        Default: /run/secrets
     YASHIGANI_SERVICE_MANIFEST_PATH — path to service_identities.yaml.
                                        Default: /etc/yashigani/service_identities.yaml
@@ -66,6 +81,11 @@ class ServiceIdentity:
     mtls_capable: bool
     bootstrap_token_sha256: str
     revoked: bool
+    # SPIFFE URI embedded as URI SAN on the leaf cert (v2.23.1 — EX-231-08).
+    # Empty string means "no SPIFFE identity" — treated as a soft default when
+    # the manifest is mid-migration. Fresh manifests populate this for every
+    # service. The issuer always emits a URI SAN when this is non-empty.
+    spiffe_id: str = ""
 
     # Runtime-only fields resolved from the filesystem
     cert_path: Optional[Path] = None
@@ -144,6 +164,10 @@ class Manifest:
     services: tuple[ServiceIdentity, ...]
     cert_policy: CertPolicy
     ca_source: CASource
+    # Top-level endpoint_acls: path -> set of allowed SPIFFE URIs.
+    # Empty dict means "no ACLs declared" — yashigani.auth.spiffe defaults
+    # to deny on any gated endpoint.
+    endpoint_acls: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def get(self, name: str) -> ServiceIdentity:
         for s in self.services:
@@ -217,6 +241,14 @@ def load_manifest(path: Optional[str] = None) -> Manifest:
             raise ManifestError(f"{name}: bootstrap_token_sha256 must be a string")
         revoked = bool(entry.get("revoked", False))
 
+        spiffe_id = entry.get("spiffe_id", "") or ""
+        if not isinstance(spiffe_id, str):
+            raise ManifestError(f"{name}: spiffe_id must be a string")
+        if spiffe_id and not spiffe_id.startswith("spiffe://"):
+            raise ManifestError(
+                f"{name}: spiffe_id {spiffe_id!r} must start with spiffe://"
+            )
+
         services.append(
             ServiceIdentity(
                 name=name,
@@ -225,18 +257,49 @@ def load_manifest(path: Optional[str] = None) -> Manifest:
                 mtls_capable=mtls_capable,
                 bootstrap_token_sha256=bootstrap_token_sha256,
                 revoked=revoked,
+                spiffe_id=spiffe_id,
             )
         )
 
     policy = _parse_cert_policy(doc.get("cert_policy", {}))
     ca_source = _parse_ca_source(doc.get("ca_source", {}))
+    endpoint_acls = _parse_endpoint_acls(doc.get("endpoint_acls", {}))
 
     return Manifest(
         schema_version=schema_version,
         services=tuple(services),
         cert_policy=policy,
         ca_source=ca_source,
+        endpoint_acls=endpoint_acls,
     )
+
+
+def _parse_endpoint_acls(raw: Any) -> dict[str, frozenset[str]]:
+    """Parse the top-level endpoint_acls block into {path: frozenset(spiffe_ids)}."""
+    if raw is None or raw == {}:
+        return {}
+    if not isinstance(raw, dict):
+        raise ManifestError("endpoint_acls must be a mapping of path -> rule")
+    out: dict[str, frozenset[str]] = {}
+    for path, rule in raw.items():
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise ManifestError(
+                f"endpoint_acls key {path!r} must be a string path starting with '/'"
+            )
+        if not isinstance(rule, dict):
+            raise ManifestError(f"endpoint_acls[{path!r}] must be a mapping")
+        allowed = rule.get("allowed_spiffe_ids", [])
+        if not isinstance(allowed, list) or not all(isinstance(s, str) for s in allowed):
+            raise ManifestError(
+                f"endpoint_acls[{path!r}].allowed_spiffe_ids must be a list of strings"
+            )
+        for sid in allowed:
+            if not sid.startswith("spiffe://"):
+                raise ManifestError(
+                    f"endpoint_acls[{path!r}] contains non-SPIFFE id {sid!r}"
+                )
+        out[path] = frozenset(allowed)
+    return out
 
 
 def _parse_cert_policy(raw: Any) -> CertPolicy:
@@ -369,6 +432,13 @@ def current_service(
     secrets_dir_path = Path(secrets_dir or os.getenv("YASHIGANI_INTERNAL_CA_DIR", _DEFAULT_SECRETS_DIR))
     cert_path = secrets_dir_path / f"{name}_client.crt"
     key_path = secrets_dir_path / f"{name}_client.key"
+    # Pattern A for Python ssl: trust anchor is the public root cert (NOT the
+    # private root key). Python 3.12 / OpenSSL 3.0 on Ubuntu 24.04 does not
+    # auto-set X509_V_FLAG_PARTIAL_CHAIN on SSLContext.load_verify_locations(),
+    # so an intermediate-only anchor fails with "unable to get issuer
+    # certificate" (gate #58a evidence, 2026-04-28). Caddy/Go/postgres remain
+    # on Pattern B (partial-chain capable). Root PRIVATE key never enters a
+    # workload container — only the public ca_root.crt does.
     ca_root = secrets_dir_path / "ca_root.crt"
     bootstrap_token_path = secrets_dir_path / f"{name}_bootstrap_token"
 
@@ -382,6 +452,7 @@ def current_service(
         mtls_capable=identity.mtls_capable,
         bootstrap_token_sha256=identity.bootstrap_token_sha256,
         revoked=identity.revoked,
+        spiffe_id=identity.spiffe_id,
         cert_path=cert_path,
         key_path=key_path,
         ca_root_path=ca_root,

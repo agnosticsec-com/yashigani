@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-01T01:45:00+01:00 -->
+<!-- last-updated: 2026-05-02T11:14:40+01:00 -->
 # Yashigani
 ---
 
@@ -21,7 +21,7 @@
 ---
 **Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, agent bundles, and the optional Smallstep step-ca runtime ACME service are all gated behind compose profiles / install flags. **Core-plane mTLS is default-on**: per-service leaf certificates are issued at install time by the in-tree two-tier PKI (`src/yashigani/pki/issuer.py`) — no optional services required.
 ---
-**Document Date:** 2026-05-01
+**Document Date:** 2026-05-02
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -232,34 +232,46 @@ v2.23.0 consolidates Yashigani to a single branch. The `release/1.x` branch is e
 
 ## 7. Feature Matrix by Tier
 
-The table below lists only rows that **differ across tiers**. Rows that are identical across all six tiers are listed in [§7.1 Common features](#71-common-features). For the complete per-feature breakdown by version, see [Architecture.md §5 Complete Feature List](Architecture.md#5-complete-feature-list).
+The table below lists only rows that **differ across tiers**. Rows that are identical across all seven tiers are listed in [§7.1 Common features](#71-common-features). For the complete per-feature breakdown by version, see [Architecture.md §5 Complete Feature List](Architecture.md#5-complete-feature-list).
 
-| Feature | Community | Non-profit & Education | Starter | Professional | Professional Plus | Enterprise |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Licensing** | | | | | | |
-| Free, no license key | Yes | — | — | — | — | — |
-| Signed licence key required | — | Yes (verified) | Yes | Yes | Yes | Yes |
-| Pricing | Free | £500/yr (waiver via partnership MOU) | £3,000/yr | £12,000/yr | £100,000/yr | From £200,000/yr |
-| Max agents / MCP servers | 20 | 1,500 | 300 | 1,500 | 15,000 | Unlimited |
-| Max end users | 10 | 500 | 100 | 500 | 5,000 | Unlimited |
-| Max admin seats | 2 | 25 | 10 | 25 | 100 | Unlimited |
-| Max organizations / domains | 1 | 1 | 1 | 1 | 5 | Unlimited |
-| Apache 2.0 open-source license | Yes | — | — | — | — | — |
-| Non-Profit / Education licence (verified) | — | Yes | — | — | — | — |
-| CLA-covered contributions | Yes | — | — | — | — | — |
-| **Authentication** | | | | | | |
-| OpenID Connect (OIDC) SSO | No | Yes | Yes | Yes | Yes | Yes |
-| SAML v2 SSO | No | Optional add-on | No | Yes | Yes | Yes |
-| SCIM automated provisioning | No | Yes | No | Yes | Yes | Yes |
-| Multi-IdP Identity Broker (v2.0) | Local only | 1 OIDC (SAML add-on) | 1 OIDC | 1 OIDC + 1 SAML | 5 IdPs | Unlimited |
-| **Authorization** | | | | | | |
-| Multi-tenant org isolation | No | No | No | No | Partial (5 orgs) | Yes |
-| **Deployment** | | | | | | |
-| Container Pool Manager (v2.0) | 1/identity, 3 total | 3/identity, 15 total | 1/identity, 5 total | 3/identity, 15 total | 5/identity, 50 total | Unlimited |
+| Feature | Community | Non-profit & Education | Igniter | Starter | Professional | Professional Plus | Enterprise |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Licensing** | | | | | | | |
+| Free, no license key | Yes | — | — | — | — | — | — |
+| Signed licence key required | — | Yes (verified) | Yes | Yes | Yes | Yes | Yes |
+| Pricing | Free | Free (always) | £1,750/yr | £3,000/yr | £12,000/yr | £80,000/yr | From £200,000/yr |
+| Max agents / MCP servers | 20 | Unlimited | 200 | 400 | 2,000 | 16,000 | Unlimited |
+| Max end users | 5 | Unlimited | 50 | 100 | 500 | 4,000 | Unlimited |
+| Max admin seats | 2 | Unlimited | 5 | 10 | 25 | 100 | Unlimited |
+| Max organizations / domains | 1 | Unlimited | 1 | 1 | 1 | 5 | Unlimited |
+| Apache 2.0 open-source license | Yes | — | — | — | — | — | — |
+| Non-Profit / Education licence (verified) | — | Yes | — | — | — | — | — |
+| CLA-covered contributions | Yes | — | — | — | — | — | — |
+| **Authentication** | | | | | | | |
+| OpenID Connect (OIDC) SSO | No | Yes (free) | Yes | Yes | Yes | Yes | Yes |
+| SAML v2 SSO | No | Yes (free) | No | No | Yes | Yes | Yes |
+| SCIM automated provisioning | No | Yes (free) | No | No | Yes | Yes | Yes |
+| Multi-IdP Identity Broker (v2.0) | Local only | Unlimited IdPs | 1 OIDC | 1 OIDC | 1 OIDC + 1 SAML | 5 IdPs | Unlimited |
+| **Authorization** | | | | | | | |
+| Multi-tenant org isolation | No | No | No | No | No | Partial (5 orgs) | Yes |
+| **Deployment** | | | | | | | |
+| Container Pool Manager (v2.0) | 1/identity, 3 total | Unlimited | 1/identity, 5 total | 1/identity, 5 total | 3/identity, 15 total | 5/identity, 50 total | Unlimited |
+
+**User-count bundles (paid tiers — ramped overflow premium):**
+
+Paid tiers support optional 50- or 250-user bundles to grow within a tier before upgrading. The premium increases at higher tiers to create a natural upgrade trigger.
+
+| Tier | Bundle size | Bundle price/yr | Users added | Agents added (4:1) | Max bundles | Tier cap at max bundles |
+|---|---|---|---|---|---|---|
+| Starter | 50 users | £1,627.50 | +50 | +200 | 5 | 350 users / £11,137.50 |
+| Professional | 50 users | £1,350 | +50 | +200 | 50 | 3,000 users / £79,500 |
+| Professional Plus | 250 users | £6,000 | +250 | +1,000 | 20 | 9,000 users / £200,000 |
+
+Each tier's maximum bundle spend is set just below the next tier's base price — at that point, upgrading delivers more capacity, features, and better value per user. Igniter has no bundles; upgrade to Starter at 51+ users.
 
 ### 7.1 Common features
 
-The following features are included in **all six tiers** at parity. They are deliberately not gated by license tier — they are core to what Yashigani is.
+The following features are included in **all seven tiers** at parity. They are deliberately not gated by license tier — they are core to what Yashigani is.
 
 **Authentication and identity**
 - Username + password (Argon2 / bcrypt)

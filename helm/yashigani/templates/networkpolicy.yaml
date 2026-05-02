@@ -1,5 +1,18 @@
+{{- if .Values.networkPolicies.enabled }}
+# Last updated: 2026-05-01T17:00:00+01:00
 # NetworkPolicy — default-deny with explicit allow rules per service.
 # Enforces the principle of least privilege for intra-cluster traffic.
+#
+# EX-231-10 (2026-04-29): Caddy-centric isolation.
+# Tiago directive: Caddy is the SOLE ingress to backoffice and gateway.
+# Rules implemented:
+#   - backoffice ingress: caddy ONLY (removed prometheus direct scrape)
+#   - gateway ingress: caddy ONLY (removed open-webui direct access,
+#     removed prometheus direct scrape)
+#   - prometheus egress: via Caddy :8444/:8445 ONLY (when metrics listeners
+#     enabled); direct pod-scrape egress only when listeners explicitly disabled
+#   - open-webui egress: via Caddy :443 only
+#   - helm test pods: via Caddy only (test connects to caddy, not direct)
 #
 # NOTE: Pod selectors use app.kubernetes.io/name labels, which match the
 # labels emitted by every Deployment and StatefulSet in this chart.
@@ -55,7 +68,9 @@ spec:
           port: 53
 
 ---
-# Gateway — accept ingress from caddy (if enabled) and nginx-ingress controller
+# Gateway — accept ingress from Caddy ONLY (EX-231-10: Caddy is sole ingress).
+# open-webui is removed — in K8s it must route through Caddy's :443 listener.
+# nginx-ingress retained for installations using tlsMode=nginx (Caddy bypassed).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -74,13 +89,11 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-caddy
-        # nginx-ingress controller pods (namespace may differ per cluster)
+        # nginx-ingress controller pods (namespace may differ per cluster).
+        # Only active when global.tlsMode=nginx — Caddy is bypassed in that mode.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: open-webui
       ports:
         - protocol: TCP
           port: 8080
@@ -114,14 +127,14 @@ spec:
               app.kubernetes.io/name: yashigani-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-budget-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
@@ -136,6 +149,20 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    {{- if .Values.mtls.enabled }}
+    # Direct-to-postgres egress for session-scoped advisory lock during run_migrations.
+    # Gateway run_migrations() acquires pg_advisory_lock via YASHIGANI_DB_DSN_DIRECT —
+    # pgbouncer transaction-pool mode can route each connection to a different postgres
+    # backend, so the advisory lock must go direct to serialise concurrent gateway
+    # replicas. Same rationale as allow-backoffice-egress direct-postgres entry.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
     - to:
         - podSelector:
             matchLabels:
@@ -200,14 +227,14 @@ spec:
               app.kubernetes.io/name: yashigani-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-budget-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
@@ -222,6 +249,23 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    # Direct-to-postgres for bootstrap-class advisory locks only.
+    # run_migrations() acquires a session-scoped pg_advisory_lock directly on
+    # the postgres backend — pgbouncer transaction-pool mode routes each new
+    # connection to a DIFFERENT backend, so two replicas can each "acquire"
+    # the same key independently without serialisation. The direct path puts
+    # both lock connections on the same backend process, where advisory locks
+    # actually serialise. Captain #58c retro #3bw/#3bx. Scoped to port 5432
+    # only; backoffice app-traffic still goes through pgbouncer.
+    {{- if .Values.mtls.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
 
 ---
 # Policy (OPA) — accept ingress from gateway and backoffice only
@@ -251,7 +295,7 @@ spec:
           port: 8181
 
 ---
-# Redis — accept ingress from gateway, backoffice, and agent bundles
+# Redis — accept ingress from gateway, backoffice, agent bundles, and helm test pods
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -277,12 +321,16 @@ spec:
         - podSelector:
             matchLabels:
               yashigani.io/bundle: langgraph
+        # helm test pods run test-redis-ping
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
 
 ---
-# Budget Redis — accept ingress from gateway and backoffice only
+# Budget Redis — accept ingress from gateway, backoffice, and helm test pods.
 # Separate Redis instance; noeviction policy protects budget counters.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -305,9 +353,13 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: yashigani-backoffice
+        # helm test pods run test-redis-ping
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
 
 ---
 # Ollama — accept ingress from gateway only (inference is data-plane only)
@@ -362,7 +414,9 @@ spec:
           port: 80
 
 ---
-# PostgreSQL — accept ingress from pgbouncer only
+# PostgreSQL — accept ingress from pgbouncer (app traffic) and backoffice
+# (direct connection for session-scoped advisory lock during run_migrations).
+# See allow-backoffice-egress comment above for rationale. Captain #58c #3bw.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -384,6 +438,38 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    {{- if .Values.mtls.enabled }}
+    # Backoffice direct connection for advisory-lock-based migration serialisation.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Gateway direct connection for advisory-lock-based migration serialisation.
+    # Same rationale as backoffice above — gateway run_migrations() uses
+    # YASHIGANI_DB_DSN_DIRECT to acquire pg_advisory_lock directly on postgres.
+    # Captain R4 finding 2026-04-30: gateway→postgres blocked by NetworkPolicy,
+    # causing connection timeout in run_migrations() → CrashLoopBackOff.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Partition-maintenance CronJob direct-to-postgres for DDL (CREATE TABLE
+    # PARTITION). Session-scoped DDL cannot be proxied via pgbouncer transaction
+    # pool. Finding D verification 2026-05-01.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: db-maintenance
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
 
 ---
 # PgBouncer — accept ingress from gateway, backoffice, and langgraph agent
@@ -470,7 +556,9 @@ spec:
           port: 8080
 
 ---
-# Open WebUI egress — only to gateway
+# Open WebUI egress — EX-231-10: LLM calls route through Caddy, not gateway
+# directly. open-webui connects to Caddy:443, which proxies to gateway:8080.
+# This enforces the Caddy-centric model for all ingress to gateway.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -488,10 +576,10 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: yashigani-gateway
+              app.kubernetes.io/name: yashigani-caddy
       ports:
         - protocol: TCP
-          port: 8080
+          port: 443
 
 ---
 # Prometheus — accept ingress from grafana and from caddy / nginx-ingress
@@ -524,7 +612,11 @@ spec:
           port: 9090
 
 ---
-# Prometheus egress — scrape targets within namespace
+# Prometheus egress — EX-231-10: scrape via Caddy only (not direct to pods).
+# When Caddy internal metrics listeners are enabled (default), Prometheus
+# scrapes gateway via caddy:8444 and backoffice via caddy:8445. The direct
+# pod-scrape ports (:8080/:8443) are ONLY emitted when the listeners are
+# explicitly disabled (non-default, deliberate testing only).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -539,13 +631,50 @@ spec:
   policyTypes:
     - Egress
   egress:
+    {{- if .Values.caddy.internalMetricsListener.enabled }}
+    # Scrape gateway via Caddy :8444 (SPIFFE-gated mTLS listener)
     - to:
-        - podSelector: {}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-caddy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.caddy.internalMetricsListener.port }}
+    {{- end }}
+    {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+    # Scrape backoffice via Caddy :8445 (SPIFFE-gated mTLS listener)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-caddy
+      ports:
+        - protocol: TCP
+          port: {{ .Values.caddy.internalMetricsListenerBackoffice.port }}
+    {{- end }}
+    {{- if not .Values.caddy.internalMetricsListener.enabled }}
+    # Direct gateway scrape — only when Caddy metrics listener is explicitly disabled.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
       ports:
         - protocol: TCP
           port: 8080
+    {{- end }}
+    {{- if not .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+    # Direct backoffice scrape — only when Caddy metrics listener is explicitly disabled.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
+      ports:
         - protocol: TCP
           port: 8443
+    {{- end }}
+    # Prometheus self-scrape + alertmanager + loki
+    - to:
+        - podSelector: {}
+      ports:
         - protocol: TCP
           port: 9090
         - protocol: TCP
@@ -669,7 +798,7 @@ spec:
               app.kubernetes.io/name: yashigani-redis
       ports:
         - protocol: TCP
-          port: 6379
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
     - to:
         - podSelector:
             matchLabels:
@@ -677,6 +806,73 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+
+---
+# Helm test pods — EX-231-10: gateway/backoffice tests go via Caddy (:443).
+# Redis tests access Redis directly (Redis is data-plane, not the SPIFFE target).
+# Transient pods spawned by `helm test`, annotated with helm.sh/hook=test
+# and labelled app.kubernetes.io/component=test.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: test
+  policyTypes:
+    - Egress
+  egress:
+    # gateway/backoffice health checks go via Caddy (EX-231-10).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-caddy
+      ports:
+        - protocol: TCP
+          port: 443
+    # Redis tests access Redis directly (not in scope for Caddy-centric fix).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-redis
+      ports:
+        - protocol: TCP
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-budget-redis
+      ports:
+        - protocol: TCP
+          port: {{ if .Values.mtls.enabled }}6380{{ else }}6379{{ end }}
+
+---
+# Caddy ingress: allow Helm test pods to reach Caddy for health checks.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-helm-test-to-caddy-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-caddy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: test
+      ports:
+        - protocol: TCP
+          port: 443
 
 ---
 # OpenClaw — additional external egress for messaging channel webhooks.
@@ -703,3 +899,135 @@ spec:
         - protocol: TCP
           port: 80
 {{- end }}
+
+---
+# Caddy ingress — accept external client connections on :443 and :80.
+# With default-deny-ingress, LoadBalancer/NodePort traffic is blocked unless
+# explicitly allowed. ipBlock 0.0.0.0/0 permits external clients.
+# The SPIFFE-gated metrics listeners (:8444, :8445) allow ingress from
+# Prometheus only (separate rule for allow-prometheus-to-caddy-metrics-ingress).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-caddy-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-caddy
+  policyTypes:
+    - Ingress
+  ingress:
+    # External client traffic
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    {{- if .Values.caddy.internalMetricsListener.enabled }}
+    # Prometheus scrapes Caddy's SPIFFE-gated gateway metrics listener
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-prometheus
+      ports:
+        - protocol: TCP
+          port: {{ .Values.caddy.internalMetricsListener.port }}
+    {{- end }}
+    {{- if .Values.caddy.internalMetricsListenerBackoffice.enabled }}
+    # Prometheus scrapes Caddy's SPIFFE-gated backoffice metrics listener
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-prometheus
+      ports:
+        - protocol: TCP
+          port: {{ .Values.caddy.internalMetricsListenerBackoffice.port }}
+    {{- end }}
+
+---
+# Caddy egress — Caddy is the K8s public TLS edge (Option B parity with
+# Docker/Podman compose). Under default-deny-egress, Caddy must be granted
+# explicit egress to every upstream it reverse_proxies to; otherwise the
+# kernel drops every connection and the front door 502s.
+#
+# Upstreams (mirrors helm/yashigani/templates/configmaps.yaml :443 site):
+#   - yashigani-gateway:8080      (mTLS, /v1/* + /health)
+#   - yashigani-backoffice:8443   (mTLS, /admin/* + /api/admin/*)
+#   - open-webui:8080             (plain, only when openWebui.enabled)
+#
+# DNS (UDP/TCP 53) is already covered by allow-dns-egress for all pods.
+# The :8444 / :8445 SPIFFE-gated metrics listeners are *ingress* on Caddy
+# (Prometheus dials Caddy), so they don't appear in this egress list.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-caddy-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-caddy
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-backoffice
+      ports:
+        - protocol: TCP
+          port: 8443
+    {{- if .Values.openWebui.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: open-webui
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+
+{{- if .Values.mtls.enabled }}
+---
+# db-maintenance CronJob egress — direct-to-postgres only.
+# Partition DDL requires a session-scoped connection (CREATE TABLE PARTITION
+# requires advisory locks that cannot be serialised via pgbouncer transaction pool).
+# Finding D verification fix 2026-05-01.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-db-maintenance-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: db-maintenance
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}{{- /* mtls.enabled */ -}}
+{{- end }}{{- /* networkPolicies.enabled */ -}}

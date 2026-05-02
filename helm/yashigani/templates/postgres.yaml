@@ -21,10 +21,31 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-postgres
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger rolling update when PKI Secret resourceVersion changes.
+        # See gateway.yaml for full rationale.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets mount collision — see redis.yaml note.
+      automountServiceAccountToken: false
       securityContext:
-        fsGroup: 999
+        # Captain #58c #3bt evidence (2026-04-29): postgres:16-alpine runs as
+        # UID/GID 70 (Alpine convention). The previous fsGroup: 999 was
+        # carried over from when the image was the Debian-based postgres
+        # (UID/GID 999). With Alpine, mounted Secret volumes (default mode
+        # 0440 root:fsGroup) ended up as `r--r----- root:ping(999)`, and
+        # postgres dropped to UID 70 GID 70 before initdb scripts ran —
+        # neither in root(0) nor in ping(999), so /run/secrets/* read as
+        # `Permission denied`, 05-enable-ssl.sh exited non-zero, postgres
+        # restarted, second start saw partial PGDATA → init scripts skipped
+        # → ssl=off → pgbouncer→postgres handshake failed.
+        # fsGroup: 70 chowns Secret + PVC volumes to GID 70 (postgres),
+        # giving the postgres user read access via group membership without
+        # broadening permissions beyond the pod.
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -47,6 +68,57 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
                   key: postgres_password
+            # Retro #3ao — point PGDATA at a subdirectory of the PV root.
+            # local-path / many CSI drivers leave a non-empty PV root
+            # (lost+found, .snapshot, mountpoint marker file). The postgres
+            # entrypoint then sees a "non-empty data dir" and prints
+            # "PostgreSQL Database directory appears to contain a database;
+            # Skipping initialization" — but the dir doesn't actually contain
+            # a database, so role yashigani_app is never created and every
+            # consumer hits "role does not exist". Using a subdir we own
+            # avoids the collision entirely.
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          {{- if .Values.mtls.enabled }}
+          # mTLS mode: pg_hba.conf rewrites to hostssl+clientcert=verify-ca
+          # for anything non-local, which pg_isready cannot satisfy without
+          # cert flags. Hit the local unix socket instead (pg_hba keeps
+          # `local all all trust` so the probe just checks the process is
+          # accepting connections).
+          #
+          # Captain #58c #3bs evidence (2026-04-28): without a startupProbe,
+          # the liveness probe kicks in 70s after pod start. initdb + the
+          # init scripts in /docker-entrypoint-initdb.d (including
+          # 05-enable-ssl.sh which copies certs into PGDATA + appends ssl=on
+          # to postgresql.conf) can take 60-90s on Docker Desktop K8s, so
+          # liveness fires mid-init, K8s restarts the pod, second start sees
+          # non-empty PGDATA -> init scripts skipped -> ssl=off ->
+          # pgbouncer→postgres TLS handshake never establishes ->
+          # backoffice CrashLoopBackOff. The startupProbe holds liveness +
+          # readiness back until postgres has accepted at least one
+          # connection, giving init scripts up to 300s to complete.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "/var/run/postgresql", "-U", "yashigani_app", "-d", "yashigani"]
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "yashigani_app", "-d", "yashigani"]
@@ -61,11 +133,37 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if .Values.mtls.enabled }}
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            # Retro #3an — mount the WHOLE ConfigMap as a directory, not via
+            # subPath. With subPath the postgres entrypoint occasionally sees
+            # the wrong file mode (depending on CSI driver) and silently
+            # skips the SSL init step, which is exactly what we hit on the
+            # previous K8s gate (pg_hba.conf had zero hostssl rows). A full
+            # directory mount keeps defaultMode honoured everywhere.
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        - name: init-scripts
+          configMap:
+            name: yashigani-postgres-init
+            defaultMode: 0555
+      {{- end }}
   {{- if .Values.postgres.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:

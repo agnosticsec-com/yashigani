@@ -1,0 +1,221 @@
+{{- if .Values.adminBootstrap.enabled }}
+{{- if not .Values.adminBootstrap.existingSecretName }}
+{{- /*
+  Last updated: 2026-04-25T10:30:00+01:00
+
+  Admin bootstrap (retro #3ap) — K8s parity for two-admin + dual-TOTP install.
+
+  Compose path (install.sh _gen_admin_credentials) writes six files into
+  ./secrets:
+    admin1_username
+    admin_initial_password   (admin1 password — name kept for legacy compat)
+    admin1_totp_secret
+    admin2_username
+    admin2_password
+    admin2_totp_secret
+
+  This Job is the chart-side equivalent. It runs as a pre-install hook so
+  the data is present before the backoffice starts and `_bootstrap_admin_accounts`
+  runs (see src/yashigani/backoffice/app.py — that function reads the same
+  six file names off the secrets-dir mount).
+
+  RBAC: scoped via dedicated yashigani-admin-bootstrap ServiceAccount with a
+  Role that only allows get/update/patch on the named Secret. The Secret is
+  pre-seeded by Helm itself at -19 weight (before this Job runs at -8) so
+  the Role does not need the unrestricted `create` verb.
+*/ -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: yashigani-admin-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-admin-bootstrap
+    app.kubernetes.io/component: bootstrap
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: yashigani-admin-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-admin-bootstrap
+    app.kubernetes.io/component: bootstrap
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.adminBootstrap.secretName | quote }}]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: yashigani-admin-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-admin-bootstrap
+    app.kubernetes.io/component: bootstrap
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: yashigani-admin-bootstrap
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: yashigani-admin-bootstrap
+  apiGroup: rbac.authorization.k8s.io
+---
+# Empty placeholder Secret — created at pre-install (-19), filled by the
+# Job below at -8. resource-policy:keep so subsequent helm upgrades do not
+# erase rotated TOTP secrets / passwords already provisioned.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.adminBootstrap.secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-admin-bootstrap
+    app.kubernetes.io/component: bootstrap
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-19"
+    "helm.sh/resource-policy": keep
+type: Opaque
+data: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: yashigani-admin-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-admin-bootstrap
+    app.kubernetes.io/component: bootstrap
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    # Run after RBAC + placeholder (-20/-19) but BEFORE the PKI bootstrap
+    # at -5 — both Jobs are independent so order between them doesn't
+    # matter, but admin bootstrap should come up before the backoffice
+    # Deployment (no negative weight = 0).
+    "helm.sh/hook-weight": "-8"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yashigani-admin-bootstrap
+        app.kubernetes.io/component: bootstrap
+    spec:
+      restartPolicy: Never
+      serviceAccountName: yashigani-admin-bootstrap
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: minter
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.global.imageOwner }}/{{ .Values.adminBootstrap.image.repository }}:{{ .Values.adminBootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.adminBootstrap.image.pullPolicy }}
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              # Generate six values matching install.sh _gen_admin_credentials.
+              # Charset matches feedback_password_charset.md exactly:
+              # A-Za-z0-9!*,-._~ (URL-safe, sed/shell/env-safe).
+              # Script emitted via base64 so YAML block-scalar indent does not
+              # bleed into the Python source.
+              echo "aW1wb3J0IHNlY3JldHMsIHN0cmluZywgYmFzZTY0LCBvcwphZGogPSBbImNhbG0iLCJicmF2ZSIsImdlbnRsZSIsImx1Y2t5Iiwic2hhcnAiLCJxdWlldCIsImJyaWdodCJdCm5vdW4gPSBbImZveCIsIndyZW4iLCJseW54Iiwib3J5eCIsImliaXMiLCJzdG9hdCIsInJhdmVuIl0KZGVmIHVuYW1lKCk6CiAgICByZXR1cm4gZiJ7c2VjcmV0cy5jaG9pY2UoYWRqKX0te3NlY3JldHMuY2hvaWNlKG5vdW4pfS17c2VjcmV0cy5yYW5kYmVsb3coOTAwKSsxMDB9IgpjaGFyc2V0ID0gc3RyaW5nLmFzY2lpX2xldHRlcnMgKyBzdHJpbmcuZGlnaXRzICsgIiEqLC0uX34iCmRlZiBwdyhuPTM2KToKICAgIHdoaWxlIFRydWU6CiAgICAgICAgY2FuZGlkYXRlID0gIiIuam9pbihzZWNyZXRzLmNob2ljZShjaGFyc2V0KSBmb3IgXyBpbiByYW5nZShuKSkKICAgICAgICBpZiAoYW55KGMuaXN1cHBlcigpIGZvciBjIGluIGNhbmRpZGF0ZSkKICAgICAgICAgICAgYW5kIGFueShjLmlzbG93ZXIoKSBmb3IgYyBpbiBjYW5kaWRhdGUpCiAgICAgICAgICAgIGFuZCBhbnkoYy5pc2RpZ2l0KCkgZm9yIGMgaW4gY2FuZGlkYXRlKQogICAgICAgICAgICBhbmQgYW55KGMgaW4gIiEqLC0uX34iIGZvciBjIGluIGNhbmRpZGF0ZSkpOgogICAgICAgICAgICByZXR1cm4gY2FuZGlkYXRlCmRlZiB0b3RwX3NlY3JldCgpOgogICAgcmV0dXJuIGJhc2U2NC5iMzJlbmNvZGUoc2VjcmV0cy50b2tlbl9ieXRlcygyMCkpLmRlY29kZSgpLnJzdHJpcCgiPSIpCnUxID0gdW5hbWUoKQp1MiA9IHVuYW1lKCkKd2hpbGUgdTIgPT0gdTE6CiAgICB1MiA9IHVuYW1lKCkKdmFscyA9IHsKICAgICJhZG1pbjFfdXNlcm5hbWUiOiB1MSwKICAgICJhZG1pbl9pbml0aWFsX3Bhc3N3b3JkIjogcHcoKSwKICAgICJhZG1pbjFfdG90cF9zZWNyZXQiOiB0b3RwX3NlY3JldCgpLAogICAgImFkbWluMl91c2VybmFtZSI6IHUyLAogICAgImFkbWluMl9wYXNzd29yZCI6IHB3KCksCiAgICAiYWRtaW4yX3RvdHBfc2VjcmV0IjogdG90cF9zZWNyZXQoKSwKfQpmb3IgaywgdiBpbiB2YWxzLml0ZW1zKCk6CiAgICBwcmludChmIntrfT17dn0iKQo=" | base64 -d > /tmp/mint.py
+              python3 /tmp/mint.py > /tmp/values.env
+              # Project to discrete files for the applier.
+              mkdir -p /tmp/secret
+              while IFS='=' read -r k v; do
+                [ -n "$k" ] || continue
+                printf '%s' "$v" > "/tmp/secret/$k"
+                chmod 0400 "/tmp/secret/$k"
+              done < /tmp/values.env
+              echo "[admin-bootstrap] minted six values:"
+              ls -l /tmp/secret
+          volumeMounts:
+            - name: workspace
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.adminBootstrap.resources | nindent 12 }}
+      containers:
+        - name: applier
+          image: "{{ .Values.mtls.kubectlImage.repository }}:{{ .Values.mtls.kubectlImage.tag }}"
+          imagePullPolicy: {{ .Values.mtls.kubectlImage.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              cd /tmp/secret
+              # Idempotency: if the placeholder is already populated (i.e.
+              # this is a helm upgrade, not a fresh install), skip overwriting
+              # so rotated passwords / re-enrolled TOTPs stay intact.
+              existing=$(kubectl get secret {{ .Values.adminBootstrap.secretName }} \
+                --namespace {{ .Release.Namespace }} \
+                -o jsonpath='{.data.admin_initial_password}' 2>/dev/null || true)
+              if [ -n "$existing" ]; then
+                echo "[admin-bootstrap] Secret already populated — preserving."
+                exit 0
+              fi
+              kubectl create secret generic {{ .Values.adminBootstrap.secretName }} \
+                --namespace {{ .Release.Namespace }} \
+                $(for f in admin1_username admin_initial_password admin1_totp_secret admin2_username admin2_password admin2_totp_secret; do \
+                    [ -f "$f" ] && echo "--from-file=$f=$f"; \
+                  done) \
+                --dry-run=client -o yaml \
+              | kubectl apply -n {{ .Release.Namespace }} -f -
+              echo "[admin-bootstrap] Secret {{ .Values.adminBootstrap.secretName }} populated."
+          volumeMounts:
+            - name: workspace
+              mountPath: /tmp
+              readOnly: true
+          resources:
+            {{- toYaml .Values.adminBootstrap.resources | nindent 12 }}
+      volumes:
+        # All bootstrap material in RAM — never node disk.
+        - name: workspace
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+{{- end }}
+{{- end }}

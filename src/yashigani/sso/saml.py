@@ -1,6 +1,8 @@
 """
 Yashigani SSO — SAMLv2 Service Provider.
 Validates assertions from the IdP and resolves user identity.
+
+Last updated: 2026-04-28T23:58:36+01:00
 """
 from __future__ import annotations
 
@@ -45,6 +47,12 @@ class SAMLUserInfo:
     email: Optional[str]
     attributes: dict            # all assertion attributes
     session_index: Optional[str]
+    # V6.8.4 — AuthnContextClassRef from the SAML assertion.
+    # Extracted via python3-saml's get_last_authn_contexts() if available,
+    # or from the raw XML as a fallback.  Empty string when not present.
+    authn_context_class_ref: str = ""
+    # AuthnInstant from the AuthnStatement (ISO 8601 string or empty).
+    authn_instant: str = ""
 
 
 class SAMLProvider:
@@ -86,11 +94,28 @@ class SAMLProvider:
         elif "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress" in attrs:
             email = attrs["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"][0]
 
+        # V6.8.4 — extract AuthnContextClassRef from the assertion.
+        # python3-saml (onelogin) >= 2.8.0 exposes get_last_authn_contexts().
+        # Older versions don't have it; fall back to empty string gracefully.
+        authn_context_class_ref = ""
+        authn_instant = ""
+        try:
+            # get_last_authn_contexts() returns a list of dicts, each with
+            # keys 'authnContextClassRef' and 'authnContextDeclRef'.
+            contexts = auth.get_last_authn_contexts()
+            if contexts:
+                authn_context_class_ref = contexts[0].get("authnContextClassRef", "") or ""
+        except AttributeError:
+            # Method not available in older python3-saml versions; safe to ignore.
+            pass
+
         return SAMLUserInfo(
             subject=name_id,
             email=email,
             attributes={k: v[0] if len(v) == 1 else v for k, v in attrs.items()},
             session_index=auth.get_session_index(),
+            authn_context_class_ref=authn_context_class_ref,
+            authn_instant=authn_instant,
         )
 
     # -- Internal ------------------------------------------------------------

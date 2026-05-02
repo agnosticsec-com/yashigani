@@ -1,14 +1,19 @@
 """
 Yashigani Backoffice — Model & Alias management routes.
 
+# Last updated: 2026-04-27T00:00:00+01:00
+
 CRUD for model aliases and model allocation to users/groups/orgs.
   GET     /admin/models                  — List all model aliases
-  POST    /admin/models                  — Create a model alias
-  DELETE  /admin/models/{alias}          — Delete a model alias
+  POST    /admin/models                  — Create a model alias (step-up required)
+  DELETE  /admin/models/{alias}          — Delete a model alias (step-up required)
   GET     /admin/models/available        — List models from Ollama
   GET     /admin/models/allocations      — List all model allocations
-  POST    /admin/models/allocations      — Allocate a model to user/group/org
-  DELETE  /admin/models/allocations/{id} — Remove an allocation
+  POST    /admin/models/allocations      — Allocate a model to user/group/org (step-up required)
+  DELETE  /admin/models/allocations/{id} — Remove an allocation (step-up required)
+
+LF-STEPUP-AGENT-CREATE (2026-04-27): mutation endpoints now require step-up auth.
+Model alias and allocation changes affect routing policy and sensitivity ceilings.
 """
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from yashigani.backoffice.middleware import AdminSession
+from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession, require_stepup_admin_session
 from yashigani.backoffice.state import backoffice_state
 from yashigani.models.alias_store import ModelAlias
 
@@ -78,7 +83,7 @@ async def list_aliases(session: AdminSession):
 
 
 @router.post("", status_code=201)
-async def create_alias(body: AliasRequest, session: AdminSession):
+async def create_alias(body: AliasRequest, session: StepUpAdminSession = require_stepup_admin_session):
     store = _alias_store()
     if store.get(body.alias) is not None:
         raise HTTPException(status_code=409, detail={"error": "alias_exists"})
@@ -94,7 +99,7 @@ async def create_alias(body: AliasRequest, session: AdminSession):
 
 
 @router.delete("/{alias}")
-async def delete_alias(alias: str, session: AdminSession):
+async def delete_alias(alias: str, session: StepUpAdminSession = require_stepup_admin_session):
     store = _alias_store()
     deleted = store.delete(alias)
     if not deleted:
@@ -130,7 +135,7 @@ async def list_allocations(session: AdminSession):
 
 
 @router.post("/allocations", status_code=201)
-async def create_allocation(body: AllocationRequest, session: AdminSession):
+async def create_allocation(body: AllocationRequest, session: StepUpAdminSession = require_stepup_admin_session):
     global _alloc_counter
     store = _alias_store()
     if store.get(body.model_alias) is None:
@@ -147,7 +152,7 @@ async def create_allocation(body: AllocationRequest, session: AdminSession):
 
 
 @router.delete("/allocations/{alloc_id}")
-async def delete_allocation(alloc_id: str, session: AdminSession):
+async def delete_allocation(alloc_id: str, session: StepUpAdminSession = require_stepup_admin_session):
     global _allocations
     before = len(_allocations)
     _allocations = [a for a in _allocations if a["id"] != alloc_id]

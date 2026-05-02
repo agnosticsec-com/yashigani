@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-02T10:00:00+01:00 (fix: _pki_chown_client_keys mode probe replaced with static subuid check; unshare fallback to podman_run on failure — gate #ROOTLESS-7)
+# 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
+# 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
+# 2026-05-02: secrets_dir chown deferred to _prepare_secrets_dir_for_pki() for Podman rootless (gate #ROOTLESS-3 blocker)
+# 2026-05-02: stale-partial-install guard in compose_up() must not wipe when ca_root.crt already present (gate #ROOTLESS-5 blocker)
+# 2026-05-02: license_key placeholder created at step 7 (before PKI chown) in demo mode; compose_up placeholder write is non-fatal for Podman rootless (gate #ROOTLESS-6 blocker)
+# 2026-05-02: _pki_chown_client_keys mode probe replaced with static /etc/subuid check; unshare case falls back to podman_run before aborting (gate #ROOTLESS-7 blocker)
+# 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
 # =============================================================================
@@ -58,6 +66,13 @@ UPSTREAM_URL=""
 LICENSE_KEY_PATH=""
 DB_AES_KEY=""                 # YASHIGANI_DB_AES_KEY — set via prompt or --db-aes-key
 NON_INTERACTIVE=false
+# Track whether YSG_RUNTIME was set explicitly by the operator (env var or
+# --runtime CLI flag). When true, prompt_runtime_choice() skips the
+# interactive prompt — the admin has already chosen.
+if [[ -n "${YSG_RUNTIME:-}" ]]; then
+  YSG_RUNTIME_EXPLICIT=true
+  export YSG_RUNTIME_EXPLICIT
+fi
 SKIP_PREFLIGHT=false
 SKIP_PULL=false
 UPGRADE=false
@@ -108,11 +123,19 @@ OPTIONS
   --db-aes-key     KEY                    Database AES-256 encryption key (64-char hex)
   --namespace      NAMESPACE              Kubernetes namespace (default: yashigani)
   --agent-bundles  BUNDLES               Comma-separated opt-in agents: langflow,letta,openclaw (or "all")
-  --with-openwebui                        Include Open WebUI chat interface
+  --with-openwebui                        Enable optional integration with the open-source Open WebUI project
+                                          (image pulled unmodified from ghcr.io/open-webui/open-webui;
+                                           Open WebUI is governed by its own licence terms)
   --with-internal-ca                      Include Smallstep CA for internal service-to-service TLS
   --wazuh                                 Install Wazuh SIEM (manager + indexer + dashboard)
   --offline                               Air-gapped mode (no ACME, no image pulls)
   --non-interactive                       Skip all interactive prompts
+  --runtime <docker|podman|k8s>          Lock the container runtime (admin-must-choose
+                                          rule per feedback_runtime_choice.md;
+                                          equivalent to YSG_RUNTIME=...). Required in
+                                          --non-interactive mode if both Docker and
+                                          Podman are installed. Default in interactive
+                                          mode: prompt with Podman pre-selected.
   --skip-preflight                        Skip preflight checks
   --skip-pull                             Skip docker compose pull (use local images)
   --upgrade                               Upgrade an existing installation
@@ -187,6 +210,20 @@ parse_args() {
       --wazuh)           INSTALL_WAZUH=true;     shift ;;
       --offline)         OFFLINE=true;           shift ;;
       --non-interactive) NON_INTERACTIVE=true;  shift ;;
+      --runtime)
+        # Explicit runtime selection. Required in --non-interactive mode if
+        # auto-detection finds both Docker and Podman (admin-must-choose rule).
+        # Setting YSG_RUNTIME_EXPLICIT=true tells prompt_runtime_choice() to
+        # skip the prompt — the admin already chose via CLI flag.
+        case "${2:-}" in
+          docker|podman|k8s)
+            YSG_RUNTIME="$2"; export YSG_RUNTIME
+            YSG_RUNTIME_EXPLICIT=true; export YSG_RUNTIME_EXPLICIT
+            shift 2
+            ;;
+          *) log_error "--runtime must be one of: docker, podman, k8s"; exit 1 ;;
+        esac
+        ;;
       --skip-preflight)  SKIP_PREFLIGHT=true;   shift ;;
       --skip-pull)       SKIP_PULL=true;         shift ;;
       --upgrade)         UPGRADE=true;           shift ;;
@@ -362,46 +399,133 @@ require_cmd() {
 # Sets COMPOSE_CMD as an array (e.g. "docker compose" or "podman compose")
 # Sets YSG_PODMAN_RUNTIME=true if using Podman (for auto-applying override file)
 YSG_PODMAN_RUNTIME=false
+COMPOSE_CMD=()   # global declaration so ${#COMPOSE_CMD[@]} is safe under set -u before first resolve
 
 resolve_compose_cmd() {
   COMPOSE_CMD=()
+  YSG_PODMAN_RUNTIME=false   # reset before resolution — prevents stale env/state bleed
 
-  # Prefer Podman (rootless, daemonless, more secure)
-  # Check Podman FIRST — matches platform-detect.sh priority
-  # Prefer podman-compose (Python, sequential) over podman compose (plugin, parallel)
-  # because the docker-compose plugin crashes Podman's API socket with EOF on parallel creates.
+  # ── HARD RUNTIME SEPARATION (Tiago directive 2026-04-29 after 3rd cross-runtime
+  # bug: Laura #95 docker-compose-shim against Podman socket "file name too long",
+  # plus prior compose-path-prefix bugs at v2.23.1 #58c rounds 4 + 7) ────────────
+  #
+  # When YSG_RUNTIME is set explicitly, ONLY native tools for that runtime are
+  # acceptable. We REFUSE to fall through to the other runtime's tools — even if
+  # they're available — because docker-compose against a Podman socket (and
+  # vice versa) consistently produces subtle path / serialisation / format
+  # incompatibilities that LOOK like generic compose bugs but are actually
+  # cross-runtime contract mismatches.
+  #
+  # Auto-detect (YSG_RUNTIME unset / =auto) still tries Podman first then Docker,
+  # but each branch is self-contained: Podman branch never selects docker-compose,
+  # Docker branch never selects podman-compose.
+  local _prefer="${YSG_RUNTIME:-auto}"
 
-  # Try standalone podman-compose FIRST (pip install podman-compose) — sequential, stable
-  if command -v podman-compose >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-    COMPOSE_CMD=("podman-compose")
-    YSG_PODMAN_RUNTIME=true
-    return 0
+  # ── Docker-only branch ─────────────────────────────────────────────────────
+  if [[ "$_prefer" == "docker" ]]; then
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+      log_error "YSG_RUNTIME=docker requested but Docker daemon is not reachable."
+      log_error "Install Docker Desktop or start the Docker daemon and retry."
+      log_error "If you meant Podman, set YSG_RUNTIME=podman instead."
+      exit 1
+    fi
+    if docker compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker" "compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker compose (Docker plugin)"
+      return 0
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker-compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker-compose (standalone)"
+      return 0
+    fi
+    log_error "YSG_RUNTIME=docker but no compose tool found. Install:"
+    log_error "  • docker compose plugin: https://docs.docker.com/compose/install/"
+    log_error "  • OR docker-compose: https://docs.docker.com/compose/install/standalone/"
+    exit 1
   fi
 
-  # Fall back to podman compose (Podman 4+ built-in, delegates to docker-compose plugin)
-  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  # ── Podman-only branch ─────────────────────────────────────────────────────
+  if [[ "$_prefer" == "podman" ]]; then
+    if ! command -v podman >/dev/null 2>&1 || ! podman info >/dev/null 2>&1; then
+      log_error "YSG_RUNTIME=podman requested but Podman is not reachable."
+      log_error "Install Podman + start its socket (rootful: systemctl start podman.socket)."
+      log_error "If you meant Docker, set YSG_RUNTIME=docker instead."
+      exit 1
+    fi
+    # podman-compose (Python) FIRST: sequential, stable, native to Podman.
+    # We do NOT fall through to docker-compose — passing docker-compose a Podman
+    # socket via DOCKER_HOST works for simple cases but breaks on seccomp profile
+    # paths (Laura #95 TM-V231-005), security_opt parsing, and a few other places
+    # where docker-compose makes Docker-specific assumptions about the socket.
+    if command -v podman-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman-compose")
+      YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman-compose (native, sequential)"
+      return 0
+    fi
     if podman compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("podman" "compose")
       YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman compose (Podman 4+ built-in)"
       return 0
     fi
+    log_error "YSG_RUNTIME=podman but no native Podman compose tool found. Install:"
+    log_error "  • podman-compose:  pip install podman-compose"
+    log_error "  • OR Podman 4+ with built-in compose subcommand"
+    log_error ""
+    log_error "Do NOT install docker-compose against the Podman socket — that path"
+    log_error "is explicitly NOT supported (cross-runtime compatibility issues, see"
+    log_error "Laura #95 TM-V231-005 + v2.23.1 retro #3a-fix)."
+    exit 1
   fi
 
-  # Fall back to Docker — verify daemon is running (not just CLI installed)
+  # ── Auto-detect (YSG_RUNTIME unset or =auto) ───────────────────────────────
+  # Prefer Podman for rootless-first security posture. Strict-self-contained:
+  # the Podman branch only considers podman-compose / podman compose; the
+  # Docker branch only considers docker compose / docker-compose. No mixing.
+
+  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    if command -v podman-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman-compose")
+      YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman-compose (auto-detect)"
+      return 0
+    fi
+    if podman compose version >/dev/null 2>&1; then
+      COMPOSE_CMD=("podman" "compose")
+      YSG_PODMAN_RUNTIME=true
+      log_info "Compose tool: podman compose (auto-detect, built-in)"
+      return 0
+    fi
+    # Podman is reachable but neither podman-compose nor `podman compose` is
+    # available. We refuse to silently fall through to docker-compose against
+    # the Podman socket (cross-runtime bug pattern). Tell the user.
+    log_warn "Podman is installed but no Podman-native compose tool found."
+    log_warn "Install podman-compose (pip install podman-compose) for the native"
+    log_warn "Podman path, OR set YSG_RUNTIME=docker if you intend to use Docker."
+    log_warn "Continuing auto-detect to look for Docker..."
+  fi
+
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     if docker compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("docker" "compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker compose (auto-detect, plugin)"
+      return 0
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+      COMPOSE_CMD=("docker-compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: docker-compose (auto-detect, standalone)"
       return 0
     fi
   fi
 
-  # Try standalone docker-compose
-  if command -v docker-compose >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    COMPOSE_CMD=("docker-compose")
-    return 0
-  fi
-
-  # Docker Desktop on macOS without CLI in PATH
+  # Docker Desktop on macOS without CLI in PATH (only triggered when YSG_RUNTIME
+  # is explicitly =docker_desktop_no_cli; never auto-selected).
   if [ "${YSG_RUNTIME:-}" = "docker_desktop_no_cli" ]; then
     local dd_docker=""
     for p in "$HOME/.docker/bin/docker" "/usr/local/bin/com.docker.cli" \
@@ -410,14 +534,17 @@ resolve_compose_cmd() {
     done
     if [ -n "$dd_docker" ] && $dd_docker compose version >/dev/null 2>&1; then
       COMPOSE_CMD=("$dd_docker" "compose")
+      YSG_PODMAN_RUNTIME=false
+      log_info "Compose tool: $dd_docker compose (Docker Desktop, CLI not in PATH)"
       return 0
     fi
   fi
 
   log_error "No compose command found. Install one of:"
-  log_error "  • Docker Desktop  — https://docker.com/products/docker-desktop"
-  log_error "  • Podman Desktop  — https://podman-desktop.io"
-  log_error "  • podman + podman-compose (pip install podman-compose)"
+  log_error "  • Docker:  Docker Desktop OR docker + docker compose plugin"
+  log_error "  • Podman:  podman + podman-compose (pip install podman-compose)"
+  log_error ""
+  log_error "Then set YSG_RUNTIME=docker or YSG_RUNTIME=podman to lock the runtime."
   exit 1
 }
 
@@ -610,6 +737,12 @@ print_platform_summary() {
     _interactive_platform_fallback
   fi
 
+  # --- Admin-must-choose-runtime prompt (Tiago directive 2026-04-29) ---
+  # Always runs; the function itself handles non-interactive vs interactive
+  # branching and respects YSG_RUNTIME_EXPLICIT (set by --runtime CLI flag
+  # or pre-existing env var).
+  prompt_runtime_choice
+
   printf "\n"
   printf "  %-22s %s\n" "OS:"           "${YSG_OS:-unknown} (${YSG_DISTRO:-unknown})"
   printf "  %-22s %s\n" "Architecture:" "${YSG_ARCH:-unknown}"
@@ -656,6 +789,132 @@ _print_model_recommendations() {
     printf "    - qwen2.5:3b (inspection only), CPU inference for others\n"
   fi
   printf "\n"
+}
+
+# =============================================================================
+# Runtime choice prompt — admin always picks the runtime
+# =============================================================================
+# Per feedback_runtime_choice.md (Tiago directive): admin ALWAYS picks the
+# container runtime, even when only one is detected. Default pre-selection
+# is Podman (rootless-first security posture). Non-interactive mode: require
+# YSG_RUNTIME explicit (--runtime CLI flag or env var); error out otherwise.
+#
+# This runs AFTER source_platform_detect.sh has set YSG_DOCKER_AVAILABLE +
+# YSG_PODMAN_AVAILABLE booleans and the auto-pick suggestion in YSG_RUNTIME.
+prompt_runtime_choice() {
+  local detected="${YSG_RUNTIME:-none}"
+  local docker_avail="${YSG_DOCKER_AVAILABLE:-false}"
+  local podman_avail="${YSG_PODMAN_AVAILABLE:-false}"
+  local docker_running="${YSG_DOCKER_RUNNING:-false}"
+  local podman_running="${YSG_PODMAN_RUNNING:-false}"
+
+  # If admin set --runtime / YSG_RUNTIME explicitly, that wins. Verify the
+  # chosen runtime is actually installed; refuse with clear message if not.
+  if [[ "${YSG_RUNTIME_EXPLICIT:-false}" == "true" ]]; then
+    log_info "Runtime explicitly set: $detected (skipping prompt)"
+    return 0
+  fi
+
+  # Non-interactive: require explicit choice. Refuse to auto-pick under the
+  # admin-must-choose rule. Helpful message tells the operator how to set it.
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    if [[ "$docker_avail" == "true" && "$podman_avail" == "true" ]]; then
+      log_error "Both Docker and Podman are installed — admin must choose explicitly."
+      log_error "Re-run with --runtime docker  OR  --runtime podman"
+      log_error "(or set YSG_RUNTIME=docker / YSG_RUNTIME=podman in the environment)"
+      exit 1
+    fi
+    # Only one detected — auto-pick is acceptable in non-interactive mode.
+    log_info "Non-interactive mode: runtime auto-selected = $detected"
+    return 0
+  fi
+
+  # ── Interactive: ALWAYS prompt the admin ────────────────────────────────
+  printf "\n"
+  printf "  ┌────────────────────────────────────────────────────────────────┐\n"
+  printf "  │  Container runtime — admin must choose                         │\n"
+  printf "  └────────────────────────────────────────────────────────────────┘\n"
+  printf "\n"
+  printf "  Detected on this host:\n"
+
+  local podman_status="not installed"
+  if [[ "$podman_avail" == "true" ]]; then
+    podman_status="installed"
+    [[ "$podman_running" == "true" ]] && podman_status="installed + running"
+  fi
+  local docker_status="not installed"
+  if [[ "$docker_avail" == "true" ]]; then
+    docker_status="installed"
+    [[ "$docker_running" == "true" ]] && docker_status="installed + running"
+  fi
+
+  printf "    Podman: %s\n" "$podman_status"
+  printf "    Docker: %s\n" "$docker_status"
+  printf "\n"
+  printf "  Yashigani supports both — pick the one you want this install to use.\n"
+  printf "  Podman is recommended (rootless-first, daemonless, more secure posture).\n"
+  printf "\n"
+
+  # Build the menu showing the actual options. Podman first (default).
+  local default_choice="1"
+  printf "    1) Podman   "
+  if [[ "$podman_avail" != "true" ]]; then
+    printf "(NOT installed — pick this only if you'll install podman+podman-compose)\n"
+  elif [[ "$podman_running" != "true" ]]; then
+    printf "(installed but not running — install will start the socket)\n"
+  else
+    printf "(installed + running — recommended)\n"
+  fi
+
+  printf "    2) Docker   "
+  if [[ "$docker_avail" != "true" ]]; then
+    printf "(NOT installed — pick this only if you'll install docker+compose)\n"
+  elif [[ "$docker_running" != "true" ]]; then
+    printf "(installed but daemon not running — start it before continuing)\n"
+  else
+    printf "(installed + running)\n"
+  fi
+
+  printf "    3) Kubernetes (Helm chart, advanced — Docker Desktop K8s, kind, k3s, prod cluster)\n"
+  printf "\n"
+  printf "  Choice [1-3] (default: 1 / Podman): "
+
+  local rt_choice
+  if ! read -r rt_choice </dev/tty 2>/dev/null; then
+    rt_choice=""
+  fi
+  rt_choice="${rt_choice:-$default_choice}"
+
+  case "$rt_choice" in
+    1) YSG_RUNTIME=podman ;;
+    2) YSG_RUNTIME=docker ;;
+    3) YSG_RUNTIME=k8s ;;
+    *) log_warn "Invalid choice — defaulting to Podman"; YSG_RUNTIME=podman ;;
+  esac
+  export YSG_RUNTIME
+
+  # Sanity-check the chosen runtime is actually installed. If not, warn loud
+  # so the admin knows the install will exit at compose-cmd resolution.
+  case "$YSG_RUNTIME" in
+    podman)
+      [[ "$podman_avail" != "true" ]] && \
+        log_warn "Podman is not installed yet. Install it before re-running install.sh,"
+      [[ "$podman_avail" != "true" ]] && \
+        log_warn "or set YSG_RUNTIME=docker if you intended to use Docker."
+      ;;
+    docker)
+      [[ "$docker_avail" != "true" ]] && \
+        log_warn "Docker is not installed yet. Install Docker Desktop or docker engine"
+      [[ "$docker_avail" != "true" ]] && \
+        log_warn "before re-running install.sh."
+      ;;
+    k8s)
+      log_info "Kubernetes runtime selected — install.sh will use helm install path"
+      ;;
+  esac
+
+  printf "\n"
+  log_success "Runtime selected: $YSG_RUNTIME"
 }
 
 _interactive_platform_fallback() {
@@ -763,6 +1022,98 @@ install_runtime() {
 
   bash "$runtime_script"
   log_success "Container runtime installed"
+}
+
+# =============================================================================
+# STEP 4b: Installer pre-flight hard-stop checks (P0-12)
+#
+# These checks run before the main preflight script and will EXIT with a
+# copy-pasteable remediation block if the condition is not met.  The installer
+# body runs zero sudo — these gates ensure the operator has done any required
+# privileged setup before we start.
+# =============================================================================
+check_installer_preflight() {
+  if [[ "$SKIP_PREFLIGHT" == "true" || "$DRY_RUN" == "true" ]]; then
+    return 0
+  fi
+
+  # Only applies to compose / docker runtimes — K8s manages its own RBAC.
+  if [[ "${MODE:-}" == "k8s" ]]; then
+    return 0
+  fi
+
+  # --- Check 1: docker group membership (Docker runtime only) ---------------
+  # The installer body never runs sudo, so the current user must be able to
+  # reach the Docker daemon without elevated privilege.
+  if [[ "${YSG_RUNTIME:-}" == "docker" ]]; then
+    if ! docker info >/dev/null 2>&1; then
+      printf "\nPre-flight failed: your user cannot run docker without sudo.\n\n"
+      printf "  sudo groupadd docker          # creates the group if it doesn't exist\n"
+      printf "  sudo usermod -aG docker \$USER # adds you to the group\n"
+      printf "  newgrp docker                 # activate without logout (or log out and back in)\n\n"
+      printf "Then re-run this installer.\n\n"
+      exit 1
+    fi
+  fi
+
+  # --- Check 2: bind-mount directory ownership (UID 1001) -------------------
+  # PKI issuer and backoffice services run as UID 1001 inside containers and
+  # write to the bind-mounted secrets dir.  The installer no longer runs chown
+  # via sudo — the operator must do this once before running the installer.
+  #
+  # Podman rootless: container UID 1001 maps to host UID (subuid_start + 1000).
+  # `podman unshare chown 1001:1001` is the correct operator command — the
+  # resulting host UID is the subuid-remapped value, not literal 1001. We
+  # accept either literal 1001 (Docker / rootful) or the subuid-mapped value
+  # (Podman rootless non-root install).
+  local _bm_failed=0
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Compute the expected host UID for container UID 1001.
+  # Podman rootless: read /etc/subuid for the current user and add 1000.
+  # Docker / rootful: literal 1001.
+  local _expected_uid="1001"
+  local _is_rootless_podman=false
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]] && [[ "$(id -u)" != "0" ]]; then
+    _is_rootless_podman=true
+    local _subuid_start
+    _subuid_start="$(awk -F: -v u="$(id -un)" '$1==u{print $2; exit}' /etc/subuid 2>/dev/null || echo "")"
+    if [[ -n "$_subuid_start" ]]; then
+      # container UID 1001 = subuid_start + 1001 - 1
+      _expected_uid=$(( _subuid_start + 1001 - 1 ))
+    fi
+  fi
+
+  for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
+    if [[ ! -d "$_bm_dir" ]]; then
+      _bm_failed=1
+      break
+    fi
+    # shellcheck disable=SC2012
+    local _uid
+    _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ "$_uid" != "1001" && "$_uid" != "$_expected_uid" ]]; then
+      _bm_failed=1
+      break
+    fi
+  done
+
+  if [[ "$_bm_failed" -eq 1 ]]; then
+    printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
+    if [[ "$_is_rootless_podman" == "true" ]]; then
+      printf "  cd %s/docker\n" "${WORK_DIR}"
+      printf "  mkdir -p data certs logs\n"
+      printf "  podman unshare chown 1001:1001 data certs logs\n\n"
+      printf "(Podman rootless: 'podman unshare chown' maps container UID 1001 to the\n"
+      printf " correct host subuid. Do NOT use 'sudo chown' for rootless Podman.)\n\n"
+    else
+      printf "  cd %s/docker\n" "${WORK_DIR}"
+      printf "  mkdir -p data certs logs\n"
+      printf "  sudo chown -R 1001:1001 data certs logs\n\n"
+    fi
+    printf "Then re-run this installer.\n\n"
+    exit 1
+  fi
 }
 
 # =============================================================================
@@ -1035,8 +1386,42 @@ _write_aes_key_to_env() {
   # tolerated it because Podman on macOS ignores unknown apparmor profile
   # names silently, but fails HARD when the seccomp FILE path is wrong.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+    # AppArmor stays unconfined on Podman (macOS Podman, rootful Linux Podman
+    # both ignore unknown profile names; rather than name-mismatch silently,
+    # explicitly disable). Linux + AppArmor users override via env.
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+    # TM-V231-005 (Laura #95): seccomp enforcement on Podman via docker-compose
+    # compat layer is NOT achievable by passing an absolute path. docker-compose
+    # v5.x reads the JSON file and inlines its contents into the API request;
+    # Podman's docker-compat API then tries to open() the JSON blob as a filename,
+    # hitting "file name too long" (ENAMETOOLONG). The absolute-path approach
+    # (Laura #95, 2026-04-29) was reverted because it causes a compose-up failure
+    # on every macOS Podman install.
+    #
+    # Correct fix requires native Podman-compose seccomp syntax (not docker-compose
+    # compat). Deferred to v2.23.2 (project_v232_backlog.md TM-V231-005). Until
+    # then, seccomp on Podman stays unconfined. The gateway + backoffice seccomp
+    # profile IS enforced on Docker (Linux and macOS Docker Desktop).
     _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
+    log_warn "Podman seccomp: unconfined (TM-V231-005 — docker-compose v5 compat cannot pass file path to Podman; deferred to v2.23.2)"
+  elif [[ "${YSG_OS:-}" == "linux" && "${YSG_RUNTIME:-}" == "docker" ]]; then
+    # Docker on Linux: auto-load our AppArmor profile so containers start without
+    # requiring a manual 'apparmor_parser -r' step. If loading fails (no apparmor,
+    # locked-down kernel, or VM environment), fall back to 'unconfined' so the
+    # install doesn't block. Retro v2.23.1 item #3ae.
+    local _aa_profile_src="${WORK_DIR}/docker/apparmor/yashigani-gateway"
+    if [[ -f "$_aa_profile_src" ]] && command -v apparmor_parser >/dev/null 2>&1; then
+      if apparmor_parser -r "$_aa_profile_src" >/dev/null 2>&1; then
+        log_success "AppArmor profile loaded: yashigani-gateway"
+        _env_set "YASHIGANI_APPARMOR_PROFILE" "yashigani-gateway"
+      else
+        log_warn "AppArmor profile load failed — falling back to unconfined"
+        _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+      fi
+    else
+      log_warn "AppArmor profile or parser not available — using unconfined"
+      _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
+    fi
   fi
 
   # --- Upstream MCP URL ---
@@ -1223,8 +1608,13 @@ _backup_existing_data() {
 
   # Backup secrets (passwords, TOTP secrets, tokens)
   if [[ -d "${WORK_DIR}/docker/secrets" ]]; then
-    cp -r "${WORK_DIR}/docker/secrets" "${backup_dir}/secrets"
-    log_info "  secrets/ backed up"
+    # BUG-3 (v2.23.1): cp -rp preserves ownership + mode + timestamps so the
+    # subsequent restore (cp -rp on the backup) lands files with the SAME uids
+    # the running containers expect (pgbouncer=70, redis=999, postgres=999,
+    # grafana=472, gateway/backoffice=1001). cp -r without -p was losing the
+    # uids during backup, then restore preserved root:root and broke services.
+    cp -rp "${WORK_DIR}/docker/secrets" "${backup_dir}/secrets"
+    log_info "  secrets/ backed up (ownership/mode preserved)"
   fi
 
   # Backup .env (contains passwords as env vars)
@@ -1235,7 +1625,7 @@ _backup_existing_data() {
 
   # Backup audit logs (if accessible)
   local _runtime_cmd=""
-  command -v podman >/dev/null 2>&1 && _runtime_cmd="podman" || _runtime_cmd="docker"
+  [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]] && _runtime_cmd="podman" || _runtime_cmd="docker"
   local audit_volume
   audit_volume="$($_runtime_cmd volume ls -q 2>/dev/null | grep audit_data || true)"
   if [[ -n "$audit_volume" ]]; then
@@ -1250,7 +1640,32 @@ _backup_existing_data() {
     log_info "  Postgres dump skipped (not accessible)"
   fi
 
-  chmod -R 600 "$backup_dir"
+  # BUG-58B-04a (v2.23.1): do NOT use 'chmod -R 600' on the backup dir.
+  # That clobbers intentionally-0644 public secret files (admin passwords,
+  # bootstrap tokens, service passwords that non-root containers must read).
+  # When restore.sh copies these back, the 0600 mode on files that were 0644
+  # causes service containers (pgbouncer=UID70, redis=UID999, etc.) to get
+  # EACCES on startup. Fix: tighten private keys to 0400, leave everything
+  # else at its source mode (already ≤0644 per install.sh canonical assignment).
+  # CA private keys and service private keys are the only secret material that
+  # must be inaccessible to processes other than their owner; everything else
+  # (passwords, certs, tokens) is intentionally readable by the service UIDs.
+  find "${backup_dir}/secrets" -maxdepth 1 -type f \
+    \( -name '*.key' \) -exec chmod 0400 {} \; 2>/dev/null || true
+  # Lock down the backup dir itself and non-secrets files (e.g. postgres_dump.sql,
+  # .env) to owner-read-only; the secrets sub-dir mode is controlled above.
+  chmod 0700 "$backup_dir"
+  if [[ -f "${backup_dir}/.env" ]]; then
+    chmod 0600 "${backup_dir}/.env"
+  fi
+  if [[ -f "${backup_dir}/postgres_dump.sql" ]]; then
+    chmod 0600 "${backup_dir}/postgres_dump.sql"
+  fi
+  # Defensive assertion: no world/group-readable private keys in backup (S1).
+  if find "${backup_dir}/secrets" -type f -name '*.key' \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
+    log_error "CWE-732: group/world-readable key file(s) in backup ${backup_dir}/secrets"
+    exit 1
+  fi
   log_success "Backup saved to ${backup_dir}"
 }
 
@@ -1263,13 +1678,24 @@ check_existing_installation() {
     return 0
   fi
 
-  # Check whether compose containers are running
+  # Check whether compose containers are running.
+  # MUST use $COMPOSE_CMD (or resolve it on demand) — never hardcode 'docker compose'
+  # here, because Docker Desktop may not be running when the admin is using Podman.
+  # Hardcoding 'docker compose' caused a silent hang on macOS from-scratch Podman
+  # install (v2.23.2 gate, 2026-05-01): docker CLI is present but daemon is down.
+  # Fix: resolve_compose_cmd if COMPOSE_CMD is still empty, then use the array.
+  # Guard with timeout 10 to prevent infinite block if socket is unreachable.
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
   local running=false
 
-  if command -v docker &>/dev/null && [[ -f "$compose_file" ]]; then
-    if docker compose -f "$compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
-      running=true
+  if [[ -f "$compose_file" ]]; then
+    if [[ ${#COMPOSE_CMD[@]} -eq 0 ]]; then
+      resolve_compose_cmd 2>/dev/null || true
+    fi
+    if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+      if timeout 10 "${COMPOSE_CMD[@]}" -f "$compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+        running=true
+      fi
     fi
   fi
 
@@ -1503,11 +1929,18 @@ compose_pull() {
 
   resolve_compose_cmd
 
-  # --- Verify Docker daemon is running before attempting pull ---
-  _ensure_docker_running
+  # --- Docker-only checks (skip entirely when using Podman runtime) ---
+  # _ensure_docker_running and _fix_docker_credentials call 'docker info' and
+  # docker-credential-osxkeychain which are Docker Desktop-specific. Calling
+  # them when YSG_PODMAN_RUNTIME=true hangs because Docker daemon is not running.
+  # Podman manages its own machine lifecycle — no equivalent checks needed here.
+  if [[ "$YSG_PODMAN_RUNTIME" != "true" ]]; then
+    # --- Verify Docker daemon is running before attempting pull ---
+    _ensure_docker_running
 
-  # --- Fix Docker credential helper if missing (common macOS issue) ---
-  _fix_docker_credentials
+    # --- Fix Docker credential helper if missing (common macOS issue) ---
+    _fix_docker_credentials
+  fi
 
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
@@ -1542,11 +1975,11 @@ compose_pull() {
       [[ -z "$_profile" ]] && continue
       case "$_profile" in
         langflow) _images="$_images
-docker.io/langflowai/langflow:latest" ;;
+docker.io/langflowai/langflow:1.9.0" ;;
         letta) _images="$_images
-docker.io/letta/letta:latest" ;;
+docker.io/letta/letta:0.16.7" ;;
         openclaw) _images="$_images
-ghcr.io/openclaw/openclaw:latest" ;;
+ghcr.io/openclaw/openclaw:2026.3.1" ;;
       esac
     done
     # Pull 4 at a time
@@ -1675,7 +2108,7 @@ _fix_docker_credentials() {
     fi
   fi
 
-  if sudo ln -sf "$cred_helper" /usr/local/bin/docker-credential-osxkeychain 2>/dev/null; then
+  if ln -sf "$cred_helper" /usr/local/bin/docker-credential-osxkeychain 2>/dev/null; then
     log_success "docker-credential-osxkeychain symlinked"
   else
     log_warn "Could not create symlink — configuring Docker to pull without credential helper"
@@ -1748,11 +2181,28 @@ compose_up() {
         log_warn "Continuing without Pool Manager — container isolation will be DISABLED."
       fi
     fi
-    # Linux: standard path
+    # Linux: rootful vs rootless socket paths differ.
+    #   - Rootful (EUID=0, typical for server installs via sudo): systemd-managed
+    #     socket at /run/podman/podman.sock, enabled via `systemctl enable --now podman.socket`.
+    #     There is no /run/user/0 unless root has a login systemd user session.
+    #   - Rootless (non-root user with `loginctl enable-linger`): XDG runtime at
+    #     /run/user/$(id -u)/podman/podman.sock.
+    # Retro v2.23.1 Ubuntu podman clean-slate: initial attempt defaulted to the
+    # rootless path under sudo, docker-compose plugin then failed to connect.
     if [[ -z "$_podman_sock" ]]; then
-      _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+      if [[ "$(id -u)" == "0" ]]; then
+        _podman_sock="/run/podman/podman.sock"
+      else
+        _podman_sock="/run/user/$(id -u)/podman/podman.sock"
+      fi
     fi
-    # Verify socket exists
+    # Verify socket exists; if rootful and missing, try to bring it up via systemd.
+    if [[ ! -S "$_podman_sock" ]]; then
+      if [[ "$(id -u)" == "0" && "$_podman_sock" == "/run/podman/podman.sock" ]]; then
+        log_info "Enabling rootful podman.socket via systemd"
+        systemctl enable --now podman.socket 2>/dev/null || true
+      fi
+    fi
     if [[ ! -S "$_podman_sock" ]]; then
       log_warn "Podman socket not found at ${_podman_sock} — compose may fail"
     fi
@@ -1792,10 +2242,9 @@ compose_up() {
       export YASHIGANI_HTTPS_PORT=8443
     fi
 
-    # 3. Create Docker-compatible directories for promtail
+    # 3. Create Docker-compatible directories for promtail (best-effort, no sudo)
     if [[ ! -d "/var/lib/docker/containers" ]]; then
-      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
-        mkdir -p /var/lib/docker/containers 2>/dev/null || \
+      mkdir -p /var/lib/docker/containers 2>/dev/null || \
         log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
     fi
 
@@ -1837,14 +2286,97 @@ compose_up() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local data_dir="${WORK_DIR}/docker/data"
   mkdir -p "$secrets_dir"
-  mkdir -p "${data_dir}/audit"
+  # Podman rootless stale-partial-install guard (gate #ROOTLESS-5):
+  # If secrets_dir exists but is owned by a different UID (subuid-mapped 1001, e.g.
+  # 363144), a previous partial install got far enough to chown the dir before
+  # failing. The installer (e.g. UID 1004) cannot write into it. Since
+  # check_existing_installation() already confirmed no containers are running,
+  # it's safe to wipe and regenerate — no live data is at risk.
+  # Only applies when not explicitly upgrading (UPGRADE=false) and when
+  # the dir is NOT owned by the current user AND PKI certs have NOT been generated
+  # yet (ca_root.crt absent). If ca_root.crt is present, PKI bootstrap already ran
+  # and chowned the dir legitimately — do NOT wipe it.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" && "${UPGRADE:-false}" != "true" ]]; then
+    local _secrets_uid
+    # shellcheck disable=SC2012
+    _secrets_uid="$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')"
+    if [[ -n "$_secrets_uid" && "$_secrets_uid" != "$(id -u)" && ! -f "${secrets_dir}/ca_root.crt" ]]; then
+      log_warn "secrets_dir owned by UID ${_secrets_uid} (not installer UID $(id -u)) — stale partial install detected"
+      log_warn "Wiping secrets_dir for clean regeneration (no containers running)"
+      # Use podman unshare rm -rf so we can remove files owned by the mapped UID
+      # without needing sudo. Falls back to plain rm (which works if we have perms).
+      if podman unshare rm -rf "$secrets_dir" 2>/dev/null; then
+        log_info "secrets_dir wiped via podman unshare"
+      else
+        log_warn "Could not wipe via podman unshare — trying direct rm"
+        rm -rf "$secrets_dir" 2>/dev/null \
+          || { log_error "Cannot wipe stale secrets_dir ${secrets_dir}. Run: sudo rm -rf \"${secrets_dir}\" then re-run."; exit 1; }
+      fi
+      mkdir -p "$secrets_dir"
+      log_info "secrets_dir recreated fresh"
+    fi
+  fi
+  # PKI issuer runs as UID 1001 inside the gateway image and writes cert/key files
+  # to the bind-mounted secrets dir. The directory must be writable by UID 1001
+  # (or its subuid-mapped equivalent) BEFORE the PKI issuer container runs.
+  #
+  # For Docker / rootful Podman: chown 1001:1001 now. The installer runs as
+  # root (or a user that can chown to 1001), so subsequent writes by the
+  # installer process also work because it runs as root.
+  #
+  # For Podman rootless: the installer runs as a non-root user (e.g. UID 1004).
+  # If we chown secrets_dir to UID 363144 (subuid-mapped 1001) NOW, the installer
+  # can no longer write to it (1004 is "other", no write bit). DEFER the chown
+  # to _prepare_secrets_dir_for_pki(), called just before bootstrap_internal_pki().
+  # All installer-side writes happen in this function; by the time PKI bootstrap
+  # runs, the chown will have been applied and the container can write its certs.
+  #
+  # Retro v2.23.1 item #3ad + gate #ROOTLESS-3.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    # Deferred to _prepare_secrets_dir_for_pki() — see comment above.
+    log_info "secrets_dir chown deferred to PKI bootstrap (Podman rootless)"
+  else
+    if chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+      log_info "secrets_dir chown 1001:1001 applied"
+    else
+      log_error "Cannot chown ${secrets_dir} to UID 1001:1001."
+      log_error "The PKI issuer container (UID 1001) cannot write certs to this directory."
+      log_error "Fix (run once as root, then re-run installer as your user):"
+      log_error "  sudo chown 1001:1001 \"${secrets_dir}\""
+      exit 1
+    fi
+    # Defensive assertion: secrets dir must be owned by UID 1001 before proceeding.
+    # (Skipped for Podman rootless — subuid remapping means host UID != 1001.)
+    # shellcheck disable=SC2012
+    _actual_uid=$(ls -nd "$secrets_dir" 2>/dev/null | awk '{print $3}')
+    if [[ "$_actual_uid" != "1001" ]]; then
+      log_error "secrets_dir UID is ${_actual_uid}, expected 1001. Aborting PKI bootstrap."
+      exit 1
+    fi
+  fi
+  # For Podman rootless, data_dir is owned by the subuid-remapped UID (e.g. 363144).
+  # mkdir as the installer user (e.g. UID 1004) would fail with Permission denied.
+  # Use `podman unshare` to create the subdirectory inside the user namespace.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    podman unshare mkdir -p "${data_dir}/audit" \
+      || { log_error "Cannot create ${data_dir}/audit via podman unshare"; exit 1; }
+  else
+    mkdir -p "${data_dir}/audit"
+  fi
   mkdir -p "${WORK_DIR}/docker/tls"
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
-      echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}"
-      chmod 644 "${secrets_dir}/${_secret_file}"
-      log_info "Created secret placeholder: ${_secret_file}"
+      # gate #ROOTLESS-6: for Podman rootless, secrets_dir may be owned by the PKI
+      # container UID (363144) after bootstrap. If the write fails, warn and continue —
+      # the service will start without the placeholder (secrets should have been created
+      # by generate_secrets() before PKI ran; this path is a safety net for upgrades).
+      if ! echo "# placeholder — replace with actual value" > "${secrets_dir}/${_secret_file}" 2>/dev/null; then
+        log_warn "Could not create placeholder ${_secret_file} (secrets_dir owned by PKI UID — expected for Podman rootless)"
+      else
+        chmod 600 "${secrets_dir}/${_secret_file}" 2>/dev/null || true
+        log_info "Created secret placeholder: ${_secret_file}"
+      fi
     fi
   done
 
@@ -1858,7 +2390,7 @@ compose_up() {
       local _token_file="${secrets_dir}/${_profile}_token"
       if [[ ! -s "$_token_file" ]]; then
         echo "# placeholder — auto-generated at first bootstrap" > "$_token_file"
-        chmod 666 "$_token_file"
+        chmod 600 "$_token_file"
         log_info "Created token placeholder: ${_profile}_token"
       fi
     fi
@@ -1889,6 +2421,209 @@ compose_up() {
   fi
 
   log_success "Services started"
+
+  # ---------------------------------------------------------------------------
+  # Retro #81-c: prometheus config smoke check.
+  #
+  # Bug f52123c shipped a broken scrape config (http_headers.Host is on the
+  # Prom v3 forbidden list) that survived `docker compose up` because the
+  # container stays "running" even when /-/ready is 503 from a bad config.
+  # The prom healthcheck is /-/healthy (process-up), NOT /-/ready
+  # (config-loaded-and-scraping). A clean-slate installer run would therefore
+  # report green while /targets was empty.
+  #
+  # Fix: after compose up, (1) syntactically validate the on-disk config with
+  # promtool via a throw-away prometheus:v3.0.1 exec, and (2) poll /-/ready on
+  # the running instance. promtool failure is BLOCKING (the config is broken
+  # — pretending otherwise is the exact failure mode this retro item fixes).
+  # /-/ready failure is a warn (first-boot scrape pool setup can run long on
+  # slow hosts; we don't want to fail-close on a timing race).
+  # ---------------------------------------------------------------------------
+  local prom_cfg="${WORK_DIR}/config/prometheus.yml"
+  if [[ -f "$prom_cfg" ]]; then
+    log_info "Validating prometheus config with promtool..."
+    if "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T prometheus promtool check config /etc/prometheus/prometheus.yml >/dev/null 2>&1; then
+      log_success "promtool check config OK"
+    else
+      local _promtool_out
+      _promtool_out="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T prometheus promtool check config /etc/prometheus/prometheus.yml 2>&1 || true)"
+      log_error "promtool rejected ${prom_cfg}:"
+      printf '%s
+' "$_promtool_out" >&2
+      log_error "Prometheus will not scrape. Fix config and re-run. See retro #81-c."
+      return 1
+    fi
+
+    log_info "Waiting for prometheus /-/ready..."
+    local _ready_host="127.0.0.1"
+    local _ready_port="9090"
+    local _ready_ok=0
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      if "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T prometheus wget -qO- "http://localhost:9090/-/ready" 2>/dev/null | grep -q "Ready"; then
+        _ready_ok=1; break
+      fi
+      sleep 2
+    done
+    if [[ "$_ready_ok" -eq 1 ]]; then
+      log_success "prometheus /-/ready OK"
+    else
+      log_warn "prometheus /-/ready not green after 20s — check 'docker compose logs prometheus' if /targets is empty"
+    fi
+  fi
+}
+
+# =============================================================================
+# STEP 10c (compose/vm, upgrade only): Postgres SSL upgrade injection
+# =============================================================================
+# When upgrading FROM a version that lacked internal mTLS (v2.22.x and earlier),
+# the Postgres PGDATA volume already exists. The postgres image only runs its
+# /docker-entrypoint-initdb.d/*.sh scripts on FIRST init (empty PGDATA), so
+# 05-enable-ssl.sh is silently skipped on upgrade. This function detects that
+# postgres does not yet have ssl=on and injects the SSL config directly into
+# the running (or freshly started) postgres container.
+#
+# Design choices:
+#   * Only runs when UPGRADE=true AND postgres is already running (PGDATA exists).
+#   * Starts postgres in a minimal mode (no pgbouncer/app containers) to avoid
+#     the chicken-and-egg: apps need pgbouncer, pgbouncer needs ssl postgres.
+#   * Resets the yashigani_app password to force SCRAM-SHA-256 re-hash.
+#     On upgrade the old SCRAM hash may have been computed with different
+#     parameters; a password reset forces postgres to recompute the hash with
+#     the current scram_iterations setting (retro N1-HARNESS-003, 2026-05-02).
+#   * Fail-closed: if postgres cannot be reached after the restart, returns 1.
+#
+# Retro N1-HARNESS-002 (2026-05-02): this function was absent and caused
+# v2.22.3 → v2.23.1 upgrade to fail with pgbouncer "server down" because
+# postgres had ssl=off with pg_hba.conf requiring ssl + clientcert.
+_upgrade_postgres_ssl() {
+  if [[ "$UPGRADE" != "true" ]]; then
+    return 0
+  fi
+
+  local compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  resolve_compose_cmd
+
+  # Check if postgres is running and whether SSL is already on.
+  log_info "Checking postgres SSL state (upgrade path)..."
+  local _ssl_state
+  _ssl_state=$("${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+      psql -U yashigani_app -d yashigani -h 127.0.0.1 -tAc "SHOW ssl;" 2>/dev/null | tr -d ' \n' || echo "unknown")
+
+  if [[ "$_ssl_state" == "on" ]]; then
+    log_info "Postgres SSL already enabled — skipping SSL upgrade injection"
+    return 0
+  fi
+
+  log_info "Postgres SSL is '${_ssl_state}' — injecting SSL config for v2.23.1 upgrade"
+
+  # Inject SSL configuration into PGDATA.
+  local _pgdata_path
+  _pgdata_path=$("${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+      bash -c 'echo "${PGDATA:-/var/lib/postgresql/data}"' 2>/dev/null | tr -d '\r\n' || echo "/var/lib/postgresql/data")
+
+  log_info "  PGDATA: ${_pgdata_path}"
+
+  # Step 1: Install server cert + key into PGDATA.
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata_path}'
+install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt \"\$PGDATA/server.crt\"
+install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key \"\$PGDATA/server.key\"
+# Trust bundle: root + intermediate concatenated.
+cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > \"\$PGDATA/root.crt\"
+chown postgres:postgres \"\$PGDATA/root.crt\"
+chmod 0640 \"\$PGDATA/root.crt\"
+echo '[postgres-ssl-upgrade] Server cert + trust bundle installed'
+" 2>&1 || {
+    log_error "postgres SSL upgrade: failed to install server cert — cannot enable SSL"
+    return 1
+  }
+
+  # Step 2: Append ssl settings to postgresql.conf (only if not already present).
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata_path}'
+if grep -q '^ssl = on' \"\$PGDATA/postgresql.conf\" 2>/dev/null; then
+  echo '[postgres-ssl-upgrade] ssl already in postgresql.conf — skipping'
+  exit 0
+fi
+printf \"\n# Yashigani internal mTLS (added by install.sh --upgrade)\nssl = on\nssl_cert_file = 'server.crt'\nssl_key_file  = 'server.key'\nssl_ca_file   = 'root.crt'\nssl_min_protocol_version = 'TLSv1.2'\nlog_connections = on\n\" >> \"\$PGDATA/postgresql.conf\"
+echo '[postgres-ssl-upgrade] ssl settings appended to postgresql.conf'
+" 2>&1 || {
+    log_error "postgres SSL upgrade: failed to update postgresql.conf"
+    return 1
+  }
+
+  # Step 3: Overwrite pg_hba.conf to require TLS + clientcert (same as 05-enable-ssl.sh).
+  "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata_path}'
+cat > \"\$PGDATA/pg_hba.conf\" << 'HBAEOF'
+# TYPE  DATABASE  USER  ADDRESS        METHOD
+# Local socket — used by the postgres docker-entrypoint itself for init.
+local   all       all                  trust
+# Loopback — postgres image runs its own bootstrap on 127.0.0.1.
+host    all       all   127.0.0.1/32   trust
+host    all       all   ::1/128        trust
+# Everything else must come in over TLS with a client cert signed by our
+# internal CA, AND present a valid scram-sha-256 password. Three factors.
+hostssl all       all   0.0.0.0/0      scram-sha-256  clientcert=verify-ca
+hostssl all       all   ::/0           scram-sha-256  clientcert=verify-ca
+# Defence in depth — explicitly reject any plaintext attempt.
+hostnossl all     all   0.0.0.0/0      reject
+hostnossl all     all   ::/0           reject
+HBAEOF
+chown postgres:postgres \"\$PGDATA/pg_hba.conf\"
+chmod 0600 \"\$PGDATA/pg_hba.conf\"
+echo '[postgres-ssl-upgrade] pg_hba.conf updated'
+" 2>&1 || {
+    log_error "postgres SSL upgrade: failed to update pg_hba.conf"
+    return 1
+  }
+
+  # Step 4: Restart postgres to pick up new config.
+  log_info "  Restarting postgres to activate SSL config..."
+  "${COMPOSE_CMD[@]}" -f "$compose_file" restart postgres 2>&1 || {
+    log_error "postgres SSL upgrade: failed to restart postgres"
+    return 1
+  }
+
+  # Step 5: Wait for postgres to come back.
+  local _retries=30 _i
+  for _i in $(seq 1 $_retries); do
+    local _ssl_check
+    _ssl_check=$("${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+        psql -U yashigani_app -d yashigani -h 127.0.0.1 -tAc "SHOW ssl;" 2>/dev/null | tr -d ' \n' || echo "unknown")
+    if [[ "$_ssl_check" == "on" ]]; then
+      log_success "postgres SSL enabled (confirmed on retry ${_i})"
+      break
+    fi
+    if [[ "$_i" -eq "$_retries" ]]; then
+      log_error "postgres SSL upgrade: postgres did not enable ssl=on after restart"
+      return 1
+    fi
+    sleep 2
+  done
+
+  # Step 6: Reset yashigani_app password to force SCRAM-SHA-256 re-hash.
+  # Retro N1-HARNESS-003 (2026-05-02): upgrading from v2.22.x leaves the SCRAM
+  # hash with parameters that may not match the server's current
+  # scram_iterations. A password reset forces postgres to recompute the hash.
+  local _pg_pass
+  _pg_pass=$(cat "${WORK_DIR}/docker/secrets/postgres_password" 2>/dev/null || \
+             grep -oP '(?<=POSTGRES_PASSWORD=)[^ ]+' "${WORK_DIR}/docker/.env" 2>/dev/null | head -1 || echo "")
+  if [[ -z "$_pg_pass" ]]; then
+    log_warn "postgres SSL upgrade: could not read postgres_password — skipping SCRAM re-hash"
+  else
+    "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T postgres \
+        psql -U yashigani_app -d yashigani -h 127.0.0.1 \
+        -c "ALTER USER yashigani_app WITH PASSWORD '${_pg_pass}';" 2>&1 || {
+      log_warn "postgres SSL upgrade: SCRAM re-hash failed — pgbouncer auth may fail"
+    }
+    log_info "  yashigani_app SCRAM hash refreshed"
+  fi
+
+  log_success "Postgres SSL upgrade injection complete"
 }
 
 # =============================================================================
@@ -1903,13 +2638,15 @@ bootstrap_postgres() {
     return 0
   fi
 
-  # Wait for backoffice to be ready before running bootstrap
+  # Wait for backoffice to be ready before running bootstrap.
+  # v2.23.1: backoffice terminates mTLS on :8443 — the readiness probe must
+  # present a client cert, same pattern as the Dockerfile HEALTHCHECK.
   local retries=45
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
   resolve_compose_cmd
   log_info "Waiting for backoffice to be ready..."
   for i in $(seq 1 $retries); do
-    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import urllib.request; urllib.request.urlopen('http://localhost:8443/healthz')" >/dev/null 2>&1; then
+    if "${COMPOSE_CMD[@]}" -f "$compose_file" exec -T backoffice python -c "import ssl, urllib.request; c=ssl.create_default_context(cafile='/run/secrets/ca_root.crt'); c.load_cert_chain('/run/secrets/backoffice_client.crt','/run/secrets/backoffice_client.key'); urllib.request.urlopen('https://localhost:8443/healthz', context=c)" >/dev/null 2>&1; then
       break
     fi
     if [[ "$i" -eq "$retries" ]]; then
@@ -1943,7 +2680,9 @@ register_agent_bundles() {
     return 0
   fi
 
-  local backoffice_url="http://localhost:8443"
+  # v2.23.1: backoffice terminates mTLS on :8443. Intra-container calls below
+  # present the backoffice client cert + CA (same pattern as the Dockerfile
+  # HEALTHCHECK). `backoffice_url` dropped — was unused dead code.
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
@@ -1987,7 +2726,7 @@ register_agent_bundles() {
   local reg_output
   reg_output="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T -e AGENTS_JSON="${agents_json}" backoffice \
     python3 -c '
-import json, os, sys, time, urllib.request
+import json, os, ssl, sys, time, urllib.request
 
 secrets = "/run/secrets"
 def read_secret(name):
@@ -1995,6 +2734,18 @@ def read_secret(name):
         return open(os.path.join(secrets, name)).read().strip()
     except:
         return ""
+
+# v2.23.1: backoffice serves mTLS on :8443. Present the client cert on every
+# call (same chain used by the Dockerfile HEALTHCHECK).
+# Pattern A for Python ssl: trust anchor is the PUBLIC ca_root.crt. Python
+# 3.12/OpenSSL 3.0/Ubuntu 24.04 strict chain validation rejects intermediate-
+# only anchors (gate #58a evidence, 2026-04-28). Private ca_root.key never
+# enters a workload container.
+_ctx = ssl.create_default_context(cafile=os.path.join(secrets, "ca_root.crt"))
+_ctx.load_cert_chain(
+    os.path.join(secrets, "backoffice_client.crt"),
+    os.path.join(secrets, "backoffice_client.key"),
+)
 
 user = read_secret("admin1_username")
 pw = read_secret("admin1_password")
@@ -2009,10 +2760,10 @@ totp_code = pyotp.TOTP(totp_secret, digest=hashlib.sha256).now()
 
 # Login
 login_data = json.dumps({"username": user, "password": pw, "totp_code": totp_code}).encode()
-req = urllib.request.Request("http://localhost:8443/auth/login", data=login_data,
+req = urllib.request.Request("https://localhost:8443/auth/login", data=login_data,
                              headers={"Content-Type": "application/json"})
 try:
-    resp = urllib.request.urlopen(req)
+    resp = urllib.request.urlopen(req, context=_ctx)
 except Exception as e:
     print(f"ERROR:login_failed:{e}", file=sys.stderr)
     sys.exit(1)
@@ -2034,11 +2785,11 @@ agents = json.loads(os.environ.get("AGENTS_JSON", "[]"))
 results = []
 for agent in agents:
     reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"], "protocol": agent.get("protocol", "openai")}).encode()
-    req = urllib.request.Request("http://localhost:8443/admin/agents", data=reg_data,
+    req = urllib.request.Request("https://localhost:8443/admin/agents", data=reg_data,
                                  headers={"Content-Type": "application/json",
                                            "Cookie": f"__Host-yashigani_admin_session={session}"})
     try:
-        resp = urllib.request.urlopen(req)
+        resp = urllib.request.urlopen(req, context=_ctx)
         body = json.loads(resp.read())
         token = body.get("token", "")
         profile = agent["profile"]
@@ -2078,7 +2829,7 @@ for r in results:
         local _token="${_rest#*:}"
         if [[ -n "$_profile" && -n "$_token" && "$_token" != "$_profile" ]]; then
           echo "$_token" > "${secrets_dir}/${_profile}_token"
-          chmod 644 "${secrets_dir}/${_profile}_token"
+          chmod 600 "${secrets_dir}/${_profile}_token"
         fi
         log_success "  ${_agent_name}: registered"
         any_registered=true
@@ -2154,14 +2905,79 @@ GEN_REDIS_PASSWORD=""
 GEN_GRAFANA_PASSWORD=""
 
 _gen_password() {
-  # 36-char alphanumeric password (matches Agnostic Security policy)
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 36
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits) for _ in range(36)))'
+  # 36-char password with mixed case, digits, and symbols.
+  # Symbol set: ! * , - . _ ~
+  #   - all RFC 3986 unreserved or sub-delim → safe in Postgres DSN userinfo
+  #     without percent-encoding (passwords are interpolated raw into
+  #     postgresql://user:PW@host/db by Docker Compose / Helm / bootstrap).
+  #   - no $ ` \ " to avoid shell / .env variable expansion.
+  #   - no = or # to avoid .env assignment / comment parsing.
+  #   - no | & \ to avoid breaking sed "s|key=...|key=PW|" updates to .env.
+  # Guarantees ≥1 uppercase, lowercase, digit, and symbol (36 chars × ~10%
+  # symbol weight otherwise misses symbols in a non-trivial fraction of runs).
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import secrets, string
+symbols = "!*,-._~"
+alphabet = string.ascii_letters + string.digits + symbols
+while True:
+    pw = "".join(secrets.choice(alphabet) for _ in range(36))
+    if (any(c.isupper() for c in pw)
+        and any(c.islower() for c in pw)
+        and any(c.isdigit() for c in pw)
+        and any(c in symbols for c in pw)):
+        print(pw)
+        break
+PY
+  elif command -v openssl >/dev/null 2>&1; then
+    # openssl base64 only emits [A-Za-z0-9+/=] → insufficient symbol coverage.
+    # Blend with /dev/urandom through tr -dc over the full target alphabet.
+    # Retry up to 8× to satisfy category requirements.
+    local _pw _i
+    for _i in 1 2 3 4 5 6 7 8; do
+      _pw="$(LC_ALL=C tr -dc 'A-Za-z0-9!*,._~-' < /dev/urandom 2>/dev/null | head -c 36)"
+      if [[ "$_pw" =~ [A-Z] ]] && [[ "$_pw" =~ [a-z] ]] && [[ "$_pw" =~ [0-9] ]] && [[ "$_pw" =~ [\!\*,._~-] ]]; then
+        printf "%s" "$_pw"
+        return 0
+      fi
+    done
+    printf "%s" "$_pw"
   else
-    # Last resort — /dev/urandom
-    LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 36
+    # Last resort — /dev/urandom only; category guarantee via retry loop.
+    local _pw _i
+    for _i in 1 2 3 4 5 6 7 8; do
+      _pw="$(LC_ALL=C tr -dc 'A-Za-z0-9!*,._~-' < /dev/urandom | head -c 36)"
+      if [[ "$_pw" =~ [A-Z] ]] && [[ "$_pw" =~ [a-z] ]] && [[ "$_pw" =~ [0-9] ]] && [[ "$_pw" =~ [\!\*,._~-] ]]; then
+        printf "%s" "$_pw"
+        return 0
+      fi
+    done
+    printf "%s" "$_pw"
+  fi
+}
+
+_urlencode_userinfo() {
+  # Percent-encode a Postgres URI userinfo (user or password) so it round-trips
+  # through psycopg2 / SQLAlchemy / libpq URI parsers regardless of which
+  # sub-delims they choke on. psycopg2 truncates at ',' in URI-style DSNs
+  # even though RFC 3986 permits it in userinfo — so we encode everything
+  # except the RFC 3986 "unreserved" set (A-Z a-z 0-9 - . _ ~).
+  local _s="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$_s" <<'PY'
+import sys, urllib.parse
+print(urllib.parse.quote(sys.argv[1], safe=""), end="")
+PY
+  else
+    local _i _c _out=""
+    for (( _i=0; _i<${#_s}; _i++ )); do
+      _c="${_s:_i:1}"
+      case "$_c" in
+        [A-Za-z0-9._~-]) _out+="$_c" ;;
+        *) _out+=$(printf '%%%02X' "'$_c") ;;
+      esac
+    done
+    printf "%s" "$_out"
   fi
 }
 
@@ -2178,11 +2994,14 @@ _gen_totp_secret() {
 }
 
 _gen_totp_uri() {
-  # otpauth://totp/Yashigani:username?secret=SECRET&issuer=Yashigani&digits=6&period=30
+  # otpauth://totp/Yashigani:username?secret=SECRET&issuer=Yashigani&algorithm=SHA256&digits=6&period=30
+  # algorithm=SHA256 is mandatory — pyotp uses digest=hashlib.sha256.
+  # Without this parameter, authenticator apps default to SHA-1 → codes never match.
+  # P0-10 / feedback_sha256_minimum_pqr (Tiago 2026-05-01).
   local username="$1"
   local secret="$2"
   local issuer="${DOMAIN:-Yashigani}"
-  echo "otpauth://totp/Yashigani:${username}?secret=${secret}&issuer=${issuer}&digits=6&period=30"
+  echo "otpauth://totp/Yashigani:${username}?secret=${secret}&issuer=${issuer}&algorithm=SHA256&digits=6&period=30"
 }
 
 # Generate two distinct admin usernames from curated word lists
@@ -2261,6 +3080,21 @@ generate_secrets() {
         fi
       fi
     done
+    # v2.23.1 fix: URL-encoded Postgres password for URI-style DSNs (psycopg2
+    # mis-parses unreserved sub-delims like ',' in userinfo). Compose templates
+    # must reference POSTGRES_PASSWORD_URLENC for postgresql:// DSNs; raw
+    # POSTGRES_PASSWORD remains for non-URI env (pgbouncer auth, libpq kwargs).
+    if [[ "$GEN_POSTGRES_PASSWORD" != "[preserved]" && -n "$GEN_POSTGRES_PASSWORD" ]]; then
+      local _pgurlenc
+      _pgurlenc="$(_urlencode_userinfo "$GEN_POSTGRES_PASSWORD")"
+      if grep -q "^POSTGRES_PASSWORD_URLENC=" "$env_file" 2>/dev/null; then
+        local tmp_env; tmp_env="$(mktemp)"
+        sed "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${_pgurlenc}|" "$env_file" > "$tmp_env"
+        mv "$tmp_env" "$env_file"
+      else
+        echo "POSTGRES_PASSWORD_URLENC=${_pgurlenc}" >> "$env_file"
+      fi
+    fi
     # Ensure OpenClaw gateway token exists
     if ! grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
       local openclaw_token
@@ -2276,7 +3110,7 @@ generate_secrets() {
         local _new_pw
         _new_pw="$(_gen_password)"
         printf "%s" "$_new_pw" > "${secrets_dir}/${_cred_name}"
-        chmod 644 "${secrets_dir}/${_cred_name}"
+        chmod 600 "${secrets_dir}/${_cred_name}"
         # Map secret file name to env var name
         local _env_key
         _env_key="$(echo "$_cred_name" | tr '[:lower:]' '[:upper:]')"
@@ -2295,6 +3129,40 @@ generate_secrets() {
     GEN_WAZUH_INDEXER_PASSWORD="$(cat "${secrets_dir}/wazuh_indexer_password" 2>/dev/null || echo "")"
     GEN_WAZUH_API_PASSWORD="$(cat "${secrets_dir}/wazuh_api_password" 2>/dev/null || echo "")"
     GEN_WAZUH_DASHBOARD_PASSWORD="$(cat "${secrets_dir}/wazuh_dashboard_password" 2>/dev/null || echo "")"
+
+    # BUG-1 (v2.23.1): caddy_internal_hmac was silently skipped on the upgrade
+    # path because this early-return block never reached the generation code below.
+    # A partial install (e.g. K8s first, then Docker) leaves postgres_password in
+    # .env but omits caddy_internal_hmac, so the gateway cannot start.
+    # Fix: check + generate each new secret independently, regardless of whether
+    # core secrets (postgres/redis) already exist.
+    local hmac_file="${secrets_dir}/caddy_internal_hmac"
+    if [[ ! -s "$hmac_file" ]] || [[ "${REINSTALL:-false}" == "true" ]]; then
+      local _hmac_secret
+      if command -v openssl >/dev/null 2>&1; then
+        _hmac_secret="$(openssl rand -hex 32)"
+      elif command -v python3 >/dev/null 2>&1; then
+        _hmac_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+      else
+        log_error "Cannot generate caddy_internal_hmac: neither openssl nor python3 found"
+        return 1
+      fi
+      printf "%s" "$_hmac_secret" > "$hmac_file"
+      chmod 0440 "$hmac_file"
+      log_info "Generated caddy_internal_hmac → ${hmac_file} (mode 0440, upgrade path)"
+    else
+      log_info "caddy_internal_hmac already present — preserving (use REINSTALL=true to rotate)"
+    fi
+    # Always sync CADDY_INTERNAL_HMAC into .env (may be absent if secret was just created).
+    local _hmac_val
+    _hmac_val="$(cat "$hmac_file")"
+    if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
+      local tmp_env; tmp_env="$(mktemp)"
+      sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
+      mv "$tmp_env" "$env_file"
+    else
+      echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+    fi
 
     return 0
   fi
@@ -2324,13 +3192,13 @@ generate_secrets() {
   # --- Admin 1 (primary) ---
   GEN_ADMIN1_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin1_password"
-  chmod 644 "${secrets_dir}/admin1_password"
+  chmod 600 "${secrets_dir}/admin1_password"
   # Also write as admin_initial_password — the backoffice bootstrap checks this
   # file to decide whether to generate new credentials or use existing ones
   printf "%s" "$GEN_ADMIN1_PASSWORD" > "${secrets_dir}/admin_initial_password"
-  chmod 644 "${secrets_dir}/admin_initial_password"
+  chmod 600 "${secrets_dir}/admin_initial_password"
   printf "%s" "$GEN_ADMIN1_USERNAME" > "${secrets_dir}/admin1_username"
-  chmod 644 "${secrets_dir}/admin1_username"
+  chmod 600 "${secrets_dir}/admin1_username"
   # Update .env so backoffice creates the account with the generated username
   local env_file="${WORK_DIR}/docker/.env"
   if grep -q "^YASHIGANI_ADMIN_USERNAME=" "$env_file" 2>/dev/null; then
@@ -2343,25 +3211,25 @@ generate_secrets() {
 
   GEN_ADMIN1_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN1_TOTP_SECRET" > "${secrets_dir}/admin1_totp_secret"
-  chmod 644 "${secrets_dir}/admin1_totp_secret"
+  chmod 600 "${secrets_dir}/admin1_totp_secret"
   GEN_ADMIN1_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN1_USERNAME" "$GEN_ADMIN1_TOTP_SECRET")"
 
   # --- Admin 2 (backup — anti-lockout) ---
   GEN_ADMIN2_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_ADMIN2_PASSWORD" > "${secrets_dir}/admin2_password"
-  chmod 644 "${secrets_dir}/admin2_password"
+  chmod 600 "${secrets_dir}/admin2_password"
   printf "%s" "$GEN_ADMIN2_USERNAME" > "${secrets_dir}/admin2_username"
-  chmod 644 "${secrets_dir}/admin2_username"
+  chmod 600 "${secrets_dir}/admin2_username"
 
   GEN_ADMIN2_TOTP_SECRET="$(_gen_totp_secret)"
   printf "%s" "$GEN_ADMIN2_TOTP_SECRET" > "${secrets_dir}/admin2_totp_secret"
-  chmod 644 "${secrets_dir}/admin2_totp_secret"
+  chmod 600 "${secrets_dir}/admin2_totp_secret"
   GEN_ADMIN2_TOTP_URI="$(_gen_totp_uri "$GEN_ADMIN2_USERNAME" "$GEN_ADMIN2_TOTP_SECRET")"
 
   # --- PostgreSQL ---
   GEN_POSTGRES_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_POSTGRES_PASSWORD" > "${secrets_dir}/postgres_password"
-  chmod 644 "${secrets_dir}/postgres_password"
+  chmod 600 "${secrets_dir}/postgres_password"
   # Also write to .env so Docker Compose can interpolate ${POSTGRES_PASSWORD}
   # in service DSN and PgBouncer DATABASE_URL
   local env_file="${WORK_DIR}/docker/.env"
@@ -2372,11 +3240,20 @@ generate_secrets() {
   else
     echo "POSTGRES_PASSWORD=${GEN_POSTGRES_PASSWORD}" >> "$env_file"
   fi
+  # v2.23.1 fix: URL-encoded variant for URI-style DSNs (see _urlencode_userinfo).
+  GEN_POSTGRES_PASSWORD_URLENC="$(_urlencode_userinfo "$GEN_POSTGRES_PASSWORD")"
+  if grep -q "^POSTGRES_PASSWORD_URLENC=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^POSTGRES_PASSWORD_URLENC=.*|POSTGRES_PASSWORD_URLENC=${GEN_POSTGRES_PASSWORD_URLENC}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "POSTGRES_PASSWORD_URLENC=${GEN_POSTGRES_PASSWORD_URLENC}" >> "$env_file"
+  fi
 
   # --- Redis ---
   GEN_REDIS_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_REDIS_PASSWORD" > "${secrets_dir}/redis_password"
-  chmod 644 "${secrets_dir}/redis_password"
+  chmod 600 "${secrets_dir}/redis_password"
   # Write to .env for Compose interpolation (LangGraph REDIS_URI needs it)
   if grep -q "^REDIS_PASSWORD=" "$env_file" 2>/dev/null; then
     local tmp_env; tmp_env="$(mktemp)"
@@ -2390,7 +3267,7 @@ generate_secrets() {
   local openclaw_token
   openclaw_token="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
   printf "%s" "$openclaw_token" > "${secrets_dir}/openclaw_gateway_token"
-  chmod 644 "${secrets_dir}/openclaw_gateway_token"
+  chmod 600 "${secrets_dir}/openclaw_gateway_token"
   if grep -q "^OPENCLAW_GATEWAY_TOKEN=" "$env_file" 2>/dev/null; then
     local tmp_env; tmp_env="$(mktemp)"
     sed "s|^OPENCLAW_GATEWAY_TOKEN=.*|OPENCLAW_GATEWAY_TOKEN=${openclaw_token}|" "$env_file" > "$tmp_env"
@@ -2402,7 +3279,7 @@ generate_secrets() {
   # --- Grafana ---
   GEN_GRAFANA_PASSWORD="$(_gen_password)"
   printf "%s" "$GEN_GRAFANA_PASSWORD" > "${secrets_dir}/grafana_admin_password"
-  chmod 644 "${secrets_dir}/grafana_admin_password"
+  chmod 600 "${secrets_dir}/grafana_admin_password"
 
   # --- Wazuh SIEM (generated even if --wazuh not selected — ready for later) ---
   GEN_WAZUH_INDEXER_PASSWORD="$(_gen_password)"
@@ -2411,7 +3288,7 @@ generate_secrets() {
   printf "%s" "$GEN_WAZUH_INDEXER_PASSWORD" > "${secrets_dir}/wazuh_indexer_password"
   printf "%s" "$GEN_WAZUH_API_PASSWORD" > "${secrets_dir}/wazuh_api_password"
   printf "%s" "$GEN_WAZUH_DASHBOARD_PASSWORD" > "${secrets_dir}/wazuh_dashboard_password"
-  chmod 644 "${secrets_dir}/wazuh_indexer_password" "${secrets_dir}/wazuh_api_password" "${secrets_dir}/wazuh_dashboard_password"
+  chmod 600 "${secrets_dir}/wazuh_indexer_password" "${secrets_dir}/wazuh_api_password" "${secrets_dir}/wazuh_dashboard_password"
   # Write to .env for Compose interpolation
   for _wkey in WAZUH_INDEXER_PASSWORD WAZUH_API_PASSWORD WAZUH_DASHBOARD_PASSWORD; do
     local _wval
@@ -2428,6 +3305,44 @@ generate_secrets() {
       echo "${_wkey}=${_wval}" >> "$env_file"
     fi
   done
+
+  # --- EX-231-10 Layer B: per-install Caddy HMAC shared secret ----------------
+  # caddy_internal_hmac: 32 bytes (256-bit), hex-encoded.
+  # Caddy reads it via CADDY_INTERNAL_HMAC env var and injects it as
+  # X-Caddy-Verified-Secret on every upstream proxy to backoffice and gateway.
+  # Tom's middleware does hmac.compare_digest(header, secret) → 401 if absent.
+  # Mode 0440: readable by uid 1001 (yashigani — Caddy/gateway/backoffice);
+  # never world-readable.
+  # On --upgrade this block regenerates the secret. All three containers must
+  # be restarted to pick it up (install.sh --upgrade restarts them).
+  local hmac_file="${secrets_dir}/caddy_internal_hmac"
+  if [[ ! -s "$hmac_file" ]] || [[ "${REINSTALL:-false}" == "true" ]]; then
+    local _hmac_secret
+    if command -v openssl >/dev/null 2>&1; then
+      _hmac_secret="$(openssl rand -hex 32)"
+    elif command -v python3 >/dev/null 2>&1; then
+      _hmac_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    else
+      log_error "Cannot generate caddy_internal_hmac: neither openssl nor python3 found"
+      return 1
+    fi
+    printf "%s" "$_hmac_secret" > "$hmac_file"
+    chmod 0440 "$hmac_file"
+    log_info "Generated caddy_internal_hmac → ${hmac_file} (mode 0440)"
+  else
+    log_info "caddy_internal_hmac already present — preserving (use REINSTALL=true to rotate)"
+  fi
+  # Write/update CADDY_INTERNAL_HMAC in .env so Compose can interpolate it
+  # into the Caddy, gateway, and backoffice environment blocks.
+  local _hmac_val
+  _hmac_val="$(cat "$hmac_file")"
+  if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+  fi
 
   # --- HIBP breach check on generated passwords (defense-in-depth) ---
   _hibp_check_passwords
@@ -2740,6 +3655,7 @@ k8s_helm_dep_update() {
 }
 
 # STEP 8 (k8s): helm upgrade --install
+# Last updated (k8s_helm_install): 2026-04-27T06:05:04Z
 k8s_helm_install() {
   set_step "8" "helm upgrade --install"
   log_step "8/${TOTAL_STEPS}" "Deploying via Helm..."
@@ -2758,10 +3674,37 @@ k8s_helm_install() {
     return 0
   fi
 
+  # v2.23.1 task #94 — flag set tuned for the umbrella chart's ~97 rendered
+  # resources + slow-booting open-webui pod:
+  #   --wait              block until all Deployments/StatefulSets Available so
+  #                       the next install step (rollout status) doesn't race.
+  #   --wait-for-jobs     pre-install hooks (admin-bootstrap, mtls-bootstrap)
+  #                       must finish before main resources, otherwise the
+  #                       backoffice starts without the bootstrap secret.
+  #   --timeout 20m       cold pull of open-webui:main (~2 GiB) + first-boot
+  #                       SvelteKit migration + qwen2.5:3b ollama warm-up can
+  #                       collectively take 12-15 min on Docker Desktop /
+  #                       laptop hardware. 5m default is too tight.
+  #   --atomic            on failure, helm rolls back; avoids leaving the
+  #                       release in pending-install state which then blocks
+  #                       a subsequent helm install with "cannot re-use a
+  #                       name that is still in use".
+  #   --burst-limit 1000  raise client-side throttling above the default 100
+  #   --qps 500           so that helm's internal poll loop (which iterates
+  #                       all 97 resources every 2s) does not saturate the
+  #                       client-go rate limiter and spuriously raise
+  #                       "client rate limiter Wait returned an error:
+  #                       context deadline exceeded".
   local helm_args=(
     upgrade --install yashigani "$chart_dir"
     --namespace "$NAMESPACE"
     --create-namespace
+    --wait
+    --wait-for-jobs
+    --timeout 20m
+    --atomic
+    --burst-limit 1000
+    --qps 500
   )
 
   if [[ -f "$helm_values" ]]; then
@@ -2938,10 +3881,14 @@ _pki_run_issuer() {
   # that skip compose build may leave :latest as the only built tag, so
   # falling back to it is safer than forcing a pull of :${VERSION} that
   # doesn't exist on a remote registry (yashigani/gateway isn't public).
+  # Use `image inspect` rather than `image exists` — the latter is a
+  # Podman-only subcommand (Docker errors with "unknown command").
+  # `image inspect IMAGE` is portable across docker/podman and returns 0
+  # when the image is present locally.
   local image=""
   for tag in "${YASHIGANI_VERSION}" "latest"; do
-    if "$runtime" image exists "yashigani/gateway:${tag}" 2>/dev/null \
-       || "$runtime" image exists "localhost/yashigani/gateway:${tag}" 2>/dev/null; then
+    if "$runtime" image inspect "yashigani/gateway:${tag}" >/dev/null 2>&1 \
+       || "$runtime" image inspect "localhost/yashigani/gateway:${tag}" >/dev/null 2>&1; then
       image="yashigani/gateway:${tag}"
       break
     fi
@@ -2959,21 +3906,468 @@ _pki_run_issuer() {
     return 1
   fi
 
+  # Bind-mount options differ between podman and docker:
+  #   - ":Z" is an SELinux relabel (no-op on non-SELinux hosts like Ubuntu,
+  #     but required on RHEL/Fedora with enforcing policy).
+  #   - ":U" (podman-only) recursively chowns the mount source to the
+  #     container's user/group, so a non-root USER inside the image can
+  #     write. Docker has no equivalent and errors on ":U".
+  # Without ":U", rootful podman fails with EACCES when the image runs as
+  # a non-root user (the image sets `USER yashigani`), since the host dir
+  # is owned by root. Retro: v2.23.1 Ubuntu podman clean-slate failure.
+  local _mount_opts="rw,Z"
+  if [[ "$runtime" == "podman" ]]; then
+    _mount_opts="rw,Z,U"
+  else
+    # Docker: no :U support — manually chown the secrets dir to the container
+    # UID (1001 = yashigani user in our image) so the issuer can write.
+    # mkdir -p above may have created it as root when install runs via sudo.
+    # Retro v2.23.1 item #3ad (Docker path).
+    chown 1001:1001 "$secrets_in" 2>/dev/null || true
+    # Retro #3ah (v2.23.1): the issuer also writes back to
+    # service_identities.yaml (bootstrap_token_sha256 fields) via the
+    # /manifest.yaml bind mount. Without ownership match the write fails
+    # with PermissionError and the whole PKI bootstrap aborts. Podman's
+    # :U handles this automatically, but Docker doesn't, so chown the
+    # manifest to UID 1001 too. Restored after the run by _pki_persist_env's
+    # callers (manifest is regenerated on rotation).
+    chown 1001:1001 "$manifest_in" 2>/dev/null || true
+  fi
+
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "$runtime run --rm --network=none -v $secrets_in:/secrets -v $manifest_in:/manifest.yaml $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
+    dry_print "$runtime run --rm --network=none -v ${secrets_in}:/secrets:${_mount_opts} -v ${manifest_in}:/manifest.yaml:${_mount_opts} $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
     return 0
   fi
 
   # --network=none: issuer does no network I/O, and cutting the network
   # prevents any accidental telemetry exfil.
   "$runtime" run --rm --network=none \
-    -v "${secrets_in}:/secrets:rw,Z" \
-    -v "${manifest_in}:/manifest.yaml:rw,Z" \
+    -v "${secrets_in}:/secrets:${_mount_opts}" \
+    -v "${manifest_in}:/manifest.yaml:${_mount_opts}" \
     "$image" \
     python -m yashigani.pki.issuer \
       --secrets-dir /secrets \
       --manifest /manifest.yaml \
       "$subcmd" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# _pki_chown_client_keys — re-own each service's private key to the UID of
+# the consuming container, and chmod all certificate files to 0644.
+# Called on both fresh install and skip paths so keys and certs are always
+# accessible even when PKI bootstrap is skipped (certs already present).
+#
+# Retro v2.23.1 root cause: pgbouncer (UID 70) crashed because keys were
+# owned by UID 1001 from the issuer image and chown was never called on
+# the skip path.
+# Retro v2.23.1 RC-6: pgbouncer_client.crt was 0600 owned by UID 1001 —
+# pgbouncer runs as UID 70 and could not read it. Fix: chmod 0644 all
+# *_client.crt and ca_*.crt files. Certificates are public material
+# (distributed to peers for verification) and require no secrecy; 0644 is
+# correct. Private keys remain 0600, chowned to the container's UID.
+#
+# fix #58a-chown (2026-04-29): bifurcate chown strategy by YSG_RUNTIME.
+# fix #58a-podman-remote (2026-04-29): detect Podman remote-client mode
+#   (macOS Podman tunnels to a VM; `podman unshare` is unsupported on the
+#   remote client). Detected via `podman info --format '{{.Host.RemoteSocket.Exists}}'`.
+#   Remote callers use podman_run mode (ephemeral `podman run --rm`) rather
+#   than `podman unshare`. This simplifies the matrix:
+#     docker            → docker_run  (docker run --rm alpine chown)
+#     podman remote     → podman_run  (podman run --rm alpine chown)
+#     podman local root → direct      (plain chown)
+#     podman local non-root → unshare (podman unshare chown)
+#
+#   Previous bug: _chown_mode was set to "unshare" purely on `id -u != 0`.
+#   When YSG_RUNTIME=docker AND Podman is also installed AND the caller is
+#   non-root, `podman unshare chown` maps service UIDs (e.g. 70) through
+#   Podman's /etc/subuid range (typically 165536+70 = 165605). Docker
+#   containers run their service as the bare UID (70), so the host file at
+#   165605 is inaccessible → TLS key read fails → pgbouncer/postgres/redis
+#   crash at startup → full stack cascades. (Laura EX-231-10 AUDIT-NEEDED.)
+#
+#   Correct per-runtime strategy:
+#     k8s    → skip entirely; mtls-bootstrap-job.yaml handles ownership.
+#     podman + root    → direct chown (root can chown to any UID).
+#     podman + non-root → podman unshare chown (correct namespace mapping).
+#     docker (root or non-root) → docker run --rm with alpine:3 image;
+#       the Docker daemon runs as root and can chown inside the container to
+#       any UID. This works for both root and non-root callers.
+#       Image pinned to digest to prevent supply-chain substitution.
+#       alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#       (amd64/arm64 manifest list — 2026-04-29; rotate on next release cycle)
+#
+#   Error discipline (SOP 1 fail-closed): any chown failure is log_error +
+#   return 1. The previous log_warn + continue masked a 6-day live bug.
+#
+# Last updated: 2026-04-29T22:05:15+01:00
+# ---------------------------------------------------------------------------
+_pki_chown_client_keys() {
+  local _effective_runtime="${YSG_RUNTIME:-}"
+  # Normalise: YSG_PODMAN_RUNTIME=true overrides YSG_RUNTIME for legacy callers.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    _effective_runtime="podman"
+  fi
+
+  # K8s: ownership is handled by mtls-bootstrap-job.yaml initContainer.
+  # Nothing to do here — skip silently.
+  if [[ "$_effective_runtime" == "k8s" ]]; then
+    log_info "_pki_chown_client_keys: K8s runtime — skipping (mtls-bootstrap-job owns this step)"
+    return 0
+  fi
+
+  # Only act for docker and podman runtimes.
+  if [[ "$_effective_runtime" != "podman" && "$_effective_runtime" != "docker" ]]; then
+    log_info "_pki_chown_client_keys: unknown runtime '${_effective_runtime}' — skipping"
+    return 0
+  fi
+
+  local _uid_mapped_services=(
+    "gateway:1001"
+    "backoffice:1001"
+    "redis:999"
+    "budget-redis:999"
+    "pgbouncer:70"
+    # postgres (UID 999) needs to read its own key inside the read-only
+    # /run/secrets bind-mount so that 05-enable-ssl.sh can `install` it
+    # into PGDATA. Without this chown the `install` call fails with
+    # "Permission denied" and postgres starts with ssl=off, causing
+    # pgbouncer verify-ca to refuse the plaintext upstream.
+    # Retro #3ad — v2.23.1.
+    "postgres:999"
+  )
+
+  # Determine chown strategy for this runtime.
+  # "direct"      — plain chown(1); Podman local root caller.
+  # "unshare"     — podman unshare chown; maps UIDs through the user-namespace
+  #                 for the rootless Podman LOCAL caller. MUST NOT be used on
+  #                 the Docker path or on Podman remote (macOS client).
+  # "docker_run"  — ephemeral docker run --rm; mounts the secrets dir, runs
+  #                 chown inside the container where Docker daemon provides
+  #                 root privs. Works regardless of host caller UID.
+  # "podman_run"  — ephemeral podman run --rm; same approach for Podman remote
+  #                 (macOS tunnels to VM). `podman unshare` is NOT supported on
+  #                 the remote client — this is the correct fallback.
+  local _chown_mode
+  if [[ "$_effective_runtime" == "docker" ]]; then
+    _chown_mode="docker_run"
+  elif [[ "$_effective_runtime" == "podman" ]]; then
+    # Detect Podman remote-client (macOS Podman tunnels to a VM).
+    # `podman unshare` is unsupported on the remote client; use podman_run.
+    #
+    # Detection strategy (retro N1-HARNESS-001, 2026-05-02):
+    # `podman info --format '{{.Host.RemoteSocket.Exists}}'` returns true even
+    # when running as the local Podman host user via an SSH session, because a
+    # UNIX socket path exists on the host.  This caused Linux-local installs to
+    # take the podman_run path, which then failed when the alpine pull image was
+    # unavailable (Docker Hub rate limit) and soft-warned instead of chowning.
+    #
+    # gate #ROOTLESS-7 (2026-05-02): `podman unshare echo "unshare_probe"` was
+    # the previous probe but it touches Podman's container storage briefly.
+    # When called immediately after _pki_run_issuer releases the storage lock,
+    # there is a transient window where the probe returns non-zero, causing
+    # the install to fall through to podman_run mode. In podman_run mode the
+    # ephemeral alpine container volume mount fails because secrets_dir was
+    # chowned to a subuid-range UID (363144) that podman run cannot access from
+    # the rootless installer, so chown is silently skipped and pgbouncer (UID 70)
+    # cannot read its key → pgbouncer crash-loops → podman-compose waits forever.
+    #
+    # Fix: replace the live podman probe with a static /etc/subuid check.
+    # If the current user has a subuid allocation ≥ 65536 entries, podman unshare
+    # is supported and we are the local rootless caller. This is a kernel-level
+    # capability check, not a runtime lock check, so it is immune to transient
+    # storage contention. macOS remote callers do not have /etc/subuid entries on
+    # the Mac side (they run via the Podman VM), so they fall through to podman_run.
+    if [[ "$(id -u)" == "0" ]]; then
+      _chown_mode="direct"
+    elif awk -v u="$(id -un)" -F: '$1==u && $3>=65536 {found=1} END{exit !found}' \
+           /etc/subuid 2>/dev/null; then
+      # User has a subuid allocation ≥ 65536 → local rootless Podman; use unshare.
+      # Note: /etc/subuid uses username (not numeric UID) in field 1; id -un gets
+      # the username. Some distros also accept numeric UIDs in /etc/subuid; we
+      # check by username first which covers the common Debian/Ubuntu layout.
+      _chown_mode="unshare"
+    else
+      # No /etc/subuid entry for this user (macOS client, restricted env).
+      _chown_mode="podman_run"
+    fi
+  fi
+
+  log_info "Chown'ing client keys to container UIDs (runtime: ${_effective_runtime}, mode: ${_chown_mode})"
+
+  # Alpine:3 image pinned to digest (manifest list — covers amd64+arm64).
+  # digest captured 2026-04-29; rotate on next release cycle via:
+  #   docker pull alpine:3 && docker inspect alpine:3 --format='{{index .RepoDigests 0}}'
+  local _alpine_image="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Helper: chown a single file to <uid>:<uid> using the active strategy.
+  # Optional 4th arg: _extra_chmod — an octal mode string (e.g. "0640") to
+  # apply AFTER chown. For docker_run and podman_run modes the chmod is
+  # performed INSIDE the container alongside the chown (BUG-2 fix: a non-root
+  # host caller cannot chmod a file it does not own after the in-container
+  # chown transfers ownership to a different UID). For direct/unshare modes the
+  # caller IS root (direct) or owns the file in the mapped namespace (unshare
+  # with root in container), so a host-side chmod is safe; we still do it
+  # inside the container for direct consistency.
+  # On error: log_error + propagate non-zero (fail-closed, SOP 1).
+  _do_chown() {
+    local _uid="$1" _file="$2" _label="$3" _extra_chmod="${4:-}"
+    case "$_chown_mode" in
+      direct)
+        if ! chown "${_uid}:${_uid}" "$_file"; then
+          log_error "chown ${_uid}:${_uid} failed on ${_label} — aborting (fix file ownership manually)"
+          return 1
+        fi
+        if [[ -n "$_extra_chmod" ]]; then
+          if ! chmod "$_extra_chmod" "$_file"; then
+            log_error "chmod ${_extra_chmod} failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
+        ;;
+      unshare)
+        # gate #ROOTLESS-7 fallback: if podman unshare chown fails (e.g., file
+        # owned by a subuid-range UID outside the current unshare namespace, or
+        # a transient storage lock), attempt a podman_run ephemeral container
+        # before aborting. This makes unshare mode resilient to edge cases while
+        # still preferring the lower-overhead unshare path.
+        local _unshare_ok=0
+        if podman unshare chown "${_uid}:${_uid}" "$_file" 2>/dev/null; then
+          _unshare_ok=1
+          if [[ -n "$_extra_chmod" ]]; then
+            # BUG-2 fix: chmod must also run inside unshare; host-side chmod
+            # would fail with EPERM on a subuid-mapped file.
+            if ! podman unshare chmod "$_extra_chmod" "$_file" 2>/dev/null; then
+              log_warn "podman unshare chmod ${_extra_chmod} failed on ${_label} — falling back to podman_run"
+              _unshare_ok=0
+            fi
+          fi
+        fi
+        if [[ "$_unshare_ok" == "0" ]]; then
+          # Fall back to podman_run (same as macOS path).
+          log_warn "podman unshare chown/chmod failed on ${_label} — falling back to podman_run"
+          local _rel_file="${_file#"${_secrets_dir}/"}"
+          local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
+          if [[ -n "$_extra_chmod" ]]; then
+            _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
+          fi
+          if ! podman run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "$_container_cmd" 2>/dev/null; then
+            log_error "podman_run fallback chown/chmod also failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
+        ;;
+      docker_run)
+        # BUG-2 fix: combine chown + chmod into one docker run invocation so
+        # both ops execute as root inside the container. After the container
+        # exits, the file is owned by uid/gid <_uid> on the host; a non-root
+        # installer (e.g. uid 1003) cannot chmod a file owned by uid 1001.
+        # Bind-mount the secrets dir into a minimal container; chown+chmod the
+        # specific file path relative to the mount root /s.
+        # The container is rm'd immediately; no persistent state.
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
+        if [[ -n "$_extra_chmod" ]]; then
+          _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
+        fi
+        if ! docker run --rm \
+               --volume "${_secrets_dir}:/s:rw" \
+               "$_alpine_image" \
+               sh -c "$_container_cmd"; then
+          log_error "docker run chown/chmod failed on ${_label} — aborting"
+          return 1
+        fi
+        ;;
+      podman_run)
+        # Podman remote-client (macOS tunnels to VM): `podman unshare` is not
+        # supported. Use an ephemeral container instead — same approach as
+        # docker_run but invoking `podman run`. The Podman VM provides root
+        # inside the container, so it can chown to any UID.
+        # BUG-2 fix: same rationale as docker_run — chmod must be inside the
+        # container, not on the host, to avoid EPERM for non-root callers.
+        #
+        # WARN-not-ABORT: macOS Podman virtiofs may not expose the secrets path
+        # (~/Documents/ can be blocked by macOS TCC Privacy settings after a
+        # machine restart). When this happens, `podman run --volume` fails with
+        # "statfs ... operation not permitted". This is safe to soft-warn:
+        # virtiofs + Podman rootless user-namespace already maps the macOS host
+        # user (UID 502) to the container owner UID dynamically — the chown is
+        # not required for the container to read its own key files.
+        # Evidence: R3 gate 2026-04-29 — gateway started without explicit chown.
+        # Hard-abort would block install on a working macOS Podman configuration.
+        # TM-V231-005: upgrade chown to hard-requirement in v2.23.2 by requiring
+        # the admin to grant Podman Full Disk Access before install.
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
+        if [[ -n "$_extra_chmod" ]]; then
+          _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
+        fi
+        if ! podman run --rm \
+               --volume "${_secrets_dir}:/s:rw" \
+               "$_alpine_image" \
+               sh -c "$_container_cmd" 2>/dev/null; then
+          log_warn "podman run chown/chmod failed on ${_label} (macOS TCC Privacy may block virtiofs access)"
+          log_warn "  virtiofs UID remapping should compensate — verifying at service start"
+          log_warn "  To fix permanently: grant Podman Full Disk Access in System Settings > Privacy"
+        fi
+        ;;
+    esac
+    return 0
+  }
+
+  for _svc_uid in "${_uid_mapped_services[@]}"; do
+    local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
+    local _keyfile="${_secrets_dir}/${_svc}_client.key"
+    if [[ -f "$_keyfile" ]]; then
+      _do_chown "${_uid}" "$_keyfile" "${_svc}_client.key" || return 1
+    fi
+  done
+
+  # Chmod all certificate files to 0644. Certs are public material and must
+  # be readable by every container that verifies peer identity (pgbouncer,
+  # gateway, backoffice, postgres, redis, etc.). Keys remain 0600.
+  # This find+chmod is runtime-agnostic — it runs as the host caller and only
+  # changes mode bits (not ownership), so it works for both root and non-root.
+  log_info "Chmod'ing client certs + CA certs to 0644 (public material)"
+  find "${_secrets_dir}" -maxdepth 1 -type f \
+    \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
+    -exec chmod 0644 {} \; 2>/dev/null || true
+
+  # Laura bonus finding (EX-231-10 closure): Prometheus container runs as
+  # uid 65534 (nobody). The secrets dir is owned by uid 1001, mode drwxr-x--x
+  # (traversable by others via o+x). Prometheus needs to read its own
+  # prometheus_client.{crt,key} for SPIFFE-gated /internal/metrics scrapes.
+  # Fix: chown prometheus_client.key to 1001:1001, chmod to 0640.
+  # Prometheus gets group_add: ["1001"] in docker-compose.yml so GID 1001
+  # membership grants read access to the 0640 key.
+  log_info "Setting prometheus_client.key to 0640 (group 1001 — Laura EX-231-10 fix)"
+  local _prom_key="${_secrets_dir}/prometheus_client.key"
+  if [[ -f "$_prom_key" ]]; then
+    # BUG-2 fix: pass "0640" as the 4th arg so chmod runs inside the container
+    # alongside chown. A non-root installer (e.g. uid 1003) cannot chmod a file
+    # owned by uid 1001 from the host shell after the in-container chown exits.
+    _do_chown "1001" "$_prom_key" "prometheus_client.key" "0640" || return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _pki_detect_uri_san_drift — compare URI SANs on existing leaf certs against
+# docker/service_identities.yaml. Detects certs minted before the manifest's
+# spiffe_id for a service existed (or where the spiffe_id was changed since
+# mint). A drift triggers a forced leaf rotation regardless of time-based
+# renewal status.
+#
+# Motivation: v2.23.1 retro #82. Pre-EX-231-08 certs (Apr-22) carry no URI
+# SAN, so Caddy's X-SPIFFE-ID header is empty and the SPIFFE gate at
+# /internal/metrics returns 401 even though the mTLS handshake passes.
+# Time-based status check alone does NOT catch this — those certs are still
+# within their validity window.
+#
+# Return: 0 if every leaf's URI SAN matches the manifest's spiffe_id.
+#         1 if any leaf is missing, has no URI SAN, or the URI SAN disagrees
+#         with the manifest.
+# Prints one line per service.
+# Last updated: 2026-04-24T13:45:00+01:00
+# ---------------------------------------------------------------------------
+_pki_detect_uri_san_drift() {
+  local manifest="${WORK_DIR}/docker/service_identities.yaml"
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+
+  if [[ ! -f "$manifest" ]]; then
+    log_warn "service_identities.yaml missing at ${manifest} — skipping URI SAN drift check"
+    return 0
+  fi
+
+  if ! command -v openssl >/dev/null 2>&1; then
+    log_warn "openssl not on PATH — skipping URI SAN drift check"
+    return 0
+  fi
+
+  # Parse manifest into "<name>|<spiffe_id>" pairs. awk walks the list-of-maps
+  # and emits the spiffe_id encountered within each "- name:" block. Tolerant
+  # to comment lines, blank lines, and quoted values.
+  local pairs
+  pairs=$(awk '
+    /^[[:space:]]*-[[:space:]]+name:[[:space:]]+/ {
+      if (name != "" && sid != "") print name "|" sid
+      sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]+/, "")
+      gsub(/[[:space:]"'\'']/, "")
+      name = $0
+      sid = ""
+      next
+    }
+    /^[[:space:]]+spiffe_id:[[:space:]]+/ {
+      if (name == "") next
+      sub(/^[[:space:]]+spiffe_id:[[:space:]]+/, "")
+      gsub(/[[:space:]"'\'']/, "")
+      sid = $0
+    }
+    END {
+      if (name != "" && sid != "") print name "|" sid
+    }
+  ' "$manifest")
+
+  if [[ -z "$pairs" ]]; then
+    log_warn "No (name, spiffe_id) pairs parsed from manifest — skipping drift check"
+    return 0
+  fi
+
+  local drift=0
+  local svc expected crt san_block got
+  while IFS='|' read -r svc expected; do
+    [[ -z "$svc" || -z "$expected" ]] && continue
+    crt="${secrets_dir}/${svc}_client.crt"
+    if [[ ! -f "$crt" ]]; then
+      log_warn "  ${svc}: leaf cert missing (${crt}) — treating as drift"
+      drift=1
+      continue
+    fi
+    # openssl -text emits SANs on the line immediately following
+    # "X509v3 Subject Alternative Name:" — split on commas, keep URI entries.
+    san_block=$(openssl x509 -in "$crt" -noout -text 2>/dev/null \
+                | awk '/X509v3 Subject Alternative Name/{getline; print; exit}')
+    got=$(printf '%s' "$san_block" | tr ',' '\n' \
+          | sed -n 's/^[[:space:]]*URI:[[:space:]]*//p' \
+          | head -1)
+    if [[ -z "$got" ]]; then
+      log_warn "  ${svc}: no URI SAN on leaf — expected ${expected}"
+      drift=1
+    elif [[ "$got" != "$expected" ]]; then
+      log_warn "  ${svc}: URI SAN mismatch — got ${got}, expected ${expected}"
+      drift=1
+    else
+      log_info "  ${svc}: URI SAN OK (${got})"
+    fi
+  done <<< "$pairs"
+
+  return $drift
+}
+
+# _prepare_secrets_dir_for_pki() — chown secrets_dir so the PKI issuer container
+# can write certs into it. For Podman rootless this is deferred from generate_secrets()
+# to here, because the installer needs to write files into secrets_dir during
+# generate_secrets() and can only do so while it still owns the directory.
+# gate #ROOTLESS-3 fix (v2.23.1).
+_prepare_secrets_dir_for_pki() {
+  local secrets_dir="${WORK_DIR}/docker/secrets"
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    if [[ "$(id -u)" == "0" ]]; then
+      # Rootful Podman running as root — plain chown works
+      chown 1001:1001 "$secrets_dir" 2>/dev/null || true
+      log_info "secrets_dir chown 1001:1001 applied (rootful)"
+    else
+      # Rootless Podman — use podman unshare to map through the user namespace
+      if podman unshare chown 1001:1001 "$secrets_dir" 2>/dev/null; then
+        log_info "secrets_dir chown 1001:1001 applied via podman unshare (rootless)"
+      else
+        log_warn "Could not chown ${secrets_dir} via podman unshare — PKI issuer will use :U remapping"
+      fi
+    fi
+  fi
+  # Docker / non-Podman path: chown was already applied in generate_secrets().
 }
 
 bootstrap_internal_pki() {
@@ -2984,21 +4378,44 @@ bootstrap_internal_pki() {
   local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
   if [[ -f "$ca_root" ]]; then
     log_info "Root CA already present — checking renewal status"
+    local needs_rotation=false
     # Su Review Finding: no /tmp — keep scratch inside WORK_DIR.
+    # Podman rootless: status_file written by container (UID 363144) cannot
+    # be removed by host user via plain rm. Use podman unshare rm when runtime
+    # is Podman rootless (non-root); fall back to direct rm otherwise.
     local status_file="${WORK_DIR}/docker/secrets/.pki-status"
     if _pki_run_issuer status >"$status_file" 2>&1; then
       if grep -q "'status': 'renew'" "$status_file" 2>/dev/null; then
-        log_info "Renewal needed — rotating leaves"
-        _pki_run_issuer rotate-leaves \
-          --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS" \
-          || { rm -f "$status_file"; log_error "Leaf rotation failed"; return 1; }
-        log_success "Leaf certs rotated"
-      else
-        log_success "Certs current — no rotation needed"
+        log_info "Time-based renewal needed"
+        needs_rotation=true
       fi
     fi
-    rm -f "$status_file"
+    if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" ]]; then
+      podman unshare rm -f "$status_file" 2>/dev/null || rm -f "$status_file" 2>/dev/null || true
+    else
+      rm -f "$status_file"
+    fi
+
+    # Manifest-aware drift check — v2.23.1 retro #82. Rotates leaves even if
+    # they are still time-valid when the URI SAN doesn't match the manifest.
+    log_info "Checking leaf URI SANs against docker/service_identities.yaml"
+    if ! _pki_detect_uri_san_drift; then
+      log_warn "URI SAN drift detected — forcing leaf rotation"
+      needs_rotation=true
+    fi
+
+    if [[ "$needs_rotation" == "true" ]]; then
+      if ! _pki_run_issuer rotate-leaves \
+             --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS"; then
+        log_error "Leaf rotation failed — mTLS mesh will not converge"
+        return 1
+      fi
+      log_success "Leaf certs rotated"
+    else
+      log_success "Certs current — no rotation needed"
+    fi
     _pki_persist_env
+    _pki_chown_client_keys   # always re-apply — chown no-ops if already correct
     return 0
   fi
 
@@ -3017,27 +4434,7 @@ bootstrap_internal_pki() {
 
   _pki_persist_env
 
-  # Podman rootless: client keys are 0o400 (psycopg2 strict perm check).
-  # Inside the user namespace, container uid 1001 (the yashigani user in
-  # gateway + backoffice images) resolves to host uid (subuid + 1000),
-  # NOT the installer's uid. `podman unshare chown` re-owns the key files
-  # through the user-namespace mapping so the container user can read its
-  # own key without loosening host-side perms.
-  # Infra images that run as root-in-container (postgres, pgbouncer) don't
-  # need this — root-in-container maps to the installer's uid which already
-  # owns the file.
-  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
-    log_info "Chown'ing client keys through Podman user namespace"
-    local _uid_mapped_services=("gateway:1001" "backoffice:1001" "redis:999" "budget-redis:999")
-    for _svc_uid in "${_uid_mapped_services[@]}"; do
-      local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
-      local _keyfile="${WORK_DIR}/docker/secrets/${_svc}_client.key"
-      if [[ -f "$_keyfile" ]]; then
-        podman unshare chown "${_uid}:${_uid}" "$_keyfile" 2>/dev/null \
-          || log_warn "podman unshare chown failed on ${_svc} key — continuing"
-      fi
-    done
-  fi
+  _pki_chown_client_keys   # re-own service keys to container UIDs (see helper above)
 
   log_success "Internal CA + per-service leaf certs generated"
   log_info "  CA root:      docker/secrets/ca_root.crt"
@@ -3048,6 +4445,7 @@ bootstrap_internal_pki() {
 handle_pki_subcommand() {
   case "$PKI_ACTION" in
     bootstrap)
+      _prepare_secrets_dir_for_pki
       bootstrap_internal_pki
       ;;
     rotate-leaves)
@@ -3159,6 +4557,9 @@ main() {
     # Step 4: Install runtime (vm mode only — no-op for compose)
     install_runtime
 
+    # Step 4b: Installer pre-flight hard-stop (P0-12: docker group + bind-mount owner)
+    check_installer_preflight
+
     # Step 5: Preflight
     run_preflight
 
@@ -3181,6 +4582,13 @@ main() {
     # Step 7: License key (skipped in demo — Community, no key needed)
     if [[ "$DEPLOY_MODE" == "demo" ]]; then
       log_step "7/${TOTAL_STEPS}" "Skipping licence key (demo mode — Community tier)"
+      # gate #ROOTLESS-6: create placeholder NOW (before PKI bootstrap chowns secrets_dir)
+      # so compose_up() doesn't need to write it after the chown.
+      local _lic="${WORK_DIR}/docker/secrets/license_key"
+      if [[ ! -s "$_lic" ]]; then
+        echo "# community — no licence key required" > "$_lic"
+        chmod 600 "$_lic"
+      fi
     else
       handle_license
     fi
@@ -3193,11 +4601,13 @@ main() {
       COMPOSE_PROFILES+=("openwebui")
       log_success "Open WebUI enabled (--with-openwebui flag)"
     elif [[ "$NON_INTERACTIVE" != "true" ]]; then
-      printf "\n${C_BOLD}Include Open WebUI chat interface?${C_RESET}\n"
-      printf "    Provides a browser-based AI chat UI for end users.\n"
-      printf "    Without it, Yashigani runs as API-only (gateway + admin panel).\n"
-      printf "    ${C_YELLOW}Can be added later from the admin panel.${C_RESET}\n"
-      printf "\n${C_BOLD}  Include Open WebUI? [y/N]: ${C_RESET}"
+      printf "\n${C_BOLD}Enable integration with the open-source Open WebUI project?${C_RESET}\n"
+      printf "    Pulls the upstream image (ghcr.io/open-webui/open-webui) and deploys it\n"
+      printf "    unmodified to provide a browser-based chat UI for your end users. Open\n"
+      printf "    WebUI is governed by its own licence terms; review them before enabling.\n"
+      printf "    Without this, Yashigani runs as API-only (gateway + admin panel).\n"
+      printf "    ${C_YELLOW}Can be enabled later from the admin panel.${C_RESET}\n"
+      printf "\n${C_BOLD}  Enable Open WebUI integration? [y/N]: ${C_RESET}"
       local owui_choice
       read -r owui_choice </dev/tty 2>/dev/null || owui_choice="n"
       if [[ "${owui_choice,,}" == "y" || "${owui_choice,,}" == "yes" ]]; then
@@ -3229,11 +4639,20 @@ main() {
     # Step 9b: Internal mTLS PKI — bootstrap root + intermediate + leaves BEFORE
     # services start, because postgres/redis/opa/gateway/backoffice all now
     # mount certs from docker/secrets/. No certs = no boot.
+    # Podman rootless: chown secrets_dir now (deferred from generate_secrets to
+    # allow installer-side writes; see _prepare_secrets_dir_for_pki comment).
+    _prepare_secrets_dir_for_pki
     _pki_prompt_lifetimes
     bootstrap_internal_pki
 
     # Step 10: docker compose up -d
     compose_up
+
+    # Step 10c: Inject postgres SSL when upgrading from a version without mTLS.
+    # This runs AFTER compose_up (postgres must be running) but BEFORE
+    # bootstrap_postgres (which waits for backoffice, which waits for pgbouncer,
+    # which needs ssl postgres). Safe no-op on fresh installs.
+    _upgrade_postgres_ssl
 
     # Step 11: Bootstrap Postgres
     bootstrap_postgres
@@ -3244,9 +4663,12 @@ main() {
     # Step 11c: Auto-configure SIEM sink when Wazuh is installed
     if [[ "$INSTALL_WAZUH" == "true" ]] || echo "${COMPOSE_PROFILES[*]+"${COMPOSE_PROFILES[*]}"}" | grep -q "wazuh"; then
       log_info "Configuring audit SIEM sink for Wazuh..."
-      local _bo_url="http://localhost:8443"
+      # v2.23.1: reach backoffice via Caddy (host port → :443 in container).
+      # Caddy uses a self-signed cert in demo; -k tolerates it. Admin auth is
+      # the session cookie minted during admin bootstrap.
+      local _bo_url="https://localhost:${YASHIGANI_HTTPS_PORT:-443}"
       local _siem_config='{"backend":"wazuh","wazuh_url":"https://wazuh-manager:55000","wazuh_username":"wazuh-wui","wazuh_password":"'"${GEN_WAZUH_API_PASSWORD:-}"'","enabled":true}'
-      if curl -sf -X PUT "${_bo_url}/admin/alerts/sinks" -H "Content-Type: application/json" -d "$_siem_config" -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" >/dev/null 2>&1; then
+      if curl -skf -X PUT "${_bo_url}/admin/alerts/sinks" -H "Content-Type: application/json" -d "$_siem_config" -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" >/dev/null 2>&1; then
         log_success "Wazuh SIEM sink auto-configured"
       else
         log_warn "Wazuh SIEM sink auto-configuration failed — configure manually via admin UI"

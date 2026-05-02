@@ -1,7 +1,7 @@
 # Yashigani — Installation and Configuration Guide
 
-**Version:** 2.23
-**Last updated:** 2026-04-12
+**Version:** 2.23.1
+**Last updated:** 2026-04-25T21:43:38+01:00
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -100,7 +100,7 @@ Before starting, confirm the following network conditions are met:
 - **Ports 80 and 443** must be open and reachable from the internet if using ACME (Let's Encrypt) TLS mode. Port 80 is used for the ACME HTTP-01 challenge; port 443 is your application traffic. If your load balancer or upstream firewall handles 80→443 redirect externally, port 80 must still reach the host for the initial certificate issuance.
 - **DNS A record** (or AAAA for IPv6) pointing your fully qualified domain name (FQDN) to the server's public IP address. This is mandatory for ACME mode. Allow up to 5 minutes for DNS propagation before starting the stack.
 - **Outbound HTTPS** (port 443) must be permitted from the host for Let's Encrypt ACME endpoints and for Ollama model pulls from `ollama.ai` and Hugging Face registries.
-- **Internal Docker networking** is isolated by default. All non-edge services (gateway, backoffice, policy, redis, budget-redis, postgres, etc.) attach to an internal bridge network with `internal: true`. Only Caddy (ports 80/443) is exposed to the host. Ollama attaches to an external network to allow outbound model pulls from `ollama.ai` and Hugging Face registries. Budget-redis runs as a dedicated Redis instance with `maxmemory-policy noeviction` for budget state persistence (v2.0).
+- **Internal Docker networking** is isolated by default via a four-network topology (EX-231-10, v2.23.1): `edge` (Caddy + public ports 80/443), `caddy_internal` (Caddy + gateway + backoffice — the only network where :8443/:8080 are reachable), `data` (gateway + backoffice outbound + postgres/pgbouncer/redis/OPA/ollama), and `obs` (prometheus/grafana/loki/alertmanager/otel-collector/jaeger). Caddy is the SOLE ingress to backoffice and gateway — no other service has a route to `caddy_internal`. Ollama and OpenClaw additionally join `edge` for outbound internet access. In Kubernetes, K8s NetworkPolicy enforces the same posture at the kernel level.
 
 > **Warning:** Do not expose Redis (6379), budget-redis (6380), Postgres (5432), or Prometheus (9090) ports to the host in production. These services are intentionally not bound to host interfaces in the default `docker-compose.yml`.
 
@@ -263,12 +263,12 @@ All services are manageable from the admin panel via API after installation. The
   Admin 1 Username : phoenix
   Admin 1 Password : <36-char random>
   Admin 1 TOTP Key : <base32 secret>
-  Admin 1 TOTP URI : otpauth://totp/Yashigani%3Aphoenix?secret=...
+  Admin 1 TOTP URI : otpauth://totp/Yashigani%3Aphoenix?secret=...&algorithm=SHA256&digits=6&period=30
 
   Admin 2 Username : condor
   Admin 2 Password : <36-char random>
   Admin 2 TOTP Key : <base32 secret>
-  Admin 2 TOTP URI : otpauth://totp/Yashigani%3Acondor?secret=...
+  Admin 2 TOTP URI : otpauth://totp/Yashigani%3Acondor?secret=...&algorithm=SHA256&digits=6&period=30
 
   Postgres Password : <36-char random>
   Redis Password    : <36-char random>
@@ -303,7 +303,7 @@ cd yashigani
 
 ```bash
 git tag --list | grep "v2."
-git checkout v2.23.0
+git checkout v2.23.1
 ```
 
 **Step 3.** Verify file integrity (if the project provides checksums):
@@ -1581,7 +1581,7 @@ For backup recovery, use `restore.sh` to restore from a previous backup.
 
 ```bash
 git fetch origin
-git checkout v2.23.0   # replace with target version
+git checkout v2.23.1   # replace with target version
 ```
 
 **Step 2.** Pull updated images:
@@ -2304,24 +2304,24 @@ Images are signed with cosign using keyless signing (Sigstore Fulcio CA + Rekor 
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
 ```
 
 **Verify backoffice image:**
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-backoffice:2.2
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
 ```
 
 A successful verification prints:
 
 ```
-Verification for ghcr.io/agnosticsec/yashigani-gateway:2.2 --
+Verification for ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - Existence of the claims in the transparency log was verified offline
@@ -2335,9 +2335,9 @@ The SBOM is attached as a cosign attestation with predicate type `cyclonedx`. Re
 ```bash
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
   | jq '.[0].payload | @base64d | fromjson'
 ```
 
@@ -2346,9 +2346,9 @@ To extract just the component list:
 ```bash
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp='https://github.com/agnosticsec/.*' \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
   | jq '.[0].payload | @base64d | fromjson | .predicate.components[] | {name,version,purl}'
 ```
 
@@ -2357,21 +2357,21 @@ cosign verify-attestation \
 The SBOM and CryptoBoM are also attached directly to each GitHub release:
 
 ```bash
-# Download SBOM for v2.2.0
-gh release download v2.2.0 \
-  --repo agnosticsec/yashigani \
+# Download SBOM for v2.23.1
+gh release download v2.23.1 \
+  --repo agnosticsec-com/yashigani \
   --pattern 'sbom-yashigani-*.cdx.json' \
   --dir ./dist
 
-# Download CryptoBoM for v2.2.0
-gh release download v2.2.0 \
-  --repo agnosticsec/yashigani \
+# Download CryptoBoM for v2.23.1
+gh release download v2.23.1 \
+  --repo agnosticsec-com/yashigani \
   --pattern 'cryptobom-yashigani-*.json' \
   --dir ./dist
 ```
 
 Or download from the GitHub releases page at:
-`https://github.com/agnosticsec/yashigani/releases`
+`https://github.com/agnosticsec-com/yashigani/releases`
 
 ### 27.6 CryptoBoM — Cryptographic Algorithm Inventory
 
@@ -2386,7 +2386,7 @@ The CryptoBoM (`cryptobom-yashigani-<version>.json`) lists every cryptographic a
 To query which algorithms are not post-quantum resistant:
 
 ```bash
-cat dist/cryptobom-yashigani-2.2.0.json \
+cat dist/cryptobom-yashigani-2.23.1.json \
   | jq '.algorithms[] | select(.pq_status == "not_resistant") | {id, name, usage}'
 ```
 
@@ -2400,11 +2400,11 @@ cosign generate-key-pair
 
 # Sign with local key
 COSIGN_PASSWORD=<passphrase> bash scripts/sign_image.sh \
-  ghcr.io/agnosticsec/yashigani-gateway:2.2 \
-  ghcr.io/agnosticsec/yashigani-backoffice:2.2
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
 
 # Verify with public key
-cosign verify --key cosign.pub ghcr.io/agnosticsec/yashigani-gateway:2.2
+cosign verify --key cosign.pub ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
 ```
 
 The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVATE_KEY` is set or `cosign.key` is present it uses local-key mode; otherwise it falls back to keyless.
@@ -2413,4 +2413,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.23 — Installation and Configuration Guide — 2026-04-12*
+*Yashigani v2.23.1 — Installation and Configuration Guide — 2026-04-25T21:43:38+01:00*

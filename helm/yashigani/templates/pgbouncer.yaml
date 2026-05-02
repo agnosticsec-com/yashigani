@@ -20,12 +20,21 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-pgbouncer
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        # Trigger rolling update when PKI Secret resourceVersion changes.
+        # See gateway.yaml for full rationale.
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      # /run/secrets mount collision — see redis.yaml note.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 70
         runAsGroup: 70
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -39,6 +48,17 @@ spec:
               containerPort: 5432
               protocol: TCP
           env:
+            # K8s $(VAR) interpolation only resolves FORWARD references — any var
+            # that uses $(POSTGRES_PASSWORD) MUST be declared after it. The
+            # edoburu/pgbouncer entrypoint extracts the password from
+            # DATABASE_URL into userlist.txt; if the literal "$(POSTGRES_PASSWORD)"
+            # leaks in, password auth fails on every connect (Captain #58c #3bf
+            # evidence, 2026-04-28).
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
+                  key: postgres_password
             - name: DATABASE_URL
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani"
             - name: AUTH_TYPE
@@ -49,11 +69,25 @@ spec:
               value: {{ .Values.pgbouncer.env.maxClientConn | quote }}
             - name: DEFAULT_POOL_SIZE
               value: {{ .Values.pgbouncer.env.defaultPoolSize | quote }}
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.postgres.existingSecretName | default "yashigani-postgres-secrets" }}
-                  key: postgres_password
+          {{- if .Values.mtls.enabled }}
+          # mTLS mode: pg_isready cannot negotiate client-cert TLS. Fall back
+          # to a plain TCP connect against 127.0.0.1 — proves the listener is
+          # up; real cert-auth gets exercised on the first gateway connect.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "nc -w 2 127.0.0.1 5432 </dev/null >/dev/null 2>&1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "nc -w 2 127.0.0.1 5432 </dev/null >/dev/null 2>&1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          {{- else }}
           readinessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -h localhost -p 5432"]
@@ -68,8 +102,29 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 5
+          {{- end }}
           resources:
             {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+          {{- if .Values.mtls.enabled }}
+          volumeMounts:
+            - name: pki-certs
+              mountPath: /run/secrets
+              readOnly: true
+            - name: pgbouncer-config
+              mountPath: /etc/pgbouncer/pgbouncer.ini
+              subPath: pgbouncer.ini
+              readOnly: true
+          {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: pki-certs
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        - name: pgbouncer-config
+          configMap:
+            name: yashigani-pgbouncer-config
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

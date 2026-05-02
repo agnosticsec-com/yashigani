@@ -1,10 +1,13 @@
 """
 Yashigani Backoffice — Authentication routes.
-POST /auth/login       — username + password + TOTP
-POST /auth/logout      — invalidate session
-GET  /auth/status      — check session validity
-POST /auth/password/change — forced change on first login
-POST /auth/totp/provision  — TOTP + recovery codes provisioning
+POST /auth/login            — username + password + TOTP
+POST /auth/logout           — invalidate session
+GET  /auth/status           — check session validity
+POST /auth/password/change  — forced change on first login
+POST /auth/totp/provision   — TOTP + recovery codes provisioning
+POST /auth/stepup           — V6.8.4 step-up TOTP verification for high-value flows
+
+Last updated: 2026-04-30T04:45:00+01:00
 """
 from __future__ import annotations
 
@@ -20,6 +23,14 @@ from pydantic import BaseModel, Field
 from yashigani.backoffice.middleware import AdminSession, AnySession, get_session_store, _SESSION_COOKIE
 from yashigani.backoffice.state import backoffice_state
 from yashigani.auth.totp import verify_totp, generate_provisioning, generate_recovery_code_set
+from yashigani.db.postgres import tenant_transaction as _pg_tenant_transaction_impl
+
+_PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+
+
+def _pg_tenant_transaction():
+    """Shorthand: open a platform-scoped transaction on the shared pool."""
+    return _pg_tenant_transaction_impl(_PLATFORM_TENANT_ID)
 
 router = APIRouter()
 
@@ -236,7 +247,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     state = backoffice_state
     try:
-        success, record, reason = state.auth_service.authenticate(
+        success, record, reason = await state.auth_service.authenticate(
             body.username, body.password, body.totp_code
         )
     except (ValueError, TypeError):
@@ -263,6 +274,45 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     # Success — reset per-IP failure counter (global decays via TTL)
     _reset_ip_auth_failures(client_ip)
+
+    # LAURA-V232-003: when force_totp_provision=True, authenticate() returns
+    # reason="totp_provision_required" meaning the account has NOT yet set up
+    # TOTP (or has been reset). Issue a RESTRICTED session with
+    # account_tier="totp_provisioning" — accepted by require_any_session
+    # (for /auth/totp/provision/* and /auth/password/change) but REJECTED by
+    # require_admin_session (account_tier must be "admin"). This prevents an
+    # attacker from using the provisioning-state bypass to gain a full admin
+    # session before completing TOTP setup.
+    #
+    # The client must:
+    #   1. POST /auth/totp/provision/start → QR code + seed
+    #   2. POST /auth/totp/provision/confirm {totp_code} → clears flag
+    #   3. Log out and log in again → authenticates with full TOTP → gets admin session
+    if reason == "totp_provision_required":
+        session = state.session_store.create(
+            account_id=record.account_id,
+            account_tier="totp_provisioning",
+            client_ip=client_ip,
+        )
+        state.audit_writer.write(
+            _make_login_event(body.username, "totp_provision_restricted", None)
+        )
+        _log.info(
+            "TOTP provisioning session issued for %s (force_totp_provision=True). "
+            "Full admin access blocked until TOTP is provisioned.",
+            body.username,
+        )
+        _set_session_cookie(response, session.token, "totp_provisioning")
+        return {
+            "status": "totp_provision_required",
+            "force_password_change": record.force_password_change,
+            "force_totp_provision": True,
+            "message": (
+                "Your account requires TOTP provisioning before you can "
+                "access admin functions. POST to /auth/totp/provision/start "
+                "to begin enrolment."
+            ),
+        }
 
     # Check password age against admin-configurable policy.
     #
@@ -337,7 +387,7 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     ASVS V2.1: authenticated password reset without admin intervention.
     """
     state = backoffice_state
-    record = state.auth_service._accounts.get(body.username)
+    record = await state.auth_service.get_account(body.username)
 
     # Same generic error for unknown user or wrong TOTP (prevent enumeration).
     # Ava Wave 2 Issue 7 — self-service password reset is unauthenticated by
@@ -356,20 +406,34 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     if not record.totp_secret:
         raise generic_error
 
-    if not verify_totp(record.totp_secret, body.totp_code, state.auth_service._used_totp_codes):
-        raise generic_error
+    # Use the auth service's Postgres-backed replay cache so the self-service
+    # path can't be abused for TOTP replay.
+    # pylint: disable=protected-access
+    async with _pg_tenant_transaction() as conn:
+        if not await state.auth_service._verify_totp_with_replay(
+            conn, record.totp_secret, body.totp_code
+        ):
+            raise generic_error
 
-    # TOTP valid — generate new temporary password
+    # TOTP valid — generate new temporary password and persist via the
+    # Postgres-backed auth service so the reset survives restart (P0-2).
     from yashigani.auth.password import generate_password, hash_password
     temp_password = generate_password(36)
     try:
-        record.password_hash = hash_password(temp_password)
+        new_hash = hash_password(temp_password)
     except (ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "invalid_credentials_format"},
         )
-    record.force_password_change = True
+    # Apply the new password hash + force-change flag durably.
+    async with _pg_tenant_transaction() as conn:
+        await conn.execute(
+            "UPDATE admin_accounts SET password_hash = $1, "
+            "force_password_change = true, password_changed_at = $2 "
+            "WHERE username = $3",
+            new_hash, time.time(), record.username,
+        )
 
     # Invalidate all sessions
     state.session_store.invalidate_all_for_account(record.account_id)
@@ -403,11 +467,7 @@ async def verify_session(request: Request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     # Resolve account from account_id
-    record = None
-    for r in state.auth_service._accounts.values():
-        if r.account_id == session.account_id:
-            record = r
-            break
+    record = await state.auth_service.get_account_by_id(session.account_id)
 
     if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -432,7 +492,7 @@ async def change_password(
     """Force-change password. Invalidates ALL sessions (ASVS V2.1.4)."""
     state = backoffice_state
     # Find account by account_id
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail={"error": "account_not_found"})
@@ -444,11 +504,20 @@ async def change_password(
 
     old_hash_tail = record.password_hash[-8:] if record.password_hash else ""
     try:
-        record.password_hash = hash_password(body.new_password)
+        new_hash = hash_password(body.new_password)
     except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "password_rejected"})
-    new_hash_tail = record.password_hash[-8:]
+    new_hash_tail = new_hash[-8:]
+    # Durable update via Postgres — replaces in-memory field mutation.
+    async with _pg_tenant_transaction() as conn:
+        await conn.execute(
+            "UPDATE admin_accounts SET "
+            "password_hash = $1, force_password_change = false, "
+            "password_changed_at = $2 WHERE username = $3",
+            new_hash, time.time(), record.username,
+        )
+    record.password_hash = new_hash
     record.force_password_change = False
     record.password_changed_at = time.time()
 
@@ -483,12 +552,12 @@ async def provision_totp_start(
     that returned the seed, which was impossible for a first-time client.
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+    prov, _code_set = await state.auth_service.provision_totp_start(record.username)
 
     return {
         "status": "pending_confirmation",
@@ -520,12 +589,12 @@ async def provision_totp_confirm(
     (protects against time-drift and typo retries).
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    ok, reason = state.auth_service.provision_totp_confirm(
+    ok, reason = await state.auth_service.provision_totp_confirm(
         record.username, body.totp_code
     )
     if not ok:
@@ -563,23 +632,22 @@ async def provision_totp(
     (Ava Wave 2 Issue C).
     """
     state = backoffice_state
-    record = _get_record_by_id(session.account_id)
+    record = await _get_record_by_id(session.account_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
 
-    prov, _code_set = state.auth_service.provision_totp_start(record.username)
+    prov, _code_set = await state.auth_service.provision_totp_start(record.username)
 
     # Verify the user-supplied code against the freshly-stored seed.
-    ok, reason = state.auth_service.provision_totp_confirm(
+    ok, reason = await state.auth_service.provision_totp_confirm(
         record.username, body.totp_code
     )
     if not ok:
-        # Rollback — remove the newly set seed so the account is back to
-        # its pre-call state and the client can retry cleanly.
-        record.totp_secret = ""
-        record.recovery_codes = None
-        record.force_totp_provision = True
+        # Rollback — clear the newly-set seed in the durable store so the
+        # account is back to its pre-call state and the client can retry
+        # cleanly.
+        await state.auth_service.force_totp_reprovision(record.username)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail={"error": "invalid_totp_code",
                                     "message": "TOTP code did not match. Re-scan the QR code."})
@@ -593,6 +661,90 @@ async def provision_totp(
         "recovery_codes": prov.recovery_codes,  # shown once — client must acknowledge
         "recovery_codes_count": len(prov.recovery_codes),
         "message": "Store these recovery codes securely. They will not be shown again.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step-up TOTP verification (ASVS V6.8.4)
+# ---------------------------------------------------------------------------
+
+class StepUpRequest(BaseModel):
+    totp_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+@router.post("/stepup")
+async def stepup_verify(
+    body: StepUpRequest,
+    session: AdminSession,
+    store=Depends(get_session_store),
+):
+    """
+    Step-up TOTP verification for high-value admin flows (ASVS V6.8.4).
+
+    The admin submits their current TOTP code.  On success, the session's
+    last_totp_verified_at is updated.  The caller may then retry the
+    high-value endpoint that returned step_up_required.  The verification
+    window is YASHIGANI_STEPUP_TTL_SECONDS (default 300 s / 5 min).
+
+    Security guarantees:
+    - Replay prevention: codes are checked against the Postgres-backed
+      used_totp_codes table (same mechanism as login TOTP).
+    - Wrong code: 401, session is NOT updated, TOTP failure counter is
+      incremented on the session prefix.
+    - No credential enumeration: same HTTP 401 body for wrong code or
+      no session.
+    """
+    state = backoffice_state
+
+    # Resolve the admin record to get the TOTP secret.
+    admin_record = await state.auth_service.get_account_by_id(session.account_id)
+    if admin_record is None or not admin_record.totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "totp_not_configured"},
+        )
+
+    # Check per-session step-up failure counter (simple in-memory dict,
+    # keyed on session token prefix — limits to 3 wrong codes then lock).
+    session_prefix = session.token[:8]
+    failure_count = _totp_failures.get(session_prefix, 0)
+    if failure_count >= _TOTP_FAILURE_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "stepup_attempts_exceeded",
+                "message": "Too many failed step-up attempts. Please log out and log in again.",
+            },
+        )
+
+    # Verify against Postgres-backed replay cache (same path as login).
+    async with _pg_tenant_transaction() as conn:
+        ok = await state.auth_service._verify_totp_with_replay(
+            conn, admin_record.totp_secret, body.totp_code
+        )
+
+    if not ok:
+        _totp_failures[session_prefix] = failure_count + 1
+        state.audit_writer.write(_make_stepup_event(admin_record.username, "failure"))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": "invalid_totp_code",
+                "hint": "Ensure your device clock is synchronised.",
+            },
+        )
+
+    # Success — record step-up timestamp in Redis session, clear failure counter.
+    _totp_failures.pop(session_prefix, None)
+    store.record_totp_stepup(session.token)
+    state.audit_writer.write(_make_stepup_event(admin_record.username, "success"))
+
+    from yashigani.auth.stepup import STEPUP_TTL_SECONDS
+    return {
+        "status": "ok",
+        "stepup_verified": True,
+        "ttl_seconds": STEPUP_TTL_SECONDS,
+        "message": "Step-up verified. You may now retry the high-value action.",
     }
 
 
@@ -753,12 +905,11 @@ async def remove_allowed_ip(ip_or_cidr: str, session: AdminSession):
     raise HTTPException(status_code=404, detail={"error": "entry_not_found"})
 
 
-def _get_record_by_id(account_id: str):
+async def _get_record_by_id(account_id: str):
     state = backoffice_state
-    for record in state.auth_service._accounts.values():
-        if record.account_id == account_id:
-            return record
-    return None
+    if state.auth_service is None:
+        return None
+    return await state.auth_service.get_account_by_id(account_id)
 
 
 def _make_login_event(username: str, outcome: str, reason):
@@ -787,4 +938,14 @@ def _make_provision_event(username: str):
     return TotpProvisionCompletedEvent(
         account_tier="admin",
         user_handle=username,
+    )
+
+
+def _make_stepup_event(username: str, outcome: str):
+    from yashigani.audit.schema import AdminLoginEvent
+    return AdminLoginEvent(
+        account_tier="admin",
+        admin_account=username,
+        outcome=f"stepup_{outcome}",
+        failure_reason=None if outcome == "success" else "invalid_totp",
     )
