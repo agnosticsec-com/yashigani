@@ -3,7 +3,7 @@ Yashigani Auth — Argon2id password hashing + HIBP breach check.
 OWASP ASVS V2.4: m=65536, t=3, p=4 minimum parameters.
 OWASP ASVS V2.1.7: Passwords must be checked against breach databases.
 
-Last updated: 2026-05-01T00:37:01+01:00
+Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -182,6 +182,7 @@ def check_hibp(password: str) -> Optional[int]:
     # HIBP k-Anonymity protocol mandates SHA-1 as the wire format (NIST SP 800-63B §5.1.1.2).
     # usedforsecurity=False: signals to hashlib/Bandit that this is a protocol requirement,
     # not a security primitive. The actual password is stored with Argon2id. Closes B324.
+    # nosem: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- HIBP k-Anonymity protocol mandates SHA-1; usedforsecurity=False; not used for cryptographic integrity (NIST SP 800-63B §5.1.1.2)
     sha1_hash = hashlib.sha1(  # noqa: S324
         password.encode("utf-8"), usedforsecurity=False
     ).hexdigest().upper()
@@ -214,6 +215,7 @@ def _check_hibp_urllib(password: str) -> Optional[int]:
 
     # Same HIBP k-Anonymity protocol — SHA-1 mandated by external API.
     # usedforsecurity=False: not a security primitive; closes B324 (Bandit).
+    # nosem: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- HIBP k-Anonymity protocol mandates SHA-1; usedforsecurity=False; not used for cryptographic integrity (NIST SP 800-63B §5.1.1.2)
     sha1_hash = hashlib.sha1(  # noqa: S324
         password.encode("utf-8"), usedforsecurity=False
     ).hexdigest().upper()
