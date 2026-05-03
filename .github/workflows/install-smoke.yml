@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T03:00:00+01:00
+# Last updated: 2026-05-03T03:00:00+01:00
 # install-smoke.yml — Install smoke-test matrix (V232-P1)
 #
 # Matrix: ubuntu-latest × (docker|podman) — GATE
@@ -165,32 +165,64 @@ jobs:
       # amd64 SHA or to use a multi-arch pin + explicit --platform in Dockerfiles
       # (tracked as V232-SMOKE-001 in the v2.23.2 backlog).
       # -----------------------------------------------------------------------
-      # V232-SMOKE-001 (pre-existing): Dockerfiles pin arm64 digest SHAs.
-      # On amd64 GH runners those layers fail with "exec /bin/sh: exec format error".
+      # V232-SMOKE-001 (pre-existing): Dockerfiles AND docker-compose.yml pin arm64
+      # digest SHAs (built/generated on an M-chip Mac dev machine). On amd64 GH
+      # runners those layers fail with "exec /bin/sh: exec format error" for both
+      # images built from source (gateway, backoffice) AND pre-pulled images
+      # (redis, postgres, caddy, prometheus, OPA, loki, jaeger, ollama, etc.).
       # DOCKER_DEFAULT_PLATFORM=linux/amd64 does NOT override an explicit @sha256:
-      # digest in FROM — BuildKit pulls the pinned layer regardless of platform env.
-      # Work-around: patch Dockerfile FROM lines to strip digest pins before build.
-      # The correct permanent fix (Tom's domain) is to update Dockerfile digest pins
-      # to multi-arch manifests or add --platform directives to each FROM instruction.
+      # digest — BuildKit/Docker always pulls the pinned layer regardless.
+      # Work-around: strip @sha256:... from both Dockerfile FROM lines and compose
+      # image: fields before install runs. Permanent fix (Tom's domain): update all
+      # digest pins to amd64 or add explicit --platform directives.
       # Tracked as V232-SMOKE-001 in the v2.23.2 backlog.
       - name: "[ci] Strip arm64 digest pins for amd64 runner compatibility"
         if: matrix.os-label == 'linux'
         run: |
-          # Strip @sha256:... from each FROM line so BuildKit pulls the tag's native
-          # amd64 manifest instead of the pinned arm64 layer. Only affects the local
-          # workspace copy — the committed files are untouched.
+          # Strip @sha256:... from Dockerfile FROM lines and docker-compose image: lines
+          # so BuildKit/Docker pulls the tag's native amd64 manifest instead of the
+          # pinned arm64 layer. Only affects the local workspace copy; committed files
+          # are untouched. Covers both images we build (Dockerfiles) and pre-built
+          # images pulled at runtime (compose image: fields — redis, postgres, caddy,
+          # prometheus, OPA, loki, jaeger, ollama, etc.). Without stripping compose
+          # image pins those containers crash immediately with "exec format error".
           python3 - <<'PYEOF'
           import re, glob
-          for dockerfile in glob.glob("docker/Dockerfile*"):
-              with open(dockerfile) as f:
+
+          DIGEST_RE = re.compile(r'@sha256:[a-f0-9]{64}')
+
+          # Dockerfile FROM lines: FROM <image>@sha256:... [AS stage]
+          for path in glob.glob("docker/Dockerfile*"):
+              with open(path) as f:
                   content = f.read()
-              patched = re.sub(r'(^FROM\s+[^\s]+)@sha256:[a-f0-9]{64}', r'\1', content, flags=re.MULTILINE)
+              patched = re.sub(
+                  r'(^FROM\s+\S+)@sha256:[a-f0-9]{64}',
+                  r'\1',
+                  content,
+                  flags=re.MULTILINE
+              )
               if patched != content:
-                  with open(dockerfile, 'w') as f:
+                  with open(path, 'w') as f:
                       f.write(patched)
-                  print(f"Stripped arm64 digest pins from {dockerfile}")
+                  print(f"Dockerfile stripped: {path}")
               else:
-                  print(f"No digest pins in {dockerfile}")
+                  print(f"Dockerfile no pins: {path}")
+
+          # Compose image: fields: image: <name>@sha256:...
+          for path in glob.glob("docker/docker-compose*.yml"):
+              with open(path) as f:
+                  content = f.read()
+              patched = re.sub(
+                  r'(image:\s*\S+)@sha256:[a-f0-9]{64}',
+                  r'\1',
+                  content
+              )
+              if patched != content:
+                  with open(path, 'w') as f:
+                      f.write(patched)
+                  print(f"Compose stripped: {path}")
+              else:
+                  print(f"Compose no pins: {path}")
           PYEOF
 
       - name: Run installer
