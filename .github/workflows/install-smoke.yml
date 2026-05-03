@@ -142,11 +142,21 @@ jobs:
       # as the default install target, and resolves WORK_DIR from its own script
       # path (the checkout dir). Setting it to $GITHUB_WORKSPACE would trigger
       # the "existing installation" upgrade path and bypass compose build.
+      #
+      # DOCKER_DEFAULT_PLATFORM: the Dockerfiles currently pin arm64-specific
+      # digest SHAs (built on an M-chip Mac dev machine). On amd64 GH runners
+      # those digests fail with "exec format error". Setting DOCKER_DEFAULT_PLATFORM
+      # tells BuildKit to pull the amd64 variant of the multi-arch manifest for
+      # the same image tag, bypassing the pinned digest. This is a temporary
+      # workaround; the correct long-term fix is to update digest pins to the
+      # amd64 SHA or to use a multi-arch pin + explicit --platform in Dockerfiles
+      # (tracked as V232-SMOKE-001 in the v2.23.2 backlog).
       # -----------------------------------------------------------------------
       - name: Run installer
         env:
           YSG_RUNTIME: ${{ matrix.runtime }}
           CI: "true"
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
         run: |
           chmod +x install.sh
           ./install.sh \
@@ -304,19 +314,31 @@ jobs:
         env:
           YSG_RUNTIME: docker
           CI: "true"
+          # See DOCKER_DEFAULT_PLATFORM comment in smoke job: same arm64-pin workaround.
+          # Without this the build fails on arch mismatch rather than our sabotage,
+          # which is still a non-zero exit but we want the test to verify the specific
+          # sabotage path fires, not just any failure.
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
         run: |
           chmod +x install.sh
-          # Run; capture exit code without aborting the step.
-          # The || clause sets sabotage_detected=true when install exits non-zero.
-          if ./install.sh \
+          # Capture install exit code correctly.
+          # MUST NOT pipe through tee here: `cmd | tee` tests tee's exit code (0),
+          # not cmd's, causing a false "sabotage not detected" result even when
+          # install.sh exits non-zero. Redirect stdout+stderr to file directly.
+          set +e
+          ./install.sh \
               --non-interactive \
               --deploy demo \
               --runtime docker \
               --skip-preflight \
-              2>&1 | tee mutation-install.log; then
-            echo "sabotage_detected=false" >> "$GITHUB_OUTPUT"
-          else
+              > mutation-install.log 2>&1
+          install_exit=$?
+          set -e
+          echo "install exit code: $install_exit"
+          if [ "$install_exit" -ne 0 ]; then
             echo "sabotage_detected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sabotage_detected=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: "Assert mutation was detected (install must have exited non-zero)"
