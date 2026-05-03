@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T13:00:00+01:00
+# last-updated: 2026-05-03T14:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1182,14 +1182,18 @@ echo "[remote] restore.sh exit code: \$?"
 
 # V232-SMOKE-013 fix: restore.sh does NOT restart the stack. It restores
 # secrets, .env, and the postgres dump, then prints "Next steps: compose up".
-# Without a restart the containers still hold the pre-restore in-memory state
-# (the backoffice may cache admin credentials or DB connections from before
-# the restore). Restart the stack so containers re-read the restored secrets
-# and reconnect to the restored postgres state.
-echo "[remote] Restarting stack after restore (compose up) ..."
+# V232-SMOKE-014 fix: "compose up -d" alone is a no-op when containers are
+# already running (Podman/Docker don't detect secrets content changes).
+# Must STOP then UP so containers restart, reload bind-mounted secrets, and
+# reconnect to the restored postgres state. Use "stop" not "down" to preserve
+# data volumes. Explicitly restart postgres + pgbouncer first so the DB is
+# ready when backoffice connects.
+echo "[remote] Stopping stack for clean restart after restore ..."
 COMPOSE_CMD="${REMOTE_COMPOSE}"
+YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml stop 2>&1 | tail -3
+echo "[remote] Stack stopped — starting fresh ..."
 YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml up -d 2>&1 | tail -5
-echo "[remote] Stack restarted"
+echo "[remote] Stack restarted after restore"
 REMOTE_SCRIPT
 
     local rc=$?
