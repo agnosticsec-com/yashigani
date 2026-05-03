@@ -1,3 +1,4 @@
+# Last updated: 2026-05-03
 name: Deploy
 
 on:
@@ -32,37 +33,64 @@ jobs:
       - uses: azure/setup-helm@5119fcb9089d432beecbf79bb2c7915207344b78 # v3
         with:
           version: v3.14.0
+      # V232-CSCAN-01c sweep: validate workflow_dispatch inputs before use in
+      # run: blocks.  Env-var indirection used throughout.
+      - name: Validate inputs
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [[ ! "$INPUT_IMAGE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "::error::image_tag '$INPUT_IMAGE_TAG' is not a valid semver — refusing to proceed" >&2
+            exit 1
+          fi
+          if [[ "$INPUT_ENVIRONMENT" != "staging" && "$INPUT_ENVIRONMENT" != "production" ]]; then
+            echo "::error::environment '$INPUT_ENVIRONMENT' must be 'staging' or 'production'" >&2
+            exit 1
+          fi
       - name: Write kubeconfig
         run: |
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > /tmp/kubeconfig
           chmod 600 /tmp/kubeconfig
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: Verify image signatures
-        run: |
-          cosign verify \
-            ghcr.io/${{ github.repository_owner }}/yashigani-gateway:${{ inputs.image_tag }} \
-            --key env://COSIGN_PUBLIC_KEY
-          cosign verify \
-            ghcr.io/${{ github.repository_owner }}/yashigani-backoffice:${{ inputs.image_tag }} \
-            --key env://COSIGN_PUBLIC_KEY
         env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          REPO_OWNER: ${{ github.repository_owner }}
           COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
-      - name: Helm repo add
         run: |
-          helm repo add yashigani https://${{ github.repository_owner }}.github.io/yashigani
+          cosign verify \
+            "ghcr.io/${REPO_OWNER}/yashigani-gateway:${INPUT_IMAGE_TAG}" \
+            --key env://COSIGN_PUBLIC_KEY
+          cosign verify \
+            "ghcr.io/${REPO_OWNER}/yashigani-backoffice:${INPUT_IMAGE_TAG}" \
+            --key env://COSIGN_PUBLIC_KEY
+      - name: Helm repo add
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          helm repo add yashigani "https://${REPO_OWNER}.github.io/yashigani"
           helm repo update
       - name: Helm upgrade --install
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
+          dry_run_flag=""
+          if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+            dry_run_flag="--dry-run"
+          fi
           helm upgrade --install yashigani yashigani/yashigani \
             --namespace yashigani \
             --create-namespace \
-            --set gateway.image.tag=${{ inputs.image_tag }} \
-            --set backoffice.image.tag=${{ inputs.image_tag }} \
-            --values helm/environments/${{ inputs.environment }}.yaml \
+            --set "gateway.image.tag=${INPUT_IMAGE_TAG}" \
+            --set "backoffice.image.tag=${INPUT_IMAGE_TAG}" \
+            --values "helm/environments/${INPUT_ENVIRONMENT}.yaml" \
             --kubeconfig /tmp/kubeconfig \
             --timeout 10m \
             --wait \
-            ${{ inputs.dry_run == 'true' && '--dry-run' || '' }}
+            ${dry_run_flag}
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f /tmp/kubeconfig

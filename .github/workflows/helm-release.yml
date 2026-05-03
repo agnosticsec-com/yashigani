@@ -1,3 +1,4 @@
+# Last updated: 2026-05-03
 name: Helm Release
 
 on:
@@ -20,12 +21,25 @@ jobs:
       - uses: azure/setup-helm@5119fcb9089d432beecbf79bb2c7915207344b78 # v3
         with:
           version: v3.14.0
+      # V232-CSCAN-01c: guard step — reject any head_branch that is not a
+      # semver release tag before any consumer step uses it.  Env-var
+      # indirection is used throughout; the expression never reaches the
+      # shell parser as expanded YAML text.
+      - name: Validate head_branch is a release tag
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [[ ! "$HEAD_BRANCH" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?$ ]]; then
+            echo "::error::head_branch '$HEAD_BRANCH' is not a release tag — refusing to proceed" >&2
+            exit 1
+          fi
       - name: Lint chart
         run: helm lint helm/yashigani/
       - name: Update appVersion from tag
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          TAG="${{ github.event.workflow_run.head_branch }}"
-          APP_VERSION="${TAG#refs/tags/v}"
+          APP_VERSION="${HEAD_BRANCH#v}"
           sed -i "s/^appVersion:.*/appVersion: \"${APP_VERSION}\"/" helm/yashigani/Chart.yaml
           sed -i "s/^version:.*/version: ${APP_VERSION}/" helm/yashigani/Chart.yaml
       - name: Helm dep update
