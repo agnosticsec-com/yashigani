@@ -127,6 +127,18 @@ jobs:
       - name: Check for forbidden sudo patterns
         run: bash scripts/lint_sudo_pattern.sh .
 
+  lint-tmp-paths:
+    runs-on: ubuntu-latest
+    # V232-P23: fail if any host-side installer, restore, or script introduces
+    # /tmp/ file paths (feedback_no_tmp.md — all work must stay under the
+    # install dir, never /tmp). Excludes legitimate container-internal paths
+    # (Dockerfile RUN layers, Helm tmpfs mounts, SSH heredoc VM-side paths).
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check for host-filesystem /tmp/ paths
+        run: bash scripts/lint_tmp_paths.sh .
+
   lint-safe-error-envelope:
     runs-on: ubuntu-latest
     # V232-CSCAN-01e: fail if any route or gateway file inlines str(exc) directly

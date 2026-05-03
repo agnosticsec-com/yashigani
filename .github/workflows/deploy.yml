@@ -50,8 +50,9 @@ jobs:
           fi
       - name: Write kubeconfig
         run: |
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > /tmp/kubeconfig
-          chmod 600 /tmp/kubeconfig
+          # V232-NEG04: use $RUNNER_TEMP (per-job secure dir) instead of /tmp
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
+          chmod 600 "${RUNNER_TEMP}/kubeconfig"
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: Verify image signatures
         env:
@@ -87,10 +88,10 @@ jobs:
             --set "gateway.image.tag=${INPUT_IMAGE_TAG}" \
             --set "backoffice.image.tag=${INPUT_IMAGE_TAG}" \
             --values "helm/environments/${INPUT_ENVIRONMENT}.yaml" \
-            --kubeconfig /tmp/kubeconfig \
+            --kubeconfig "${RUNNER_TEMP}/kubeconfig" \
             --timeout 10m \
             --wait \
             ${dry_run_flag}
       - name: Cleanup kubeconfig
         if: always()
-        run: rm -f /tmp/kubeconfig
+        run: rm -f "${RUNNER_TEMP}/kubeconfig"

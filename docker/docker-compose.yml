@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-05-03T05:30:00+01:00
+# Last updated: 2026-05-03T12:00:00+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -119,6 +119,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (caddy.yaml:49-51).
+    # NET_BIND_SERVICE required: Caddy binds privileged ports 80 and 443.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     # v2.23.1: Caddy is the FIRST container to start — no depends_on.
     # It tolerates 502s on upstreams until gateway/backoffice come up;
     # external traffic still reaches it immediately for health checks.
@@ -214,6 +218,9 @@ services:
       # Override with YASHIGANI_APPARMOR_PROFILE=unconfined on hosts without
       # AppArmor (macOS, rootless Podman without profile loaded).
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (gateway.yaml:55-56).
+    # No cap_add: gateway binds port 8080 (non-privileged).
+    cap_drop: [ALL]
     depends_on:
       redis:
         condition: service_healthy
@@ -334,6 +341,9 @@ services:
       # Backoffice shares the gateway AppArmor profile (same Python/FastAPI
       # surface). A dedicated yashigani-backoffice profile may ship later.
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (backoffice.yaml:104-105).
+    # No cap_add: backoffice binds port 8443 (non-privileged).
+    cap_drop: [ALL]
     healthcheck:
       # mTLS — Pattern A for Python ssl: trust anchor is the public ca_root.crt
       # (Py 3.12/OpenSSL 3.0 strict-chain rejects intermediate-only — gate #58a).
@@ -401,6 +411,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (open-webui.yaml:90,110).
+    # No cap_add: open-webui binds port 8080 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: open-webui calls gateway via http://gateway:8080/v1 — this is
     # the one approved direct-to-gateway path (user-facing LLM calls, not admin
     # control plane). open-webui is itself behind Caddy (:443/open-webui/*) so
@@ -451,6 +464,9 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (budget-redis.yaml:49).
+    # No cap_add: redis binds port 6380 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: budget-redis is a data-plane dep of gateway/backoffice only.
     networks:
       - data
@@ -492,6 +508,9 @@ services:
       # and fails-closed per request if OPA is unreachable (deny by default).
       # Healthcheck is re-enabled in K8s only.
       disable: true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (policy.yaml:36).
+    # No cap_add: OPA binds ports 8181/8282 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: OPA is a data-plane dep only. Never needs to reach caddy_internal.
     networks:
       - data
@@ -537,6 +556,9 @@ services:
       retries: 5
     # No depends_on — redis_password is written by the installer to docker/secrets/
     # before compose starts. Removed backoffice dependency to break cycle.
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (redis.yaml:51).
+    # No cap_add: redis binds port 6380 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: redis is a data-plane dep only.
     networks:
       - data
@@ -564,6 +586,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (ollama.yaml:42).
+    # No cap_add: ollama binds port 11434 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: ollama is a data-plane dep. Joins `data` for gateway/backoffice
     # calls and `edge` for model pulls from registry.ollama.ai (needs internet).
     networks:
@@ -608,6 +633,9 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (init job).
+    # No cap_add: no privileged-port binding.
+    cap_drop: [ALL]
     # EX-231-10: ollama-init needs data (ollama DNS) + edge (model pull).
     networks:
       - data
@@ -651,6 +679,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (prometheus.yaml:116).
+    # No cap_add: prometheus binds port 9090 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: prometheus scrapes gateway/backoffice VIA Caddy (:8444/:8445).
     # Must be on `obs` (same network as Caddy). Does NOT join `data`.
     # Caddy also joins `obs`, so Prometheus can resolve `caddy` by name here.
@@ -691,6 +722,9 @@ services:
         condition: service_healthy
       backoffice:
         condition: service_healthy
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (grafana.yaml:41).
+    # No cap_add: grafana binds port 3000 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: grafana is obs-plane only.
     networks:
       - obs
@@ -726,6 +760,9 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (postgres.yaml:67).
+    # No cap_add: postgres binds port 5432 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: postgres is data-plane only.
     networks:
       - data
@@ -771,6 +808,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (pgbouncer.yaml:50).
+    # No cap_add: pgbouncer binds port 5432 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: pgbouncer is data-plane only.
     networks:
       - data
@@ -799,6 +839,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (alertmanager.yaml:38).
+    # No cap_add: alertmanager binds port 9093 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: alertmanager is obs-plane only (receives from prometheus).
     networks:
       - obs
@@ -821,6 +864,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (loki.yaml:39).
+    # No cap_add: loki binds port 3100 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: loki is obs-plane only.
     networks:
       - obs
@@ -846,6 +892,10 @@ services:
       retries: 3
     depends_on:
       - loki
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart for promtail.
+    # No cap_add: promtail binds port 9080 (non-privileged). Docker socket access
+    # is via bind mount (read-only), not a capability.
+    cap_drop: [ALL]
     # EX-231-10: promtail ships logs to loki, obs-plane only.
     networks:
       - obs
@@ -877,6 +927,9 @@ services:
       retries: 3
     depends_on:
       - jaeger
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (otel-collector.yaml:56).
+    # No cap_add: otel-collector binds ports 4317/4318 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: otel-collector receives traces from gateway/backoffice (OTLP
     # push, not pull). gateway/backoffice are on `data`. otel-collector needs
     # to be reachable from `data` to receive OTLP pushes.
@@ -918,6 +971,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (jaeger.yaml:48).
+    # No cap_add: jaeger binds ports 14269/16686/4317 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: jaeger is obs-plane only.
     networks:
       - obs
@@ -957,6 +1013,9 @@ services:
       start_period: 60s
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (test-idp profile).
+    # No cap_add: keycloak binds port 9000 (non-privileged; dev-mode).
+    cap_drop: [ALL]
     # EX-231-10: keycloak is the upstream IdP for backoffice SSO redirect.
     # Backoffice reaches it on `data`; keycloak itself doesn't need caddy_internal.
     networks:
@@ -974,6 +1033,9 @@ services:
     restart: unless-stopped
     mem_limit: ${YASHIGANI_VAULT_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_VAULT_CPU_LIMIT:-0.5}
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (vault profile).
+    # IPC_LOCK required: Vault uses mlock(2) to prevent secrets swapping to disk.
+    cap_drop: [ALL]
     cap_add:
       - IPC_LOCK
     environment:
@@ -1037,6 +1099,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (agent-bundles.yaml:53).
+    # No cap_add: langflow binds port 7860 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: langflow calls gateway via http://gateway:8080/v1 (same as
     # open-webui). Joins `data` for gateway DNS. Does NOT join caddy_internal.
     networks:
@@ -1077,6 +1142,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (agent-bundles.yaml:53).
+    # No cap_add: letta binds port 8283 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: letta calls gateway + postgres, both on `data`.
     networks:
       - data
@@ -1130,6 +1198,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (openclaw profile).
+    # No cap_add: openclaw binds port 18789 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: openclaw calls gateway (data) + needs internet for webhooks (edge).
     networks:
       - data
@@ -1176,6 +1247,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (wazuh profile).
+    # No cap_add: wazuh-manager uses standard ports (55000/1514/1515).
+    cap_drop: [ALL]
     # EX-231-10: wazuh receives audit events from backoffice/gateway sinks.
     # Both gateway/backoffice are on `data`, so wazuh-manager joins `data`.
     # Also joins `obs` for indexer (wazuh-indexer is on obs).
@@ -1201,6 +1275,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (wazuh profile).
+    # No cap_add: wazuh-indexer binds port 9200 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: wazuh-indexer is obs-plane (receives from wazuh-manager).
     networks:
       - obs
@@ -1235,6 +1312,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (wazuh profile).
+    # No cap_add: wazuh-dashboard binds port 5601 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: wazuh-dashboard is obs-plane (queries indexer + manager).
     networks:
       - obs
@@ -1266,6 +1346,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (internal-ca profile).
+    # No cap_add: step-ca binds port 9000 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: step-ca issues certs for internal services; data-plane dep.
     networks:
       - data
