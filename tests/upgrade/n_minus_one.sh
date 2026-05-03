@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T21:15:00+01:00
+# last-updated: 2026-05-03T02:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1316,14 +1316,37 @@ WORK="${HARNESS_WORK_DIR}"
 RUNTIME="${RUNTIME}"
 COMPOSE_CMD="${REMOTE_COMPOSE}"
 
+# safe_rm_rf: handles directories with Podman rootless sub-UID-owned files
+# (e.g. docker/secrets/ after _pki_chown_client_keys in install.sh).
+# Falls back to plain rm -rf when podman unshare is not available (Docker-only VM).
+safe_rm_rf() {
+    local dir="\$1"
+    [ -d "\$dir" ] || return 0
+    if command -v podman >/dev/null 2>&1 && podman unshare echo "probe" >/dev/null 2>&1; then
+        podman unshare rm -rf "\$dir"
+    else
+        rm -rf "\$dir"
+    fi
+}
+
 # Tear down final stack
 if [ -d "\$WORK/docker" ]; then
     cd "\$WORK"
     YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml down -v --remove-orphans 2>&1 || true
 fi
 
-# Remove all harness dirs
-rm -rf "\$WORK" "\${WORK}_old" "\${WORK}_new" "\${WORK}_reup" 2>/dev/null || true
+# Remove all harness dirs (safe_rm_rf handles sub-UID-owned secrets files)
+for d in "\$WORK" "\${WORK}_old" "\${WORK}_new" "\${WORK}_reup"; do
+    safe_rm_rf "\$d" 2>/dev/null || true
+done
+
+# Verify gone
+for d in "\$WORK" "\${WORK}_old" "\${WORK}_new" "\${WORK}_reup"; do
+    if [ -d "\$d" ]; then
+        echo "[remote] WARNING: \$d still present after cleanup"
+    fi
+done
+
 echo "[remote] Cleanup complete"
 REMOTE_SCRIPT
 }
