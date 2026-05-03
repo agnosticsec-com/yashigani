@@ -179,13 +179,60 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 
 ## 7. Tagging
 
+### 7.1 Signing method
+
+All release tags from v2.23.1 onward are **GPG-signed** (annotated tag objects with a PGP signature). The signing key identity is `releases@agnosticsec.com`.
+
+Signing is handled automatically by CI (`.github/workflows/tag-sign.yml`):
+
+1. Push the annotated tag to `origin`.
+2. The `tag-sign.yml` workflow imports the `GPG_PRIVATE_KEY` secret, deletes the unsigned tag, re-creates it as a signed tag at the same commit, verifies the signature, and force-pushes it back.
+3. Downstream: `build-push.yml` and `release.yml` trigger on the tag and build/sign/publish images (cosign keyless) + SBOM.
+
+Tag consumers should always fetch with `--force` to pick up the re-signed object:
+
+```sh
+git fetch --tags --force origin
+git tag -v v2.23.2    # expects: "Good signature from releases@agnosticsec.com"
+```
+
+### 7.2 Pushing a tag (Captain — Gate 14)
+
 ```sh
 # On branch 2.23.x, tip at the release SHA:
-git tag -a "v2.23.1" -m "Yashigani v2.23.1"
-git push origin "v2.23.1"
+git tag -a "v2.23.2" -m "Yashigani v2.23.2
+
+<paste release headline bullets here>"
+git push origin "v2.23.2"
+# CI tag-sign.yml signs it automatically; wait for the workflow to complete
+# then verify:
+git fetch --tags --force origin
+git tag -v v2.23.2
 ```
 
 The `build-push.yml` and `release.yml` workflows trigger automatically on `v*.*.*` tags and handle image build, cosign signing, SBOM generation, and GitHub release creation.
+
+### 7.3 Local signing (offline / emergency)
+
+If CI is unavailable, use the local signing script (requires GPG key on dev machine):
+
+```sh
+bash scripts/sign_release_tag.sh v2.23.2 <commit-sha>
+```
+
+See `scripts/sign_release_tag.sh` for prerequisites and key setup instructions.
+
+### 7.4 Retroactive signing of existing unsigned tags
+
+If a tag was pushed without a signature, dispatch the `tag-sign.yml` workflow manually:
+
+```
+GitHub -> Actions -> "Tag -- GPG Sign & Verify" -> Run workflow
+  tag: v2.23.1
+  commit_sha: 733c3624ed04bc51e1982fca690b33232861884a
+```
+
+The workflow re-creates the tag as signed at the same commit and force-pushes it. This is a corrective action and must be noted in the release retro (finding V232-NEG02).
 
 ---
 
@@ -196,3 +243,85 @@ The `build-push.yml` and `release.yml` workflows trigger automatically on `v*.*.
 3. Archive the release evidence directory to long-term storage.
 4. Write the release retro (ISO 9001 §9.3/10.2/10.3) at `/Internal/Compliance/yashigani/v<ver>/retro.md`.
 5. Open the next version milestone on GitHub.
+
+---
+
+## 9. GPG Release Signing Key Setup (one-time, per team)
+
+This section documents the one-time key-generation ceremony. It must be performed by Tiago or a designated release manager with access to add GitHub repository secrets.
+
+### 9.1 Generate the key
+
+```sh
+gpg --full-generate-key
+# Choose: (1) RSA and RSA  -- or (4) RSA (sign only) for a dedicated signing key
+# Key size: 4096
+# Expiry: 2y  (renew before expiry; update docs/release-signing-key.asc on renewal)
+# Real name: Agnostic Security Releases
+# Email: releases@agnosticsec.com
+# Comment: (leave blank)
+```
+
+### 9.2 Export private key (for GitHub Secrets)
+
+```sh
+gpg --armor --export-secret-keys releases@agnosticsec.com
+# Copy the full armored block including -----BEGIN PGP PRIVATE KEY BLOCK-----
+# Store as GitHub Secret: GPG_PRIVATE_KEY
+# Store the passphrase as: GPG_PASSPHRASE
+```
+
+### 9.3 Export public key (for in-repo trust anchor)
+
+```sh
+gpg --armor --export releases@agnosticsec.com > docs/release-signing-key.asc
+git add docs/release-signing-key.asc
+git commit -m "chore(pki): add GPG release signing public key (releases@agnosticsec.com)"
+```
+
+### 9.4 Configure GitHub Secrets
+
+In the yashigani repository settings -> Secrets and variables -> Actions:
+
+| Secret name | Content |
+|-------------|---------|
+| `GPG_PRIVATE_KEY` | Armored private key block from §9.2 |
+| `GPG_PASSPHRASE` | Passphrase chosen during key generation |
+
+### 9.5 Verify CI signing works
+
+Push a test tag on a non-main branch (e.g. `v0.0.0-test`) and confirm the `tag-sign.yml` workflow completes with "Signature: GOOD". Delete the test tag afterward.
+
+### 9.6 Status — v2.23.2 release (V232-N03 / V232-NEG02)
+
+The GPG key for `releases@agnosticsec.com` has NOT yet been generated as of 2026-05-02. This is a **required prerequisite** before:
+
+- Cutting the v2.23.2 release tag.
+- Retroactively signing the v2.23.1 tag via `tag-sign.yml` workflow dispatch.
+
+**Tiago action required:** complete §9.1 through §9.4, then dispatch `tag-sign.yml` with:
+- `tag: v2.23.1`
+- `commit_sha: 733c3624ed04bc51e1982fca690b33232861884a`
+
+This closes V232-N03 (new signing infrastructure) and V232-NEG02 (retroactive v2.23.1 signing).
+
+---
+
+## 10. Tag signature verification (for end users and auditors)
+
+All Yashigani releases from v2.23.1 onward are signed with the Agnostic Security GPG release key. To verify:
+
+```sh
+# 1. Import the Agnostic Security release signing public key (once):
+gpg --import docs/release-signing-key.asc
+
+# 2. Fetch tags (force-refresh in case a tag was re-signed):
+git fetch --tags --force origin
+
+# 3. Verify the tag signature:
+git tag -v v2.23.2
+# Expected output includes:
+# "Good signature from 'Agnostic Security Releases <releases@agnosticsec.com>'"
+```
+
+Container image signatures (gateway and backoffice) are verified separately via cosign. See `scripts/sign_image.sh` for commands.

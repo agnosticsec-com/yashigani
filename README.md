@@ -33,10 +33,11 @@
 2. [The Problem It Solves](#2-the-problem-it-solves)
 3. [Pre-flight Checklist](#3-pre-flight-checklist)
 4. [How to Deploy](#4-how-to-deploy)
-5. [Compliance](#5-compliance)
-6. [Current Release Highlights](#6-current-release-highlights)
-7. [Feature Matrix by Tier](#7-feature-matrix-by-tier)
-8. [Our commitment to the OSS Community](#8-our-commitment-to-the-oss-community)
+5. [Verifying a Release](#5-verifying-a-release)
+6. [Compliance and Security Posture](#6-compliance-and-security-posture)
+7. [Current Release Highlights](#7-current-release-highlights)
+8. [Feature Matrix by Tier](#8-feature-matrix-by-tier)
+9. [Our commitment to the OSS Community](#9-our-commitment-to-the-oss-community)
 
 For architectural detail (request flow, components, network isolation, identity model), the full per-version feature history, the complete feature list, deployment topologies, and roadmap context, see [Architecture.md](Architecture.md).
 
@@ -128,7 +129,38 @@ For deployment topology diagrams and the full per-runtime breakdown, see [Archit
 
 ---
 
-## 5. Compliance
+## 5. Verifying a Release
+
+All Yashigani releases from v2.23.1 onward are cryptographically signed. Two signatures are provided for each release:
+
+**Git tag signature (GPG)** — verifies the source commit is authentic and unchanged:
+
+```sh
+# Import the Agnostic Security release signing public key (once):
+gpg --import docs/release-signing-key.asc
+
+# Fetch tags (in case a tag was updated):
+git fetch --tags --force origin
+
+# Verify:
+git tag -v v2.23.1
+# Expected: "Good signature from 'Agnostic Security Releases <releases@agnosticsec.com>'"
+```
+
+**Container image signature (cosign / Sigstore)** — verifies the published container images match the release tag:
+
+```sh
+cosign verify \
+  --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
+  --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
+```
+
+For the full release verification process and SBOM attestation commands, see [`docs/release-process.md §10`](docs/release-process.md).
+
+---
+
+## 6. Compliance and Security Posture
 
 Yashigani publishes per-control compliance evidence under `docs/compliance/`. The compliance suite covers OWASP ASVS v5 Level 3 (all chapters), OWASP API Security, OWASP Agentic AI / LLM Top 10, plus framework-specific reports. Per-control verdicts are PASS / PARTIAL / FAIL / N/A with file:line evidence; open exceptions are tracked in the risk register (5×5 matrix with quantitative analysis). Pre-release gate: all PARTIAL/FAIL items must have an accepted-exception entry before any tag is created.
 
@@ -136,7 +168,7 @@ For a more detailed explanation, see the [Compliance Reports](docs/compliance/RE
 
 ---
 
-## 6. Current Release Highlights
+## 7. Current Release Highlights
 
 Two in-flight releases on the v2.23 line. v2.23.0 is the single-branch / API-first / strict-CSP foundation; v2.23.1 layers core-plane mTLS, the two-tier PKI, and the full pre-release Lu / Ava review hardening on top of it. For the full per-version history (v0.1.0 → v2.22.x), see [Architecture.md §4 Security Features by Version](Architecture.md#4-security-features-by-version).
 
@@ -230,9 +262,9 @@ v2.23.0 consolidates Yashigani to a single branch. The `release/1.x` branch is e
 
 ---
 
-## 7. Feature Matrix by Tier
+## 8. Feature Matrix by Tier
 
-The table below lists only rows that **differ across tiers**. Rows that are identical across all seven tiers are listed in [§7.1 Common features](#71-common-features). For the complete per-feature breakdown by version, see [Architecture.md §5 Complete Feature List](Architecture.md#5-complete-feature-list).
+The table below lists only rows that **differ across tiers**. Rows that are identical across all seven tiers are listed in [§8.1 Common features](#81-common-features). For the complete per-feature breakdown by version, see [Architecture.md §5 Complete Feature List](Architecture.md#5-complete-feature-list).
 
 | Feature | Community | Non-profit & Education | Igniter | Starter | Professional | Professional Plus | Enterprise |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -269,7 +301,7 @@ Paid tiers support optional 50- or 250-user bundles to grow within a tier before
 
 Each tier's maximum bundle spend is set just below the next tier's base price — at that point, upgrading delivers more capacity, features, and better value per user. Igniter has no bundles; upgrade to Starter at 51+ users.
 
-### 7.1 Common features
+### 8.1 Common features
 
 The following features are included in **all seven tiers** at parity. They are deliberately not gated by license tier — they are core to what Yashigani is.
 
@@ -356,7 +388,7 @@ The following features are included in **all seven tiers** at parity. They are d
 
 ---
 
-## 8. Our commitment to the OSS Community
+## 9. Our commitment to the OSS Community
 
 Agnostic Security will donate 10% of the Yashigani platform sales profits to the open-source projects that we use, as long as they are registered as non-for-profit organizations.
 We might also decide to sponsor other Open-Source projects that we use in some way.
