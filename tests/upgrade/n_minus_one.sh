@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T10:45:00+01:00
+# last-updated: 2026-05-03T11:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1223,7 +1223,14 @@ safe_rm_rf "\$NEW_DIR"
 git clone --depth 1 --branch "\$NEW_REF" "\$REPO" "\$NEW_DIR"
 
 echo "[remote] Migrating secrets from restored state ..."
-cp -rp "\$OLD_DIR/docker/secrets" "\$NEW_DIR/docker/secrets"
+# V232-SMOKE-007 fix (re-upgrade): after restore.sh runs _pki_chown_client_keys,
+# secrets in OLD_DIR are re-owned by container sub-UIDs. Use podman unshare for
+# the copy so sub-UID ownership does not cause EACCES. Same pattern as run_backup.
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    podman unshare bash -c "cp -rp '\$OLD_DIR/docker/secrets' '\$NEW_DIR/docker/secrets'"
+else
+    cp -rp "\$OLD_DIR/docker/secrets" "\$NEW_DIR/docker/secrets"
+fi
 cp "\$OLD_DIR/docker/.env" "\$NEW_DIR/docker/.env"
 
 echo "[remote] Running install.sh --upgrade (re-upgrade) ..."
