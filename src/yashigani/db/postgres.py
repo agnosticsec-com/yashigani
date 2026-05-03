@@ -19,12 +19,26 @@ AES-GCM nonce / IV uniqueness guarantee (ASVS 11.3.4):
   There is no application-level AES-GCM cipher usage outside pgcrypto;
   all symmetric encryption is delegated to pgp_sym_encrypt/pgp_sym_decrypt.
   No manual nonce management is required or performed.
+
+Restart resilience (RETRO-R4-2):
+  asyncpg pools drop broken connections automatically: when postgres restarts,
+  the next acquire() call on a stale connection raises
+  asyncpg.exceptions.PostgresConnectionError (or TLSError during the mTLS
+  handshake). asyncpg.Pool swallows the broken connection and opens a fresh
+  one. The application does NOT need explicit reconnect logic for normal
+  query paths.
+
+  The advisory-lock path (psycopg2, bootstrap/migration) is different:
+  psycopg2.connect() has no default connect timeout and hangs indefinitely
+  when postgres is mid-restart. We set connect_timeout=30 on that connection
+  (see app.py) via a dedicated helper: connect_with_retry_sync().
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -35,6 +49,13 @@ logger = logging.getLogger(__name__)
 
 _pool: Pool | None = None
 _AES_KEY_ENV = "YASHIGANI_DB_AES_KEY"
+
+# Per-connection establishment timeout. asyncpg's default is 60 s; we reduce
+# to 15 s so a postgres restart (which causes pgbouncer to return connection
+# refused briefly) fails fast rather than blocking the lifespan for a minute.
+# The pool will retry on the next acquire() — total user-visible wait is
+# bounded by command_timeout (10 s) on the query, not the connect timeout.
+_CONNECT_TIMEOUT_S = 15
 
 
 async def create_pool() -> Pool:
@@ -59,12 +80,66 @@ async def create_pool() -> Pool:
         min_size=2,
         max_size=10,
         max_inactive_connection_lifetime=300,
+        # RETRO-R4-2: cap per-connection establishment at 15 s so a postgres
+        # restart (connection refused window) fails fast. asyncpg pool will
+        # retry on the next acquire().
+        timeout=_CONNECT_TIMEOUT_S,
         command_timeout=10,
         statement_cache_size=0,
         init=_init_connection,
     )
-    logger.info("Postgres pool created (PgBouncer DSN, statement_cache_size=0 for txn-pool)")
+    logger.info("Postgres pool created (PgBouncer DSN, statement_cache_size=0 for txn-pool, connect_timeout=%ds)", _CONNECT_TIMEOUT_S)
     return _pool
+
+
+def connect_with_retry_sync(dsn: str, *, max_attempts: int = 5, backoff_s: float = 3.0, connect_timeout: int = 15) -> "psycopg2.extensions.connection":  # type: ignore[name-defined]
+    """
+    Connect to postgres synchronously (psycopg2) with retry + connect_timeout.
+
+    RETRO-R4-2: the advisory lock path (run_migrations + bootstrap in app.py)
+    uses a bare psycopg2 connection that previously had no connect timeout.
+    When postgres restarts mid-lifespan, psycopg2.connect() hangs indefinitely
+    (TCP SYN_SENT with no server to accept). Fix:
+      - Add connect_timeout=N (passed as a DSN parameter, or via dsn_params).
+      - Retry with exponential backoff for up to max_attempts if the connection
+        fails with OperationalError (connection refused, server starting up).
+      - Raise after max_attempts so the lifespan fails loudly rather than
+        hanging the process.
+
+    Callers: yashigani.db.__init__.run_migrations(), backoffice.app.lifespan().
+    """
+    import psycopg2
+    from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+
+    # Inject connect_timeout into the DSN query string without breaking the URL.
+    parsed = urlparse(dsn)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    params.setdefault("connect_timeout", [str(connect_timeout)])
+    new_query = urlencode({k: v[0] for k, v in params.items()})
+    dsn_with_timeout = urlunparse(parsed._replace(query=new_query))
+
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            conn = psycopg2.connect(dsn_with_timeout)
+            if attempt > 1:
+                logger.info("connect_with_retry_sync: connected on attempt %d", attempt)
+            return conn
+        except psycopg2.OperationalError as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                wait = backoff_s * attempt
+                logger.warning(
+                    "connect_with_retry_sync: attempt %d/%d failed (%s) — retrying in %.1fs",
+                    attempt, max_attempts, exc, wait,
+                )
+                time.sleep(wait)
+            else:
+                logger.error(
+                    "connect_with_retry_sync: all %d attempts failed — giving up",
+                    max_attempts,
+                )
+    raise psycopg2.OperationalError(f"Failed to connect after {max_attempts} attempts") from last_exc
 
 
 async def _init_connection(conn: Connection) -> None:

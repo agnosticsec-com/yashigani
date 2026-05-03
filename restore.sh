@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-02T23:10:00+01:00 (fix RESTORE-4: BSD sed -i portability — use sed -i "" for macOS)
+# Last updated: 2026-05-02T00:00:00+01:00 (RETRO-R4-1/R4-3: CA bundle parity + openssl dgst verify; RETRO-R4-4: BSD sed portability)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -331,6 +331,80 @@ validate_backup() {
     fi
   else
     log_warn "No postgres_dump.sql in backup — DB will start empty post-restore"
+  fi
+
+  # RETRO-R4-3: verify backup manifest signature if present.
+  # install.sh signs the manifest with the CA intermediate private key.
+  # We verify using the public key extracted from ca_intermediate.crt.
+  #
+  # If both MANIFEST.sha256 and MANIFEST.sha256.sig are present, the
+  # signature MUST be valid — a bad signature is a hard FAIL (evidence of
+  # tampering). If the manifest is absent, emit a warning (unsigned backup
+  # from a pre-RETRO-R4-3 install or --force recovery scenario).
+  local _manifest="${backup_dir}/MANIFEST.sha256"
+  local _sig="${backup_dir}/MANIFEST.sha256.sig"
+  local _ca_cert="${backup_dir}/secrets/ca_intermediate.crt"
+
+  if [[ -f "$_manifest" && -f "$_sig" ]]; then
+    if [[ ! -f "$_ca_cert" ]]; then
+      log_error "RETRO-R4-3: MANIFEST.sha256.sig present but ca_intermediate.crt missing from backup/secrets/ — cannot verify"
+      errors=$((errors + 1))
+    else
+      # Extract public key from the intermediate cert, then verify.
+      # openssl dgst -verify reads a raw public key PEM file (not a cert).
+      local _pubkey_file
+      _pubkey_file=$(mktemp /tmp/ysg-pubkey-XXXXXXXX.pem 2>/dev/null || mktemp)
+      trap 'rm -f "$_pubkey_file"' RETURN
+      if ! openssl x509 -in "$_ca_cert" -noout -pubkey > "$_pubkey_file" 2>/dev/null; then
+        log_error "RETRO-R4-3: Failed to extract public key from ca_intermediate.crt"
+        errors=$((errors + 1))
+      elif ! openssl dgst -sha256 -verify "$_pubkey_file" -signature "$_sig" "$_manifest" >/dev/null 2>&1; then
+        log_error "RETRO-R4-3: Backup signature verification FAILED — backup may be tampered"
+        log_error "  Manifest: ${_manifest}"
+        log_error "  Signature: ${_sig}"
+        log_error "  Cert: ${_ca_cert}"
+        errors=$((errors + 1))
+      else
+        log_success "Backup manifest signature verified (RETRO-R4-3)"
+        # Also verify manifest content hashes match current files on disk.
+        # This catches partial writes / truncations even without sig tampering.
+        local _hash_errors=0
+        while IFS= read -r _line; do
+          local _hash _relpath
+          _hash="${_line%% *}"
+          _relpath="${_line##* }"
+          local _fpath="${backup_dir}/${_relpath}"
+          if [[ ! -f "$_fpath" ]]; then
+            log_error "RETRO-R4-3: Manifest references missing file: ${_relpath}"
+            _hash_errors=$((_hash_errors + 1))
+          else
+            local _actual_hash
+            _actual_hash=$(sha256sum "$_fpath" | awk '{print $1}')
+            if [[ "$_actual_hash" != "$_hash" ]]; then
+              log_error "RETRO-R4-3: Manifest hash mismatch for ${_relpath} (expected ${_hash}, got ${_actual_hash})"
+              _hash_errors=$((_hash_errors + 1))
+            fi
+          fi
+        done < "$_manifest"
+        if [[ "$_hash_errors" -gt 0 ]]; then
+          log_error "RETRO-R4-3: ${_hash_errors} file(s) do not match manifest — backup is corrupt"
+          errors=$((errors + _hash_errors))
+        else
+          log_success "Backup manifest content hashes verified (${_hash_errors} mismatches)"
+        fi
+      fi
+      rm -f "$_pubkey_file" 2>/dev/null || true
+      trap - RETURN
+    fi
+  elif [[ -f "$_sig" && ! -f "$_manifest" ]]; then
+    log_error "RETRO-R4-3: MANIFEST.sha256.sig present but MANIFEST.sha256 missing — backup is corrupt"
+    errors=$((errors + 1))
+  else
+    log_warn "RETRO-R4-3: Backup has no manifest signature (pre-RETRO-R4-3 backup or unsigned)"
+    log_warn "  Integrity cannot be cryptographically verified. Use --force to proceed."
+    log_warn "  New backups created by install.sh >= RETRO-R4-3 include a signed manifest."
+    # Not a hard error — operator may be restoring a legacy backup.
+    # --force callers are already warned by the outer validate_backup caller.
   fi
 
   if [[ "$errors" -gt 0 ]]; then
@@ -672,17 +746,23 @@ _pki_chown_client_keys() {
 # ---------------------------------------------------------------------------
 # BUG-4 (v2.23.1): Refresh PGDATA-cached CA + server cert after PKI restore
 # ---------------------------------------------------------------------------
-# Postgres caches the CA root + server leaf inside PGDATA at first initdb
-# (docker/postgres/05-enable-ssl.sh installs ca_root.crt -> ${PGDATA}/root.crt,
-# postgres_client.crt -> server.crt, postgres_client.key -> server.key). On a
-# fresh install the CA in PGDATA and the CA in /run/secrets/ca_root.crt are
-# the same. After a restore, /run/secrets/ now carries the BACKUPs CA but
-# PGDATA still has the in-place install CA -- every mTLS handshake against
+# Postgres caches the CA trust bundle + server leaf inside PGDATA at first initdb.
+# install.sh (05-enable-ssl.sh upgrade path) writes:
+#   cat ca_root.crt ca_intermediate.crt > ${PGDATA}/root.crt   (trust bundle)
+#   postgres_client.crt -> server.crt
+#   postgres_client.key -> server.key
+# On a fresh install the bundle in PGDATA and the CAs in /run/secrets/ are
+# the same. After a restore, /run/secrets/ now carries the BACKUP's CAs but
+# PGDATA still has the in-place install bundle -- every mTLS handshake against
 # pgbouncer fails because pgbouncer presents a leaf signed by the restored CA
 # while PGDATA root.crt only trusts the in-place CA.
 #
-# Fix: copy the restored CA + restored postgres leaf from /run/secrets into
-# PGDATA, then pg_ctl reload (no restart needed -- TLS material is reloadable).
+# RETRO-R4-1: root.crt is a concatenated bundle (root + intermediate). The
+# previous restore wrote only ca_root.crt, leaving a partial chain that
+# postgres rejected for verify-ca peer-cert validation.
+#
+# Fix: cat both certs (matching install.sh exactly), install postgres leaf,
+# pg_ctl reload (no restart needed -- TLS material is hot-reloadable).
 #
 # Pattern-sweep result: ONLY postgres caches CA-in-volume. redis, pgbouncer,
 # gateway, backoffice, caddy, grafana all read /run/secrets/ca_root.crt or
@@ -697,20 +777,32 @@ _refresh_pgdata_ca() {
 
   if [[ -z "$pg_target" ]]; then
     log_warn "Postgres not running -- PGDATA CA refresh deferred."
-    log_warn "  After bringing postgres up, manually install"
-    log_warn "  /run/secrets/ca_root.crt into \${PGDATA}/root.crt and the"
-    log_warn "  postgres_client.{crt,key} into \${PGDATA}/server.{crt,key},"
-    log_warn "  then pg_ctl reload."
+    log_warn "  After bringing postgres up, exec into the postgres container and run:"
+    log_warn "    cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > \${PGDATA}/root.crt"
+    log_warn "    chown postgres:postgres \${PGDATA}/root.crt && chmod 0640 \${PGDATA}/root.crt"
+    log_warn "    install -m0644 -o postgres -g postgres /run/secrets/postgres_client.crt \${PGDATA}/server.crt"
+    log_warn "    install -m0600 -o postgres -g postgres /run/secrets/postgres_client.key \${PGDATA}/server.key"
+    log_warn "    pg_ctl -D \${PGDATA} reload"
     return 0
   fi
 
   log_info "Refreshing PGDATA-cached CA + server cert in ${pg_target}..."
 
+  # RETRO-R4-1: install.sh writes root.crt as a CONCATENATED bundle:
+  #   cat ca_root.crt ca_intermediate.crt > ${PGDATA}/root.crt
+  # restore.sh previously wrote only ca_root.crt, leaving postgres with a
+  # trust store missing the intermediate. pgbouncer presents leaves signed
+  # by the intermediate; postgres's ssl_ca_file rejects them because the
+  # chain is incomplete. Fix: match install.sh exactly — cat both PEMs.
   if ! pg_exec "$pg_target" sh -c '
     set -e
     PGDATA="${PGDATA:-/var/lib/postgresql/data/pgdata}"
     : "${PGDATA:?PGDATA env var unset in postgres container}"
-    install -m 0644 -o postgres -g postgres /run/secrets/ca_root.crt         "${PGDATA}/root.crt"
+    # Trust bundle: root + intermediate concatenated (must match install.sh line that
+    # does: cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > ${PGDATA}/root.crt)
+    cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > "${PGDATA}/root.crt"
+    chown postgres:postgres "${PGDATA}/root.crt"
+    chmod 0640 "${PGDATA}/root.crt"
     install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt "${PGDATA}/server.crt"
     install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDATA}/server.key"
     # pg_ctl cannot run as root. Use gosu if available (official postgres image),
@@ -724,10 +816,12 @@ _refresh_pgdata_ca() {
     fi
   '; then
     log_error "PGDATA CA refresh failed. mTLS between pgbouncer and postgres may be broken."
-    log_error "  Manual recovery: exec into postgres, copy"
-    log_error "  /run/secrets/{ca_root.crt,postgres_client.crt,postgres_client.key} into"
-    log_error "  \${PGDATA}/{root.crt,server.crt,server.key} (chown postgres:postgres),"
-    log_error "  then run: pg_ctl -D \${PGDATA} reload"
+    log_error "  Manual recovery: exec into postgres, run:"
+    log_error "    cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > \${PGDATA}/root.crt"
+    log_error "    chown postgres:postgres \${PGDATA}/root.crt && chmod 0640 \${PGDATA}/root.crt"
+    log_error "    install -m0644 -o postgres -g postgres /run/secrets/postgres_client.crt \${PGDATA}/server.crt"
+    log_error "    install -m0600 -o postgres -g postgres /run/secrets/postgres_client.key \${PGDATA}/server.key"
+    log_error "    pg_ctl -D \${PGDATA} reload"
     return 1
   fi
 

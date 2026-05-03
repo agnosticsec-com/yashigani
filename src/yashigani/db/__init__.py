@@ -1,7 +1,7 @@
-# Last updated: 2026-04-29T01:00:00+01:00
-from yashigani.db.postgres import create_pool, close_pool, tenant_transaction, get_pool
+# Last updated: 2026-05-02T00:00:00+01:00 (RETRO-R4-2: expose connect_with_retry_sync)
+from yashigani.db.postgres import create_pool, close_pool, tenant_transaction, get_pool, connect_with_retry_sync
 
-__all__ = ["create_pool", "close_pool", "tenant_transaction", "get_pool", "run_migrations"]
+__all__ = ["create_pool", "close_pool", "tenant_transaction", "get_pool", "run_migrations", "connect_with_retry_sync"]
 
 
 # Stable 64-bit advisory-lock key for Yashigani schema/bootstrap operations.
@@ -28,7 +28,6 @@ def run_migrations() -> None:
     import os
     from alembic.config import Config
     from alembic import command
-    import psycopg2
     from urllib.parse import urlparse, unquote
 
     logger = logging.getLogger(__name__)
@@ -63,7 +62,10 @@ def run_migrations() -> None:
     # for the lock connection when it's set; compose runs single-replica so
     # falls back to YASHIGANI_DB_DSN where contention doesn't matter.
     lock_dsn = os.environ.get("YASHIGANI_DB_DSN_DIRECT") or dsn
-    lock_conn = psycopg2.connect(lock_dsn)
+    # RETRO-R4-2: use connect_with_retry_sync instead of bare psycopg2.connect()
+    # so a postgres restart mid-startup fails fast (connect_timeout=15s) and
+    # retries rather than hanging the process indefinitely.
+    lock_conn = connect_with_retry_sync(lock_dsn, max_attempts=5, backoff_s=3.0)
     try:
         lock_conn.autocommit = True
         with lock_conn.cursor() as cur:

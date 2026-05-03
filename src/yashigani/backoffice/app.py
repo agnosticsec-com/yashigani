@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-05-02T19:17:04+01:00
+Last updated: 2026-05-02T00:00:00+01:00 (RETRO-R4-2: advisory lock uses connect_with_retry_sync — no more hang on pg restart)
 """
 from __future__ import annotations
 
@@ -212,11 +212,16 @@ async def lifespan(app: FastAPI):
             backoffice_state.auth_service = auth_service
 
             import asyncio as _asyncio
-            import psycopg2 as _psycopg2
+            from yashigani.db.postgres import connect_with_retry_sync as _connect_retry
             direct_dsn = os.environ.get("YASHIGANI_DB_DSN_DIRECT") or db_dsn
 
             def _acquire_lock_sync():
-                conn = _psycopg2.connect(direct_dsn)
+                # RETRO-R4-2: use connect_with_retry_sync (connect_timeout=15s,
+                # up to 5 attempts with backoff) instead of bare psycopg2.connect()
+                # which hangs indefinitely when postgres is mid-restart.
+                # F-NEW-02 finding: pg_advisory_lock blocked the entire lifespan
+                # for 60+ s when postgres restarted during K8s rolling update.
+                conn = _connect_retry(direct_dsn, max_attempts=5, backoff_s=3.0)
                 conn.autocommit = True
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_lock(%s)", (_BOOTSTRAP_ADVISORY_LOCK_KEY,))
