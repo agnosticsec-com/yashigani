@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-03T12:15:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check in validate_backup)
+# Last updated: 2026-05-03T12:30:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check; V232-SMOKE-011: podman unshare chown -R before cp restore)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -487,6 +487,12 @@ restore_backup() {
           log_warn "podman unshare chown on secrets dir failed — chmod 751 may fail; pre-run: sudo chown $(id -un):$(id -gn) '${WORK_DIR}/docker/secrets'"
         fi
         # Also reset any existing files so cp -rp can overwrite them.
+        # RESTORE-4 (V232-SMOKE-011): existing files are sub-UID-owned; plain
+        # chmod u+w leaves them sub-UID-owned so tom cannot overwrite them.
+        # Remap ownership to uid 0 (= tom on the host) inside the user namespace
+        # so cp -rp from the backup can create/overwrite files in the live dir.
+        # _pki_chown_client_keys re-applies container sub-UID ownership after copy.
+        podman unshare chown -R 0:0 "${WORK_DIR}/docker/secrets" 2>/dev/null || true
         find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
           -exec podman unshare chmod u+w {} \; 2>/dev/null || true
       else
