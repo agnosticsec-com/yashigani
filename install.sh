@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T05:30:00+01:00 (fix: pre-start postgres for SSL injection before full compose up — V232-SMOKE-004)
 # last-updated: 2026-05-03T04:30:00+01:00 (fix: add OPA/otel-collector/jaeger UIDs to _pki_chown_client_keys — V232-SMOKE-002)
 # last-updated: 2026-05-03T03:45:00+01:00 (fix: parallel Podman pull wait deadlock with exec+tee coprocess)
 # last-updated: 2026-05-01T12:00:00+01:00 (fix: --mode argv guard prevents TTY/non-interactive overwrite — P1 #3bg)
@@ -2513,6 +2514,44 @@ compose_up() {
   "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} down 2>/dev/null || true
 
   if [[ "$UPGRADE" == "true" ]]; then
+    # V232-SMOKE-004 (2026-05-03): podman-compose 1.5.x implements depends_on
+    # condition: service_healthy by spawning `podman wait --condition=healthy`
+    # before starting each dependent service. In the upgrade path from v2.22.x,
+    # postgres starts with ssl=off (no ssl keys in PGDATA), so pgbouncer cannot
+    # open TLS connections and backoffice's DB connect retries all time out.
+    # backoffice therefore never becomes healthy, and `podman wait --condition=healthy
+    # backoffice` blocks `compose up` indefinitely — creating a deadlock with
+    # _upgrade_postgres_ssl, which cannot run until compose_up returns.
+    #
+    # Fix: pre-start only postgres (no depends_on blocking) before the full `up -d`,
+    # wait for pg_isready, run _upgrade_postgres_ssl inline, then start the rest.
+    # This replaces the step-10c call site in install_yashigani() which can no longer
+    # be reached when compose_up blocks.
+    #
+    # docker-compose (Go) does NOT block on depends_on during `up -d` — it starts
+    # containers in dependency order but returns immediately. This pre-start block
+    # only applies to the Podman path.
+    if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+      log_info "Upgrade + Podman: pre-starting postgres for SSL injection (V232-SMOKE-004)..."
+      "${COMPOSE_CMD[@]}" "${compose_files[@]}" up -d postgres 2>/dev/null || true
+      # Wait up to 60s for postgres to accept connections.
+      local _pg_ready=0 _pg_i
+      for _pg_i in $(seq 1 30); do
+        if "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres pg_isready 2>/dev/null; then
+          _pg_ready=1; break
+        fi
+        sleep 2
+      done
+      if [[ "$_pg_ready" -eq 0 ]]; then
+        log_warn "postgres did not become ready in 60s — SSL injection will be attempted anyway"
+      fi
+      # Inline postgres SSL injection (same logic as _upgrade_postgres_ssl, which
+      # can no longer be called after compose_up returns because it never does on
+      # the Podman+upgrade deadlock path). _upgrade_postgres_ssl is idempotent:
+      # safe no-op when ssl=on already.
+      _upgrade_postgres_ssl
+      log_info "postgres SSL injection complete — starting remaining services..."
+    fi
     log_info "Starting services (upgrade — removing orphaned containers)..."
     # ROOTLESS-9 (v2.23.1): podman-compose up -d returns non-zero when optional
     # services (otel-collector, promtail, grafana) fail to start — even if all
