@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T02:00:00+01:00
+# last-updated: 2026-05-03T03:30:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -382,7 +382,23 @@ safe_rm_rf() {
 
 echo "[remote] Tearing down any existing stack at \$WORK ..."
 
-# Nuke running stack if it exists
+# First: global Podman cleanup — remove ALL tom-owned Podman containers and
+# volumes from any previous harness run.  This handles the case where a prior
+# run auto-detected podman even though the harness was invoked with
+# --runtime docker, leaving orphaned Podman containers that subsequent
+# "docker compose down" calls would miss.
+#
+# Safety: we only touch containers/volumes owned by the running user (tom).
+# Podman rootless user-namespace containers are per-user by design.
+if command -v podman >/dev/null 2>&1; then
+    echo "[remote] Cleaning up all Podman containers from previous runs ..."
+    podman stop --all 2>/dev/null || true
+    podman rm --all --force 2>/dev/null || true
+    podman volume rm --all --force 2>/dev/null || true
+    echo "[remote] Podman global cleanup: done"
+fi
+
+# Nuke running Docker stack if it exists
 if [ -d "\$WORK/docker" ]; then
     cd "\$WORK"
     # Stop and remove everything including volumes
