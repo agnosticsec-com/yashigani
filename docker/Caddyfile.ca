@@ -329,7 +329,7 @@ Hiring: https://agnosticsec.com/careers
         reverse_proxy open-webui:8080 {
 
             import inject-caddy-verified
-            header_upheader_up X-Forwarded-Proto https
+            header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }
