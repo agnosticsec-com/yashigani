@@ -34,10 +34,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install the wheel — pulls all pyproject.toml install_requires automatically.
+# pip is removed after installation: it is not needed at runtime and its presence
+# would expose the image to CVE-2026-3219 (improper archive handling) if pip were
+# ever invoked against attacker-controlled input. It is not — all pip invocations
+# are build-time only — but removing the tool eliminates the attack surface class.
 COPY --from=builder /dist/*.whl /tmp/
 RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)" && \
-    rm /tmp/*.whl
+    rm /tmp/*.whl && \
+    pip uninstall -y pip
 
 # Admin UI templates + static assets — copy into installed package
 COPY src/yashigani/backoffice/templates/ /usr/local/lib/python3.12/site-packages/yashigani/backoffice/templates/

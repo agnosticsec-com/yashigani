@@ -68,10 +68,15 @@ WORKDIR /app
 
 # Install the wheel — pulls all pyproject.toml install_requires automatically.
 # fasttext extra pulled explicitly; vault extra skipped (gateway uses docker KMS).
+# pip is removed after installation: it is not needed at runtime and its presence
+# would expose the image to CVE-2026-3219 (improper archive handling) if pip were
+# ever invoked against attacker-controlled input. It is not — all pip invocations
+# are build-time only — but removing the tool eliminates the attack surface class.
 COPY --from=builder /dist/*.whl /tmp/
 RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)[fasttext]" && \
-    rm /tmp/*.whl
+    rm /tmp/*.whl && \
+    pip uninstall -y pip
 
 # FastText classifier model — trained in the trainer stage, baked into image.
 # No runtime download, no host-side pre-build required.
