@@ -2,6 +2,16 @@
 """
 generate_sbom.py — Yashigani SBOM and CryptoBoM generator
 
+**BUILD/RELEASE-HOST TOOL ONLY — NEVER invoke from a Yashigani runtime container.**
+
+pip is uninstalled from Yashigani runtime images (V232-CSCAN-01k), so calling this
+script from inside a gateway or backoffice container will fail.  Additionally, a
+runtime-mode guard (see below) raises RuntimeError if YASHIGANI_SERVICE_NAME is set,
+which it always is inside runtime images (V232-CSCAN-01k-RES-02).
+
+Run from the build host:
+  python scripts/generate_sbom.py [--version VERSION] [--output-dir DIR]
+
 Produces two artifacts in dist/:
   sbom-yashigani-{version}.cdx.json     CycloneDX 1.5 SBOM (JSON)
   cryptobom-yashigani-{version}.json    Machine-readable cryptographic algorithm inventory
@@ -16,6 +26,8 @@ Fallback:
   If cyclonedx-bom is not installed the script assembles a minimal CycloneDX
   document from `pip list --format=json` and dpkg output directly.  The result
   is valid CycloneDX 1.5 but component hashes are omitted.
+
+Last updated: 2026-05-03
 """
 
 from __future__ import annotations
@@ -58,9 +70,29 @@ def _resolve_version(override: str | None) -> str:
 # Dependency collection
 # ---------------------------------------------------------------------------
 
+def _check_not_runtime() -> None:
+    """Raise RuntimeError if running inside a Yashigani runtime container (V232-CSCAN-01k-RES-02).
+
+    YASHIGANI_SERVICE_NAME is set to 'gateway' or 'backoffice' in every runtime image
+    (Dockerfile.gateway, Dockerfile.backoffice ENV block).  Its presence means we are
+    inside a runtime container where pip is uninstalled (V232-CSCAN-01k) and this
+    build-host tool must not run.
+    """
+    service_name = os.environ.get("YASHIGANI_SERVICE_NAME")
+    if service_name:
+        raise RuntimeError(
+            f"generate_sbom.py is a build/release tool — refusing to run inside a "
+            f"Yashigani runtime container (YASHIGANI_SERVICE_NAME={service_name!r} is set). "
+            "Run on the build host instead."
+        )
+
+
 def _pip_packages() -> list[dict]:
     """Return list of {name, version} dicts from pip list."""
     try:
+        # nosem: build-host pip-list invocation (V232-CSCAN-01k-RES-02). Never reachable
+        # in runtime images: pip is uninstalled (V232-CSCAN-01k) AND the
+        # _check_not_runtime() guard above blocks even hypothetical reach.
         raw = subprocess.check_output(
             [sys.executable, "-m", "pip", "list", "--format=json"],
             stderr=subprocess.DEVNULL,
@@ -370,6 +402,9 @@ def _build_cryptobom(version: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Refuse to run inside a Yashigani runtime container (V232-CSCAN-01k-RES-02).
+    _check_not_runtime()
+
     parser = argparse.ArgumentParser(
         description="Generate CycloneDX SBOM and CryptoBoM for Yashigani",
     )
