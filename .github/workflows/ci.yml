@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T06:58:47+01:00
+# Last updated: 2026-05-03T02:00:00+01:00
 name: CI
 
 on:
@@ -23,10 +23,10 @@ jobs:
         python-version: ["3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -80,7 +80,7 @@ jobs:
           PYTHON_VERSION: ${{ matrix.python-version }}
 
       - name: Upload unit-test artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: unit-tests-py${{ matrix.python-version }}-${{ github.sha }}
@@ -122,10 +122,10 @@ jobs:
     # required for a type-check gate (would just duplicate findings).
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -177,7 +177,7 @@ jobs:
           PYEOF
 
       - name: Upload mypy artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: mypy-${{ github.sha }}

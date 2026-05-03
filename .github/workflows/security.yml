@@ -18,11 +18,11 @@ jobs:
     name: Trivy Container Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Build gateway for scan
         run: docker build -f docker/Dockerfile.gateway -t yashigani/gateway:scan .
       - name: Trivy gateway
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: yashigani/gateway:scan
           scan-type: image
@@ -34,7 +34,7 @@ jobs:
       - name: Build backoffice for scan
         run: docker build -f docker/Dockerfile.backoffice -t yashigani/backoffice:scan .
       - name: Trivy backoffice
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: yashigani/backoffice:scan
           scan-type: image
@@ -45,13 +45,13 @@ jobs:
           output: trivy-backoffice.sarif
       # P0-5b: distinct category per upload — GitHub rejects duplicate tool+job combinations.
       - name: Upload SARIF results
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always()
         with:
           sarif_file: trivy-gateway.sarif
           category: trivy-gateway
       - name: Upload SARIF backoffice
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always()
         with:
           sarif_file: trivy-backoffice.sarif
@@ -69,8 +69,8 @@ jobs:
     name: Bandit SAST
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - run: pip install "bandit[toml]>=1.7"
@@ -84,7 +84,7 @@ jobs:
           # B324 SHA-1 findings closed by usedforsecurity=False in auth/password.py.
           bandit -r src/yashigani/ -c pyproject.toml -ll -b .bandit
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: bandit-report
@@ -95,8 +95,8 @@ jobs:
     name: pip-audit Dependency Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -108,7 +108,7 @@ jobs:
         # OSV provides broader CVE coverage than the default PyPI advisory database.
         run: pip-audit --vulnerability-service osv --format json --output pip-audit-report.json
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: pip-audit-report
@@ -122,7 +122,7 @@ jobs:
     permissions:
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Install Opengrep
         # Opengrep is not on PyPI. Install via binary release from GitHub.
         # Pinned to v1.20.0 (verified current 2026-05-02). ubuntu-latest = x86_64.
@@ -144,7 +144,7 @@ jobs:
             --config p/supply-chain \
             --sarif-output opengrep.sarif \
             src/yashigani/
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always()
         with:
           sarif_file: opengrep.sarif
@@ -162,7 +162,7 @@ jobs:
     permissions:
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install Opengrep
         # Opengrep is not on PyPI. Install via binary release from GitHub.
@@ -242,7 +242,7 @@ jobs:
           PYEOF
 
       - name: Upload Opengrep artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: opengrep-${{ github.sha }}
@@ -251,7 +251,7 @@ jobs:
             opengrep-summary.txt
           retention-days: 90
 
-      - uses: github/codeql-action/upload-sarif@v4
+      - uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
         if: always()
         with:
           sarif_file: opengrep-push.sarif
@@ -271,14 +271,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     steps:
-      - uses: actions/checkout@v6
-      - uses: dependency-check/Dependency-Check_Action@main
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dependency-check/Dependency-Check_Action@1e54355a8b4c8abaa8cc7d0b70aa655a3bb15a6c # 1.1.0
         with:
           project: yashigani
           path: .
           format: JSON HTML
           args: --failOnCVSS 7 --enableRetired
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: owasp-dep-check-report
