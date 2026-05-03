@@ -542,13 +542,16 @@ services:
   ollama:
     dns_search: ["."]
     image: docker.io/ollama/ollama:0.6.2@sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab
+    user: "1000:1000"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OLLAMA_MEM_LIMIT:-4096m}
     cpus: ${YASHIGANI_OLLAMA_CPU_LIMIT:-2.0}
     volumes:
-      - ollama_data:/root/.ollama
+      - ollama_data:/data
     environment:
       OLLAMA_HOST: "0.0.0.0"
+      HOME: "/data"
+      OLLAMA_MODELS: "/data/models"
     healthcheck:
       # ollama image has no curl/wget — use bash /dev/tcp to check port
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/11434' 2>/dev/null"]

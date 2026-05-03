@@ -24,14 +24,10 @@ spec:
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       securityContext:
-        # ACS-RISK-008 documented exception: ollama/ollama upstream image runs
-        # as root UID 0 and writes model weights to /root/.ollama (PVC mount).
-        # runAsNonRoot: true causes CrashLoopBackOff with the official image.
-        # readOnlyRootFilesystem cannot be set for the same reason.
-        # Mitigating controls: ollama is disabled by default (opt-in), isolated
-        # behind Caddy + NetworkPolicy, and explicitly excluded from the Kyverno
-        # restrict-root-user ClusterPolicy via label selector.
-        # Risk-register ref: ACS-RISK-008-EX-OLLAMA-2026-05-02
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -39,7 +35,10 @@ spec:
           image: "{{ .Values.ollama.image.repository }}:{{ .Values.ollama.image.tag }}"
           imagePullPolicy: {{ .Values.ollama.image.pullPolicy }}
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
@@ -49,6 +48,10 @@ spec:
           env:
             - name: OLLAMA_HOST
               value: {{ .Values.ollama.env.ollamaHost | quote }}
+            - name: HOME
+              value: {{ .Values.ollama.env.home | default "/data" | quote }}
+            - name: OLLAMA_MODELS
+              value: {{ .Values.ollama.env.ollamaModels | default "/data/models" | quote }}
           readinessProbe:
             tcpSocket:
               port: 11434
@@ -67,7 +70,7 @@ spec:
             {{- toYaml .Values.ollama.resources | nindent 12 }}
           volumeMounts:
             - name: data
-              mountPath: /root/.ollama
+              mountPath: /data
   {{- if .Values.ollama.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:

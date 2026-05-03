@@ -44,16 +44,6 @@ spec:
                 - Pod
               namespaces:
                 - {{ .Release.Namespace }}
-      exclude:
-        any:
-          - resources:
-              kinds:
-                - Pod
-              namespaces:
-                - {{ .Release.Namespace }}
-              selector:
-                matchLabels:
-                  app.kubernetes.io/name: ollama
       validate:
         message: >-
           ACS-RISK-008: Pod must set runAsNonRoot: true or a non-zero runAsUser
@@ -207,7 +197,6 @@ metadata:
     policies.kyverno.io/subject: "Pod"
     policies.kyverno.io/description: >-
       ACS-RISK-008: Pods must not set runAsUser: 0 at pod or container level.
-      Exception: ollama (risk-register ACS-RISK-008-EX-OLLAMA-2026-05-02).
 spec:
   validationFailureAction: {{ .Values.admissionPolicies.validationFailureAction }}
   background: true
@@ -220,16 +209,6 @@ spec:
                 - Pod
               namespaces:
                 - {{ .Release.Namespace }}
-      exclude:
-        any:
-          - resources:
-              kinds:
-                - Pod
-              namespaces:
-                - {{ .Release.Namespace }}
-              selector:
-                matchLabels:
-                  app.kubernetes.io/name: ollama
       validate:
         message: >-
           ACS-RISK-008: Pod '{{ "{{" }} request.object.metadata.name {{ "}}" }}'
@@ -248,16 +227,6 @@ spec:
                 - Pod
               namespaces:
                 - {{ .Release.Namespace }}
-      exclude:
-        any:
-          - resources:
-              kinds:
-                - Pod
-              namespaces:
-                - {{ .Release.Namespace }}
-              selector:
-                matchLabels:
-                  app.kubernetes.io/name: ollama
       validate:
         message: >-
           ACS-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod

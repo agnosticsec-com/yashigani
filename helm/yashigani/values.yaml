@@ -371,7 +371,10 @@ ollama:
     type: ClusterIP
   persistence:
     enabled: true
-    size: 20Gi
+    # Sized for: model storage (3-30 GB depending on model) +
+    # per-user inference data (documents, files, embeddings caches).
+    # Increase further for multi-user heavy-document workloads.
+    size: 100Gi
     storageClass: ""
   hpa:
     enabled: true
@@ -380,6 +383,11 @@ ollama:
   model: "qwen2.5:3b"
   env:
     ollamaHost: "0.0.0.0"
+    # HOME=/data routes ollama's key + state (~/.ollama) to the persistent
+    # volume mount, allowing the container to run as UID 1000 (non-root).
+    # Verified 2026-05-03 — no root required.
+    home: "/data"
+    ollamaModels: "/data/models"
 
 # ---------------------------------------------------------------------------
 # Prometheus — metrics collection

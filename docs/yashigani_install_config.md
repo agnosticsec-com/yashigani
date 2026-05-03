@@ -106,6 +106,31 @@ Before starting, confirm the following network conditions are met:
 
 ---
 
+### 1.4 Privileges and Security Posture
+
+Yashigani is designed for sysadmin operators. The privilege model is layered to keep host privileges minimal while keeping the install practical.
+
+**During pre-flight (before install runs):**
+- The pre-flight check (`scripts/preflight_check.sh`) may require `sudo` on your host to install missing prerequisites (Docker, Podman, container CLI symlinks, AppArmor profiles). This is operator-side and only runs when you explicitly accept the prompts.
+- Pre-flight never modifies anything without asking first.
+
+**During install body (`install.sh`):**
+- The installer body runs as your unprivileged user.
+- No `sudo` calls inside `install.sh` — every privileged operation has been pushed out to pre-flight or to the runtime container engine (Podman rootless or Docker).
+- A CI lint guards against any future regression that would re-introduce `sudo` to the installer body.
+
+**At runtime (containers):**
+- All Yashigani-owned services (gateway, backoffice) run as non-root with read-only root filesystem, dropped capabilities, seccomp default, and AppArmor / SELinux profiles.
+- All third-party services (Caddy, Postgres, Ollama, Grafana, Loki, Prometheus, Alertmanager, OPA, Jaeger, Vault) run as non-root with hardened security context. The Ollama container in particular runs as UID 1000 with `HOME=/data` and `OLLAMA_MODELS=/data/models` pointing at its persistent volume.
+- One image (`edoburu/pgbouncer`) requires writable rootfs because the upstream entrypoint generates `/etc/pgbouncer/userlist.txt` at startup. The container still runs with `allowPrivilegeEscalation: false` and all Linux capabilities dropped, and is reachable only on the internal `data` network. This will be replaced in a future release once an upstream non-root variant is available.
+
+**For regulated environments (PCI, HIPAA, SOC 2, FedRAMP):**
+- All workloads enforce non-root via Kubernetes admission policies (Kyverno) — any pod that drifts is rejected at the admission webhook.
+- The Ollama persistent volume is sized for both model weights AND per-user inference data (default 100 GiB; increase via `ollama.persistence.size` for heavy multi-user document workloads).
+- For a fully root-free runtime, replace `edoburu/pgbouncer` with a managed connection pooler that ships non-root upstream — Yashigani's gateway and backoffice support direct PostgreSQL connections when PgBouncer is removed from the topology.
+
+---
+
 ## 2. Quick Start (Demo — 5 Minutes)
 
 For a fast local demo with a self-signed certificate, use the one-liner installer:
