@@ -44,7 +44,7 @@ data:
     # M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS.
     # Trust anchor: ca_bundle.crt (root+intermediate). Go x509 (OTEL Collector)
     # verifies client certs (leaf+intermediate chain bundles) against the CA pool.
-    # Captain R4 K8s gate 2026-04-30: using ca_bundle.crt for consistency with
+    # Internal K8s gate finding: using ca_bundle.crt for consistency with
     # all other Go/libssl consumers (pgbouncer, Caddy).
     {{- if .Values.mtls.enabled }}
     # mTLS enabled: receivers require client cert auth.
@@ -208,7 +208,7 @@ data:
     # Internal mTLS snippet — used by every reverse_proxy that targets a
     # service terminating mTLS (gateway:8080, backoffice:8443). Caddy
     # presents caddy_client.{crt,key} and verifies the upstream against
-    # ca_bundle.crt (root+intermediate). Captain R4 K8s gate 2026-04-30:
+    # ca_bundle.crt (root+intermediate). Internal K8s gate finding:
     # Caddy Go TLS also fails to verify chain-bundle upstreams with only
     # ca_intermediate.crt as the trust anchor — x509: certificate signed by
     # unknown authority. ca_bundle.crt (root+intermediate) resolves this.
@@ -264,7 +264,7 @@ data:
     }
     # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
     # work regardless of how the cluster operator routes the public domain.
-    # Captain #58c #3by (2026-04-29): use explicit PKI cert (caddy_client.crt/key)
+    # Internal K8s integration finding: use explicit PKI cert (caddy_client.crt/key)
     # instead of `tls internal`. Caddy's internal CA issued a cert bound to
     # 'localhost', causing HTTP 421 Misdirected Request for IP-based connections
     # (e.g. port-forward to 127.0.0.1). caddy_client.crt has IP Address:127.0.0.1
@@ -275,12 +275,12 @@ data:
       # not inside `handle`). `verify_if_given` accepts non-mTLS browser
       # connections AND extracts SPIFFE URI from a presented client cert when
       # one is given. Per-path SPIFFE forwarding stays in `handle` blocks.
-      # Captain #58c #3br evidence (2026-04-28).
-      # #3by: explicit cert (not `tls internal`) — Caddy internal auto-cert
+      # Internal K8s integration evidence.
+      # Explicit cert (not `tls internal`) — Caddy internal auto-cert
       # binds to 'localhost' only; our PKI cert has IP Address:127.0.0.1 SAN.
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
-        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
-        # Closes Ava R3 finding. Consistent with docker/Caddyfile.acme.
+        # TLS 1.3 minimum + GCM-only ciphers. Project security baseline.
+        # Closes internal QA finding. Consistent with docker/Caddyfile.acme.
         protocols tls1.3
         ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
         curves x25519mlkem768 x25519 secp384r1 secp256r1

@@ -14,7 +14,7 @@ This document covers the end-to-end process for cutting a Yashigani release from
 | `gh` CLI | Download CI artifacts, create release | `brew install gh` (macOS) / see [cli.github.com](https://cli.github.com) |
 | `gh auth login` | PAT with `repo` + `read:packages` scopes | `gh auth login --scopes repo,read:packages` |
 
-Note: workflow edits (anything under `.github/workflows/`) require a PAT with `workflow` scope in addition to `repo`. Split workflow commits from code commits when needed (see `feedback_pat_workflow_scope.md`).
+Note: workflow edits (anything under `.github/workflows/`) require a PAT with `workflow` scope in addition to `repo`. Split workflow commits from code commits when needed.
 
 ---
 
@@ -104,12 +104,9 @@ opengrep-summary.txt      # Grep-able verdict lines:
 
 ## 4. Evidence Archive
 
-Per `feedback_yashigani_repo_code_only.md`: CI evidence lives OUTSIDE the yashigani repo.
+CI evidence lives OUTSIDE the yashigani repo (in the internal evidence repository).
 
-**Archive root:**
-```
-/Users/max/Documents/Claude/Internal/Compliance/yashigani/v<version>/ci-evidence/<sha>/
-```
+**Archive root:** an internal evidence directory, organised by version + commit SHA.
 
 **Archive script:** `scripts/archive_ci_artifacts.sh`
 
@@ -140,7 +137,7 @@ Run this one-liner before cutting any release tag. Every line must exit 0.
 # whether SHA is short or full. Resolve with git rev-parse first.
 SHA=$(git rev-parse ec46ab4)
 VER=2.23.1
-BASE="/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VER}/ci-evidence/${SHA}"
+BASE="${YASHIGANI_EVIDENCE_ROOT:?set to the internal evidence directory}/v${VER}/ci-evidence/${SHA}"
 
 grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \
   && grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.13-*/verdict-3.13.txt \
@@ -150,7 +147,7 @@ grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \
   || echo "FAIL — one or more gates not green"
 ```
 
-Per `feedback_evidence_bound_task_closure.md` SOP-5: M7 boxes tick ONLY when this grep passes on real downloaded artifacts. CI URL alone is not sufficient.
+Release-gate boxes tick ONLY when this grep passes on real downloaded artifacts. A CI URL alone is not sufficient evidence.
 
 ---
 
@@ -160,20 +157,20 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 
 | # | Gate | Owner | Evidence path | Verdict grep |
 |---|------|-------|---------------|--------------|
-| 1 | Unit tests (py3.12) | Tom / CI | `ci-evidence/<sha>/unit-tests-py3.12-<sha>/verdict-3.12.txt` | `Unit tests: PASS` |
-| 2 | Unit tests (py3.13) | Tom / CI | `ci-evidence/<sha>/unit-tests-py3.13-<sha>/verdict-3.13.txt` | `Unit tests: PASS` |
-| 3 | Type check (mypy) | Tom / CI | `ci-evidence/<sha>/mypy-<sha>/mypy-summary.txt` | `Type check: PASS` |
+| 1 | Unit tests (py3.12) | CI | `ci-evidence/<sha>/unit-tests-py3.12-<sha>/verdict-3.12.txt` | `Unit tests: PASS` |
+| 2 | Unit tests (py3.13) | CI | `ci-evidence/<sha>/unit-tests-py3.13-<sha>/verdict-3.13.txt` | `Unit tests: PASS` |
+| 3 | Type check (mypy) | CI | `ci-evidence/<sha>/mypy-<sha>/mypy-summary.txt` | `Type check: PASS` |
 | 4 | Opengrep scan | CI | `ci-evidence/<sha>/opengrep-<sha>/opengrep-summary.txt` | `Opengrep: PASS` |
 | 5 | Bandit SAST | CI | `bandit-report-<sha>.json` in evidence dir | No HIGH/CRITICAL net-new |
 | 6 | pip-audit | CI | `pip-audit-report-<sha>.json` | Exit 0 |
-| 7 | Docker restore | Captain | `macos-podman-<sha>-closure-*.log` | `RESTORE TEST GREEN` + both admin 200 lines |
-| 8 | Podman restore | Captain | same format | same |
-| 9 | K8s Helm restore | Captain | `k8s-helm-<sha>-closure-*.log` | `RESTORE TEST GREEN` + both admin 200 lines |
-| 10 | OWASP ASVS v5 L3 | Lu | `YCS-<date>-v<ver>-OWASP-3X.md` | No FAIL above Medium |
-| 11 | Laura adversarial sweep | Laura | `laura-pentest/` findings | No P0/P1 open |
-| 12 | Risk register updated | Lu | exception-register.md | All accepted risks logged |
-| 13 | Tiago HITL GO | Maxine | Verbal/chat confirmation | "GO release" |
-| 14 | Tag + push | Captain | `git tag v<ver>` | Tag visible on GitHub |
+| 7 | Docker restore | Release Engineer | `macos-podman-<sha>-closure-*.log` | `RESTORE TEST GREEN` + both admin 200 lines |
+| 8 | Podman restore | Release Engineer | same format | same |
+| 9 | K8s Helm restore | Release Engineer | `k8s-helm-<sha>-closure-*.log` | `RESTORE TEST GREEN` + both admin 200 lines |
+| 10 | OWASP ASVS v5 L3 | Compliance Reviewer | `YCS-<date>-v<ver>-OWASP-3X.md` | No FAIL above Medium |
+| 11 | Adversarial security sweep | Security Tester | `pentest/` findings | No P0/P1 open |
+| 12 | Risk register updated | Compliance Reviewer | exception-register.md | All accepted risks logged |
+| 13 | Maintainer HITL GO | Release Coordinator | Verbal/chat confirmation | "GO release" |
+| 14 | Tag + push | Release Engineer | `git tag v<ver>` | Tag visible on GitHub |
 
 ---
 
@@ -196,7 +193,7 @@ git fetch --tags --force origin
 git tag -v v2.23.2    # expects: "Good signature from releases@agnosticsec.com"
 ```
 
-### 7.2 Pushing a tag (Captain — Gate 14)
+### 7.2 Pushing a tag (Release Engineer — Gate 14)
 
 ```sh
 # On branch 2.23.x, tip at the release SHA:
@@ -241,7 +238,7 @@ The workflow re-creates the tag as signed at the same commit and force-pushes it
 1. Fast-forward `main` to the release tag: `git push origin 2.23.x:main`.
 2. Update `README.md` and `docs/` for the new version.
 3. Archive the release evidence directory to long-term storage.
-4. Write the release retro (ISO 9001 §9.3/10.2/10.3) at `/Internal/Compliance/yashigani/v<ver>/retro.md`.
+4. Write the release retro (ISO 9001 §9.3/10.2/10.3) in the internal evidence repository.
 5. Open the next version milestone on GitHub.
 
 ---
@@ -253,13 +250,13 @@ The workflow re-creates the tag as signed at the same commit and force-pushes it
 | v2.23.2 | 2026-05-03 | `7dcd498` | `7dcd498` | Security hardening, supply-chain, ASVS L3 92%. GPG-signed (see §9 ceremony). |
 | v2.23.1 | 2026-05-02 | `3b49d0e` | `3b49d0e` | Core-plane mTLS, two-tier PKI, release hardening. GPG signing available via §7.4 retroactive dispatch. |
 
-> **GPG signing status:** Tag signing infrastructure (key ceremony + CI workflow `tag-sign.yml`) landed in the v2.23.2 release cycle. Both v2.23.2 and v2.23.1 can be verified via `git tag -v <tag>` after completing the key ceremony in §9. See §9.6 for the remaining Tiago action required to complete the ceremony and retroactively sign v2.23.1.
+> **GPG signing status:** Tag signing infrastructure (key ceremony + CI workflow `tag-sign.yml`) landed in the v2.23.2 release cycle. Both v2.23.2 and v2.23.1 can be verified via `git tag -v <tag>` after completing the key ceremony in §9.
 
 ---
 
 ## 9. GPG Release Signing Key Setup (one-time, per team)
 
-This section documents the one-time key-generation ceremony. It must be performed by Tiago or a designated release manager with access to add GitHub repository secrets.
+This section documents the one-time key-generation ceremony. It must be performed by a designated release manager with access to add GitHub repository secrets.
 
 ### 9.1 Generate the key
 
@@ -307,7 +304,7 @@ Push a test tag on a non-main branch (e.g. `v0.0.0-test`) and confirm the `tag-s
 
 The v2.23.2 tag (`7dcd498`) has been pushed. The GPG key ceremony (§9.1–§9.4) must be completed to activate tag-signing CI. Until the ceremony is complete, the tag is unsigned.
 
-**Tiago action required:** complete §9.1 through §9.4 to generate the `releases@agnosticsec.com` key and add `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` to GitHub Secrets. Then dispatch `tag-sign.yml` twice:
+**Maintainer action required:** complete §9.1 through §9.4 to generate the `releases@agnosticsec.com` key and add `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` to GitHub Secrets. Then dispatch `tag-sign.yml` twice:
 
 1. Retroactive v2.23.1 sign:
    - `tag: v2.23.1`, `commit_sha: 3b49d0e` (or the full SHA from `git rev-parse v2.23.1`)

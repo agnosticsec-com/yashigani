@@ -147,7 +147,7 @@ spec:
               # ca_bundle.crt (root+intermediate) for libpq/psycopg2 consumers.
               # asyncpg also uses this DSN but asyncpg goes through Python ssl
               # which can build the chain with root alone. Using ca_bundle.crt
-              # is safe for both consumers. Captain R4 K8s gate 2026-04-30:
+              # is safe for both consumers. Internal K8s gate finding:
               # libpq (psycopg2) fails with ca_root.crt alone when pgbouncer
               # serves a chain-bundle cert (openssl error 20 "unable to get
               # local issuer certificate").
@@ -163,9 +163,9 @@ spec:
               # key independently, no exclusion. Connecting direct to
               # postgres-the-process puts both replicas' lock connections on
               # the same backend, where pg_advisory_lock actually serialises.
-              # Captain #58c #3bw + #3bx evidence (2026-04-29).
+              # Evidence captured during internal K8s integration testing.
               # ca_bundle.crt: postgres also serves chain-bundle cert; libpq
-              # requires bundle CA to verify (Captain R4 finding 2026-04-30).
+              # requires bundle CA to verify (internal integration finding).
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
             {{- end }}
             - name: YASHIGANI_OPA_URL
@@ -197,7 +197,7 @@ spec:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
             {{- if .Values.mtls.enabled }}
-            # EX-231-10 Layer B: Tom's middleware reads CADDY_INTERNAL_HMAC at
+            # EX-231-10 Layer B: backoffice middleware reads CADDY_INTERNAL_HMAC at
             # lifespan startup and rejects requests without a matching
             # X-Caddy-Verified-Secret header → 401. Secret is in pki-certs.
             - name: CADDY_INTERNAL_HMAC

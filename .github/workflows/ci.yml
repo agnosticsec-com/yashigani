@@ -130,7 +130,7 @@ jobs:
   lint-tmp-paths:
     runs-on: ubuntu-latest
     # V232-P23: fail if any host-side installer, restore, or script introduces
-    # /tmp/ file paths (feedback_no_tmp.md — all work must stay under the
+    # /tmp/ file paths (project policy — all work must stay under the
     # install dir, never /tmp). Excludes legitimate container-internal paths
     # (Dockerfile RUN layers, Helm tmpfs mounts, SSH heredoc VM-side paths).
     steps:
@@ -321,5 +321,5 @@ jobs:
         # Asserts the embedded partition_maintenance.py in configmaps.yaml is
         # byte-identical to scripts/partition_maintenance.py for all SQL-bearing
         # lines and security-critical functions (CWE-89 / YSG-RISK-001 controls).
-        # Lu re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001 follow-up #3.
+        # Internal re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001 follow-up #3.
         run: python3 tools/check_partition_helm_parity.py

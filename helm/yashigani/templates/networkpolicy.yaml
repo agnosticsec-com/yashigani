@@ -4,7 +4,7 @@
 # Enforces the principle of least privilege for intra-cluster traffic.
 #
 # EX-231-10 (2026-04-29): Caddy-centric isolation.
-# Tiago directive: Caddy is the SOLE ingress to backoffice and gateway.
+# Security directive: Caddy is the SOLE ingress to backoffice and gateway.
 # Rules implemented:
 #   - backoffice ingress: caddy ONLY (removed prometheus direct scrape)
 #   - gateway ingress: caddy ONLY (removed open-webui direct access,
@@ -255,7 +255,7 @@ spec:
     # connection to a DIFFERENT backend, so two replicas can each "acquire"
     # the same key independently without serialisation. The direct path puts
     # both lock connections on the same backend process, where advisory locks
-    # actually serialise. Captain #58c retro #3bw/#3bx. Scoped to port 5432
+    # actually serialise (internal K8s integration finding). Scoped to port 5432
     # only; backoffice app-traffic still goes through pgbouncer.
     {{- if .Values.mtls.enabled }}
     - to:
@@ -416,7 +416,7 @@ spec:
 ---
 # PostgreSQL — accept ingress from pgbouncer (app traffic) and backoffice
 # (direct connection for session-scoped advisory lock during run_migrations).
-# See allow-backoffice-egress comment above for rationale. Captain #58c #3bw.
+# See allow-backoffice-egress comment above for rationale (internal K8s integration finding).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -450,7 +450,7 @@ spec:
     # Gateway direct connection for advisory-lock-based migration serialisation.
     # Same rationale as backoffice above — gateway run_migrations() uses
     # YASHIGANI_DB_DSN_DIRECT to acquire pg_advisory_lock directly on postgres.
-    # Captain R4 finding 2026-04-30: gateway→postgres blocked by NetworkPolicy,
+    # Internal K8s integration finding: gateway→postgres blocked by NetworkPolicy,
     # causing connection timeout in run_migrations() → CrashLoopBackOff.
     - from:
         - podSelector:
