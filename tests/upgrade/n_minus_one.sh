@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T14:00:00+01:00
+# last-updated: 2026-05-03T16:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1178,28 +1178,46 @@ echo "[remote] Running restore.sh against backup: \$BACKUP"
 cd "\$WORK"
 YSG_RUNTIME=\$RUNTIME bash restore.sh "\$BACKUP" 2>&1 | tee /tmp/n1_restore_run.log
 
-echo "[remote] restore.sh exit code: \$?"
-
-# V232-SMOKE-013 fix: restore.sh does NOT restart the stack. It restores
-# secrets, .env, and the postgres dump, then prints "Next steps: compose up".
-# V232-SMOKE-014 fix: "compose up -d" alone is a no-op when containers are
-# already running (Podman/Docker don't detect secrets content changes).
-# Must STOP then UP so containers restart, reload bind-mounted secrets, and
-# reconnect to the restored postgres state. Use "stop" not "down" to preserve
-# data volumes. Explicitly restart postgres + pgbouncer first so the DB is
-# ready when backoffice connects.
-echo "[remote] Stopping stack for clean restart after restore ..."
-COMPOSE_CMD="${REMOTE_COMPOSE}"
-YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml stop 2>&1 | tail -3
-echo "[remote] Stack stopped — starting fresh ..."
-YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml up -d 2>&1 | tail -5
-echo "[remote] Stack restarted after restore"
 REMOTE_SCRIPT
 
     local rc=$?
     if [[ $rc -ne 0 ]]; then
         verdict "N-1 upgrade restore" "FAIL" "restore"
         return 1
+    fi
+
+    # V232-SMOKE-015 fix: move compose restart to a SEPARATE vm_run_script call.
+    #
+    # Root cause: running restore.sh via a pipe ("bash restore.sh | tee logfile")
+    # inside a "set -euo pipefail" heredoc caused the heredoc to terminate at the
+    # pipe boundary (exit 0) before any subsequent commands (echo, compose stop, up)
+    # could execute. The mechanism is reproducible across Runs 21 and 22 but the
+    # exact bash/pipe interaction is not yet fully understood (exit 0 despite set -e
+    # potentially firing). Moving the restart to a SEPARATE ssh invocation (after
+    # the restore heredoc returns) guarantees it always runs when restore exits 0.
+    #
+    # V232-SMOKE-013 context: restore.sh does NOT restart the stack itself.
+    # V232-SMOKE-014 context: "compose up -d" alone is a no-op for running containers.
+    # Fix: "compose stop" then "compose up -d" forces a full container restart,
+    # re-reading the restored bind-mounted secrets and re-connecting to the
+    # restored postgres DB. "stop" (not "down") preserves named data volumes.
+    log "Restarting stack post-restore (stop then up) ..."
+    vm_run_script <<RESTART_SCRIPT
+set -euo pipefail
+WORK="${HARNESS_WORK_DIR}"
+RUNTIME="${RUNTIME}"
+COMPOSE_CMD="${REMOTE_COMPOSE}"
+cd "\$WORK"
+echo "[remote] Stopping stack for clean restart after restore ..."
+YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml stop 2>&1 | tail -5
+echo "[remote] Stack stopped. Starting fresh ..."
+YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml up -d 2>&1 | tail -5
+echo "[remote] Stack restarted after restore"
+RESTART_SCRIPT
+
+    local restart_rc=$?
+    if [[ $restart_rc -ne 0 ]]; then
+        log "WARNING: post-restore stack restart exited $restart_rc — continuing to health check"
     fi
 
     # Wait for stack to come back
