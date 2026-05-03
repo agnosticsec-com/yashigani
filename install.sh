@@ -1676,6 +1676,54 @@ _backup_existing_data() {
     log_error "CWE-732: group/world-readable key file(s) in backup ${backup_dir}/secrets"
     exit 1
   fi
+
+  # RETRO-R4-3: sign the backup manifest so restore.sh can cryptographically verify
+  # integrity before touching any live secrets. Signing key is the CA intermediate
+  # private key (already present at install time; 0400 owner-only). The signature
+  # covers a SHA-256 manifest of every file under the backup dir. restore.sh
+  # validate_backup() verifies the signature with the CA intermediate public cert
+  # (extracted from ca_intermediate.crt) — reject-if-invalid, warn-if-absent.
+  #
+  # Threat model: an attacker who can modify backup files on disk but cannot read
+  # the CA intermediate key (0400, requires host root or the issuer container) cannot
+  # forge a valid signature. Without the signature check, a tampered backup silently
+  # overwrites live secrets and breaks mTLS for all services.
+  #
+  # Implementation:
+  #   1. Build a sorted SHA-256 manifest of all files in the backup dir.
+  #   2. Sign the manifest with openssl dgst -sign (ECDSA/RSA depending on key type).
+  #   3. Write manifest + .sig into the backup dir (0400).
+  #   The intermediate key is used rather than the root to avoid root key exposure;
+  #   both are equally trusted for this purpose since we control both.
+  local _ca_key="${WORK_DIR}/docker/secrets/ca_intermediate.key"
+  local _manifest_file="${backup_dir}/MANIFEST.sha256"
+  local _sig_file="${backup_dir}/MANIFEST.sha256.sig"
+  if [[ -f "$_ca_key" ]]; then
+    # Build sorted deterministic manifest: "sha256hash  relative/path" per line.
+    # find with -print0 + sort -z to handle spaces in names; awk strips leading ./
+    if (
+      cd "$backup_dir" && \
+      find . -type f ! -name 'MANIFEST.sha256' ! -name 'MANIFEST.sha256.sig' -print0 | \
+        sort -z | \
+        xargs -0 sha256sum | \
+        awk '{gsub(/^\.\//, "", $2); print}' > MANIFEST.sha256
+    ); then
+      chmod 0400 "$_manifest_file"
+      # Sign: openssl dgst -sign reads the raw key (PEM), outputs binary DER sig.
+      if openssl dgst -sha256 -sign "$_ca_key" -out "$_sig_file" "$_manifest_file" 2>/dev/null; then
+        chmod 0400 "$_sig_file"
+        log_success "Backup manifest signed (RETRO-R4-3): ${_manifest_file##*/} + ${_sig_file##*/}"
+      else
+        log_warn "Backup manifest signing failed (openssl dgst -sign error) — backup is unsigned"
+        rm -f "$_sig_file"
+      fi
+    else
+      log_warn "Backup manifest generation failed — backup is unsigned"
+    fi
+  else
+    log_warn "CA intermediate key not found at ${_ca_key} — backup is unsigned (expected on first-run before PKI bootstrap)"
+  fi
+
   log_success "Backup saved to ${backup_dir}"
 }
 
