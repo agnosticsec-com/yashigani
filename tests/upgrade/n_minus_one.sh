@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T12:00:00+01:00
+# last-updated: 2026-05-03T13:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1179,7 +1179,17 @@ cd "\$WORK"
 YSG_RUNTIME=\$RUNTIME bash restore.sh "\$BACKUP" 2>&1 | tee /tmp/n1_restore_run.log
 
 echo "[remote] restore.sh exit code: \$?"
-echo "[remote] Waiting for stack to restart after restore ..."
+
+# V232-SMOKE-013 fix: restore.sh does NOT restart the stack. It restores
+# secrets, .env, and the postgres dump, then prints "Next steps: compose up".
+# Without a restart the containers still hold the pre-restore in-memory state
+# (the backoffice may cache admin credentials or DB connections from before
+# the restore). Restart the stack so containers re-read the restored secrets
+# and reconnect to the restored postgres state.
+echo "[remote] Restarting stack after restore (compose up) ..."
+COMPOSE_CMD="${REMOTE_COMPOSE}"
+YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml up -d 2>&1 | tail -5
+echo "[remote] Stack restarted"
 REMOTE_SCRIPT
 
     local rc=$?
