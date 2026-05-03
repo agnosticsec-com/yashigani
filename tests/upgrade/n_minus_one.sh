@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T09:00:00+01:00
+# last-updated: 2026-05-03T10:30:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -883,7 +883,16 @@ mkdir -p "\$BACKUP_DIR"
 chmod 0700 "\$BACKUP_DIR"
 
 echo "[remote] Copying secrets + .env ..."
-cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
+# V232-SMOKE-007 fix: secrets created by Podman rootless containers are owned
+# by sub-UIDs (e.g. 494216) with mode 0400 — not readable by the host tom user
+# via plain cp -rp. Use 'podman unshare cp -rp' which enters the user namespace
+# so the sub-UID maps to the correct owner and the copy succeeds. Fall back to
+# plain cp when Podman is not available (Docker-only environment).
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    podman unshare cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
+else
+    cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
+fi
 chmod 0700 "\$BACKUP_DIR/secrets"
 cp "\$WORK/docker/.env" "\$BACKUP_DIR/.env"
 chmod 0600 "\$BACKUP_DIR/.env"
