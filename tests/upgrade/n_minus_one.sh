@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T11:15:00+01:00
+# last-updated: 2026-05-03T11:30:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -886,11 +886,21 @@ echo "[remote] Copying secrets + .env ..."
 # V232-SMOKE-007 fix: secrets created by Podman rootless containers are owned
 # by sub-UIDs (e.g. 494216) with mode 0400/0775 — not readable/chmod-able by
 # the host tom user via plain cp -rp or chmod. Run both cp AND chmod inside
-# 'podman unshare bash -c' so sub-UID 494216 maps to the calling user, making
-# the files readable and their permissions changeable. Fall back to plain cp
-# for Docker-only environments.
+# 'podman unshare bash -c' so sub-UID 494216 maps to the calling user inside
+# the namespace, making the copy and the permission change succeed.
+#
+# V232-SMOKE-009 fix: after podman unshare cp, the backup secrets dir is owned
+# by the sub-UID (494216 on the host). restore.sh validate_backup() runs as
+# tom (host UID 1006) and cannot traverse a dir owned by sub-UID with mode 0700.
+# Fix: after the copy+chmod-inside-namespace, run 'podman unshare chown 0:0'
+# to remap the backup secrets dir ownership to UID 0 inside the namespace
+# (= tom on the host), then chmod 0700 as host user. Individual secret files
+# stay sub-UID-owned (restore.sh reads them via its own podman unshare logic).
+# Falls back to plain cp for Docker-only environments.
 if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
-    podman unshare bash -c "cp -rp '\$WORK/docker/secrets' '\$BACKUP_DIR/secrets' && chmod 0700 '\$BACKUP_DIR/secrets'"
+    podman unshare bash -c "cp -rp '\$WORK/docker/secrets' '\$BACKUP_DIR/secrets'"
+    podman unshare chown 0:0 "\$BACKUP_DIR/secrets"
+    chmod 0700 "\$BACKUP_DIR/secrets"
 else
     cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
     chmod 0700 "\$BACKUP_DIR/secrets"
