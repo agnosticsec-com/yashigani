@@ -1,9 +1,9 @@
-# Last updated: 2026-05-02T00:00:00+01:00
+# Last updated: 2026-05-02T02:15:00+01:00
 # install-smoke.yml — Install smoke-test matrix (V232-P1)
 #
 # Matrix: macos-latest × ubuntu-latest  ×  docker × podman
 # Each cell:  ./install.sh --non-interactive --deploy demo --runtime <r>
-# Gate:       GET https://localhost:8443/healthz → HTTP 200 within 5 min
+# Gate:       GET https://localhost:{443|8443}/healthz → HTTP 200 within 5 min
 # Scope:      Smoke only — no AVA/register/update/export sweep (deferred v2.23.3)
 #
 # Runner cost note (GH Actions billing):
@@ -12,6 +12,12 @@
 #   Expected runtime: ~12 min per cell (build + compose up + healthz wait).
 #   Estimated cost per run: ~(2×12×10 + 2×12×1) = 264 Linux-equivalent minutes.
 #   Runs only on PRs/pushes to 2.23.x — not on every push to every branch.
+#
+# WORK_DIR note:
+#   YSG_INSTALL_DIR is intentionally NOT set. The installer resolves WORK_DIR
+#   from its own script path (the checkout dir, which contains docker/docker-compose.yml).
+#   Setting YSG_INSTALL_DIR to the workspace would trigger the "existing installation
+#   found" path, which sets SKIP_PULL=true and bypasses the compose build.
 
 name: Install Smoke Matrix
 
@@ -109,13 +115,13 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Runtime setup — macOS / Podman
-      # Podman desktop / machine provides the daemon via QEMU on macOS.
+      # Podman machine provides the daemon via a VM on macOS.
       # -----------------------------------------------------------------------
       - name: "[macos/podman] Install Podman + init machine"
         if: matrix.os-label == 'macos' && matrix.runtime == 'podman'
         run: |
           brew install podman podman-compose 2>/dev/null || true
-          # Init and start the Podman machine (QEMU-backed VM on macOS)
+          # Init and start the Podman machine (VM-backed on macOS)
           podman machine init --cpus 2 --memory 4096 --disk-size 20 ysg-smoke || true
           podman machine start ysg-smoke
           # Confirm connectivity
@@ -129,18 +135,18 @@ jobs:
       # --runtime <r>      → lock runtime (feedback_runtime_choice.md)
       # --skip-preflight   → skip disk/memory checks that fail on thin runners
       #
-      # For Linux/Podman rootful we need sudo only for the initial podman socket;
-      # the installer itself must run as a normal user (feedback_no_manual_hacks.md).
-      # YSG_RUNTIME is set as an env var rather than relying solely on --runtime
-      # so the health-check.sh compose-detection path also picks it up.
+      # YSG_RUNTIME is set as an env var so health-check.sh compose-detection
+      # also picks it up (health-check.sh reads YSG_RUNTIME independently).
+      #
+      # YSG_INSTALL_DIR is intentionally absent — installer uses $HOME/.yashigani
+      # as the default install target, and resolves WORK_DIR from its own script
+      # path (the checkout dir). Setting it to $GITHUB_WORKSPACE would trigger
+      # the "existing installation" upgrade path and bypass compose build.
       # -----------------------------------------------------------------------
       - name: Run installer
         env:
           YSG_RUNTIME: ${{ matrix.runtime }}
-          # CI=true suppresses interactive prompts that might sneak through
           CI: "true"
-          # Point installer to local checkout rather than pulling from GitHub
-          YSG_INSTALL_DIR: ${{ github.workspace }}
         run: |
           chmod +x install.sh
           ./install.sh \
@@ -153,33 +159,62 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Smoke assertion: gateway /healthz → HTTP 200
-      # Demo install binds Caddy on 8443 (macOS high-port default).
+      # Port selection:
+      #   Linux: Caddy binds 443 (Docker handles host port mapping as root).
+      #   macOS: installer falls back to 8443 (cannot bind 443 on macOS non-root).
+      # Try 443 first; if no response within 30 s try 8443.
       # -k: self-signed TLS in demo mode.
-      # Retry for up to 5 minutes (300 s / 10 s interval = 30 attempts).
+      # Total window: 300 s (30 attempts × 10 s).
       # -----------------------------------------------------------------------
       - name: "Assert gateway /healthz → 200"
         run: |
-          echo "Polling https://localhost:8443/healthz for up to 300 s..."
+          echo "Detecting HTTPS port..."
+          # Read from .env if installer wrote YASHIGANI_HTTPS_PORT
+          ENV_FILE="${HOME}/.yashigani/docker/.env"
+          [ -f "$ENV_FILE" ] || ENV_FILE="${GITHUB_WORKSPACE}/docker/.env"
+          if [ -f "$ENV_FILE" ]; then
+            port=$(grep "^YASHIGANI_HTTPS_PORT=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]') || port=""
+          fi
+          port="${port:-443}"
+          echo "Using port: ${port}"
+
+          echo "Polling https://localhost:${port}/healthz for up to 300 s..."
           deadline=$(( $(date +%s) + 300 ))
           attempt=0
           while [ "$(date +%s)" -lt "$deadline" ]; do
             attempt=$(( attempt + 1 ))
             http_code=$(curl -sk -o /dev/null -w "%{http_code}" \
-              --resolve "localhost:8443:127.0.0.1" \
+              --resolve "localhost:${port}:127.0.0.1" \
               --max-time 5 \
-              "https://localhost:8443/healthz" 2>/dev/null || echo "000")
-            echo "  attempt ${attempt}: HTTP ${http_code}"
+              "https://localhost:${port}/healthz" 2>/dev/null || echo "000")
+            echo "  attempt ${attempt} (port ${port}): HTTP ${http_code}"
             if [ "$http_code" = "200" ]; then
-              echo "SMOKE PASS: gateway /healthz returned 200"
+              echo "SMOKE PASS: gateway /healthz returned 200 on port ${port}"
               exit 0
+            fi
+            # Midpoint: if 443 yielded nothing, also try 8443
+            if [ "$attempt" = "15" ] && [ "$port" = "443" ]; then
+              alt_code=$(curl -sk -o /dev/null -w "%{http_code}" \
+                --resolve "localhost:8443:127.0.0.1" \
+                --max-time 5 \
+                "https://localhost:8443/healthz" 2>/dev/null || echo "000")
+              if [ "$alt_code" = "200" ]; then
+                echo "SMOKE PASS: gateway /healthz returned 200 on fallback port 8443"
+                exit 0
+              fi
+              # Switch primary port if 8443 is responding at all
+              if [ "$alt_code" != "000" ]; then
+                echo "  switching primary port to 8443 (got ${alt_code} vs 000 on 443)"
+                port="8443"
+              fi
             fi
             sleep 10
           done
-          echo "SMOKE FAIL: gateway /healthz did not return 200 within 300 s"
+          echo "SMOKE FAIL: gateway /healthz did not return 200 within 300 s (last port: ${port})"
           exit 1
 
       # -----------------------------------------------------------------------
-      # Diagnostics on failure: tee logs so failures are debuggable
+      # Diagnostics on failure
       # -----------------------------------------------------------------------
       - name: "Dump container logs on failure"
         if: failure()
@@ -194,8 +229,9 @@ jobs:
               compose_cmd="podman compose"
             fi
           fi
-          cd "${GITHUB_WORKSPACE}/docker" || exit 0
-          ${compose_cmd} -f docker-compose.yml logs --tail=50 2>/dev/null || true
+          compose_file="${GITHUB_WORKSPACE}/docker/docker-compose.yml"
+          [ -f "$compose_file" ] || compose_file="${HOME}/.yashigani/docker/docker-compose.yml"
+          ${compose_cmd} -f "${compose_file}" logs --tail=50 2>/dev/null || true
 
       - name: "Upload install log"
         if: always()
@@ -206,17 +242,24 @@ jobs:
           retention-days: 14
 
 # ---------------------------------------------------------------------------
-# Mutation test: sabotage compose build step, assert install exits non-zero
+# Mutation test: sabotage Dockerfile.gateway so compose build always fails
 #
 # Per the brief: "confirm workflow fails" when compose build breaks.
 # Runs on Linux/Docker only (cheapest cell, sufficient to prove gate semantics).
-# The sabotage is applied only to the temporary workspace copy — the repo tree
-# is not modified (sed writes to a temp file, original is untouched).
+#
+# Sabotage strategy: insert `RUN false` as the first RUN instruction in
+# Dockerfile.gateway. This causes `docker build` to fail unconditionally —
+# unlike patching install.sh which can be bypassed by early-return paths
+# (e.g. SKIP_PULL=true when an existing install is detected). The Dockerfile
+# is the ground-truth build artifact; its failure always surfaces as a non-zero
+# compose build exit code regardless of installer branching logic.
+#
+# The patch only modifies the local workspace copy; original repo is untouched.
 # ---------------------------------------------------------------------------
   mutation:
     name: "mutation / compose-build-sabotage"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
       - name: Checkout
@@ -229,30 +272,42 @@ jobs:
           docker info
           docker compose version
 
-      - name: "Inject compose-build sabotage"
+      - name: "Inject Dockerfile sabotage"
         run: |
-          # Replace the compose build call in install.sh with a guaranteed failure.
-          # Target: the "build gateway backoffice" call in the image-build step.
-          # We inject `exit 1` as the first command in the build invocation.
-          # The sed pattern targets the log_info before the compose build call so
-          # any variation in the compose command form is still caught.
-          #
-          # IMPORTANT: this only modifies the local workspace copy.
-          # The original file and repo history are untouched.
-          grep -n "Building gateway and backoffice images" install.sh
-          sed -i 's|log_info "Building gateway and backoffice images from source\.\.\."|log_info "Building gateway and backoffice images from source..."\n  log_error "MUTATION: compose build sabotaged"\n  return 1|' install.sh
-          echo "--- Sabotage injected. Verifying patch ---"
-          grep -A3 "Building gateway and backoffice images" install.sh
+          # Verify the target exists
+          head -5 docker/Dockerfile.gateway
+
+          # Insert `RUN false` as the first executable instruction.
+          # We use a Python one-liner to insert after the first FROM line,
+          # which is more robust than sed across FROM variants (multi-stage, args).
+          python3 - <<'PYEOF'
+          with open("docker/Dockerfile.gateway", "r") as f:
+              lines = f.readlines()
+          patched = []
+          inserted = False
+          for line in lines:
+              patched.append(line)
+              if not inserted and line.strip().upper().startswith("FROM "):
+                  patched.append("# MUTATION TEST: force build failure\n")
+                  patched.append("RUN echo 'MUTATION: compose build sabotaged' && false\n")
+                  inserted = True
+          with open("docker/Dockerfile.gateway", "w") as f:
+              f.writelines(patched)
+          print(f"Inserted RUN false after first FROM (inserted={inserted})")
+          PYEOF
+
+          echo "--- Sabotage injected. First 10 lines of Dockerfile.gateway ---"
+          head -10 docker/Dockerfile.gateway
 
       - name: "Run sabotaged installer (must fail)"
         id: sabotaged_run
         env:
           YSG_RUNTIME: docker
           CI: "true"
-          YSG_INSTALL_DIR: ${{ github.workspace }}
         run: |
           chmod +x install.sh
-          # Run; capture exit code without aborting the step
+          # Run; capture exit code without aborting the step.
+          # The || clause sets sabotage_detected=true when install exits non-zero.
           if ./install.sh \
               --non-interactive \
               --deploy demo \
@@ -266,8 +321,13 @@ jobs:
 
       - name: "Assert mutation was detected (install must have exited non-zero)"
         run: |
+          # Verify the log contains the expected sabotage marker
+          echo "--- Checking mutation marker in log ---"
+          grep -i "MUTATION\|compose build\|build.*fail\|Failed to build" mutation-install.log | head -5 || true
+
           if [ "${{ steps.sabotaged_run.outputs.sabotage_detected }}" != "true" ]; then
             echo "MUTATION FAIL: sabotaged install exited 0 — gate is not enforcing build failure"
+            echo "This means the compose build step was bypassed or the error was swallowed."
             exit 1
           fi
           echo "MUTATION PASS: sabotaged install correctly exited non-zero"
