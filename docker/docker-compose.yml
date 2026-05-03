@@ -376,7 +376,7 @@ services:
   # ---------------------------------------------------------------------------
   open-webui:
     dns_search: ["."]
-    image: ghcr.io/open-webui/open-webui:v0.9.1@sha256:b4ee86c80412d2b9e78b33b27d4c4737c73141676dfdc1418d2a293f1c089c85
+    image: ghcr.io/open-webui/open-webui:v0.9.2
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENWEBUI_MEM_LIMIT:-2048m}
     cpus: ${YASHIGANI_OPENWEBUI_CPU_LIMIT:-1.0}
@@ -476,7 +476,7 @@ services:
   # ---------------------------------------------------------------------------
   policy:
     dns_search: ["."]
-    image: docker.io/openpolicyagent/opa:1.15.1@sha256:d90da198626182c2415596cad6f5f16ad45ac9653ea4fe8572e71eab89d5f8ea
+    image: docker.io/openpolicyagent/opa:1.16.1
     restart: unless-stopped
     mem_limit: ${YASHIGANI_POLICY_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_POLICY_CPU_LIMIT:-0.25}
@@ -568,7 +568,7 @@ services:
   # ---------------------------------------------------------------------------
   ollama:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.6.2@sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab
+    image: docker.io/ollama/ollama:0.22.1
     user: "1000:1000"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OLLAMA_MEM_LIMIT:-4096m}
@@ -606,7 +606,7 @@ services:
   # Model bootstrap — pull classifier model on first start
   ollama-init:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.6.2@sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab
+    image: docker.io/ollama/ollama:0.22.1
     restart: on-failure:3
     mem_limit: ${YASHIGANI_OLLAMA_INIT_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_OLLAMA_INIT_CPU_LIMIT:-0.25}
@@ -647,7 +647,7 @@ services:
   # ---------------------------------------------------------------------------
   prometheus:
     dns_search: ["."]
-    image: docker.io/prom/prometheus:v3.2.1@sha256:641f5faf625e3c667e2fb75b89a8a1dbc59a564f982f725fffb314f9293ab150
+    image: docker.io/prom/prometheus:v3.11.3
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMETHEUS_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_PROMETHEUS_CPU_LIMIT:-0.5}
@@ -694,7 +694,7 @@ services:
   # ---------------------------------------------------------------------------
   grafana:
     dns_search: ["."]
-    image: docker.io/grafana/grafana:11.5.2@sha256:4230a176e6f220e5aab2633463823a45392f12933f954e96643140a3611e482f
+    image: docker.io/grafana/grafana:13.0.1
     restart: unless-stopped
     mem_limit: ${YASHIGANI_GRAFANA_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_GRAFANA_CPU_LIMIT:-0.25}
@@ -771,7 +771,7 @@ services:
   # PgBouncer — transaction-mode connection pooler
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: docker.io/edoburu/pgbouncer:v1.23.1-p0@sha256:dba33a500894390283662d596feafad55e8dad83162703f8324e3efb7aa6808f
+    image: docker.io/edoburu/pgbouncer:v1.25.1-p0
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PGBOUNCER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PGBOUNCER_CPU_LIMIT:-0.25}
@@ -820,7 +820,7 @@ services:
   # ---------------------------------------------------------------------------
   alertmanager:
     dns_search: ["."]
-    image: docker.io/prom/alertmanager:v0.27.0@sha256:2fbdd4c66d91e740fe3fd462d8f52fc3d305a5b403bab3a58feb62be237a84fb
+    image: docker.io/prom/alertmanager:v0.32.1
     restart: unless-stopped
     mem_limit: ${YASHIGANI_ALERTMANAGER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_ALERTMANAGER_CPU_LIMIT:-0.25}
@@ -851,7 +851,7 @@ services:
   # ---------------------------------------------------------------------------
   loki:
     dns_search: ["."]
-    image: docker.io/grafana/loki:3.0.0@sha256:e5f7ab1e3a138dbf769cb73ec08144f83943c556ac6dfc8adae035d3669abb39
+    image: docker.io/grafana/loki:3.7.1
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LOKI_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_LOKI_CPU_LIMIT:-0.25}
@@ -876,7 +876,7 @@ services:
   # ---------------------------------------------------------------------------
   promtail:
     dns_search: ["."]
-    image: docker.io/grafana/promtail:3.0.0@sha256:b55d0fd9c1eff12a3d4c5c03fc4c352344ce6d067c17148ffd891af10c2d81ec
+    image: docker.io/grafana/promtail:3.6.10
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMTAIL_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PROMTAIL_CPU_LIMIT:-0.25}
@@ -910,7 +910,7 @@ services:
   # ---------------------------------------------------------------------------
   otel-collector:
     dns_search: ["."]
-    image: docker.io/otel/opentelemetry-collector-contrib:0.100.0@sha256:dfb4bdba4049130bb2f8226cc1b45977e2b34eab3ae0858eca95a98215aea5ba
+    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OTEL_COLLECTOR_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_OTEL_COLLECTOR_CPU_LIMIT:-0.5}
@@ -950,7 +950,7 @@ services:
   # ---------------------------------------------------------------------------
   jaeger:
     dns_search: ["."]
-    image: docker.io/jaegertracing/all-in-one:1.57@sha256:84d2b9664cea496af47fb58077319b55569542804884041a87b175475e183628
+    image: docker.io/jaegertracing/jaeger:2.17.0
     restart: unless-stopped
     mem_limit: ${YASHIGANI_JAEGER_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_JAEGER_CPU_LIMIT:-0.5}
@@ -986,7 +986,7 @@ services:
   # ---------------------------------------------------------------------------
   keycloak:
     dns_search: ["."]
-    image: quay.io/keycloak/keycloak:26.0@sha256:6ef47aef4e2b282b51af60d8ed1df52b8e461c0cc7a0d4250278a5540b6d0cc1
+    image: quay.io/keycloak/keycloak:26.6.1
     restart: unless-stopped
     mem_limit: ${YASHIGANI_KEYCLOAK_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_KEYCLOAK_CPU_LIMIT:-1.0}
@@ -1029,7 +1029,7 @@ services:
   # ---------------------------------------------------------------------------
   vault:
     dns_search: ["."]
-    image: docker.io/hashicorp/vault:1.16@sha256:8f24288a1ff506e7b37f82ed43d64d748ff03e27553ae248912663828ed8b88b
+    image: docker.io/hashicorp/vault:2.0.0
     restart: unless-stopped
     mem_limit: ${YASHIGANI_VAULT_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_VAULT_CPU_LIMIT:-0.5}
@@ -1073,7 +1073,7 @@ services:
   # Users build custom agent workflows visually via the Langflow UI.
   langflow:
     dns_search: ["."]
-    image: docker.io/langflowai/langflow:1.9.0@sha256:e2210f23b99d35bdacbac2640bc56a78629b582df72f83563ddda55dab56ba75
+    image: docker.io/langflowai/langflow:1.9.2
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LANGFLOW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_LANGFLOW_CPU_LIMIT:-1.0}
@@ -1163,7 +1163,7 @@ services:
   # Integration: OpenClaw (:18789) → Yashigani Gateway (:8080) → Ollama/LLM
   openclaw:
     dns_search: ["."]
-    image: ghcr.io/openclaw/openclaw:2026.3.1@sha256:f43ad2a0f5c5598f2935c0914cdc4396ca34858503c92e1082fa5fedfc0e1cd6
+    image: ghcr.io/openclaw/openclaw:v2026.5.2
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENCLAW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_OPENCLAW_CPU_LIMIT:-1.0}
@@ -1215,7 +1215,7 @@ services:
   # ---------------------------------------------------------------------------
   wazuh-manager:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-manager:4.9.2@sha256:b906ebfc77d78446e9b676e1a0b3cd78e2bf3ac2341688f1726b09c29e0aa826
+    image: docker.io/wazuh/wazuh-manager:4.14.5
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
@@ -1261,7 +1261,7 @@ services:
 
   wazuh-indexer:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-indexer:4.9.2@sha256:654bd546b92627974ac65f97836665a387647d6a299bc4c55614620bec1b56de
+    image: docker.io/wazuh/wazuh-indexer:4.14.5
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
@@ -1286,7 +1286,7 @@ services:
 
   wazuh-dashboard:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-dashboard:4.9.2@sha256:7622129f46c44f9fceb06a5e3ef7366f965e45aac60da1bafd828705e582100a
+    image: docker.io/wazuh/wazuh-dashboard:4.14.5
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}
