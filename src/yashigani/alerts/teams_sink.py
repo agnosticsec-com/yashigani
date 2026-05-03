@@ -1,5 +1,12 @@
 """
 Yashigani Alerts — Microsoft Teams webhook sink (Adaptive Card format).
+
+# Last updated: 2026-05-03T00:00:00+01:00
+
+V232-CSCAN-01b: URL guard applied at constructor time (config-write path) AND
+at send-time (defence-in-depth). Teams allowlist: webhook.office.com,
+outlook.office.com, outlook.office365.com, logic.azure.com (and subdomains).
+Redirects disabled (follow_redirects=False) to prevent pivot chains.
 """
 from __future__ import annotations
 
@@ -7,9 +14,19 @@ import logging
 
 import httpx
 
+from yashigani.alerts._url_guard import WebhookUrlForbidden, assert_webhook_url
 from yashigani.alerts.base import AlertPayload, AlertSink
 
 logger = logging.getLogger(__name__)
+
+# Teams / Power Automate webhook hosts.
+# Subdomain matching is applied: foo.webhook.office.com passes for webhook.office.com.
+_TEAMS_ALLOWED_HOSTS: frozenset[str] = frozenset({
+    "webhook.office.com",
+    "outlook.office.com",
+    "outlook.office365.com",
+    "logic.azure.com",
+})
 
 _SEVERITY_COLOR = {
     "critical": "Attention",
@@ -19,13 +36,22 @@ _SEVERITY_COLOR = {
 
 
 class TeamsSink(AlertSink):
-    """Delivers alerts to a Microsoft Teams channel via incoming webhook."""
+    """Delivers alerts to a Microsoft Teams channel via incoming webhook.
+
+    Raises WebhookUrlForbidden at construction time if the URL fails the SSRF
+    guard — this propagates to the admin config route as a 400 error.
+    """
 
     def __init__(self, webhook_url: str, timeout: float = 10.0) -> None:
+        # V232-CSCAN-01b: validate at construction (config-write time).
+        assert_webhook_url(webhook_url, allowed_hosts=_TEAMS_ALLOWED_HOSTS)
         self._url = webhook_url
         self._timeout = timeout
 
     async def send(self, payload: AlertPayload) -> None:
+        # V232-CSCAN-01b: last-line-of-defence re-validation before network call.
+        assert_webhook_url(self._url, allowed_hosts=_TEAMS_ALLOWED_HOSTS)
+
         color = _SEVERITY_COLOR.get(payload.severity, "Default")
         card = {
             "type": "message",
@@ -67,7 +93,10 @@ class TeamsSink(AlertSink):
                 }
             ],
         }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0),
+            follow_redirects=False,
+        ) as client:
             resp = await client.post(self._url, json=card)
             resp.raise_for_status()
 

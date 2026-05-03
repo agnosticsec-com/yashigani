@@ -1,7 +1,7 @@
 """
 Yashigani Backoffice — Alert sink configuration routes (v0.7.0).
 
-Last updated: 2026-05-02T09:00:00+01:00
+Last updated: 2026-05-03T00:00:00+01:00
 
 Configure Slack / Teams / PagerDuty direct webhook alerting.
 
@@ -118,8 +118,20 @@ async def update_alert_config(
     body: AlertConfigRequest,
     session: AdminSession,
 ):
-    """Update alert sink configuration and rebuild the dispatcher."""
-    _rebuild_dispatcher(body)
+    """Update alert sink configuration and rebuild the dispatcher.
+
+    V232-CSCAN-01b: URL guard is applied inside _rebuild_dispatcher() via the
+    SlackSink/TeamsSink constructors. A WebhookUrlForbidden exception is caught
+    here and converted to HTTP 400 so the malicious URL is never persisted.
+    """
+    from yashigani.alerts._url_guard import WebhookUrlForbidden
+    try:
+        _rebuild_dispatcher(body)
+    except WebhookUrlForbidden as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "webhook_url_forbidden", "reason": exc.reason},
+        ) from exc
 
     from yashigani.audit.schema import ConfigChangedEvent
     if backoffice_state.audit_writer is not None:
