@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-02T00:00:00+01:00 (RETRO-R4-1/R4-3: CA bundle parity + openssl dgst verify; RETRO-R4-4: BSD sed portability)
+# Last updated: 2026-05-03T12:15:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check in validate_backup)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -305,8 +305,10 @@ validate_backup() {
   fi
 
   # Hard fail: empty secret files indicate corruption.
+  # Exclude .gitkeep (an intentionally-empty git placeholder present in the
+  # committed docker/secrets/ directory and preserved in every backup by cp -rp).
   local empty_count
-  empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty 2>/dev/null | wc -l | tr -d ' ')
+  empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$empty_count" -gt 0 ]]; then
     log_error "${empty_count} secret file(s) are empty — backup is corrupt"
     errors=$((errors + 1))
