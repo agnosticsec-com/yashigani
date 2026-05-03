@@ -7,11 +7,10 @@ POST /auth/password/change  — forced change on first login
 POST /auth/totp/provision   — TOTP + recovery codes provisioning
 POST /auth/stepup           — V6.8.4 step-up TOTP verification for high-value flows
 
-Last updated: 2026-04-30T04:45:00+01:00
+Last updated: 2026-05-02T00:00:00+01:00
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
@@ -127,11 +126,13 @@ def _check_ip_access(client_ip: str) -> None:
             )
 
 
-async def _apply_auth_throttle(client_ip: str) -> None:
+def _apply_auth_throttle(client_ip: str, response: Response) -> None:
     """
     Check per-IP and global failure counters.  If either exceeds its threshold,
-    compute the delay from the HIGHER level and sleep before returning.
-    This wastes the attacker's connection (ASVS 6.3.5).
+    raise HTTP 429 with a ``Retry-After`` header (RFC 6585) and a user-facing
+    banner message.  The caller never proceeds past this point while throttled.
+
+    ASVS 6.3.5: brute-force mitigation via rate-limiting and account lockout.
     """
     r = _get_throttle_redis()
     ip_key = f"auth:throttle:ip:{client_ip}"
@@ -161,7 +162,22 @@ async def _apply_auth_throttle(client_ip: str) -> None:
             "Auth throttle: ip=%s level=%d delay=%ds",
             client_ip, effective_level, delay,
         )
-        await asyncio.sleep(delay)
+        # RFC 6585 §4 — Retry-After header on 429.
+        # Set on the response object so the header is present on the HTTPException
+        # response (FastAPI propagates headers set before raise).
+        response.headers["Retry-After"] = str(delay)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers={"Retry-After": str(delay)},
+            detail={
+                "error": "too_many_requests",
+                "retry_after_seconds": delay,
+                "banner": (
+                    f"Too many failed login attempts. "
+                    f"Please wait {delay} second{'s' if delay != 1 else ''} before trying again."
+                ),
+            },
+        )
 
 
 def _record_auth_failure(client_ip: str) -> None:
@@ -243,7 +259,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
 
     # Check order: allowlist → blocklist → throttle → auth
     _check_ip_access(client_ip)
-    await _apply_auth_throttle(client_ip)
+    _apply_auth_throttle(client_ip, response)
 
     state = backoffice_state
     assert state.auth_service is not None   # set unconditionally at startup
