@@ -40,8 +40,8 @@ global:
 # A CronJob rotates leaf certs weekly (default Sun 02:00). Pods pick up
 # the new cert on the next roll/restart — no in-place reload in v2.23.1.
 #
-# OPA (policy) stays on plaintext HTTP; mtls_capable:false in the manifest.
-# Observability-plane mTLS lands in v2.23.2 (task #54).
+# OPA (policy) now serves mTLS; mtls_capable:true in the manifest (v2.23.2).
+# All callers updated to use internal_httpx_client (EX-231-01 closed).
 #
 # UPGRADE NOTE — plaintext → mTLS on an existing PVC:
 # The postgres init script (05-enable-ssl.sh) only runs on a fresh initdb.
@@ -215,7 +215,7 @@ gateway:
     minAvailable: 1
   env:
     upstreamUrl: ""
-    opaUrl: "http://yashigani-policy:8181"
+    opaUrl: "https://yashigani-policy:8181"
     ollamaUrl: "http://yashigani-ollama:11434"
     redisHost: "yashigani-redis"
     redisPort: "6379"

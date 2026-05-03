@@ -169,7 +169,7 @@ spec:
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
             {{- end }}
             - name: YASHIGANI_OPA_URL
-              value: "http://yashigani-policy:8181"
+              value: "https://yashigani-policy:8181"
             - name: YASHIGANI_SECRETS_DIR
               value: "/run/secrets"
             - name: YASHIGANI_DEPLOYMENT_STREAM

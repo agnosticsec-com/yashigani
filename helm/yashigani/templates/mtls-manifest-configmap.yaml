@@ -3,8 +3,10 @@
   Service identity manifest, mounted into the PKI issuer Job.
   Source of truth is docker/service_identities.yaml — this ConfigMap is
   populated via `.Files.Get`, so `helm package` ships a version-pinned copy.
-  Keep helm/yashigani/files/service_identities.yaml in sync with the
-  docker/ copy; release tooling verifies the hashes match.
+  helm/yashigani/files/service_identities.yaml is a derived copy maintained
+  by `make sync-service-identities`. Never edit it directly. SHA parity is
+  enforced by CI (tests/contracts/test_service_identities_sha.py).
+  See docs/development/service_identities.md for the update workflow.
 */ -}}
 ---
 apiVersion: v1
