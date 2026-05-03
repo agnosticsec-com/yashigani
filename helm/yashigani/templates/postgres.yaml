@@ -32,7 +32,7 @@ spec:
       # /run/secrets mount collision — see redis.yaml note.
       automountServiceAccountToken: false
       securityContext:
-        # Captain #58c #3bt evidence (2026-04-29): postgres:16-alpine runs as
+        # Internal K8s integration evidence: postgres:16-alpine runs as
         # UID/GID 70 (Alpine convention). The previous fsGroup: 999 was
         # carried over from when the image was the Debian-based postgres
         # (UID/GID 999). With Alpine, mounted Secret volumes (default mode
@@ -98,7 +98,7 @@ spec:
           # `local all all trust` so the probe just checks the process is
           # accepting connections).
           #
-          # Captain #58c #3bs evidence (2026-04-28): without a startupProbe,
+          # Internal K8s integration evidence: without a startupProbe,
           # the liveness probe kicks in 70s after pod start. initdb + the
           # init scripts in /docker-entrypoint-initdb.d (including
           # 05-enable-ssl.sh which copies certs into PGDATA + appends ssl=on

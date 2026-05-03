@@ -129,14 +129,14 @@ spec:
               # lock can't verify chain-bundle certs with ca_root.crt alone.
               # openssl error 20 "unable to get local issuer certificate".
               # ca_bundle.crt = ca_root.crt + ca_intermediate.crt concatenated.
-              # Captain R4 K8s gate finding 2026-04-30.
+              # Internal K8s gate finding.
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-pgbouncer:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
             - name: YASHIGANI_DB_DSN_DIRECT
               # Direct-to-postgres DSN, bypassing pgbouncer. Used by run_migrations()
               # advisory lock. pgbouncer transaction-pool routes each connection to
               # a different postgres backend — session-scoped pg_advisory_lock
               # cannot serialise across replicas via pgbouncer. Direct connection
-              # puts both replicas on the same backend. Captain #58c #3bw (2026-04-29).
+              # puts both replicas on the same backend (internal K8s integration finding).
               # ca_bundle.crt: same libpq chain-verify fix as YASHIGANI_DB_DSN.
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/gateway_client.crt&sslkey=/run/secrets/gateway_client.key"
             {{- else }}
@@ -149,7 +149,7 @@ spec:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
             {{- if .Values.mtls.enabled }}
-            # EX-231-10 Layer B: Tom's middleware reads CADDY_INTERNAL_HMAC at
+            # EX-231-10 Layer B: gateway middleware reads CADDY_INTERNAL_HMAC at
             # lifespan startup and rejects requests without a matching
             # X-Caddy-Verified-Secret header → 401. Secret is in pki-certs.
             - name: CADDY_INTERNAL_HMAC

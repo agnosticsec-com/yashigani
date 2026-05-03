@@ -145,7 +145,7 @@ jobs:
       # Run the installer
       # --non-interactive  → no TTY prompts, demo mode auto-selected
       # --deploy demo      → explicit demo mode (self-signed TLS, localhost)
-      # --runtime <r>      → lock runtime (feedback_runtime_choice.md)
+      # --runtime <r>      → lock runtime (admin selects podman/docker/k8s)
       # --skip-preflight   → skip disk/memory checks that fail on thin runners
       #
       # YSG_RUNTIME is set as an env var so health-check.sh compose-detection
@@ -166,7 +166,7 @@ jobs:
       # (tracked as V232-SMOKE-001 in the v2.23.2 backlog).
       # -----------------------------------------------------------------------
       # Node.js setup (V232-CSCAN-01i)
-      # Ava's open-redirect JS-execution tests (test_v2232_open_redirect_cscan_01d.py)
+      # Open-redirect JS-execution tests (test_v2232_open_redirect_cscan_01d.py)
       # call `node --input-type=module` via subprocess.  Without Node on PATH the 26
       # dynamic tests in TestSafeNextRejectsOffOriginCases and TestSafeNextAcceptsLegitimatePaths
       # silently skip.  Node 22 LTS is pre-installed on ubuntu-latest and macos-latest
@@ -187,7 +187,7 @@ jobs:
       # DOCKER_DEFAULT_PLATFORM=linux/amd64 does NOT override an explicit @sha256:
       # digest — BuildKit/Docker always pulls the pinned layer regardless.
       # Work-around: strip @sha256:... from both Dockerfile FROM lines and compose
-      # image: fields before install runs. Permanent fix (Tom's domain): update all
+      # image: fields before install runs. Permanent fix (release engineering): update all
       # digest pins to amd64 or add explicit --platform directives.
       # Tracked as V232-SMOKE-001 in the v2.23.2 backlog.
       - name: "[ci] Strip arm64 digest pins for amd64 runner compatibility"
@@ -319,7 +319,7 @@ jobs:
           exit 1
 
       # -----------------------------------------------------------------------
-      # V232-CSCAN-01i: Run Ava's JS open-redirect unit tests
+      # V232-CSCAN-01i: Run JS open-redirect unit tests
       # These tests are pure-static + Node.js subprocess — no running stack needed.
       # 26 tests call safeNext() via `node --input-type=module`; 10 static source
       # checks run without Node.  All 36 must PASS (not skip) now that Node 22 is

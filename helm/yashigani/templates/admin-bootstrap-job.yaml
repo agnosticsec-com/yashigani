@@ -150,7 +150,7 @@ spec:
             - |
               set -euo pipefail
               # Generate six values matching install.sh _gen_admin_credentials.
-              # Charset matches feedback_password_charset.md exactly:
+              # Charset matches the project password-charset policy exactly:
               # A-Za-z0-9!*,-._~ (URL-safe, sed/shell/env-safe).
               # Script emitted via base64 so YAML block-scalar indent does not
               # bleed into the Python source.

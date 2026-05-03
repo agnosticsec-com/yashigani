@@ -58,8 +58,8 @@ spec:
             # that uses $(POSTGRES_PASSWORD) MUST be declared after it. The
             # edoburu/pgbouncer entrypoint extracts the password from
             # DATABASE_URL into userlist.txt; if the literal "$(POSTGRES_PASSWORD)"
-            # leaks in, password auth fails on every connect (Captain #58c #3bf
-            # evidence, 2026-04-28).
+            # leaks in, password auth fails on every connect (internal K8s integration
+            # evidence).
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:

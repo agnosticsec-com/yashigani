@@ -3,7 +3,7 @@
 # Last updated: 2026-05-02T23:00:00+01:00
 #
 # Purpose: pins every upstream image in values.yaml to its sha256 digest,
-# closing ASVS V10.3.1 (H-02 from Iris design-drift audit). Apply as a
+# closing ASVS V10.3.1 (H-02 from internal design-drift audit). Apply as a
 # second values file:
 #
 #   helm upgrade --install yashigani ./helm/yashigani \
