@@ -1,4 +1,4 @@
-# Last updated: 2026-04-27T21:59:11+01:00
+# Last updated: 2026-05-02T00:00:00+01:00
 # M-01 fix: OTLP receivers upgraded to mTLS (Pattern B).
 # Trust anchor: ca_intermediate.crt (never ca_root.crt — Pattern B rule).
 # Server cert: otel-collector_client.crt / otel-collector_client.key
@@ -65,9 +65,14 @@ processors:
 
 exporters:
   otlp/jaeger:
+    # EX-231-09 fix (v2.23.2): switched from insecure: true to mTLS.
+    # otel-collector presents its own leaf cert to Jaeger; Jaeger verifies
+    # against ca_intermediate.crt (Pattern B). TLS 1.2 minimum.
     endpoint: jaeger:4317
     tls:
-      insecure: true
+      cert_file: /run/secrets/otel-collector_client.crt
+      key_file: /run/secrets/otel-collector_client.key
+      ca_file: /run/secrets/ca_intermediate.crt
   logging:
     verbosity: basic
   # Loki log exporter — ships OTLP log records from gateway and backoffice.

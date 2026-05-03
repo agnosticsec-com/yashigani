@@ -1,3 +1,5 @@
+{{- /* Last updated: 2026-05-02T00:00:00+01:00 */ -}}
+{{- /* EX-231-09 fix (v2.23.2): Jaeger OTLP gRPC collector port mTLS-enabled. */ -}}
 {{- if .Values.jaeger.enabled }}
 ---
 apiVersion: apps/v1
@@ -20,10 +22,18 @@ spec:
       labels:
         app.kubernetes.io/name: yashigani-jaeger
         app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if .Values.mtls.enabled }}
+      annotations:
+        checksum/pki-certs: {{ lookup "v1" "Secret" .Release.Namespace .Values.mtls.secretName | default dict | dig "metadata" "resourceVersion" "" | quote }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -31,7 +41,10 @@ spec:
           image: "{{ .Values.jaeger.image.repository }}:{{ .Values.jaeger.image.tag }}"
           imagePullPolicy: {{ .Values.jaeger.image.pullPolicy }}
           securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
@@ -44,11 +57,27 @@ spec:
             - name: otlp-http
               containerPort: 4318
               protocol: TCP
+            - name: admin
+              containerPort: 14269
+              protocol: TCP
           env:
             - name: COLLECTOR_OTLP_ENABLED
               value: "true"
             - name: SPAN_STORAGE_TYPE
               value: "memory"
+            {{- if .Values.mtls.enabled }}
+            # EX-231-09 fix: mTLS on OTLP gRPC collector port.
+            # Jaeger presents jaeger leaf cert; otel-collector must present
+            # a valid leaf signed by ca_bundle.crt (root+intermediate, K8s).
+            - name: COLLECTOR_OTLP_GRPC_TLS_ENABLED
+              value: "true"
+            - name: COLLECTOR_OTLP_GRPC_TLS_CERT
+              value: /run/secrets/jaeger_client.crt
+            - name: COLLECTOR_OTLP_GRPC_TLS_KEY
+              value: /run/secrets/jaeger_client.key
+            - name: COLLECTOR_OTLP_GRPC_TLS_CLIENT_CA
+              value: /run/secrets/ca_bundle.crt
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /
@@ -67,6 +96,24 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml .Values.jaeger.resources | nindent 12 }}
+          {{- if .Values.mtls.enabled }}
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 50Mi
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

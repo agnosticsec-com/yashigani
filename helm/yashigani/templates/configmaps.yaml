@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-02T09:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-02T01:00:00+01:00 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -77,9 +77,19 @@ data:
         send_batch_size: 1024
     exporters:
       otlp/jaeger:
+        # EX-231-09 fix (v2.23.2): switched from insecure: true to mTLS.
+        # otel-collector presents its leaf cert; Jaeger verifies against
+        # ca_bundle.crt (root+intermediate, K8s Go x509 pattern).
         endpoint: "yashigani-jaeger:4317"
+        {{- if .Values.mtls.enabled }}
+        tls:
+          cert_file: /run/secrets/otel-collector_client.crt
+          key_file: /run/secrets/otel-collector_client.key
+          ca_file: /run/secrets/ca_bundle.crt
+        {{- else }}
         tls:
           insecure: true
+        {{- end }}
       loki:
         endpoint: "http://yashigani-loki:3100/loki/api/v1/push"
     extensions:

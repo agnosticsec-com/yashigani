@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Yashigani — Service Identity Manifest (IaC-declared ecosystem allowlist)
-# Last updated: 2026-04-28T22:00:00+01:00
+# Last updated: 2026-05-02T01:00:00+01:00
 #
 # Every container that speaks inside the Yashigani mesh MUST have an entry
 # here. Services not in this file cannot obtain an internal-CA-signed client
@@ -159,7 +159,7 @@ services:
   - name: otel-collector
     dns_sans: [otel-collector, otel-collector.internal, yashigani-otel-collector]
     spiffe_id: spiffe://yashigani.internal/otel-collector
-    purpose: "OTLP receiver, Jaeger exporter"
+    purpose: "OTLP receiver (mTLS); Jaeger exporter (mTLS, EX-231-09 closed v2.23.2)"
     mtls_capable: true
     bootstrap_token_sha256: "352e56c187102192df998a59fddef00001337912d7263bb81166cfe762b2df73"
     revoked: false
@@ -167,7 +167,7 @@ services:
   - name: jaeger
     dns_sans: [jaeger, jaeger.internal, yashigani-jaeger]
     spiffe_id: spiffe://yashigani.internal/jaeger
-    purpose: "Distributed trace UI"
+    purpose: "Distributed trace UI + OTLP gRPC collector (mTLS, EX-231-09 closed v2.23.2)"
     mtls_capable: true
     bootstrap_token_sha256: "e5e9888bff75d194f48a9f43ebe09781fe07c4078872ec8390c357becbb2558b"
     revoked: false
