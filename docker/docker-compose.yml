@@ -358,6 +358,11 @@ services:
   # Open WebUI — User-facing chat interface (v1.0)
   # Internal network only. No external port. All LLM calls route through gateway.
   # Auth: trusts X-Forwarded-User from Caddy (SSO) or API key passthrough.
+  #
+  # DEPRECATED (v2.23.2): Open WebUI integration is sunsetting. Yashigani's own
+  # built-in UI ships in v2.24.0. This service is opt-in (docker compose
+  # --profile openwebui) and will be removed in v2.24.0. Administrators should
+  # plan migration before upgrading. No image bump will be applied.
   # ---------------------------------------------------------------------------
   open-webui:
     dns_search: ["."]
