@@ -1,3 +1,4 @@
+# Last updated: 2026-05-02T10:00:00+01:00
 name: Release — SBOM, Sign & Publish
 
 # Triggered on version tags (e.g. v2.2.0).
@@ -36,7 +37,7 @@ jobs:
       # 1. Checkout
       # -----------------------------------------------------------------------
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       # -----------------------------------------------------------------------
       # 2. Resolve version from tag (strip leading 'v')
@@ -95,8 +96,8 @@ jobs:
       # 7. Sign gateway image (keyless — uses OIDC token from id-token permission)
       # -----------------------------------------------------------------------
       - name: Sign gateway image
-        env:
-          COSIGN_EXPERIMENTAL: "1"
+        # COSIGN_EXPERIMENTAL was removed in cosign v2; keyless is now default.
+        # Env var is omitted — cosign v3 (pinned above) uses OIDC by default.
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-gateway:${{ steps.version.outputs.version }}"
           cosign sign --yes "${IMAGE}"
@@ -105,8 +106,6 @@ jobs:
       # 8. Sign backoffice image
       # -----------------------------------------------------------------------
       - name: Sign backoffice image
-        env:
-          COSIGN_EXPERIMENTAL: "1"
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-backoffice:${{ steps.version.outputs.version }}"
           cosign sign --yes "${IMAGE}"
@@ -115,8 +114,6 @@ jobs:
       # 9. Attach SBOM attestation — gateway
       # -----------------------------------------------------------------------
       - name: Attach SBOM attestation (gateway)
-        env:
-          COSIGN_EXPERIMENTAL: "1"
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-gateway:${{ steps.version.outputs.version }}"
           SBOM="dist/sbom-yashigani-${{ steps.version.outputs.version }}.cdx.json"
@@ -129,8 +126,6 @@ jobs:
       # 10. Attach SBOM attestation — backoffice
       # -----------------------------------------------------------------------
       - name: Attach SBOM attestation (backoffice)
-        env:
-          COSIGN_EXPERIMENTAL: "1"
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.OWNER }}/yashigani-backoffice:${{ steps.version.outputs.version }}"
           SBOM="dist/sbom-yashigani-${{ steps.version.outputs.version }}.cdx.json"
