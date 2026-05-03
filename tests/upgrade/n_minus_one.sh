@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T11:30:00+01:00
+# last-updated: 2026-05-03T11:45:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -898,8 +898,13 @@ echo "[remote] Copying secrets + .env ..."
 # stay sub-UID-owned (restore.sh reads them via its own podman unshare logic).
 # Falls back to plain cp for Docker-only environments.
 if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    # Copy inside the user namespace (sub-UID files are readable as uid 0 there)
     podman unshare bash -c "cp -rp '\$WORK/docker/secrets' '\$BACKUP_DIR/secrets'"
-    podman unshare chown 0:0 "\$BACKUP_DIR/secrets"
+    # Remap the entire backup/secrets tree to uid 0 inside the namespace (= host
+    # user tom) so restore.sh validate_backup() and cp -rp from backup can read
+    # the files without podman unshare. _pki_chown_client_keys in restore.sh will
+    # re-own individual keys to container sub-UIDs after restoring.
+    podman unshare chown -R 0:0 "\$BACKUP_DIR/secrets"
     chmod 0700 "\$BACKUP_DIR/secrets"
 else
     cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
