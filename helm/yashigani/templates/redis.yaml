@@ -1,3 +1,4 @@
+{{- /* last-updated: 2026-05-03T02:30:07+01:00 (#3t-fix: Redis probe timeoutSeconds 3→10) */ -}}
 {{- if .Values.redis.enabled }}
 ---
 apiVersion: apps/v1
@@ -109,7 +110,7 @@ spec:
                     -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 10
             failureThreshold: 5
           livenessProbe:
             exec:
@@ -123,7 +124,7 @@ spec:
                     -p 6380 -a "$REDIS_PASSWORD" ping | grep -q PONG
             initialDelaySeconds: 15
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 10
             failureThreshold: 5
           {{- else }}
           readinessProbe:
@@ -131,14 +132,14 @@ spec:
               command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 10
             failureThreshold: 5
           livenessProbe:
             exec:
               command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 10
             failureThreshold: 5
           {{- end }}
           resources:
