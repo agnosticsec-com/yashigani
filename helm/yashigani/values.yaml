@@ -675,9 +675,14 @@ agentBundles:
 # https://github.com/open-webui/open-webui/blob/main/LICENSE before enabling.
 # Yashigani orchestrates deployment via Helm; it does not redistribute Open
 # WebUI binaries. Internal only — all inference routes through the gateway.
+#
+# DEPRECATED (v2.23.2): Open WebUI integration is sunsetting. Yashigani's own
+# built-in UI ships in v2.24.0. Set enabled: false (the default) unless you
+# are running a v2.23.x install that previously opted in.
+# LU-7023360-001: default corrected from true → false.
 # ---------------------------------------------------------------------------
 openWebui:
-  enabled: true
+  enabled: false
   image:
     # Pinned to v0.9.1 to match docker-compose.yml (was floating :main — fixed
     # in v2.23.2 image-pin sweep 2026-05-02).

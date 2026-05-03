@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-04-28T19:45:00+00:00 -->
+<!-- last-updated: 2026-05-03T00:00:00+00:00 -->
 
 # Changelog
 
@@ -10,9 +10,15 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ---
 
-## [Unreleased] — v2.23.1 (in development)
+## [Unreleased]
 
-Active branch: `v2.23.1-mtls`. Theme: **Core-Plane mTLS + Two-Tier PKI + Release Hardening**.
+No unreleased changes yet for the next version.
+
+---
+
+## [v2.23.1] — 2026-05-02
+
+Theme: **Core-Plane mTLS + Two-Tier PKI + Release Hardening**.
 
 ### Added
 - Core-plane mTLS default-on across gateway, backoffice, postgres, pgbouncer, redis, opa

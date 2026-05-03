@@ -1,7 +1,7 @@
 """
 Yashigani Auth — Multi-IdP Identity Broker.
 
-Last updated: 2026-04-28T23:58:36+01:00
+Last updated: 2026-05-03
 
 Yashigani IS the identity broker (Decision 11). Supports OIDC and SAML v2
 with multiple IdPs per deployment. Caddy delegates auth to the backoffice,
@@ -239,7 +239,7 @@ class IdentityBroker:
             )
         except ValueError as exc:
             logger.warning("OIDC code exchange failed for IdP %s: %s", idp.name, exc)
-            return SSOResult(success=False, error=str(exc))
+            return SSOResult(success=False, error=type(exc).__name__)
         except Exception as exc:
             logger.error("OIDC provider error for IdP %s: %s", idp.name, exc)
             return SSOResult(success=False, error="OIDC token exchange failed")
@@ -300,7 +300,7 @@ class IdentityBroker:
             user_info: SAMLUserInfo = provider.process_response(request_data)
         except ValueError as exc:
             logger.warning("SAML assertion failed for IdP %s: %s", idp.name, exc)
-            return SSOResult(success=False, error=str(exc))
+            return SSOResult(success=False, error=type(exc).__name__)
         except Exception as exc:
             logger.error("SAML provider error for IdP %s: %s", idp.name, exc)
             return SSOResult(success=False, error="SAML assertion validation failed")
