@@ -1,0 +1,50 @@
+# ACS-RISK-008 admission test — COMPLIANT pod fixture
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# This pod satisfies ALL Kyverno ClusterPolicies in
+# helm/yashigani/policies/admission/. Apply it against a cluster with Kyverno
+# installed and the policies applied — it MUST be admitted.
+#
+# Expected result: pod created successfully (kubectl apply exits 0).
+#
+# Usage:
+#   kubectl apply -f tests/admission/fixture-compliant.yaml
+#   kubectl get pod yashigani-test-compliant -n yashigani
+#   kubectl delete pod yashigani-test-compliant -n yashigani
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: yashigani-test-compliant
+  namespace: yashigani
+  labels:
+    app.kubernetes.io/name: yashigani-test-compliant
+    app.kubernetes.io/component: admission-test
+  annotations:
+    yashigani.io/test: "acs-risk-008-compliant"
+spec:
+  restartPolicy: Never
+  # Pod-level security context — satisfies runAsNonRoot + seccomp policies.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534      # nobody
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: busybox:1.36.1
+      command: ["sh", "-c", "echo 'Compliant pod running'; sleep 5; echo done"]
+      # Container-level security context — satisfies APE + drop-ALL + ROFS policies.
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "50m"
+          memory: "32Mi"

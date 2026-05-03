@@ -1,0 +1,66 @@
+# ACS-RISK-008 — Container hardening: require allowPrivilegeEscalation: false
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# Rejects pods where any container (or init container) does not explicitly set
+# allowPrivilegeEscalation: false. The default in Kubernetes is `true` — any
+# workload that doesn't set this can gain elevated privileges via setuid/setgid
+# binaries inside the container filesystem.
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: yashigani-require-no-privilege-escalation
+  annotations:
+    policies.kyverno.io/title: "Require allowPrivilegeEscalation false"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "high"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      All containers in the yashigani namespace must set
+      allowPrivilegeEscalation: false. Implements ACS-RISK-008.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-privilege-escalation-containers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      validate:
+        message: >-
+          ACS-RISK-008: Container '{{ element.name }}' in pod
+          '{{ request.object.metadata.name }}' must set
+          allowPrivilegeEscalation: false.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.securityContext.allowPrivilegeEscalation || true }}"
+                    operator: Equals
+                    value: true
+    - name: check-privilege-escalation-init-containers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      validate:
+        message: >-
+          ACS-RISK-008: Init container '{{ element.name }}' in pod
+          '{{ request.object.metadata.name }}' must set
+          allowPrivilegeEscalation: false.
+        foreach:
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.securityContext.allowPrivilegeEscalation || true }}"
+                    operator: Equals
+                    value: true

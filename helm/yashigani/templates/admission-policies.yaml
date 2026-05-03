@@ -1,0 +1,274 @@
+{{- /* Last updated: 2026-05-02T00:00:00+01:00 */ -}}
+{{- /*
+ACS-RISK-008 — Kyverno ClusterPolicy admission control.
+
+When admissionPolicies.enabled is true, this template renders five Kyverno
+ClusterPolicy resources that enforce the container-hardening baseline for the
+yashigani namespace. Pods that violate the baseline are REJECTED at admission
+time (validationFailureAction: Enforce) rather than discovered post-deployment.
+
+PREREQUISITE: Kyverno must be installed cluster-wide before helm install/upgrade.
+See helm/yashigani/policies/admission/README.md.
+
+NOTE: ClusterPolicy is a cluster-scoped CRD — it does not live inside the
+yashigani namespace but it is owned by this Helm release (release name in labels).
+Helm will delete these policies on helm uninstall.
+*/ -}}
+{{- if .Values.admissionPolicies.enabled }}
+---
+# Policy 1/5: require runAsNonRoot
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-require-run-as-non-root
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+  annotations:
+    policies.kyverno.io/title: "Require runAsNonRoot"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "high"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      ACS-RISK-008: Pods in the yashigani namespace must set runAsNonRoot: true
+      at pod or container level, or provide a non-zero runAsUser.
+spec:
+  validationFailureAction: {{ .Values.admissionPolicies.validationFailureAction }}
+  background: true
+  rules:
+    - name: check-containers-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+      exclude:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      validate:
+        message: >-
+          ACS-RISK-008: Pod must set runAsNonRoot: true or a non-zero runAsUser
+          at the pod level. Pod: {{ "{{" }} request.object.metadata.name {{ "}}" }}.
+        deny:
+          conditions:
+            all:
+              - key: "{{ "{{" }} request.object.spec.securityContext.runAsNonRoot || false {{ "}}" }}"
+                operator: Equals
+                value: false
+              - key: "{{ "{{" }} request.object.spec.securityContext.runAsUser || 0 {{ "}}" }}"
+                operator: Equals
+                value: 0
+---
+# Policy 2/5: require allowPrivilegeEscalation: false
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-require-no-privilege-escalation
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+  annotations:
+    policies.kyverno.io/title: "Require allowPrivilegeEscalation false"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "high"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      ACS-RISK-008: All containers must set allowPrivilegeEscalation: false.
+spec:
+  validationFailureAction: {{ .Values.admissionPolicies.validationFailureAction }}
+  background: true
+  rules:
+    - name: check-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+      validate:
+        message: >-
+          ACS-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod
+          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' must set
+          allowPrivilegeEscalation: false.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ "{{" }} element.securityContext.allowPrivilegeEscalation || true {{ "}}" }}"
+                    operator: Equals
+                    value: true
+---
+# Policy 3/5: require seccomp RuntimeDefault or Localhost
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-require-seccomp-profile
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+  annotations:
+    policies.kyverno.io/title: "Require seccomp RuntimeDefault or Localhost"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "medium"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      ACS-RISK-008: Pods must specify seccompProfile.type of RuntimeDefault
+      or Localhost at the pod level.
+spec:
+  validationFailureAction: {{ .Values.admissionPolicies.validationFailureAction }}
+  background: true
+  rules:
+    - name: check-seccomp-profile
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+      validate:
+        message: >-
+          ACS-RISK-008: Pod '{{ "{{" }} request.object.metadata.name {{ "}}" }}'
+          must set seccompProfile.type to RuntimeDefault or Localhost.
+          Unconfined is not permitted.
+        deny:
+          conditions:
+            all:
+              - key: "{{ "{{" }} request.object.spec.securityContext.seccompProfile.type || 'Unconfined' {{ "}}" }}"
+                operator: AnyIn
+                value:
+                  - Unconfined
+                  - ""
+---
+# Policy 4/5: require capabilities.drop: [ALL]
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-require-drop-all-capabilities
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+  annotations:
+    policies.kyverno.io/title: "Require drop ALL capabilities"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "high"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      ACS-RISK-008: All containers must set capabilities.drop containing ALL.
+spec:
+  validationFailureAction: {{ .Values.admissionPolicies.validationFailureAction }}
+  background: true
+  rules:
+    - name: check-capabilities-drop-all
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+      validate:
+        message: >-
+          ACS-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod
+          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' must set
+          capabilities.drop containing ALL.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "ALL"
+                    operator: AnyNotIn
+                    value: "{{ "{{" }} element.securityContext.capabilities.drop[] || `[]` {{ "}}" }}"
+---
+# Policy 5/5: restrict runAsUser: 0
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ .Release.Name }}-restrict-root-user
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-policy
+  annotations:
+    policies.kyverno.io/title: "Restrict explicit root user (UID 0)"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "critical"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      ACS-RISK-008: Pods must not set runAsUser: 0 at pod or container level.
+      Exception: ollama (risk-register ACS-RISK-008-EX-OLLAMA-2026-05-02).
+spec:
+  validationFailureAction: {{ .Values.admissionPolicies.validationFailureAction }}
+  background: true
+  rules:
+    - name: restrict-root-pod-level
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+      exclude:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      validate:
+        message: >-
+          ACS-RISK-008: Pod '{{ "{{" }} request.object.metadata.name {{ "}}" }}'
+          sets runAsUser: 0 at pod level. Root containers are not permitted.
+        deny:
+          conditions:
+            all:
+              - key: "{{ "{{" }} request.object.spec.securityContext.runAsUser || 1 {{ "}}" }}"
+                operator: Equals
+                value: 0
+    - name: restrict-root-container-level
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+      exclude:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - {{ .Release.Namespace }}
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      validate:
+        message: >-
+          ACS-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod
+          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' sets runAsUser: 0.
+          Root containers are not permitted.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ "{{" }} element.securityContext.runAsUser || 1 {{ "}}" }}"
+                    operator: Equals
+                    value: 0
+{{- end }}

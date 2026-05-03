@@ -1,0 +1,47 @@
+# ACS-RISK-008 admission test — NON-COMPLIANT pod fixture (no seccomp)
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# This pod deliberately omits seccompProfile. It MUST be REJECTED by
+# the yashigani-require-seccomp-profile policy.
+#
+# Expected result:
+#   Error from server: admission webhook "validate.kyverno.svc" denied the request:
+#   [...] ACS-RISK-008: Pod 'yashigani-test-noncompliant-no-seccomp' must set
+#   seccompProfile.type to RuntimeDefault or Localhost
+#
+# Usage:
+#   kubectl apply -f tests/admission/fixture-noncompliant-no-seccomp.yaml
+#   # Must print a policy violation error and exit non-zero.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: yashigani-test-noncompliant-no-seccomp
+  namespace: yashigani
+  labels:
+    app.kubernetes.io/name: yashigani-test-noncompliant-no-seccomp
+    app.kubernetes.io/component: admission-test
+  annotations:
+    yashigani.io/test: "acs-risk-008-noncompliant-no-seccomp"
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    # INTENTIONALLY VIOLATING: seccompProfile omitted
+  containers:
+    - name: test
+      image: busybox:1.36.1
+      command: ["sh", "-c", "echo 'This should never run'; sleep 5"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "50m"
+          memory: "32Mi"

@@ -35,6 +35,9 @@ spec:
           imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
+            # ACS-RISK-008: ROFS enabled. /var/lib/grafana is PVC-mounted
+            # (SQLite DB + plugins). /tmp provided by emptyDir volume below.
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
@@ -80,6 +83,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/grafana
+            # ACS-RISK-008: emptyDir for /tmp required when readOnlyRootFilesystem
+            # is true. Grafana writes PID files and temp buffers here.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
   {{- if .Values.grafana.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:

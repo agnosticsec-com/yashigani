@@ -1,0 +1,84 @@
+# ACS-RISK-008 — Container hardening: require runAsNonRoot
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# Rejects pods where neither the pod-level nor any individual container sets
+# runAsNonRoot: true (or provides an explicit non-zero runAsUser). This closes
+# the class of container-breakout + privilege-escalation that requires root
+# inside the container to be useful.
+#
+# Exceptions (risk-register entries):
+#   - ollama: upstream image hard-requires UID 0; opt-in only; isolated behind
+#             Caddy + NetworkPolicy. Accepted in risk register 2026-05-02.
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: yashigani-require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: "Require runAsNonRoot"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "high"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      Pods in the yashigani namespace must set runAsNonRoot: true at the pod
+      or container level, or provide a non-zero runAsUser. Implements
+      ACS-RISK-008 container hardening requirement.
+spec:
+  # validationFailureAction: Enforce — hard reject on admission.
+  # Change to Audit to observe without blocking (during rollout only).
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-containers-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      # Exclude ollama: upstream image requires UID 0.
+      # Risk-register ref: ACS-RISK-008-EX-OLLAMA-2026-05-02
+      exclude:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      validate:
+        message: >-
+          ACS-RISK-008: All containers must either set runAsNonRoot: true
+          or a non-zero runAsUser. Pod '{{ request.object.metadata.name }}'
+          has a container that runs as root or has no user configured.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  # Deny if container runAsNonRoot is explicitly false
+                  - key: "{{ element.securityContext.runAsNonRoot || 'UNSET' }}"
+                    operator: Equals
+                    value: "false"
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.securityContext.runAsNonRoot || 'UNSET' }}"
+                    operator: Equals
+                    value: "false"
+        # Also validate that at least pod-level OR each container sets nonRoot
+        deny:
+          conditions:
+            all:
+              # Pod-level runAsNonRoot is false or unset
+              - key: "{{ request.object.spec.securityContext.runAsNonRoot || false }}"
+                operator: Equals
+                value: false
+              # AND pod-level runAsUser is 0 or unset
+              - key: "{{ request.object.spec.securityContext.runAsUser || 0 }}"
+                operator: Equals
+                value: 0

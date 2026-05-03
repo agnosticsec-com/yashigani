@@ -1,0 +1,88 @@
+# ACS-RISK-008 — Container hardening: block explicit root user (UID 0)
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# Rejects pods where runAsUser: 0 is set explicitly at pod or container level.
+# This is a belt-and-suspenders control on top of require-run-as-non-root:
+# runAsNonRoot: true + runAsUser: 0 is an invalid combination that K8s rejects,
+# but runAsUser: 0 without runAsNonRoot is silently admitted. This policy
+# catches it explicitly.
+#
+# Exception — ollama: see require-run-as-non-root.yaml for rationale.
+#   Risk-register ref: ACS-RISK-008-EX-OLLAMA-2026-05-02
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: yashigani-restrict-root-user
+  annotations:
+    policies.kyverno.io/title: "Restrict explicit root user (UID 0)"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "critical"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      Pods must not set runAsUser: 0 at the pod or container level.
+      Implements ACS-RISK-008.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: restrict-root-pod-level
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      exclude:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      validate:
+        message: >-
+          ACS-RISK-008: Pod '{{ request.object.metadata.name }}' sets
+          runAsUser: 0 at the pod level. Root containers are not permitted
+          in the yashigani namespace.
+        deny:
+          conditions:
+            all:
+              - key: "{{ request.object.spec.securityContext.runAsUser || 1 }}"
+                operator: Equals
+                value: 0
+    - name: restrict-root-container-level
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      exclude:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+              selector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      validate:
+        message: >-
+          ACS-RISK-008: Container '{{ element.name }}' in pod
+          '{{ request.object.metadata.name }}' sets runAsUser: 0.
+          Root containers are not permitted in the yashigani namespace.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.securityContext.runAsUser || 1 }}"
+                    operator: Equals
+                    value: 0

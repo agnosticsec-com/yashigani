@@ -72,6 +72,29 @@ global:
 networkPolicies:
   enabled: true
 
+# ---------------------------------------------------------------------------
+# Admission Control (ACS-RISK-008 — v2.23.2 P1)
+# ---------------------------------------------------------------------------
+# When enabled, the chart renders Kyverno ClusterPolicy resources that REJECT
+# pods missing the ACS-RISK-008 container hardening baseline:
+#   - runAsNonRoot: true (pod or container level)
+#   - allowPrivilegeEscalation: false (every container)
+#   - seccompProfile.type: RuntimeDefault (pod level)
+#   - capabilities.drop: [ALL] (every container)
+#   - No runAsUser: 0 (except documented exceptions)
+#
+# PREREQUISITE: Kyverno must be installed cluster-wide BEFORE applying the
+# release. See helm/yashigani/policies/admission/README.md for install steps.
+#
+# Set to false if the cluster does not have Kyverno (e.g. during initial
+# bootstrap before Kyverno is installed). Document in risk register.
+# ---------------------------------------------------------------------------
+admissionPolicies:
+  enabled: true
+  # Kyverno policy action: Enforce (hard reject) or Audit (log only).
+  # Must be Enforce in production. Audit only during rollout evaluation.
+  validationFailureAction: Enforce
+
 mtls:
   # Hard-off switch. When false the chart renders the pre-v2.23.1 plaintext
   # topology (no PKI job, no cert mounts). Intended for deliberate testing
