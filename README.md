@@ -18,7 +18,7 @@
 ---
 **Latest Tagged Release:** v2.23.2 (`2.23.x` branch, 2026-05-03) — Security hardening, supply-chain hygiene, ASVS L3 92%; all gates GREEN
 
-> **Lifecycle notice:** v2.23.2 is the final public-cadence Yashigani release. The `2.23.x` branch continues to receive security-maintenance patches (Medium severity and above); new features ship on a private cadence from v2.24.0 onward. Existing community deployments on v2.23.1 should upgrade to v2.23.2 for the security hardening batch.
+> **Upgrade notice:** v2.23.2 ships a security hardening batch. Existing v2.23.1 deployments should upgrade.
 
 ---
 **Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, agent bundles, and the optional Smallstep step-ca runtime ACME service are all gated behind compose profiles / install flags. **Core-plane mTLS is default-on**: per-service leaf certificates are issued at install time by the in-tree two-tier PKI (`src/yashigani/pki/issuer.py`) — no optional services required.

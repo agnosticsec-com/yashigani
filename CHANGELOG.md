@@ -20,8 +20,6 @@ No unreleased changes yet for the next version.
 
 Theme: **Security Hardening + Supply-Chain Controls + ASVS L3 92%**.
 
-> **Lifecycle notice:** v2.23.2 is the final public-cadence release. The `2.23.x` branch continues as a security-maintenance line (Medium+ patches only). New features ship on a private cadence from v2.24.0 onward.
-
 ### Security
 
 - **XFF spoofing** — Caddy strips and re-sets `X-Forwarded-For` at the edge; rate limiting and audit logging now bind to the Caddy-observed address, not caller-supplied headers.

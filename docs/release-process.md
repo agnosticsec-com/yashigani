@@ -250,7 +250,7 @@ The workflow re-creates the tag as signed at the same commit and force-pushes it
 
 | Version | Date | Tag SHA (short) | Branch tip SHA | Notes |
 |---------|------|-----------------|----------------|-------|
-| v2.23.2 | 2026-05-03 | `7dcd498` | `7dcd498` | Security hardening, supply-chain, ASVS L3 92%. GPG-signed (see §9 ceremony). Final public-cadence release. |
+| v2.23.2 | 2026-05-03 | `7dcd498` | `7dcd498` | Security hardening, supply-chain, ASVS L3 92%. GPG-signed (see §9 ceremony). |
 | v2.23.1 | 2026-05-02 | `3b49d0e` | `3b49d0e` | Core-plane mTLS, two-tier PKI, release hardening. GPG signing available via §7.4 retroactive dispatch. |
 
 > **GPG signing status:** Tag signing infrastructure (key ceremony + CI workflow `tag-sign.yml`) landed in the v2.23.2 release cycle. Both v2.23.2 and v2.23.1 can be verified via `git tag -v <tag>` after completing the key ceremony in §9. See §9.6 for the remaining Tiago action required to complete the ceremony and retroactively sign v2.23.1.
