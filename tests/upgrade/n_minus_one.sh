@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T16:00:00+01:00
+# last-updated: 2026-05-03T16:30:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1202,6 +1202,22 @@ REMOTE_SCRIPT
     # re-reading the restored bind-mounted secrets and re-connecting to the
     # restored postgres DB. "stop" (not "down") preserves named data volumes.
     log "Restarting stack post-restore (stop then up) ..."
+    # V232-SMOKE-016 fix: "compose up -d" fails after "compose stop" because the
+    # pre-existing docker_edge network (created by v2.22.3) has label
+    # com.docker.compose.network="" (empty) while compose expects "edge".
+    # compose up -d refuses to proceed with the label mismatch.
+    #
+    # Root cause: "compose stop" stops containers but leaves networks in place.
+    # On the next "compose up -d", compose tries to reconcile the network's
+    # labels against the compose.yml definition and fails when they differ.
+    #
+    # Fix: after "compose stop", restart containers directly via "podman start"
+    # instead of "compose up -d". This bypasses compose's network reconciliation
+    # entirely. Containers restart with the same bind-mount spec they were
+    # created with, re-reading the restored bind-mounted secrets from disk at
+    # their startup init path. "podman start" does NOT support network recreation
+    # but we don't need it — the network already exists and containers are
+    # pre-configured to use it.
     vm_run_script <<RESTART_SCRIPT
 set -euo pipefail
 WORK="${HARNESS_WORK_DIR}"
@@ -1210,8 +1226,22 @@ COMPOSE_CMD="${REMOTE_COMPOSE}"
 cd "\$WORK"
 echo "[remote] Stopping stack for clean restart after restore ..."
 YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml stop 2>&1 | tail -5
-echo "[remote] Stack stopped. Starting fresh ..."
-YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml up -d 2>&1 | tail -5
+echo "[remote] Stack stopped. Restarting containers directly (bypassing compose network reconciliation) ..."
+# Restart all exited containers. Retains the original compose bind-mount spec
+# (secrets, data volumes) so restored bind-mounted secrets are read at init.
+# "|| true" because some containers may remain running (e.g. caddy healthz
+# serving in passthrough mode) — we just want them all started.
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    EXITED_IDS=\$(podman ps -aq --filter status=exited 2>/dev/null || true)
+    if [[ -n "\$EXITED_IDS" ]]; then
+        # shellcheck disable=SC2086
+        podman start \$EXITED_IDS 2>&1 | tail -5
+    else
+        echo "[remote] No exited containers found — stack may still be running (compose stop did not stop all?)"
+    fi
+else
+    docker start \$(docker ps -aq --filter status=exited 2>/dev/null) 2>&1 | tail -5 || true
+fi
 echo "[remote] Stack restarted after restore"
 RESTART_SCRIPT
 
