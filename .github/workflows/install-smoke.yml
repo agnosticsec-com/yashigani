@@ -165,19 +165,55 @@ jobs:
       # amd64 SHA or to use a multi-arch pin + explicit --platform in Dockerfiles
       # (tracked as V232-SMOKE-001 in the v2.23.2 backlog).
       # -----------------------------------------------------------------------
+      # V232-SMOKE-001 (pre-existing): Dockerfiles pin arm64 digest SHAs.
+      # On amd64 GH runners those layers fail with "exec /bin/sh: exec format error".
+      # DOCKER_DEFAULT_PLATFORM=linux/amd64 does NOT override an explicit @sha256:
+      # digest in FROM — BuildKit pulls the pinned layer regardless of platform env.
+      # Work-around: patch Dockerfile FROM lines to strip digest pins before build.
+      # The correct permanent fix (Tom's domain) is to update Dockerfile digest pins
+      # to multi-arch manifests or add --platform directives to each FROM instruction.
+      # Tracked as V232-SMOKE-001 in the v2.23.2 backlog.
+      - name: "[ci] Strip arm64 digest pins for amd64 runner compatibility"
+        if: matrix.os-label == 'linux'
+        run: |
+          # Strip @sha256:... from each FROM line so BuildKit pulls the tag's native
+          # amd64 manifest instead of the pinned arm64 layer. Only affects the local
+          # workspace copy — the committed files are untouched.
+          python3 - <<'PYEOF'
+          import re, glob
+          for dockerfile in glob.glob("docker/Dockerfile*"):
+              with open(dockerfile) as f:
+                  content = f.read()
+              patched = re.sub(r'(^FROM\s+[^\s]+)@sha256:[a-f0-9]{64}', r'\1', content, flags=re.MULTILINE)
+              if patched != content:
+                  with open(dockerfile, 'w') as f:
+                      f.write(patched)
+                  print(f"Stripped arm64 digest pins from {dockerfile}")
+              else:
+                  print(f"No digest pins in {dockerfile}")
+          PYEOF
+
       - name: Run installer
         env:
           YSG_RUNTIME: ${{ matrix.runtime }}
           CI: "true"
-          DOCKER_DEFAULT_PLATFORM: linux/amd64
         run: |
           chmod +x install.sh
+          # Capture install exit code correctly — do NOT pipe through tee.
+          # `cmd | tee` reports tee's exit code (0), not cmd's, so a failed
+          # install would appear green while the stack never starts.
+          set +e
           ./install.sh \
             --non-interactive \
             --deploy demo \
             --runtime "${{ matrix.runtime }}" \
             --skip-preflight \
-            2>&1 | tee install.log
+            > install.log 2>&1
+          install_exit=$?
+          set -e
+          cat install.log   # surface output to GH Actions log viewer
+          echo "installer exit code: $install_exit"
+          exit $install_exit
         timeout-minutes: 18   # inner timeout; outer job timeout is 25
 
       # -----------------------------------------------------------------------
