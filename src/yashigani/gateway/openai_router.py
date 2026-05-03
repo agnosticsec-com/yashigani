@@ -34,7 +34,7 @@ Streaming limitations
   response-path inspection. This adds ~2-3s latency but ensures PII
   cannot leak through streamed responses.
 """
-# Last updated: 2026-05-01T00:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 from __future__ import annotations
 
 import json
@@ -697,13 +697,25 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
                 # Read agent auth token from env var or secrets file
                 import os
+                from pathlib import Path as _Path
                 agent_headers: dict[str, str] = {"Content-Type": "application/json"}
                 # Check env var first (e.g., OPENCLAW_GATEWAY_TOKEN), then secrets file
                 env_token = os.getenv(f"{agent_name_lower.upper()}_GATEWAY_TOKEN", "")
                 if not env_token:
-                    token_path = f"/run/secrets/{agent_name_lower}_token"
-                    if os.path.exists(token_path):
-                        env_token = open(token_path).read().strip()
+                    # V232-CSCAN-01a: resolve-and-confine before touching the filesystem.
+                    # agent_name_lower comes from the registry (admin-registered) and is
+                    # constrained by AgentRegisterRequest.name pattern='^[a-z][a-z0-9_-]{0,63}$',
+                    # but we guard here too as defence-in-depth against pre-existing registry
+                    # entries that predate the pattern constraint (CWE-22).
+                    _secrets_root = _Path("/run/secrets").resolve()
+                    _token_path = (_secrets_root / f"{agent_name_lower}_token").resolve()
+                    if not _token_path.is_relative_to(_secrets_root):
+                        logger.warning(
+                            "V232-CSCAN-01a: agent %r produced an out-of-bounds token path %r — skipping",
+                            agent_name_lower, str(_token_path),
+                        )
+                    elif _token_path.exists():
+                        env_token = _token_path.read_text().strip()
                 if env_token:
                     agent_headers["Authorization"] = f"Bearer {env_token}"
 

@@ -1,5 +1,6 @@
 """
 Yashigani Agent Registry — Manages registered agent identities and PSK tokens.
+# Last updated: 2026-05-03T00:00:00+01:00
 
 Key schema (Redis db/3, namespace agent:*):
   agent:reg:{agent_id}      Hash: name, upstream_url, status, created_at,
@@ -15,6 +16,7 @@ import bcrypt
 import datetime
 import json
 import logging
+import re
 import secrets
 import uuid
 from typing import Optional
@@ -24,6 +26,10 @@ from yashigani.licensing.enforcer import check_agent_limit, LicenseLimitExceeded
 logger = logging.getLogger(__name__)
 
 _BCRYPT_COST = 12
+
+# V232-CSCAN-01a: canonical agent-name pattern (must match AgentRegisterRequest.name).
+# Any existing registry entry whose name does not match is flagged at startup.
+_AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 def _now_iso() -> str:
@@ -41,10 +47,35 @@ class AgentRegistry:
 
     def __init__(self, redis_client) -> None:
         self._r = redis_client
-        logger.info(
-            "AgentRegistry initialised: %d agent(s) in index",
-            self._r.scard("agent:index:all") or 0,
-        )
+        total = self._r.scard("agent:index:all") or 0
+        logger.info("AgentRegistry initialised: %d agent(s) in index", total)
+        # V232-CSCAN-01a migration check: warn on names that pre-date the slug constraint.
+        # These entries are not deleted (non-breaking), but the gateway will skip their
+        # secret-file lookup due to the path-resolution guard in openai_router.py.
+        self._warn_non_compliant_names()
+
+    # ── Startup integrity check (V232-CSCAN-01a) ─────────────────────────────
+
+    def _warn_non_compliant_names(self) -> None:
+        """Log a structured warning for any existing agent whose name does not satisfy
+        the slug pattern '^[a-z][a-z0-9_-]{0,63}$' introduced in v2.23.2.
+
+        Non-compliant entries are NOT deleted — that would break existing deployments.
+        They are flagged here and surfaced as ``legacy_name_violation=True`` in list_all()
+        so the admin UI can display them as a flagged row.
+        """
+        try:
+            for agent in self.list_all():
+                name = agent.get("name", "")
+                if not _AGENT_NAME_RE.fullmatch(name):
+                    logger.warning(
+                        "V232-CSCAN-01a: agent %r (id=%s) has a name %r that does not satisfy "
+                        "the slug pattern -- secret-file lookup will be skipped for this agent; "
+                        "re-register with a compliant name or remove this entry",
+                        name, agent.get("agent_id", "?"), name,
+                    )
+        except Exception as exc:
+            logger.warning("V232-CSCAN-01a name-compliance check failed (non-fatal): %s", exc)
 
     # ── Registration ─────────────────────────────────────────────────────────
 

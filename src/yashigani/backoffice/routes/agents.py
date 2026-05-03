@@ -17,7 +17,7 @@ Routes:
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-05-02T09:00:00+01:00
+Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -210,7 +210,15 @@ def _assert_safe_upstream_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 class AgentRegisterRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+        description=(
+            "Agent slug: lowercase letter, then lowercase alphanumeric, underscore, or hyphen. "
+            "Max 64 chars. No path traversal chars permitted (V232-CSCAN-01a / CWE-22)."
+        ),
+    )
     upstream_url: str = Field(min_length=1, max_length=512)
     protocol: str = Field(default="openai", description="Agent protocol: openai, letta, or langflow")
     groups: list[str] = Field(default_factory=list)
@@ -239,7 +247,16 @@ class AgentRegisterRequest(BaseModel):
 
 
 class AgentUpdateRequest(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    name: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+        description=(
+            "Agent slug: lowercase letter, then lowercase alphanumeric, underscore, or hyphen. "
+            "Max 64 chars. No path traversal chars permitted (V232-CSCAN-01a / CWE-22)."
+        ),
+    )
     upstream_url: Optional[str] = Field(default=None, min_length=1, max_length=512)
     groups: Optional[list[str]] = None
     allowed_caller_groups: Optional[list[str]] = None
