@@ -1,0 +1,302 @@
+# Last updated: 2026-05-02T00:00:00+01:00
+# install-smoke.yml — Install smoke-test matrix (V232-P1)
+#
+# Matrix: macos-latest × ubuntu-latest  ×  docker × podman
+# Each cell:  ./install.sh --non-interactive --deploy demo --runtime <r>
+# Gate:       GET https://localhost:8443/healthz → HTTP 200 within 5 min
+# Scope:      Smoke only — no AVA/register/update/export sweep (deferred v2.23.3)
+#
+# Runner cost note (GH Actions billing):
+#   macOS minutes are billed at 10× the Linux rate.
+#   Four-cell matrix = 2 macOS + 2 Linux jobs.
+#   Expected runtime: ~12 min per cell (build + compose up + healthz wait).
+#   Estimated cost per run: ~(2×12×10 + 2×12×1) = 264 Linux-equivalent minutes.
+#   Runs only on PRs/pushes to 2.23.x — not on every push to every branch.
+
+name: Install Smoke Matrix
+
+on:
+  push:
+    branches: ["2.23.x", "feat/v232-install-smoke-matrix*"]
+  pull_request:
+    branches: ["2.23.x"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# ---------------------------------------------------------------------------
+# Smoke matrix
+# ---------------------------------------------------------------------------
+jobs:
+  smoke:
+    name: "smoke / ${{ matrix.os-label }} / ${{ matrix.runtime }}"
+    strategy:
+      fail-fast: false   # surface all failing cells, not just the first
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os-label: linux
+            runtime: docker
+
+          - os: ubuntu-latest
+            os-label: linux
+            runtime: podman
+
+          - os: macos-latest
+            os-label: macos
+            runtime: docker
+
+          - os: macos-latest
+            os-label: macos
+            runtime: podman
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25   # hard ceiling: prevents runaway bill if compose hangs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.sha }}
+
+      # -----------------------------------------------------------------------
+      # Runtime setup — Linux / Docker
+      # Docker is pre-installed on ubuntu-latest; daemon is running.
+      # -----------------------------------------------------------------------
+      - name: "[linux/docker] Verify Docker daemon"
+        if: matrix.os-label == 'linux' && matrix.runtime == 'docker'
+        run: |
+          docker info
+          docker compose version
+
+      # -----------------------------------------------------------------------
+      # Runtime setup — Linux / Podman
+      # ubuntu-latest ships podman 4.x; compose plugin via podman-compose.
+      # Rootless requires subuid/subgid entries (absent on GH runners by default).
+      # We run rootful podman (sudo-started daemon) to avoid the subuid dance.
+      # -----------------------------------------------------------------------
+      - name: "[linux/podman] Install podman-compose + configure rootful"
+        if: matrix.os-label == 'linux' && matrix.runtime == 'podman'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman podman-compose
+          # Rootful: confirm podman socket is reachable
+          sudo systemctl start podman.socket 2>/dev/null || true
+          podman --version
+          podman-compose version
+
+      # -----------------------------------------------------------------------
+      # Runtime setup — macOS / Docker
+      # GH-hosted macos-latest (Sonoma/arm64) ships the Docker CLI but no daemon.
+      # Colima provides a lightweight VM-backed daemon via the Docker socket.
+      # brew install colima pulls ~150 MB; colima start takes ~90 s on arm64.
+      # -----------------------------------------------------------------------
+      - name: "[macos/docker] Install Colima + start Docker daemon"
+        if: matrix.os-label == 'macos' && matrix.runtime == 'docker'
+        run: |
+          brew install colima docker docker-compose 2>/dev/null || true
+          colima start --cpu 2 --memory 4 --disk 20 --arch aarch64 --vm-type vz --vz-rosetta 2>/dev/null || \
+            colima start --cpu 2 --memory 4 --disk 20
+          # Give the socket a moment to settle
+          sleep 5
+          docker info
+          docker compose version
+
+      # -----------------------------------------------------------------------
+      # Runtime setup — macOS / Podman
+      # Podman desktop / machine provides the daemon via QEMU on macOS.
+      # -----------------------------------------------------------------------
+      - name: "[macos/podman] Install Podman + init machine"
+        if: matrix.os-label == 'macos' && matrix.runtime == 'podman'
+        run: |
+          brew install podman podman-compose 2>/dev/null || true
+          # Init and start the Podman machine (QEMU-backed VM on macOS)
+          podman machine init --cpus 2 --memory 4096 --disk-size 20 ysg-smoke || true
+          podman machine start ysg-smoke
+          # Confirm connectivity
+          podman info
+          podman-compose version
+
+      # -----------------------------------------------------------------------
+      # Run the installer
+      # --non-interactive  → no TTY prompts, demo mode auto-selected
+      # --deploy demo      → explicit demo mode (self-signed TLS, localhost)
+      # --runtime <r>      → lock runtime (feedback_runtime_choice.md)
+      # --skip-preflight   → skip disk/memory checks that fail on thin runners
+      #
+      # For Linux/Podman rootful we need sudo only for the initial podman socket;
+      # the installer itself must run as a normal user (feedback_no_manual_hacks.md).
+      # YSG_RUNTIME is set as an env var rather than relying solely on --runtime
+      # so the health-check.sh compose-detection path also picks it up.
+      # -----------------------------------------------------------------------
+      - name: Run installer
+        env:
+          YSG_RUNTIME: ${{ matrix.runtime }}
+          # CI=true suppresses interactive prompts that might sneak through
+          CI: "true"
+          # Point installer to local checkout rather than pulling from GitHub
+          YSG_INSTALL_DIR: ${{ github.workspace }}
+        run: |
+          chmod +x install.sh
+          ./install.sh \
+            --non-interactive \
+            --deploy demo \
+            --runtime "${{ matrix.runtime }}" \
+            --skip-preflight \
+            2>&1 | tee install.log
+        timeout-minutes: 18   # inner timeout; outer job timeout is 25
+
+      # -----------------------------------------------------------------------
+      # Smoke assertion: gateway /healthz → HTTP 200
+      # Demo install binds Caddy on 8443 (macOS high-port default).
+      # -k: self-signed TLS in demo mode.
+      # Retry for up to 5 minutes (300 s / 10 s interval = 30 attempts).
+      # -----------------------------------------------------------------------
+      - name: "Assert gateway /healthz → 200"
+        run: |
+          echo "Polling https://localhost:8443/healthz for up to 300 s..."
+          deadline=$(( $(date +%s) + 300 ))
+          attempt=0
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            attempt=$(( attempt + 1 ))
+            http_code=$(curl -sk -o /dev/null -w "%{http_code}" \
+              --resolve "localhost:8443:127.0.0.1" \
+              --max-time 5 \
+              "https://localhost:8443/healthz" 2>/dev/null || echo "000")
+            echo "  attempt ${attempt}: HTTP ${http_code}"
+            if [ "$http_code" = "200" ]; then
+              echo "SMOKE PASS: gateway /healthz returned 200"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "SMOKE FAIL: gateway /healthz did not return 200 within 300 s"
+          exit 1
+
+      # -----------------------------------------------------------------------
+      # Diagnostics on failure: tee logs so failures are debuggable
+      # -----------------------------------------------------------------------
+      - name: "Dump container logs on failure"
+        if: failure()
+        env:
+          YSG_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          compose_cmd="docker compose"
+          if [ "$YSG_RUNTIME" = "podman" ]; then
+            if command -v podman-compose >/dev/null 2>&1; then
+              compose_cmd="podman-compose"
+            elif podman compose version >/dev/null 2>&1; then
+              compose_cmd="podman compose"
+            fi
+          fi
+          cd "${GITHUB_WORKSPACE}/docker" || exit 0
+          ${compose_cmd} -f docker-compose.yml logs --tail=50 2>/dev/null || true
+
+      - name: "Upload install log"
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: install-log-${{ matrix.os-label }}-${{ matrix.runtime }}-${{ github.sha }}
+          path: install.log
+          retention-days: 14
+
+# ---------------------------------------------------------------------------
+# Mutation test: sabotage compose build step, assert install exits non-zero
+#
+# Per the brief: "confirm workflow fails" when compose build breaks.
+# Runs on Linux/Docker only (cheapest cell, sufficient to prove gate semantics).
+# The sabotage is applied only to the temporary workspace copy — the repo tree
+# is not modified (sed writes to a temp file, original is untouched).
+# ---------------------------------------------------------------------------
+  mutation:
+    name: "mutation / compose-build-sabotage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.sha }}
+
+      - name: "[linux/docker] Verify Docker daemon"
+        run: |
+          docker info
+          docker compose version
+
+      - name: "Inject compose-build sabotage"
+        run: |
+          # Replace the compose build call in install.sh with a guaranteed failure.
+          # Target: the "build gateway backoffice" call in the image-build step.
+          # We inject `exit 1` as the first command in the build invocation.
+          # The sed pattern targets the log_info before the compose build call so
+          # any variation in the compose command form is still caught.
+          #
+          # IMPORTANT: this only modifies the local workspace copy.
+          # The original file and repo history are untouched.
+          grep -n "Building gateway and backoffice images" install.sh
+          sed -i 's|log_info "Building gateway and backoffice images from source\.\.\."|log_info "Building gateway and backoffice images from source..."\n  log_error "MUTATION: compose build sabotaged"\n  return 1|' install.sh
+          echo "--- Sabotage injected. Verifying patch ---"
+          grep -A3 "Building gateway and backoffice images" install.sh
+
+      - name: "Run sabotaged installer (must fail)"
+        id: sabotaged_run
+        env:
+          YSG_RUNTIME: docker
+          CI: "true"
+          YSG_INSTALL_DIR: ${{ github.workspace }}
+        run: |
+          chmod +x install.sh
+          # Run; capture exit code without aborting the step
+          if ./install.sh \
+              --non-interactive \
+              --deploy demo \
+              --runtime docker \
+              --skip-preflight \
+              2>&1 | tee mutation-install.log; then
+            echo "sabotage_detected=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "sabotage_detected=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Assert mutation was detected (install must have exited non-zero)"
+        run: |
+          if [ "${{ steps.sabotaged_run.outputs.sabotage_detected }}" != "true" ]; then
+            echo "MUTATION FAIL: sabotaged install exited 0 — gate is not enforcing build failure"
+            exit 1
+          fi
+          echo "MUTATION PASS: sabotaged install correctly exited non-zero"
+
+      - name: "Upload mutation log"
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutation-log-${{ github.sha }}
+          path: mutation-install.log
+          retention-days: 14
+
+# ---------------------------------------------------------------------------
+# Gate summary: all smoke cells + mutation must pass before merge
+# ---------------------------------------------------------------------------
+  smoke-gate:
+    name: "smoke-gate (all cells)"
+    needs: [smoke, mutation]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: "Check all jobs passed"
+        run: |
+          smoke_result="${{ needs.smoke.result }}"
+          mutation_result="${{ needs.mutation.result }}"
+          echo "smoke matrix: ${smoke_result}"
+          echo "mutation:     ${mutation_result}"
+          if [ "$smoke_result" != "success" ] || [ "$mutation_result" != "success" ]; then
+            echo "GATE FAIL: one or more cells did not pass"
+            exit 1
+          fi
+          echo "GATE PASS: all smoke cells and mutation test passed"
