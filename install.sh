@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp sites; V232-P27+F-NEW-03: skip-pull guard; F-NEW-04: bind-mount auto-create for rootful/Docker)
 # last-updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-012: _pki_chown_client_keys enforces secrets dir mode 0755 so OPA inotify watcher can read dir)
 # last-updated: 2026-05-03T06:00:00+01:00 (fix: use podman cp for postgres SSL injection when old bind-mount lacks new certs — V232-SMOKE-004b)
 # last-updated: 2026-05-03T05:30:00+01:00 (fix: pre-start postgres for SSL injection before full compose up — V232-SMOKE-004)
@@ -674,10 +675,17 @@ bootstrap_repo() {
 download_tarball() {
   require_cmd "tar"
 
+  # V232-NEG04: never use /tmp — use the install dir's own work subdir so all
+  # temporary files stay within the operator-controlled install tree.
+  local _dl_work_dir
+  _dl_work_dir="${YSG_INSTALL_DIR}/.ysg_work"
+  mkdir -p "$_dl_work_dir"
+  trap 'rm -rf "${YSG_INSTALL_DIR}/.ysg_work"' EXIT
+
   local tmp_tar
-  tmp_tar="$(mktemp /tmp/yashigani-XXXXXX.tar.gz)"
+  tmp_tar="$(mktemp "${_dl_work_dir}/yashigani-XXXXXX.tar.gz")"
   local tmp_dir
-  tmp_dir="$(mktemp -d /tmp/yashigani-extract-XXXXXX)"
+  tmp_dir="$(mktemp -d "${_dl_work_dir}/yashigani-extract-XXXXXX")"
 
   log_info "Downloading tarball: $YASHIGANI_TARBALL_URL"
   if ! curl -sSL --fail --retry 3 -o "$tmp_tar" "$YASHIGANI_TARBALL_URL"; then
@@ -1099,14 +1107,19 @@ check_installer_preflight() {
 
   # --- Check 2: bind-mount directory ownership (UID 1001) -------------------
   # PKI issuer and backoffice services run as UID 1001 inside containers and
-  # write to the bind-mounted secrets dir.  The installer no longer runs chown
-  # via sudo — the operator must do this once before running the installer.
+  # write to the bind-mounted secrets dir.
+  #
+  # F-NEW-04: For Docker (rootful) and rootful Podman installs, the installer
+  # runs as root (or via sudo) and CAN create + chown the bind-mount dirs
+  # directly.  Do this automatically rather than asking the operator to run
+  # separate commands before re-running the installer.
   #
   # Podman rootless: container UID 1001 maps to host UID (subuid_start + 1000).
   # `podman unshare chown 1001:1001` is the correct operator command — the
   # resulting host UID is the subuid-remapped value, not literal 1001. We
-  # accept either literal 1001 (Docker / rootful) or the subuid-mapped value
-  # (Podman rootless non-root install).
+  # cannot do this automatically (would require a nested podman unshare call
+  # with a shell that hasn't been set up yet), so we still error with
+  # instructions on the Podman rootless path.
   local _bm_failed=0
   local _secrets_dir="${WORK_DIR}/docker/secrets"
 
@@ -1123,6 +1136,29 @@ check_installer_preflight() {
       # container UID 1001 = subuid_start + 1001 - 1
       _expected_uid=$(( _subuid_start + 1001 - 1 ))
     fi
+  fi
+
+  # F-NEW-04: pre-create bind-mount dirs for Docker (rootful) and rootful
+  # Podman (id -u == 0).  Podman rootless is excluded — it needs `podman
+  # unshare chown` which cannot run here.
+  if [[ "$_is_rootless_podman" == "false" ]]; then
+    for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
+      if [[ ! -d "$_bm_dir" ]]; then
+        mkdir -p "$_bm_dir"
+        log_info "Created bind-mount dir: $_bm_dir"
+      fi
+      # shellcheck disable=SC2012
+      local _dir_uid
+      _dir_uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
+      if [[ "$_dir_uid" != "1001" ]]; then
+        if chown 1001:1001 "$_bm_dir" 2>/dev/null; then
+          log_info "chown 1001:1001 applied to $_bm_dir"
+        else
+          log_error "Cannot chown $_bm_dir to 1001:1001 — run: sudo chown 1001:1001 \"$_bm_dir\""
+          _bm_failed=1
+        fi
+      fi
+    done
   fi
 
   for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
@@ -1387,7 +1423,8 @@ _write_aes_key_to_env() {
     if [[ -z "$value" ]]; then return 0; fi
     if grep -q "^${key}=" "$env_file" 2>/dev/null; then
       local tmp_env
-      tmp_env="$(mktemp)"
+      # V232-NEG04: never use /tmp — keep temp file alongside the .env file
+      tmp_env="$(mktemp "${WORK_DIR}/docker/.env.XXXXXX")"
       sed "s|^${key}=.*|${key}=${value}|" "$env_file" > "$tmp_env"
       mv "$tmp_env" "$env_file"
     else
@@ -2012,6 +2049,57 @@ compose_pull() {
 
   if [[ "$SKIP_PULL" == "true" ]]; then
     log_warn "Skipping docker compose pull (--skip-pull)"
+
+    # V232-P27 / F-NEW-03: Partial-state detector.
+    # When --skip-pull is set, the caller assumes images are already present
+    # locally.  If remote images are absent, later steps produce confusing errors.
+    # Detect early: verify remote images exist OR fail clearly.
+    # For gateway/backoffice (in-tree Dockerfiles): build automatically when absent.
+    _check_skip_pull_images() {
+      local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
+      local _missing_external=0
+
+      local _remote_images
+      _remote_images=$(grep '^\s*image:' "$_compose_file" 2>/dev/null \
+        | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*$//' \
+        | grep -v 'yashigani/' | grep -v '^\${' | sort -u)
+
+      for _img in $_remote_images; do
+        [[ -z "$_img" ]] && continue
+        if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+          podman image exists "$_img" 2>/dev/null || { log_warn "--skip-pull: remote image '$_img' not found locally"; _missing_external=1; }
+        else
+          docker image inspect "$_img" >/dev/null 2>&1 || { log_warn "--skip-pull: remote image '$_img' not found locally"; _missing_external=1; }
+        fi
+      done
+
+      if [[ "$_missing_external" -eq 1 ]]; then
+        log_error "--skip-pull set but one or more remote images are missing locally."
+        log_error "Remove --skip-pull to pull them, or pre-load: docker pull <image>"
+        exit 1
+      fi
+
+      # gateway/backoffice: build now if absent on Docker path
+      # (Podman builds inline during compose_pull proper)
+      if [[ "${YSG_PODMAN_RUNTIME:-false}" != "true" ]]; then
+        resolve_compose_cmd
+        local _gw_ok _bo_ok
+        _gw_ok=$(docker image inspect yashigani/gateway:latest >/dev/null 2>&1 && echo yes || echo no)
+        _bo_ok=$(docker image inspect yashigani/backoffice:latest >/dev/null 2>&1 && echo yes || echo no)
+        if [[ "$_gw_ok" == "no" || "$_bo_ok" == "no" ]]; then
+          log_warn "--skip-pull + Docker: gateway/backoffice absent — building from source"
+          "${COMPOSE_CMD[@]}" -f "${WORK_DIR}/docker/docker-compose.yml" build gateway backoffice || {
+            log_error "Build failed — cannot continue with --skip-pull and missing images"
+            exit 1
+          }
+          log_success "gateway/backoffice built from source"
+        fi
+      fi
+    }
+
+    if [[ "$DRY_RUN" != "true" ]]; then
+      _check_skip_pull_images
+    fi
     return 0
   fi
 
@@ -2589,7 +2677,8 @@ compose_up() {
         }
         # CA bundle: root + intermediate (same as _upgrade_postgres_ssl step 1)
         local _tmp_bundle
-        _tmp_bundle=$(mktemp "/tmp/ysg_ca_bundle_XXXXXX.crt" 2>/dev/null || echo "/tmp/ysg_ca_bundle.crt")
+        # V232-NEG04: use secrets dir for temp bundle — never /tmp
+        _tmp_bundle=$(mktemp "${_host_secrets}/.ysg_bundle_XXXXXX.crt" 2>/dev/null || echo "${_host_secrets}/.ysg_bundle.crt")
         cat "${_host_secrets}/ca_root.crt" "${_host_secrets}/ca_intermediate.crt" > "$_tmp_bundle"
         podman cp "$_tmp_bundle" "${_pg_container_name}:${_pgdata}/root.crt" 2>/dev/null || {
           log_error "podman cp ca bundle failed — SSL injection aborted"; rm -f "$_tmp_bundle"; return 1

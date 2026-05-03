@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Last updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp in MANIFEST sig verify with BACKUP_DIR-local path)
 # Last updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check; V232-SMOKE-011: podman unshare chown -R before cp restore; V232-SMOKE-012: secrets dir 0751→0755)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
@@ -355,7 +356,9 @@ validate_backup() {
       # Extract public key from the intermediate cert, then verify.
       # openssl dgst -verify reads a raw public key PEM file (not a cert).
       local _pubkey_file
-      _pubkey_file=$(mktemp /tmp/ysg-pubkey-XXXXXXXX.pem 2>/dev/null || mktemp)
+      # V232-NEG04: never use /tmp — place temp pubkey alongside backup dir
+      _pubkey_file=$(mktemp "${BACKUP_DIR}/.ysg-pubkey-XXXXXXXX.pem" 2>/dev/null \
+        || mktemp "${HOME}/.ysg-pubkey-XXXXXXXX.pem")
       trap 'rm -f "$_pubkey_file"' RETURN
       if ! openssl x509 -in "$_ca_cert" -noout -pubkey > "$_pubkey_file" 2>/dev/null; then
         log_error "RETRO-R4-3: Failed to extract public key from ca_intermediate.crt"

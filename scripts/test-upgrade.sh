@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # scripts/test-upgrade.sh — Yashigani v2.0.0
+# Last updated: 2026-05-03T14:00:00+01:00
 # Tests the upgrade path from v1.09.5 -> v1.10.0 -> v2.0.0.
 # Verifies data persistence, service health, and feature availability.
 #
@@ -13,7 +14,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
-WORK_DIR="/tmp/yashigani-upgrade-test"
+# V232-NEG04: never use /tmp — use HOME-relative path (or YSG_UPGRADE_TEST_DIR override)
+WORK_DIR="${YSG_UPGRADE_TEST_DIR:-${HOME}/.yashigani-upgrade-test}"
 PASSED=0
 FAILED=0
 
@@ -29,9 +31,10 @@ _info() { printf "${BLUE}[INFO]${RESET} %s\n" "$*"; }
 
 cleanup() {
   _info "Cleaning up..."
-  cd /tmp
+  local _safe_dir="${HOME}"
   if [ -d "$WORK_DIR" ]; then
     cd "$WORK_DIR" && docker compose -f docker/docker-compose.yml down -v 2>/dev/null || true
+    cd "${_safe_dir}"
   fi
   docker ps -aq | xargs -r docker rm -f 2>/dev/null || true
   rm -rf "$WORK_DIR"
