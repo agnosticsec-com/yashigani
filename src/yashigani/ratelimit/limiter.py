@@ -13,7 +13,15 @@ Redis key schema:
 
 Lua script executes atomically — no TOCTOU race between read and write.
 Returns HTTP 429 with Retry-After on violation.
+Returns HTTP 503 with Retry-After when Redis is unreachable in fail-closed mode.
 Audit event written on every violation.
+
+Fail mode is controlled by the ``fail_mode`` field on RateLimitConfig
+(set via the RATE_LIMITER_FAIL_MODE environment variable):
+  open   (default) — Redis errors allow the request through.
+  closed — Redis errors reject with a synthetic "redis_unavailable" result.
+
+Last updated: 2026-05-02T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -26,6 +34,13 @@ from typing import Optional
 from yashigani.ratelimit.config import RateLimitConfig
 
 logger = logging.getLogger(__name__)
+
+# Retry-After value (seconds) returned when Redis is unavailable in fail-closed mode.
+# 5 seconds is a reasonable backoff for a transient Redis hiccup.
+_REDIS_UNAVAILABLE_RETRY_AFTER_SEC: int = 5
+
+# dimension label used on the result when Redis is unreachable in fail-closed mode
+_DIMENSION_REDIS_UNAVAILABLE: str = "redis_unavailable"
 
 # Lua token bucket script — atomic read-modify-write
 _LUA_TOKEN_BUCKET = """
@@ -135,7 +150,10 @@ class RateLimiter:
                 continue
             result = self._consume(key, rps * multiplier, burst)
             if not result.allowed:
-                result.dimension = dimension
+                # Preserve the dimension already set by _consume (e.g. redis_unavailable
+                # in fail-closed mode) rather than overwriting it with the loop label.
+                if not result.dimension:
+                    result.dimension = dimension
                 return result
 
         return RateLimitResult(allowed=True, dimension="none", remaining=-1, retry_after_ms=0)
@@ -201,8 +219,21 @@ class RateLimiter:
                 retry_after_ms=retry_ms,
             )
         except Exception as exc:
-            # Redis unavailable → fail open (log, allow)
-            logger.error("Rate limiter Redis error (failing open): %s", exc)
+            fail_mode = self._config.fail_mode
+            if fail_mode == "closed":
+                # Fail closed: treat Redis unavailability as a blocking condition.
+                # The proxy will return HTTP 503 + Retry-After to the caller.
+                logger.error(
+                    "Rate limiter Redis error (fail-closed — rejecting request): %s", exc
+                )
+                return RateLimitResult(
+                    allowed=False,
+                    dimension=_DIMENSION_REDIS_UNAVAILABLE,
+                    remaining=0,
+                    retry_after_ms=_REDIS_UNAVAILABLE_RETRY_AFTER_SEC * 1000,
+                )
+            # Default: fail open — log and allow
+            logger.error("Rate limiter Redis error (fail-open — allowing request): %s", exc)
             return RateLimitResult(allowed=True, dimension="redis_error", remaining=-1, retry_after_ms=0)
 
     def _rpi_multiplier(self) -> float:

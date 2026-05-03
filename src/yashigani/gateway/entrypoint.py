@@ -3,7 +3,7 @@ Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
 
-Last updated: 2026-04-29T17:45:00+01:00
+Last updated: 2026-05-02T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -141,6 +141,15 @@ def _build_app():
         redis_query = ""
 
     # Rate limiter — Redis DB 2
+    _rl_fail_mode_raw = os.environ.get("RATE_LIMITER_FAIL_MODE", "open").strip().lower()
+    _rl_fail_mode = _rl_fail_mode_raw if _rl_fail_mode_raw in ("open", "closed") else "open"
+    if _rl_fail_mode_raw not in ("open", "closed"):
+        logger.warning(
+            "RATE_LIMITER_FAIL_MODE=%r is not valid (expected 'open' or 'closed'); "
+            "defaulting to 'open'",
+            _rl_fail_mode_raw,
+        )
+    logger.info("Rate limiter fail mode: %s", _rl_fail_mode)
     rate_limiter = None
     try:
         import redis as _redis
@@ -148,7 +157,7 @@ def _build_app():
         redis_client_rl.ping()
         rate_limiter = RateLimiter(
             redis_client=redis_client_rl,
-            config=RateLimitConfig(),
+            config=RateLimitConfig(fail_mode=_rl_fail_mode),
             resource_monitor=resource_monitor,
         )
     except Exception as exc:

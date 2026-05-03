@@ -2,11 +2,14 @@
 Yashigani Rate Limit — Configuration dataclass.
 All limits are admin-configurable at runtime via the backoffice API.
 Defaults are conservative enough for a single-node deployment.
+
+Last updated: 2026-05-02T00:00:00+00:00
 """
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -22,9 +25,17 @@ class RateLimitConfig:
         0.30–0.60     → ×0.80  (−20%)
         0.60–0.80     → ×0.50  (−50%)
         > 0.80        → ×0.25  (−75%, critical pressure)
+
+    fail_mode:
+        ``open``   (default) — Redis errors allow the request through.
+        ``closed`` — Redis errors reject the request with HTTP 503 +
+                   ``Retry-After``.  Set via RATE_LIMITER_FAIL_MODE=closed.
     """
     enabled: bool = True
     adaptive_enabled: bool = True
+
+    # ``open`` → Redis errors allow (default). ``closed`` → Redis errors reject HTTP 503.
+    fail_mode: Literal["open", "closed"] = "open"
 
     # ── Global ───────────────────────────────────────────────────────────────
     # Applied to the total request rate across all clients

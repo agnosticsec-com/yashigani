@@ -350,6 +350,22 @@ async def _proxy_request_body(
                 session_id=session_id_rl,
                 rate_limiter=rate_limiter,
             )
+            # Redis-unavailable in fail-closed mode → 503 Service Unavailable.
+            # All other rate-limit violations (token bucket exhausted) → 429.
+            if rl_result.dimension == "redis_unavailable":
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "RATE_LIMITER_UNAVAILABLE",
+                        "detail": "Rate limiter backend unavailable; request rejected (fail-closed mode).",
+                        "request_id": request_id,
+                        "retry_after_seconds": retry_sec,
+                    },
+                    headers={
+                        "X-Yashigani-Request-Id": request_id,
+                        "Retry-After": str(retry_sec),
+                    },
+                )
             return JSONResponse(
                 status_code=429,
                 content={

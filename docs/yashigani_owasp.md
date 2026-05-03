@@ -2,7 +2,7 @@
 
 **Document Version:** 2.23.1
 **Date:** 2026-04-27
-<!-- Last updated: 2026-04-27T22:18:09+01:00 -->
+<!-- Last updated: 2026-05-02T00:00:00+00:00 -->
 **Codebase version:** v2.23.1
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
@@ -471,7 +471,7 @@ The OWASP API Security Top 10 (2023) identifies the most critical security risks
 
 **Yashigani Controls:** Four independent rate limiting dimensions (per-IP, per-session, per-agent, per-endpoint), all Redis-backed. Anomaly detection via Redis ZSET sliding window. 4 MB body size limit. Response cache reduces load.
 
-**Residual Risk:** Redis availability is a dependency for rate limiting.
+**Residual Risk:** Redis availability is a dependency for rate limiting. Operators in regulated environments can set `RATE_LIMITER_FAIL_MODE=closed` (v2.23.2) to reject requests rather than fail-open when Redis is unreachable.
 
 **Coverage: FULL**
 

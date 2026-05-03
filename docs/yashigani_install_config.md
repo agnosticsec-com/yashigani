@@ -1,7 +1,7 @@
 # Yashigani — Installation and Configuration Guide
 
 **Version:** 2.23.1
-**Last updated:** 2026-04-25T21:43:38+01:00
+**Last updated:** 2026-05-02T00:00:00+00:00
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -1272,6 +1272,25 @@ The adaptive rate limiter reduces effective limits when the Resource Pressure In
 Update via Admin → Rate Limiting → Adaptive Thresholds. Changes take effect on the next request cycle. All threshold changes are written to the audit log as `RateLimitThresholdChangedEvent` with previous and new values.
 
 > **Tip:** After any rate limit change, verify it is in effect by watching the Redis key for your agent: `docker compose exec redis redis-cli keys "rl:*"`. Changes take effect within 60 seconds.
+
+### 12.5 Fail Mode (v2.23.2)
+
+By default the rate limiter **fails open**: if Redis is temporarily unreachable the request is allowed through and a warning is logged. This preserves availability during transient Redis hiccups.
+
+For regulated environments where an unenforced rate limit is unacceptable, set **fail-closed mode**. When closed, any Redis error causes the limiter to reject the request immediately with `HTTP 503 Service Unavailable` and a `Retry-After` header.
+
+```
+RATE_LIMITER_FAIL_MODE=closed   # default: open
+```
+
+Set this environment variable for the `gateway` service in `docker-compose.override.yml` (or the equivalent Helm values key `gateway.env.RATE_LIMITER_FAIL_MODE`).
+
+| Value | Behaviour on Redis error |
+|-------|--------------------------|
+| `open` (default) | Request allowed; warning logged |
+| `closed` | Request rejected with `HTTP 503` + `Retry-After: 5` |
+
+> **When to use `closed`:** Payment card processors, healthcare data handlers, or any deployment where regulatory requirements mandate that rate controls are always enforced. Note that `closed` mode means Redis availability is on the critical request path — plan accordingly with Redis HA or Sentinel.
 
 ---
 
