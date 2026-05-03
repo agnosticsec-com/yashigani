@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T07:00:00+01:00
+# last-updated: 2026-05-03T09:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -102,6 +102,12 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+# BASE_WORK_DIR is frozen after arg parse (HARNESS_WORK_DIR may be set by
+# --work-dir). It is used by cleanup() to enumerate all dirs created during the
+# run. HARNESS_WORK_DIR itself is mutated in main() after each phase so
+# subsequent phases read from the correct (upgraded/restored) directory.
+BASE_WORK_DIR="$HARNESS_WORK_DIR"
 
 # ---------------------------------------------------------------------------
 # Execution-context guard — must run from developer machine, not from VM
@@ -1002,13 +1008,9 @@ bash install.sh \
     --upgrade 2>&1 | tee /tmp/n1_upgrade_run.log
 
 echo "[remote] install.sh --upgrade exit code: \$?"
-
-# Swap work dir so subsequent phases point at the new dir
-safe_rm_rf "\${OLD_DIR}.old"
-mv "\$OLD_DIR" "\${OLD_DIR}.old"
-mv "\$NEW_DIR" "\$OLD_DIR"
-
-echo "[remote] Work dir swapped: \$OLD_DIR now contains \$NEW_REF"
+# NOTE: no dir swap here. HARNESS_WORK_DIR is updated on the macOS side in
+# main() after run_upgrade() returns (V232-SMOKE-006 fix). The new install
+# lives at NEW_DIR (n1_harness_new); subsequent phases reference it directly.
 REMOTE_SCRIPT
 
     local rc=$?
@@ -1229,12 +1231,10 @@ bash install.sh \
     --upgrade 2>&1 | tee /tmp/n1_reupgrade_run.log
 
 echo "[remote] Re-upgrade install.sh exit code: \$?"
-
-# Swap work dir again
-safe_rm_rf "\${OLD_DIR}.reup"
-mv "\$OLD_DIR" "\${OLD_DIR}.reup"
-mv "\$NEW_DIR" "\$OLD_DIR"
-
+# NOTE: no dir swap here. HARNESS_WORK_DIR is updated on the macOS side in
+# main() after run_reupgrade() returns (V232-SMOKE-006 fix). The re-upgraded
+# install lives at NEW_DIR (n1_harness_new_reup); subsequent phases reference
+# it directly via the updated HARNESS_WORK_DIR.
 echo "[remote] Re-upgrade complete"
 REMOTE_SCRIPT
 
@@ -1274,13 +1274,17 @@ REMOTE_SCRIPT
 # ---------------------------------------------------------------------------
 cleanup() {
     if [[ "$SKIP_CLEANUP" == "true" ]]; then
-        log "SKIP_CLEANUP=true — leaving $HARNESS_WORK_DIR on VM"
+        log "SKIP_CLEANUP=true — leaving harness dirs on VM"
         return
     fi
 
     log_phase "11 — Cleanup"
+    # V232-SMOKE-006: HARNESS_WORK_DIR is updated during the run (→ _new → _new_reup).
+    # Use BASE_WORK_DIR (the original base, e.g. n1_harness) to enumerate ALL dirs
+    # that may have been created across the full harness run.
     vm_run_script <<REMOTE_SCRIPT
 set -euo pipefail
+BASE="${BASE_WORK_DIR}"
 WORK="${HARNESS_WORK_DIR}"
 RUNTIME="${RUNTIME}"
 COMPOSE_CMD="${REMOTE_COMPOSE}"
@@ -1298,19 +1302,23 @@ safe_rm_rf() {
     fi
 }
 
-# Tear down final stack
+# Tear down final running stack (whichever dir is currently active)
 if [ -d "\$WORK/docker" ]; then
     cd "\$WORK"
     YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml down -v --remove-orphans 2>&1 || true
 fi
 
-# Remove all harness dirs (safe_rm_rf handles sub-UID-owned secrets files)
-for d in "\$WORK" "\${WORK}_old" "\${WORK}_new" "\${WORK}_reup"; do
+# Remove all harness dirs that may have been created during the run.
+# Enumerate from BASE_WORK_DIR to cover: base, _new, _new_reup, and any .old
+# swap artefacts, regardless of how HARNESS_WORK_DIR was updated mid-run.
+for d in "\$BASE" "\${BASE}_new" "\${BASE}_new_reup" \
+          "\${BASE}.old" "\${BASE}_new.reup" "\${BASE}_reup"; do
     safe_rm_rf "\$d" 2>/dev/null || true
 done
 
 # Verify gone
-for d in "\$WORK" "\${WORK}_old" "\${WORK}_new" "\${WORK}_reup"; do
+for d in "\$BASE" "\${BASE}_new" "\${BASE}_new_reup" \
+          "\${BASE}.old" "\${BASE}_new.reup" "\${BASE}_reup"; do
     if [ -d "\$d" ]; then
         echo "[remote] WARNING: \$d still present after cleanup"
     fi
@@ -1428,6 +1436,17 @@ main() {
     # result plus the schema delta check in verify_post_upgrade.
     run_upgrade || { emit_final_verdict "FAIL"; exit 1; }
 
+    # V232-SMOKE-006 fix: the upgraded install runs in ${HARNESS_WORK_DIR}_new.
+    # The remote dir swap inside run_upgrade's heredoc (mv _new → base) exits
+    # before the mv because install.sh | tee causes the pipeline exit code to
+    # be consumed by set -e, so HARNESS_WORK_DIR on the macOS side never updates
+    # via the remote mv. Update it here explicitly so that all subsequent phases
+    # (backup, restore, re-upgrade, cleanup) use the upgraded dir containing
+    # restore.sh and the v2.23.1 mTLS secrets.
+    local old_work_dir="$HARNESS_WORK_DIR"
+    HARNESS_WORK_DIR="${HARNESS_WORK_DIR}_new"
+    log "Work dir updated: $old_work_dir → $HARNESS_WORK_DIR (post-upgrade)"
+
     # Phase 5: wait for upgraded stack
     wait_for_new_stack || { emit_final_verdict "FAIL"; exit 1; }
 
@@ -1458,6 +1477,12 @@ main() {
 
     # Phase 9: re-upgrade (forward path again after restore)
     run_reupgrade || { emit_final_verdict "FAIL"; exit 1; }
+
+    # V232-SMOKE-006 fix (re-upgrade): same as post-upgrade swap above.
+    # The re-upgraded install lives in ${HARNESS_WORK_DIR}_reup.
+    local post_reup_dir="${HARNESS_WORK_DIR}_reup"
+    HARNESS_WORK_DIR="$post_reup_dir"
+    log "Work dir updated: → $HARNESS_WORK_DIR (post-reupgrade)"
 
     # Phase 9b: wait for re-upgraded stack + verify logins
     wait_for_new_stack || { emit_final_verdict "FAIL"; exit 1; }
