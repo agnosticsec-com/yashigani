@@ -116,6 +116,17 @@ jobs:
           fi
           echo "Version consistent: $PY_VER"
 
+  lint-sudo-pattern:
+    runs-on: ubuntu-latest
+    # Fast grep-based gate — no Python install needed. Fails immediately if any
+    # file outside the documented exclusion list introduces a forbidden sudo
+    # pattern. See scripts/lint_sudo_pattern.sh for the two detected classes.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check for forbidden sudo patterns
+        run: bash scripts/lint_sudo_pattern.sh .
+
   mypy:
     runs-on: ubuntu-latest
     # Run on Python 3.12 only — type stubs are stable; 3.13 parity is not
