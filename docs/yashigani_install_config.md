@@ -1,7 +1,7 @@
 # Yashigani — Installation and Configuration Guide
 
 **Version:** 2.23.1
-**Last updated:** 2026-05-02T00:00:00+00:00
+**Last updated:** 2026-05-02T14:00:00+00:00
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -970,6 +970,26 @@ SCIM allows your IdP to automatically provision and deprovision users and groups
 
 > **Note:** SCIM provisioning does not override manually created local accounts. If a user exists in both SCIM and local accounts, SCIM takes precedence for attribute updates.
 
+### 8.4 Keycloak Test IdP Profile — Security Warning
+
+The repository ships a `test-idp` Compose profile for developer SSO integration testing against a local Keycloak instance. **This profile is NOT for production use.**
+
+> **WARNING (EX-231-05 / ASVS V2.1.1, V14.1.1):** The `test-idp` profile starts Keycloak in `start-dev` mode with default credentials (`KEYCLOAK_ADMIN=admin` / `KEYCLOAK_ADMIN_PASSWORD=admin`). These credentials are readable from `docker/.env.test-idp`. They are intentionally left as defaults because this profile is exclusively for local developer testing and is never activated by the installer. Do NOT expose port 9000 externally. Do NOT use this profile on a shared or internet-facing host.
+
+**Activating the test IdP (developers only):**
+
+```bash
+docker compose --profile test-idp --env-file docker/.env.test-idp up -d keycloak
+```
+
+**Verifying the test-idp profile is NOT active in production:**
+
+```bash
+docker compose ps keycloak 2>&1 | grep -q "Up" && echo "WARNING: keycloak running" || echo "OK: keycloak not running"
+```
+
+The installer (`install.sh`) never activates the `test-idp` profile. Standard production installs have no Keycloak container.
+
 ---
 
 ## 9. SIEM Integration
@@ -1407,6 +1427,16 @@ Run through this checklist before exposing Yashigani to production traffic.
 - [ ] Jaeger trace UI loads at `https://your-domain/admin/jaeger`
 - [ ] Alertmanager receivers are configured (not just the default null receiver)
 - [ ] A test alert has been sent to verify each notification channel
+
+> **WARNING — Jaeger In-Memory Storage (EX-231-06 / ASVS V7.3.1):** The default Jaeger deployment (`jaeger` service in `docker-compose.yml`) uses in-memory storage. **All distributed traces are lost when the Jaeger container restarts.** This is acceptable for development and non-regulated environments. For production deployments where trace retention is required (audit trail, incident investigation, compliance), replace the default Jaeger all-in-one container with a persistent backend before go-live:
+>
+> **Option 1 — Elasticsearch (recommended):** Set `SPAN_STORAGE_TYPE=elasticsearch` and configure `ES_SERVER_URLS` in your `docker-compose.override.yml`. See [Jaeger Elasticsearch storage docs](https://www.jaegertracing.io/docs/latest/deployment/#elasticsearch).
+>
+> **Option 2 — Cassandra:** Set `SPAN_STORAGE_TYPE=cassandra` and configure `CASSANDRA_SERVERS`. Requires a Cassandra cluster.
+>
+> **Option 3 — Hosted tracing:** Replace Jaeger with a hosted OTLP-compatible service (e.g. Grafana Tempo, Honeycomb) by updating `OTEL_EXPORTER_OTLP_ENDPOINT` in your `.env` and removing the `jaeger` service from your compose override.
+>
+> Until persistent storage is configured, trace data is development-only. Do not reference Jaeger traces in audit responses or compliance evidence if your deployment uses in-memory Jaeger.
 
 ### Data and Backup
 
