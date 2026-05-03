@@ -30,6 +30,13 @@ spec:
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       securityContext:
+        # ACS-RISK-008: caddy runs as UID 1000 (caddy user baked into the
+        # official image). NET_BIND_SERVICE retained to bind :80/:443 without
+        # root. ROFS: /data and /config are emptyDir mounts so read-only root
+        # is safe — all filesystem writes go to volume mounts.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -38,6 +45,7 @@ spec:
           imagePullPolicy: {{ .Values.caddy.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
               add: ["NET_BIND_SERVICE"]

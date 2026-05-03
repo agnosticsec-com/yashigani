@@ -1,0 +1,71 @@
+# ACS-RISK-008 — Container hardening: require capabilities.drop: [ALL]
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# Rejects pods where any container does not drop ALL Linux capabilities.
+# The default is to inherit the full set of ambient capabilities from the
+# runtime (CAP_CHOWN, CAP_NET_RAW, CAP_SETUID, CAP_SETGID, etc.) — each
+# is a potential privilege-escalation vector. Only NET_BIND_SERVICE is
+# permitted to be added back (Caddy only, to bind :80/:443).
+#
+# Note: This policy checks that ["ALL"] appears in the drop list. If a
+# container adds back a capability (e.g. NET_BIND_SERVICE) that is fine
+# as long as ALL is also in the drop list (K8s processes drop before add).
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: yashigani-require-drop-all-capabilities
+  annotations:
+    policies.kyverno.io/title: "Require drop ALL capabilities"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "high"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      All containers in the yashigani namespace must set
+      capabilities.drop containing ALL. Implements ACS-RISK-008.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-capabilities-drop-all-containers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      validate:
+        message: >-
+          ACS-RISK-008: Container '{{ element.name }}' in pod
+          '{{ request.object.metadata.name }}' must set
+          securityContext.capabilities.drop containing ALL.
+        foreach:
+          - list: "request.object.spec.containers"
+            deny:
+              conditions:
+                all:
+                  - key: "ALL"
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop[] || `[]` }}"
+    - name: check-capabilities-drop-all-init-containers
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      validate:
+        message: >-
+          ACS-RISK-008: Init container '{{ element.name }}' in pod
+          '{{ request.object.metadata.name }}' must set
+          securityContext.capabilities.drop containing ALL.
+        foreach:
+          - list: "request.object.spec.initContainers"
+            deny:
+              conditions:
+                all:
+                  - key: "ALL"
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop[] || `[]` }}"
