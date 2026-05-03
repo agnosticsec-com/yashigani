@@ -2,6 +2,8 @@
 Yashigani Inspection — Prompt injection classifier.
 Uses Qwen3.5 via Ollama (local only — never a cloud call for detection).
 Returns structured JSON verdict with classification, confidence, and spans.
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -110,7 +112,7 @@ class PromptInjectionClassifier:
                 confidence=0.0,
                 exfil_indicators=False,
                 detected_payload_spans=[],
-                raw_response=str(exc),
+                raw_response=type(exc).__name__,
             )
 
     def available_models(self) -> list[str]:
