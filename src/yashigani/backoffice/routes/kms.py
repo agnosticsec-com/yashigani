@@ -84,9 +84,13 @@ async def update_schedule(body: ScheduleUpdateRequest, session: StepUpAdminSessi
     try:
         _validate_cron(body.cron_expr)
     except ValueError as exc:
+        # V232-CSCAN-01g: log full validation error server-side; safe envelope to client.
+        payload, _ = safe_error_envelope(
+            exc, public_message="invalid cron expression", status=422
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "invalid_cron_expression", "message": str(exc)},
+            detail=payload,
         )
 
     state = backoffice_state
@@ -126,9 +130,11 @@ async def rotate_now(session: StepUpAdminSession):
     try:
         scheduler.trigger_now()
     except Exception as exc:
+        # V232-CSCAN-01g: log full exception server-side; safe envelope to client.
+        payload, _ = safe_error_envelope(exc, public_message="rotation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "rotation_failed", "message": str(exc)},
+            detail=payload,
         )
 
     assert state.audit_writer is not None  # set unconditionally at startup
@@ -157,9 +163,11 @@ async def list_secrets(session: AdminSession):
     try:
         keys = provider.list_secrets()
     except Exception as exc:
+        # V232-CSCAN-01g: log full exception server-side; safe envelope to client.
+        payload, _ = safe_error_envelope(exc, public_message="failed to list secrets")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "list_failed", "message": str(exc)},
+            detail=payload,
         )
 
     return {"secrets": keys, "total": len(keys)}

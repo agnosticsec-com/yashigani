@@ -148,8 +148,10 @@ jobs:
             src/yashigani/backoffice/routes/sensitivity.py
             src/yashigani/gateway/openai_router.py
           )
+          # V232-CSCAN-01g: extend pattern to catch "message": str(exc) and "detail": str(exc)
+          # forms (not just f-string forms) — the three kms.py sites used the dict-literal form.
           HITS=$(grep -En \
-            '"error"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}|"detail"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}' \
+            '"error"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}|"detail"[[:space:]]*:[[:space:]]*str\(exc\)|"detail"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}' \
             "${MIGRATED_FILES[@]}" \
             || true)
           if [ -n "$HITS" ]; then
