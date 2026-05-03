@@ -129,6 +129,7 @@
     # ── Gateway health check — /healthz ─────────────────────────────────────
     handle /healthz {
         reverse_proxy gateway:8080 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -137,6 +138,7 @@
     # ── Agent routing — /agents/* ────────────────────────────────────────────
     handle /agents/* {
         reverse_proxy gateway:8080 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -145,6 +147,7 @@
     # ── Gateway API — /v1/* (OpenAI-compatible) ──────────────────────────────
     handle /v1/* {
         reverse_proxy gateway:8080 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -152,6 +155,7 @@
 
     handle /mcp/* {
         reverse_proxy gateway:8080 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -160,6 +164,7 @@
     # ── Backoffice routes ────────────────────────────────────────────────────
     handle /admin/* {
         reverse_proxy backoffice:8443 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -167,6 +172,7 @@
 
     handle /auth/* {
         reverse_proxy backoffice:8443 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -174,6 +180,7 @@
 
     handle /dashboard/* {
         reverse_proxy backoffice:8443 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -181,6 +188,7 @@
 
     handle /scim/* {
         reverse_proxy backoffice:8443 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -188,6 +196,7 @@
 
     handle /login {
         reverse_proxy backoffice:8443 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -198,7 +207,11 @@
         basic_auth {
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
-        reverse_proxy prometheus:9090
+        # inject-caddy-verified: prometheus does not validate the header but
+        # we inject it uniformly across all reverse_proxy blocks.
+        reverse_proxy prometheus:9090 {
+            import inject-caddy-verified
+        }
     }
 
     # ── Open WebUI — catch-all ───────────────────────────────────────────────
@@ -208,6 +221,7 @@
         request_header -X-Forwarded-Groups
 
         forward_auth backoffice:8443 {
+            import inject-caddy-verified
             uri /auth/verify
             copy_headers X-Forwarded-User X-Forwarded-Name
 
@@ -217,7 +231,10 @@
             }
         }
 
+        # inject-caddy-verified: open-webui does not validate the header but
+        # we inject it uniformly across all reverse_proxy blocks.
         reverse_proxy open-webui:8080 {
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }

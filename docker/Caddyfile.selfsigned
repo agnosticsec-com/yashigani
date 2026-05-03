@@ -338,7 +338,15 @@ Hiring: https://agnosticsec.com/careers
         basic_auth {
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
-        reverse_proxy prometheus:9090
+        # inject-caddy-verified: prometheus does not validate the header but
+
+        # we inject it uniformly across all reverse_proxy blocks. Closes LU-231-10-A.
+
+        reverse_proxy prometheus:9090 {
+
+            import inject-caddy-verified
+
+        }
     }
 
     # ── Open WebUI — catch-all (only active when --with-openwebui is used) ──
@@ -365,8 +373,16 @@ Hiring: https://agnosticsec.com/careers
             }
         }
 
+        # inject-caddy-verified: open-webui does not validate the header but
+
+        # we inject it uniformly across all reverse_proxy blocks. Auth is
+
+        # enforced by the forward_auth block above. Closes LU-231-10-A.
+
         reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
+
+            import inject-caddy-verified
+            header_upheader_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
             # Explicitly pass the trusted identity headers from forward_auth
             header_up X-Forwarded-User {http.request.header.X-Forwarded-User}

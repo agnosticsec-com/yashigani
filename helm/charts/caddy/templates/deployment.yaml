@@ -1,4 +1,5 @@
 {{- if .Values.enabled }}
+{{- fail "helm/charts/caddy is deprecated and must not be enabled. Use the parent helm/yashigani chart. See helm/charts/caddy/Chart.yaml for details." }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

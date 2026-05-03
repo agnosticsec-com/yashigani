@@ -323,7 +323,15 @@ Hiring: https://agnosticsec.com/careers
             # Populated at bootstrap from generated prometheus_password secret
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
-        reverse_proxy prometheus:9090
+        # inject-caddy-verified: prometheus does not validate the header but
+
+        # we inject it uniformly across all reverse_proxy blocks. Closes LU-231-10-A.
+
+        reverse_proxy prometheus:9090 {
+
+            import inject-caddy-verified
+
+        }
     }
 
     # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
@@ -344,8 +352,16 @@ Hiring: https://agnosticsec.com/careers
             }
         }
 
+        # inject-caddy-verified: open-webui does not validate the header but
+
+        # we inject it uniformly across all reverse_proxy blocks. Auth is
+
+        # enforced by the forward_auth block above. Closes LU-231-10-A.
+
         reverse_proxy open-webui:8080 {
-            header_up X-Forwarded-Proto https
+
+            import inject-caddy-verified
+            header_upheader_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
     }

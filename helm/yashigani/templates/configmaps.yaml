@@ -396,7 +396,11 @@ data:
           }
         }
 
+        # inject-caddy-verified: open-webui does not validate the header but
+        # we inject it uniformly across all reverse_proxy blocks. Auth is
+        # enforced by the forward_auth block above. Closes LU-231-10-A.
         reverse_proxy open-webui:8080 {
+          import inject-caddy-verified
           header_up X-Forwarded-Proto https
           header_up X-Real-IP {remote_host}
           header_up X-Forwarded-User {http.request.header.X-Forwarded-User}
