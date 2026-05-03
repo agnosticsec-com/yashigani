@@ -1,5 +1,5 @@
 # Yashigani v2.23.1 — Wazuh SIEM auto-deploy override
-# Last updated: 2026-04-29T14:30:00+01:00
+# Last updated: 2026-05-02T23:00:00+01:00
 #
 # Activate: docker compose -f docker-compose.yml -f docker-compose.wazuh.yml up -d
 # Or set via Admin → Audit → SIEM Integration → Wazuh (Auto-deploy)
@@ -19,7 +19,7 @@
 services:
 
   wazuh-indexer:
-    image: wazuh/wazuh-indexer:4.7.3
+    image: docker.io/wazuh/wazuh-indexer:4.7.3@sha256:b976a99ec2d0311ee468d3e9ab4abebd941aea1bb4b32b337216e8cb63c8be3b
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
@@ -49,7 +49,7 @@ services:
       - obs
 
   wazuh-manager:
-    image: wazuh/wazuh-manager:4.7.3
+    image: docker.io/wazuh/wazuh-manager:4.7.3@sha256:8b418c4faf64e5ba8d9f16f20f9697a16b371058c7b2d7be6ff7e88de54e8603
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
@@ -78,7 +78,7 @@ services:
       - obs
 
   wazuh-dashboard:
-    image: wazuh/wazuh-dashboard:4.7.3
+    image: docker.io/wazuh/wazuh-dashboard:4.7.3@sha256:f151b074dce5b1f95fa5490359a2b34d5c8b0331e264fe26beb3ef48f8375bde
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}
