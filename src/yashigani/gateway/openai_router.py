@@ -643,12 +643,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     backend_body = agent_resp
                     route_reason = f"agent:{selected_model[1:]}:letta"
                 except Exception as exc:
-                    logger.error("Letta agent %s failed: %s", selected_model, exc)
+                    # V232-CSCAN-01e: log full exception server-side; safe message to caller.
+                    logger.exception("Letta agent %s failed", selected_model)
                     return JSONResponse(
                         status_code=502,
                         content={
                             "error": {
-                                "message": f"Agent {selected_model} (Letta) failed: {exc}",
+                                "message": f"Agent {selected_model} (Letta) unreachable",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",
@@ -669,12 +670,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     backend_body = agent_resp
                     route_reason = f"agent:{selected_model[1:]}:langflow"
                 except Exception as exc:
-                    logger.error("Langflow agent %s failed: %s", selected_model, exc)
+                    # V232-CSCAN-01e: log full exception server-side; safe message to caller.
+                    logger.exception("Langflow agent %s failed", selected_model)
                     return JSONResponse(
                         status_code=502,
                         content={
                             "error": {
-                                "message": f"Agent {selected_model} (Langflow) failed: {exc}",
+                                "message": f"Agent {selected_model} (Langflow) unreachable",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",
@@ -727,12 +729,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                             headers=agent_headers,
                         )
                 except Exception as exc:
-                    logger.error("Agent %s unreachable: %s", selected_model, exc)
+                    # V232-CSCAN-01e: log full exception server-side; safe message to caller.
+                    logger.exception("Agent %s unreachable", selected_model)
                     return JSONResponse(
                         status_code=502,
                         content={
                             "error": {
-                                "message": f"Agent {selected_model} unreachable: {exc}",
+                                "message": f"Agent {selected_model} unreachable",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",

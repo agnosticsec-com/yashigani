@@ -8,7 +8,7 @@ Regression tests for Ava QA findings AVA-2026-04-29-001 and AVA-2026-04-29-002.
 These tests are pure unit tests: no live Postgres, no live Redis, no live Caddy.
 They re-fail if the original bugs are reintroduced.
 """
-# Last updated: 2026-04-29T22:58:39+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 from __future__ import annotations
 
 import asyncio
@@ -157,25 +157,27 @@ class TestAva001StoredXssAgentName:
         assert any(e["loc"] == ("name",) for e in errors), errors
 
     def test_register_accepts_clean_name(self):
-        """Clean agent names must continue to pass — no regression on legitimate input."""
+        """Clean agent slug names must continue to pass — no regression on legitimate input.
+        Note: V232-CSCAN-01a tightened name to slug pattern '^[a-z][a-z0-9_-]{0,63}$'.
+        """
         req = _AgentRegisterRequest(
-            name="My Production Agent v2",
+            name="my-production-agent-v2",
             upstream_url="https://agent.example.com",
         )
-        assert req.name == "My Production Agent v2"
+        assert req.name == "my-production-agent-v2"
 
     def test_register_accepts_name_with_angle_bracket_in_math_context(self):
-        """A lone < or > that does NOT form an HTML tag must NOT be rejected.
+        """A slug-compliant name with only lowercase and hyphens must be accepted.
 
-        The regex only matches '<' followed by a letter, '/', or '!' — i.e.
-        actual tag syntax. Bare operators like '1 < 2' are allowed.
+        Note: V232-CSCAN-01a tightened name to slug pattern so free-text names
+        ('threshold < 100') are now rightly rejected. This test is updated to use
+        a slug that satisfies the new constraint.
         """
-        # "threshold < 100" — no letter follows the <, so no tag match
         req = _AgentRegisterRequest(
-            name="threshold < 100",
+            name="threshold-agent",
             upstream_url="https://agent.example.com",
         )
-        assert req.name == "threshold < 100"
+        assert req.name == "threshold-agent"
 
     # --- AgentUpdateRequest -------------------------------------------------
 
@@ -186,8 +188,9 @@ class TestAva001StoredXssAgentName:
         assert any(e["loc"] == ("name",) for e in errors), errors
 
     def test_update_accepts_clean_name(self):
-        req = _AgentUpdateRequest(name="Renamed Agent")
-        assert req.name == "Renamed Agent"
+        """Note: V232-CSCAN-01a tightened name to slug pattern — use a slug."""
+        req = _AgentUpdateRequest(name="renamed-agent")
+        assert req.name == "renamed-agent"
 
     def test_update_accepts_none_name(self):
         """None (field omitted) must still pass — name is optional on update."""

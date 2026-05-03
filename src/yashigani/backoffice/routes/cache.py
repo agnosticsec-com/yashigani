@@ -4,15 +4,19 @@ GET  /admin/cache                  — list all tenant configs
 GET  /admin/cache/{tenant_id}      — get config for tenant
 PUT  /admin/cache/{tenant_id}      — set config
 DELETE /admin/cache/{tenant_id}    — invalidate all entries for tenant
+
+# Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import require_admin_session
+from yashigani.common.error_envelope import safe_error_envelope
 
 logger = logging.getLogger(__name__)
 cache_router = APIRouter(tags=["cache"])
@@ -40,7 +44,12 @@ async def list_cache_configs(session=Depends(require_admin_session)):
             )
         return {"tenants": [dict(r) for r in rows], "cache_available": True}
     except Exception as exc:
-        return {"tenants": [], "error": str(exc), "cache_available": True}
+        # V232-CSCAN-01e: log full exception server-side; return safe envelope to client.
+        payload, _ = safe_error_envelope(exc, public_message="cache config unavailable")
+        return JSONResponse(
+            status_code=500,
+            content={"tenants": [], "cache_available": True, **payload},
+        )
 
 
 @cache_router.get("/admin/cache/{tenant_id}")

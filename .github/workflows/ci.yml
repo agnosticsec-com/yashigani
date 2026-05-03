@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T09:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 name: CI
 
 on:
@@ -126,6 +126,40 @@ jobs:
 
       - name: Check for forbidden sudo patterns
         run: bash scripts/lint_sudo_pattern.sh .
+
+  lint-safe-error-envelope:
+    runs-on: ubuntu-latest
+    # V232-CSCAN-01e: fail if any route or gateway file inlines str(exc) directly
+    # into an HTTP response body. Use safe_error_envelope() instead.
+    # Pattern matches: {"error": str(exc)} or similar inline exception-to-response.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check for str(exc) in HTTP responses (V232-CSCAN-01e)
+        run: |
+          # V232-CSCAN-01e: guard the 7 sites that were migrated to safe_error_envelope().
+          # Fail if str(exc) or f-string {exc} is re-introduced in the migrated files.
+          # Pre-existing sites in dashboard.py and services.py are tracked as
+          # separate debt items (not covered by this gate — scope is the 7 alerted files).
+          MIGRATED_FILES=(
+            src/yashigani/backoffice/routes/cache.py
+            src/yashigani/backoffice/routes/inspection_backend.py
+            src/yashigani/backoffice/routes/kms.py
+            src/yashigani/backoffice/routes/sensitivity.py
+            src/yashigani/gateway/openai_router.py
+          )
+          HITS=$(grep -En \
+            '"error"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}|"detail"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}' \
+            "${MIGRATED_FILES[@]}" \
+            || true)
+          if [ -n "$HITS" ]; then
+            echo "ERROR: str(exc) or f-string {exc} found in HTTP response body in a V232-CSCAN-01e migrated file."
+            echo "Use safe_error_envelope() from yashigani.common.error_envelope instead."
+            echo ""
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK: no inline str(exc) in migrated error-envelope files."
 
   mypy:
     runs-on: ubuntu-latest

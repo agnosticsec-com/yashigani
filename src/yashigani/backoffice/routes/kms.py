@@ -8,7 +8,7 @@ GET  /kms/secrets         — list tracked secret keys (names only, no values)
 
 Mutating KMS operations require step-up TOTP (ASVS V6.8.4).
 """
-# Last updated: 2026-04-27T00:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 router = APIRouter()
 
@@ -44,8 +45,11 @@ async def kms_status(session: AdminSession):
         healthy = provider.health_check()
         health_error = None
     except Exception as exc:
+        # V232-CSCAN-01e: log full exception (may include Vault address, role-id path)
+        # server-side only; surface only a stable string to the admin UI.
+        envelope, _ = safe_error_envelope(exc, public_message="kms backend unavailable")
         healthy = False
-        health_error = str(exc)
+        health_error = envelope["error"]
 
     return {
         "provider": provider.provider_name,
