@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T06:00:00+01:00 (fix: use podman cp for postgres SSL injection when old bind-mount lacks new certs — V232-SMOKE-004b)
 # last-updated: 2026-05-03T05:30:00+01:00 (fix: pre-start postgres for SSL injection before full compose up — V232-SMOKE-004)
 # last-updated: 2026-05-03T04:30:00+01:00 (fix: add OPA/otel-collector/jaeger UIDs to _pki_chown_client_keys — V232-SMOKE-002)
 # last-updated: 2026-05-03T03:45:00+01:00 (fix: parallel Podman pull wait deadlock with exec+tee coprocess)
@@ -2545,12 +2546,134 @@ compose_up() {
       if [[ "$_pg_ready" -eq 0 ]]; then
         log_warn "postgres did not become ready in 60s — SSL injection will be attempted anyway"
       fi
-      # Inline postgres SSL injection (same logic as _upgrade_postgres_ssl, which
-      # can no longer be called after compose_up returns because it never does on
-      # the Podman+upgrade deadlock path). _upgrade_postgres_ssl is idempotent:
-      # safe no-op when ssl=on already.
-      _upgrade_postgres_ssl
-      log_info "postgres SSL injection complete — starting remaining services..."
+
+      # podman-compose may restart the OLD postgres container (stopped but not
+      # removed) rather than creating a new one. If so, the container's
+      # /run/secrets bind-mount points to the OLD work dir, which does not have
+      # the v2.23.x mTLS certs. Detect this by checking if postgres_client.crt
+      # is accessible inside the container via /run/secrets.
+      #
+      # If the cert is missing inside the container, use podman cp to copy the
+      # cert files from the HOST secrets dir directly into the running container
+      # before calling _upgrade_postgres_ssl. _upgrade_postgres_ssl reads the
+      # certs from /run/secrets inside the container; this cp makes them available
+      # regardless of which bind-mount directory is active.
+      local _pg_container_name="docker_postgres_1"
+      local _host_secrets="${WORK_DIR}/docker/secrets"
+      if ! "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres \
+             test -f /run/secrets/postgres_client.crt 2>/dev/null; then
+        log_info "  postgres_client.crt not in /run/secrets (old bind-mount) — copying via podman cp"
+        # Copy the three files _upgrade_postgres_ssl needs into the container's /run/secrets.
+        # This dir exists in the container as a bind-mount (read-only from host), but since
+        # the bind-mount source is the old dir (no new certs), we use podman cp to inject
+        # the files from the new host secrets dir. podman cp overwrites even into a bind-mounted
+        # dir on the container side because Podman copies into the overlay FS layer.
+        #
+        # NOTE: podman cp into a bind-mounted path works differently: it places the file
+        # into the underlying host dir, not an overlay. Since the bind-mount is read-only
+        # from compose, we CANNOT write into /run/secrets that way. Instead, inject into
+        # /var/lib/postgresql/data (PGDATA) directly — that is the destination used by
+        # _upgrade_postgres_ssl anyway. We bypass /run/secrets entirely.
+        local _pgdata
+        _pgdata=$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres \
+            bash -c 'echo "${PGDATA:-/var/lib/postgresql/data}"' 2>/dev/null | tr -d '\r\n' || echo "/var/lib/postgresql/data")
+        log_info "  PGDATA: ${_pgdata} — injecting certs via podman cp + exec chown"
+
+        # Copy server cert + key into PGDATA
+        podman cp "${_host_secrets}/postgres_client.crt" "${_pg_container_name}:${_pgdata}/server.crt" 2>/dev/null || {
+          log_error "podman cp postgres_client.crt failed — SSL injection aborted"; return 1
+        }
+        podman cp "${_host_secrets}/postgres_client.key" "${_pg_container_name}:${_pgdata}/server.key" 2>/dev/null || {
+          log_error "podman cp postgres_client.key failed — SSL injection aborted"; return 1
+        }
+        # CA bundle: root + intermediate (same as _upgrade_postgres_ssl step 1)
+        local _tmp_bundle
+        _tmp_bundle=$(mktemp "/tmp/ysg_ca_bundle_XXXXXX.crt" 2>/dev/null || echo "/tmp/ysg_ca_bundle.crt")
+        cat "${_host_secrets}/ca_root.crt" "${_host_secrets}/ca_intermediate.crt" > "$_tmp_bundle"
+        podman cp "$_tmp_bundle" "${_pg_container_name}:${_pgdata}/root.crt" 2>/dev/null || {
+          log_error "podman cp ca bundle failed — SSL injection aborted"; rm -f "$_tmp_bundle"; return 1
+        }
+        rm -f "$_tmp_bundle"
+
+        # chown + chmod the copied files to postgres:postgres (UID 70 in pgvector image)
+        "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata}'
+chown postgres:postgres \"\$PGDATA/server.crt\" \"\$PGDATA/server.key\" \"\$PGDATA/root.crt\"
+chmod 0644 \"\$PGDATA/server.crt\" \"\$PGDATA/root.crt\"
+chmod 0600 \"\$PGDATA/server.key\"
+echo '[postgres-ssl-upgrade] certs injected via podman cp + chown'
+" 2>&1 || {
+          log_error "chown/chmod of injected certs failed — SSL injection aborted"
+          return 1
+        }
+
+        # Append ssl settings + pg_hba.conf + restart postgres
+        # (same steps 2-4 from _upgrade_postgres_ssl, but skipping step 1 since
+        # we already placed the certs in PGDATA via podman cp above)
+        "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata}'
+if grep -q '^ssl = on' \"\$PGDATA/postgresql.conf\" 2>/dev/null; then
+  echo '[postgres-ssl-upgrade] ssl already in postgresql.conf — skipping'
+  exit 0
+fi
+printf \"\n# Yashigani internal mTLS (added by install.sh --upgrade)\nssl = on\nssl_cert_file = 'server.crt'\nssl_key_file  = 'server.key'\nssl_ca_file   = 'root.crt'\nssl_min_protocol_version = 'TLSv1.2'\nlog_connections = on\n\" >> \"\$PGDATA/postgresql.conf\"
+echo '[postgres-ssl-upgrade] ssl settings appended to postgresql.conf'
+" 2>&1 || { log_error "postgresql.conf update failed"; return 1; }
+
+        "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres bash -c "
+set -euo pipefail
+PGDATA='${_pgdata}'
+cat > \"\$PGDATA/pg_hba.conf\" << 'HBAEOF'
+# TYPE  DATABASE  USER  ADDRESS        METHOD
+local   all       all                  trust
+host    all       all   127.0.0.1/32   trust
+host    all       all   ::1/128        trust
+hostssl all       all   0.0.0.0/0      scram-sha-256  clientcert=verify-ca
+hostssl all       all   ::/0           scram-sha-256  clientcert=verify-ca
+hostnossl all     all   0.0.0.0/0      reject
+hostnossl all     all   ::/0           reject
+HBAEOF
+chown postgres:postgres \"\$PGDATA/pg_hba.conf\"
+chmod 0600 \"\$PGDATA/pg_hba.conf\"
+echo '[postgres-ssl-upgrade] pg_hba.conf updated'
+" 2>&1 || { log_error "pg_hba.conf update failed"; return 1; }
+
+        log_info "  Restarting postgres to activate SSL config (cp path)..."
+        "${COMPOSE_CMD[@]}" "${compose_files[@]}" restart postgres 2>&1 || true
+        # Wait for postgres to come back with SSL on
+        local _ssl_ok=0 _ssl_i
+        for _ssl_i in $(seq 1 30); do
+          local _ssl_check
+          _ssl_check=$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres \
+              psql -U yashigani_app -d yashigani -h 127.0.0.1 -tAc "SHOW ssl;" 2>/dev/null | tr -d ' \n' || echo "unknown")
+          if [[ "$_ssl_check" == "on" ]]; then
+            log_success "  postgres SSL enabled (cp path, confirmed on retry ${_ssl_i})"
+            _ssl_ok=1; break
+          fi
+          sleep 2
+        done
+        if [[ "$_ssl_ok" -eq 0 ]]; then
+          log_error "postgres SSL upgrade: postgres did not enable ssl=on after restart (cp path)"
+          return 1
+        fi
+        # SCRAM re-hash (same as _upgrade_postgres_ssl step 6)
+        local _pg_pass
+        _pg_pass=$(cat "${WORK_DIR}/docker/secrets/postgres_password" 2>/dev/null || echo "")
+        if [[ -n "$_pg_pass" ]]; then
+          "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T postgres \
+              psql -U yashigani_app -d yashigani -h 127.0.0.1 \
+              -c "ALTER USER yashigani_app WITH PASSWORD '${_pg_pass}';" 2>/dev/null || true
+          log_info "  SCRAM re-hash applied (cp path)"
+        fi
+        log_info "postgres SSL injection complete (cp path) — starting remaining services..."
+      else
+        # /run/secrets is accessible with the new certs — use the standard path
+        log_info "  /run/secrets has new certs — using standard _upgrade_postgres_ssl"
+        _upgrade_postgres_ssl || return 1
+        log_info "postgres SSL injection complete — starting remaining services..."
+      fi
     fi
     log_info "Starting services (upgrade — removing orphaned containers)..."
     # ROOTLESS-9 (v2.23.1): podman-compose up -d returns non-zero when optional
