@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-01T12:00:00+01:00 (fix: --mode argv guard prevents TTY/non-interactive overwrite — P1 #3bg)
 # last-updated: 2026-05-03T00:30:00+01:00 (fix: chown password files + bootstrap tokens + HMAC secret to UID 1001 — gate #ROOTLESS-11)
 # last-updated: 2026-05-03T00:15:00+01:00 (fix: _pki_runtime_cmd honours YSG_RUNTIME=podman on --skip-pull path — gate #ROOTLESS-10)
 # last-updated: 2026-05-03T00:00:00+01:00 (fix: separate mount opts for manifest vs secrets in _pki_run_issuer for Podman rootless — gate #ROOTLESS-9)
@@ -62,6 +63,9 @@ dry_print()   { printf "${C_YELLOW}    >>  Would run: %s${C_RESET}\n" "$*"; }
 # Defaults
 # -----------------------------------------------------------------------------
 MODE="compose"
+# Set to 1 by parse_args() when --mode appears on argv. Prevents TTY / non-interactive
+# detection from overwriting an explicitly requested runtime mode (P1 #3bg).
+MODE_EXPLICIT=0
 DEPLOY_MODE=""                # demo|production|enterprise — set interactively or via --deploy
 DOMAIN=""
 TLS_MODE="acme"
@@ -175,6 +179,7 @@ parse_args() {
     case "$1" in
       --mode)
         MODE="${2:?'--mode requires a value: compose|k8s|vm'}"
+        MODE_EXPLICIT=1   # guard: _apply_deploy_defaults must not overwrite this
         shift 2
         ;;
       --domain)
@@ -1201,18 +1206,19 @@ select_deploy_mode() {
 }
 
 _apply_deploy_defaults() {
+  # When --mode was passed explicitly on argv, never overwrite it here (P1 #3bg).
   case "$DEPLOY_MODE" in
     demo)
-      MODE="compose"
+      [[ "$MODE_EXPLICIT" -eq 0 ]] && MODE="compose"
       DOMAIN="${DOMAIN:-localhost}"
       TLS_MODE="selfsigned"
       SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-false}"
       ;;
     production)
-      MODE="compose"
+      [[ "$MODE_EXPLICIT" -eq 0 ]] && MODE="compose"
       ;;
     enterprise)
-      MODE="k8s"
+      [[ "$MODE_EXPLICIT" -eq 0 ]] && MODE="k8s"
       TOTAL_STEPS=10
       ;;
   esac
