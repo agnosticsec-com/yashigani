@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T06:58:47+01:00
+# Last updated: 2026-05-03 (V232-CSCAN-01h: Trivy SARIF digest annotation)
 name: Security Scan
 
 on:
@@ -21,6 +21,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Build gateway for scan
         run: docker build -f docker/Dockerfile.gateway -t yashigani/gateway:scan .
+      # V232-CSCAN-01h: surface scanned image digest in job summary so stale-image
+      # FPs (e.g. CVE-2025-8869 against pip 24.3.1 when Dockerfile pins 26.0.1) are
+      # visually distinguishable from real CVEs in the GitHub Security tab.
+      - name: Capture gateway digest
+        id: digest-gateway
+        run: |
+          DIGEST=$(docker inspect yashigani/gateway:scan --format '{{.Id}}')
+          echo "gateway_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Trivy scan: gateway"
+            echo "Image digest: \`$DIGEST\`"
+            echo "Scanned at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Trivy gateway
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -33,6 +46,17 @@ jobs:
           output: trivy-gateway.sarif
       - name: Build backoffice for scan
         run: docker build -f docker/Dockerfile.backoffice -t yashigani/backoffice:scan .
+      # V232-CSCAN-01h: see "Capture gateway digest" rationale above.
+      - name: Capture backoffice digest
+        id: digest-backoffice
+        run: |
+          DIGEST=$(docker inspect yashigani/backoffice:scan --format '{{.Id}}')
+          echo "backoffice_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Trivy scan: backoffice"
+            echo "Image digest: \`$DIGEST\`"
+            echo "Scanned at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Trivy backoffice
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
