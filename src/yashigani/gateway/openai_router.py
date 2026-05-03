@@ -34,7 +34,7 @@ Streaming limitations
   response-path inspection. This adds ~2-3s latency but ensures PII
   cannot leak through streamed responses.
 """
-# Last updated: 2026-04-23T11:36:14+01:00
+# Last updated: 2026-05-01T00:00:00+01:00
 from __future__ import annotations
 
 import json
@@ -252,10 +252,10 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # ── 0. DDoS protection — per-IP connection counting (v2.2) ───────────
     if _state.ddos_protector is not None:
-        _client_ip = (
-            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        # CWE-345 fix (V232-NEG03 / LAURA-2026-04-29-006): use the
+        # trusted-proxy-boundary resolver instead of trusting XFF[0].
+        from yashigani.gateway.proxy import _get_client_ip as _resolve_ip
+        _client_ip = _resolve_ip(request)
         _state.ddos_protector.record(_client_ip, "/v1/chat/completions")
         if not _state.ddos_protector.check(_client_ip, "/v1/chat/completions"):
             logger.warning(

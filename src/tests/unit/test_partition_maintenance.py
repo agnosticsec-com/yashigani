@@ -5,8 +5,19 @@ Verifies that:
   - _quote_ident rejects maliciously-crafted partition names before any SQL
     statement is composed.
   - Normal partition names (the only ones the script ever generates) pass.
-  - The CREATE TABLE DDL no longer contains any f-string interpolation of
-    user-derived values; instead $1/$2 bind parameters carry the date literals.
+  - The CREATE TABLE DDL uses _quote_ident for identifier slots and
+    date.isoformat() for date-range slots.
+  - date.isoformat() output can never contain SQL-injectable characters
+    (defence-in-depth regression guard per Lu follow-up #5,
+     YCS-20260502-v2.23.1-CWE89-reaudit-001).
+
+Background on DDL date-literal exception:
+  PostgreSQL does not accept asyncpg $1/$2 bind parameters in DDL parser
+  positions (PARTITION OF … FOR VALUES FROM … TO …). The server returns
+  "expects 0 arguments". Therefore date literals are interpolated directly
+  as strings. This is safe because date.isoformat() is locale-independent
+  and always returns exactly 10 ASCII characters matching YYYY-MM-DD —
+  no quote, no space, no escape character, no semicolon.
 
 These tests do NOT require a live database connection.
 """
@@ -114,10 +125,84 @@ class TestNoFstringInDDL:
             "partition_maintenance.py — YSG-RISK-001 regression."
         )
 
-    def test_bind_params_present(self):
-        """Ensure $1/$2 bind parameters are used for date literals."""
+    def test_identifier_slots_use_quote_ident(self):
+        """The DDL SQL string must use q_name and q_table (from _quote_ident),
+        not bare 'name' or 'table' interpolation."""
         source = _SCRIPT_PATH.read_text(encoding="utf-8")
-        assert "$1" in source and "$2" in source, (
-            "Expected asyncpg $1/$2 bind parameter markers in "
-            "partition_maintenance.py — date literals must not be interpolated."
+        # Positive assertion: quoted tokens appear in the DDL
+        assert "{q_name}" in source, (
+            "Expected {q_name} (from _quote_ident) in partition_maintenance.py "
+            "DDL — identifier slot must use safe quoting."
         )
+        assert "{q_table}" in source, (
+            "Expected {q_table} (from _quote_ident) in partition_maintenance.py "
+            "DDL — identifier slot must use safe quoting."
+        )
+
+    def test_date_slots_use_isoformat(self):
+        """DDL date-range slots must use date.isoformat() (deterministic YYYY-MM-DD).
+        asyncpg $1/$2 bind params are NOT accepted in DDL parser positions
+        (PostgreSQL returns 'expects 0 arguments') — date.isoformat() is the
+        correct approach for this DDL site."""
+        source = _SCRIPT_PATH.read_text(encoding="utf-8")
+        assert "start.isoformat()" in source, (
+            "Expected start.isoformat() in DDL date-range slot — "
+            "af114f7 DDL date-literal exception regression."
+        )
+        assert "end.isoformat()" in source, (
+            "Expected end.isoformat() in DDL date-range slot — "
+            "af114f7 DDL date-literal exception regression."
+        )
+
+
+class TestDateLiteralInjectionImpossible:
+    """Defence-in-depth regression tests for the DDL date-literal slots.
+
+    Lu follow-up #5 (YCS-20260502-v2.23.1-CWE89-reaudit-001):
+    Even though start/end come from Python date arithmetic (not user input),
+    we assert here that date.isoformat() CANNOT produce SQL-injectable output,
+    so any future refactor that accidentally lets external data reach the date
+    slots would still be safe.
+    """
+
+    INJECTION_CHARS = ["'", '"', ";", " ", "\n", "\r", "\\", "\x00", "--", "/*"]
+
+    def test_isoformat_never_contains_single_quote(self):
+        """date.isoformat() must never contain a single quote — the DDL wraps
+        the date literal in single quotes, so a quote in the value would break
+        out of the string literal."""
+        from datetime import date
+        # Spot-check a full year of date values (all months, start + end variants)
+        for month in range(1, 13):
+            d = date(2026, month, 1)
+            assert "'" not in d.isoformat(), (
+                f"date({2026}, {month}, 1).isoformat() returned a single quote"
+            )
+
+    def test_isoformat_output_matches_yyyy_mm_dd(self):
+        """date.isoformat() must always return exactly YYYY-MM-DD (10 chars,
+        only digits and hyphens). Validates locale-independence."""
+        import re
+        from datetime import date
+        pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+        for year in [2025, 2026, 2027]:
+            for month in range(1, 13):
+                d = date(year, month, 1)
+                iso = d.isoformat()
+                assert len(iso) == 10, f"Unexpected length {len(iso)} for {iso}"
+                assert pattern.match(iso), (
+                    f"date.isoformat() returned unexpected format: {iso!r}"
+                )
+
+    def test_isoformat_contains_no_injectable_characters(self):
+        """date.isoformat() must not contain any character from the SQL injection
+        character set, for the entire year of possible partition dates."""
+        from datetime import date
+        for month in range(1, 13):
+            d = date(2026, month, 1)
+            iso = d.isoformat()
+            for ch in self.INJECTION_CHARS:
+                assert ch not in iso, (
+                    f"date.isoformat() returned {iso!r} which contains "
+                    f"injection-class character {ch!r}"
+                )
