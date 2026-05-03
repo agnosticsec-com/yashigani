@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T02:30:07+01:00 (fix: #3d postgres key 0600, #2 YASHIGANI_VERSION in .env, #3h disk preflight + tee install.log)
+# last-updated: 2026-05-03T03:45:00+01:00 (fix: parallel Podman pull wait deadlock with exec+tee coprocess)
 # last-updated: 2026-05-01T12:00:00+01:00 (fix: --mode argv guard prevents TTY/non-interactive overwrite — P1 #3bg)
 # last-updated: 2026-05-03T00:30:00+01:00 (fix: chown password files + bootstrap tokens + HMAC secret to UID 1001 — gate #ROOTLESS-11)
 # last-updated: 2026-05-03T00:15:00+01:00 (fix: _pki_runtime_cmd honours YSG_RUNTIME=podman on --skip-pull path — gate #ROOTLESS-10)
@@ -2068,20 +2068,30 @@ docker.io/letta/letta:0.16.7" ;;
 ghcr.io/openclaw/openclaw:2026.3.1" ;;
       esac
     done
-    # Pull 4 at a time
+    # Pull 4 at a time.
+    # IMPORTANT: use explicit PID tracking instead of bare `wait` — bare `wait`
+    # on Linux bash 5.2 includes the `exec > >(tee ...)` logging coprocess in
+    # the wait set, causing a deadlock (install.sh waits for tee; tee waits for
+    # install.sh stdout to close; install.sh cannot close stdout until it exits).
     local _count=0
     local _total
+    local _batch_pids=()
     _total=$(echo "$_images" | grep -c .)
     for _img in $_images; do
       [[ -z "$_img" ]] && continue
       podman pull "$_img" >/dev/null 2>&1 &
+      _batch_pids+=($!)
       _count=$((_count + 1))
       if [[ $((_count % 4)) -eq 0 ]]; then
-        wait
+        wait "${_batch_pids[@]}" 2>/dev/null || true
+        _batch_pids=()
         log_info "  pulled $_count/$_total images..."
       fi
     done
-    wait
+    # Wait for any remaining batch
+    if [[ ${#_batch_pids[@]} -gt 0 ]]; then
+      wait "${_batch_pids[@]}" 2>/dev/null || true
+    fi
     log_success "All $_total remote images pulled"
   else
     log_info "Pulling remote container images..."
