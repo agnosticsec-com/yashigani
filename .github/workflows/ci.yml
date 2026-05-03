@@ -204,3 +204,50 @@ jobs:
         run: |
           echo "mypy reported type errors — see mypy-output.txt artifact"
           exit 1
+
+  helm-template-parity:
+    # Fast contract test — no Helm/tiller required, pure Python regex over raw
+    # template text. Catches the 1a6db9f class of regression (env vars silently
+    # dropped from one service template during re-templating).
+    # 7 parametrised green-tip specs + 3 in-process mutation guards.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install "pytest>=8"
+
+      - name: Run Helm env-parity contract tests
+        run: python3 -m pytest tests/contracts/test_helm_env_parity.py -v --tb=short
+
+  contracts:
+    runs-on: ubuntu-latest
+    # Integration-contract gate: verifies that shared artefacts that must be
+    # identical across runtimes (docker/ vs helm/) have not drifted. Fails fast
+    # — no matrix, no Python version permutations needed for a file-hash check.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: service_identities.yaml SHA parity
+        # Fails if docker/ canonical and helm/files/ derived copy have diverged.
+        # Fix: edit docker/service_identities.yaml, run `make sync-service-identities`,
+        # commit both files. See docs/development/service_identities.md.
+        run: python3 -m pytest tests/contracts/test_service_identities_sha.py -v
+
+      - name: make check-service-identities (shell gate)
+        # Independent shell-level check using shasum — catches any pytest
+        # collection failure masking a real drift.
+        run: make check-service-identities
