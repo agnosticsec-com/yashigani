@@ -7,6 +7,8 @@ GET  /inspection/threshold     — get sanitization confidence threshold
 POST /inspection/threshold     — set sanitization confidence threshold (0.70–0.99)
 GET  /inspection/mode          — get pipeline mode (strict | permissive)
 POST /inspection/mode          — set pipeline mode
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 router = APIRouter()
 
@@ -143,9 +146,10 @@ async def set_threshold(body: ThresholdRequest, session: AdminSession):
     try:
         pipeline.update_threshold(body.threshold)
     except ValueError as exc:
+        payload, _ = safe_error_envelope(exc, public_message="inspection backend unavailable", status=422)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "invalid_threshold", "message": str(exc)},
+            detail=payload,
         )
 
     assert state.audit_writer is not None  # set unconditionally at startup

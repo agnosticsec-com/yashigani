@@ -135,27 +135,34 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Check for str(exc) in HTTP responses (V232-CSCAN-01e)
+      - name: Check for str(exc) in HTTP responses (V232-CSCAN-01e/01j)
         run: |
-          # V232-CSCAN-01e: guard the 7 sites that were migrated to safe_error_envelope().
-          # Fail if str(exc) or f-string {exc} is re-introduced in the migrated files.
-          # Pre-existing sites in dashboard.py and services.py are tracked as
-          # separate debt items (not covered by this gate — scope is the 7 alerted files).
+          # V232-CSCAN-01e/01g/01j: guard all migrated files.
+          # Fail if str(exc) or f-string {exc} is re-introduced in any of them.
           MIGRATED_FILES=(
             src/yashigani/backoffice/routes/cache.py
             src/yashigani/backoffice/routes/inspection_backend.py
             src/yashigani/backoffice/routes/kms.py
             src/yashigani/backoffice/routes/sensitivity.py
             src/yashigani/gateway/openai_router.py
+            src/yashigani/backoffice/routes/services.py
+            src/yashigani/backoffice/routes/dashboard.py
+            src/yashigani/backoffice/routes/kms_vault.py
+            src/yashigani/backoffice/routes/jwt_config.py
+            src/yashigani/backoffice/routes/webauthn.py
+            src/yashigani/backoffice/routes/audit.py
+            src/yashigani/backoffice/routes/ratelimit.py
+            src/yashigani/backoffice/routes/inspection.py
+            src/yashigani/backoffice/routes/opa_assistant.py
+            src/yashigani/backoffice/routes/rbac.py
           )
-          # V232-CSCAN-01g: extend pattern to catch "message": str(exc) and "detail": str(exc)
-          # forms (not just f-string forms) — the three kms.py sites used the dict-literal form.
+          # Pattern covers all known inline str(exc) / f-string {exc} forms.
           HITS=$(grep -En \
             '"error"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}|"detail"[[:space:]]*:[[:space:]]*str\(exc\)|"detail"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}' \
             "${MIGRATED_FILES[@]}" \
             || true)
           if [ -n "$HITS" ]; then
-            echo "ERROR: str(exc) or f-string {exc} found in HTTP response body in a V232-CSCAN-01e migrated file."
+            echo "ERROR: str(exc) or f-string {exc} found in HTTP response body in a migrated file."
             echo "Use safe_error_envelope() from yashigani.common.error_envelope instead."
             echo ""
             echo "$HITS"

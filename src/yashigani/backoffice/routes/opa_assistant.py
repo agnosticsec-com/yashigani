@@ -1,7 +1,7 @@
 """
 Yashigani Backoffice — OPA Policy Assistant routes (v0.7.0).
 
-Last updated: 2026-05-02T09:00:00+01:00
+Last updated: 2026-05-03
 
 Natural language → RBAC JSON suggestion with admin approve/reject flow.
 The assistant only generates the data document (JSON).
@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +168,10 @@ async def apply_suggestion(
         )
     except Exception as exc:
         logger.error("OPA assistant apply: OPA push failed: %s", exc)
+        payload, _ = safe_error_envelope(exc, public_message="opa assistant unavailable", status=502)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": "opa_push_failed", "message": str(exc)},
+            detail=payload,
         )
 
     # Audit
