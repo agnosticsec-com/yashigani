@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T01:00:00+01:00
+# Last updated: 2026-05-02T09:00:00+01:00
 name: CI
 
 on:
@@ -261,3 +261,10 @@ jobs:
         # caddy adapt steps are skipped here (no caddy binary in ubuntu-latest);
         # they run locally when CADDY_BIN is set or caddy is on PATH.
         run: python3 -m pytest tests/contracts/test_caddyfile_family.py -v --tb=short
+
+      - name: Partition maintenance helm parity
+        # Asserts the embedded partition_maintenance.py in configmaps.yaml is
+        # byte-identical to scripts/partition_maintenance.py for all SQL-bearing
+        # lines and security-critical functions (CWE-89 / YSG-RISK-001 controls).
+        # Lu re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001 follow-up #3.
+        run: python3 tools/check_partition_helm_parity.py
