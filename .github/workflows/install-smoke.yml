@@ -1,17 +1,23 @@
-# Last updated: 2026-05-02T02:15:00+01:00
+# Last updated: 2026-05-02T03:00:00+01:00
 # install-smoke.yml — Install smoke-test matrix (V232-P1)
 #
-# Matrix: macos-latest × ubuntu-latest  ×  docker × podman
-# Each cell:  ./install.sh --non-interactive --deploy demo --runtime <r>
-# Gate:       GET https://localhost:{443|8443}/healthz → HTTP 200 within 5 min
-# Scope:      Smoke only — no AVA/register/update/export sweep (deferred v2.23.3)
+# Matrix: ubuntu-latest × (docker|podman) — GATE
+#         macos-latest  × (docker|podman) — INFORMATIONAL (self-hosted required)
 #
-# Runner cost note (GH Actions billing):
-#   macOS minutes are billed at 10× the Linux rate.
-#   Four-cell matrix = 2 macOS + 2 Linux jobs.
-#   Expected runtime: ~12 min per cell (build + compose up + healthz wait).
-#   Estimated cost per run: ~(2×12×10 + 2×12×1) = 264 Linux-equivalent minutes.
-#   Runs only on PRs/pushes to 2.23.x — not on every push to every branch.
+# GH hosted macOS runners (macos-latest = Sonoma/Sequoia arm64) do NOT support
+# the Apple Virtualization Framework (VZ) or nested virtualization. Both Colima
+# (Docker on macOS) and Podman machine (Podman on macOS) require VZ to start a
+# VM-backed daemon. GH hosted runners fail at `colima start` / `podman machine
+# start` with "exiting, status={Exiting:true}" / "Setting up Rosetta share".
+# macOS cells are therefore set continue-on-error: true and excluded from the
+# smoke-gate. They are retained in the matrix so they run automatically when
+# self-hosted macOS runners are available (set runs-on to the self-hosted label
+# and remove continue-on-error: true from macOS cells).
+#
+# Runner cost (GH hosted):
+#   Linux cells: 2 × ~12 min × 1× = ~24 Linux-equivalent minutes per run.
+#   macOS cells: run but don't block (expected to fail during setup).
+#   Runs only on PRs/pushes to 2.23.x — not on every branch push.
 #
 # WORK_DIR note:
 #   YSG_INSTALL_DIR is intentionally NOT set. The installer resolves WORK_DIR
@@ -48,20 +54,27 @@ jobs:
           - os: ubuntu-latest
             os-label: linux
             runtime: docker
+            gates: true       # included in smoke-gate
 
           - os: ubuntu-latest
             os-label: linux
             runtime: podman
+            gates: true       # included in smoke-gate
 
           - os: macos-latest
             os-label: macos
             runtime: docker
+            gates: false      # informational — requires self-hosted runner for VZ
 
           - os: macos-latest
             os-label: macos
             runtime: podman
+            gates: false      # informational — requires self-hosted runner for VZ
 
     runs-on: ${{ matrix.os }}
+    # macOS cells continue-on-error because GH hosted runners lack VZ support.
+    # Remove continue-on-error when pointing macos cells at self-hosted runners.
+    continue-on-error: ${{ !matrix.gates }}
     timeout-minutes: 25   # hard ceiling: prevents runaway bill if compose hangs
 
     steps:
