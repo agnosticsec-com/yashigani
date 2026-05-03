@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-03T12:30:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check; V232-SMOKE-011: podman unshare chown -R before cp restore)
+# Last updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check; V232-SMOKE-011: podman unshare chown -R before cp restore; V232-SMOKE-012: secrets dir 0751→0755)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -502,13 +502,16 @@ restore_backup() {
       fi
     fi
 
-    # RC-6 (v2.23.1): secrets directory must be world-traversable (0751) so
+    # RC-6 (v2.23.1): secrets directory must be world-readable (0755) so
     # container processes running as non-root UIDs (pgbouncer=70, redis=999,
-    # etc.) can access individual files within it. restore.sh runs with
-    # umask 077, which would create the directory as 0700 — override explicitly.
-    # The outer home directory (/home/max) provides the primary access control;
-    # making the inner secrets/ directory traversable is intentional and safe.
-    chmod 751 "${WORK_DIR}/docker/secrets"
+    # OPA=1000, etc.) can both traverse AND read-list the directory.
+    # OPA requires read on the dir to inotify-watch TLS certs for hot-reload;
+    # 0751 (world-traverse-only) prevented the inotify watcher → OPA unhealthy.
+    # restore.sh runs with umask 077, which would create the dir as 0700 — set
+    # explicitly to 0755. The outer home directory provides the primary access
+    # control; making the inner secrets/ directory readable is intentional and safe.
+    # V232-SMOKE-012 fix: changed 0751 → 0755.
+    chmod 755 "${WORK_DIR}/docker/secrets"
     # Ensure any pre-existing read-only files in the destination are writable
     # before we overwrite them. On macOS (BSD cp), cp -rp fails to overwrite
     # a 0400 file even when you own it — unlike GNU cp which can force-overwrite

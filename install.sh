@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-012: _pki_chown_client_keys enforces secrets dir mode 0755 so OPA inotify watcher can read dir)
 # last-updated: 2026-05-03T06:00:00+01:00 (fix: use podman cp for postgres SSL injection when old bind-mount lacks new certs — V232-SMOKE-004b)
 # last-updated: 2026-05-03T05:30:00+01:00 (fix: pre-start postgres for SSL injection before full compose up — V232-SMOKE-004)
 # last-updated: 2026-05-03T04:30:00+01:00 (fix: add OPA/otel-collector/jaeger UIDs to _pki_chown_client_keys — V232-SMOKE-002)
@@ -4429,6 +4430,22 @@ _pki_chown_client_keys() {
   #   docker pull alpine:3 && docker inspect alpine:3 --format='{{index .RepoDigests 0}}'
   local _alpine_image="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
   local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # V232-SMOKE-012 fix: ensure the secrets directory is mode 0755 (rwxr-xr-x)
+  # so ALL container UIDs (including OPA=1000, otel-collector=10001, etc.) can
+  # both traverse AND read-list the directory. OPA's inotify TLS cert watcher
+  # requires read on the directory; 0751 (others --x) prevents it → OPA unhealthy.
+  # restore.sh previously set 0751; install.sh did not enforce a canonical mode.
+  # This call normalises it regardless of what set it previously.
+  if [[ "$_effective_runtime" == "podman" ]] && \
+     awk -v u="$(id -un)" -F: '$1==u && $3>=65536 {found=1} END{exit !found}' \
+       /etc/subuid 2>/dev/null; then
+    podman unshare chmod 755 "${_secrets_dir}" 2>/dev/null || \
+      log_warn "_pki_chown_client_keys: could not chmod 755 ${_secrets_dir} via podman unshare"
+  else
+    chmod 755 "${_secrets_dir}" 2>/dev/null || \
+      log_warn "_pki_chown_client_keys: could not chmod 755 ${_secrets_dir}"
+  fi
 
   # Helper: chown a single file to <uid>:<uid> using the active strategy.
   # Optional 4th arg: _extra_chmod — an octal mode string (e.g. "0640") to
