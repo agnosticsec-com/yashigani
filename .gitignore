@@ -87,3 +87,6 @@ docker/secrets/
 *.pem
 *.key
 .claude-tmp/
+
+# Internal AI-agent operating instructions — NEVER commit (per feedback_yashigani_repo_code_only.md)
+CLAUDE.md
