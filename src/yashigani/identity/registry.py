@@ -13,9 +13,10 @@ Redis namespace (db/3):
   identity:index:active           Set: active identity_id values
   identity:index:kind:human       Set: human identity_ids
   identity:index:kind:service     Set: service identity_ids
+  identity:index:org:{org_id}     Set: identity_ids owned by org_id (SEC-240-7)
   identity:slug:{slug}            String: identity_id (slug -> id lookup)
 """
-# Last updated: 2026-04-28T00:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 from __future__ import annotations
 
 import datetime
@@ -181,6 +182,11 @@ class IdentityRegistry:
         pipe.sadd("identity:index:all", identity_id)
         pipe.sadd("identity:index:active", identity_id)
         pipe.sadd(f"identity:index:kind:{kind.value}", identity_id)
+        # SEC-240-7: org_id index for O(1) suspend_owned_by() lookup.
+        # Previously suspend_owned_by() iterated the full identity set and
+        # filtered in Python — O(N) with N = total identities in the registry.
+        if org_id:
+            pipe.sadd(f"identity:index:org:{org_id}", identity_id)
         pipe.execute()
 
         logger.info(
@@ -316,8 +322,38 @@ class IdentityRegistry:
         pipe.delete(f"identity:key:{identity_id}")
         pipe.delete(f"identity:key:grace:{identity_id}")
         pipe.delete(f"identity:slug:{reg['slug']}")
+        # Clean up org index (SEC-240-7).
+        org_id = reg.get("org_id", "")
+        if org_id:
+            pipe.srem(f"identity:index:org:{org_id}", identity_id)
         pipe.execute()
         logger.info("IdentityRegistry: deactivated %s", identity_id)
+
+    def suspend_owned_by(self, org_id: str) -> int:
+        """Suspend all active identities registered under *org_id*.
+
+        SEC-240-7 — O(1) lookup via the ``identity:index:org:{org_id}`` Redis
+        set populated at register time.  Previously callers iterated
+        ``list_all()`` and filtered in Python — O(N) over the full registry.
+
+        Returns the number of identities suspended.
+        """
+        if not org_id:
+            return 0
+        owned_ids = self._decode_set(
+            self._r.smembers(f"identity:index:org:{org_id}")
+        )
+        suspended = 0
+        for identity_id in owned_ids:
+            reg = self.get(identity_id)
+            if reg and reg.get("status") == "active":
+                self.suspend(identity_id)
+                suspended += 1
+        logger.info(
+            "IdentityRegistry: suspend_owned_by(%s) suspended %d identit(ies)",
+            org_id, suspended,
+        )
+        return suspended
 
     # ── Key operations ───────────────────────────────────────────────────
 

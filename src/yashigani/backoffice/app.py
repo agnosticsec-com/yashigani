@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-05-02T00:00:00+01:00 (RETRO-R4-2: advisory lock uses connect_with_retry_sync — no more hang on pg restart)
+Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -153,7 +153,6 @@ async def lifespan(app: FastAPI):
     # "this event loop is already running" and disables Postgres features.
     import logging as _logging
     import os
-    from urllib.parse import quote
     _log = _logging.getLogger("yashigani.backoffice.lifespan")
 
     # Layer B: load the per-install caddy_internal_hmac secret.
@@ -247,26 +246,13 @@ async def lifespan(app: FastAPI):
             backoffice_state.inference_logger = inference_logger
 
             # Anomaly detector Redis client (DB 2), mirrors _bootstrap URL logic.
-            redis_host = os.getenv("REDIS_HOST", "redis")
-            redis_port = os.getenv("REDIS_PORT", "6380")
-            redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
-            secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
-            redis_pwd_file = os.path.join(secrets_dir, "redis_password")
-            redis_password = (
-                open(redis_pwd_file).read().strip()
-                if os.path.exists(redis_pwd_file)
-                else os.getenv("REDIS_PASSWORD", "")
+            from yashigani.gateway._redis_url import build_redis_url
+            anomaly_redis_url = build_redis_url(
+                2,
+                use_tls=os.getenv("REDIS_USE_TLS", "true").lower() == "true",
+                secrets_dir=os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets"),
+                client_cert_name="backoffice_client",
             )
-            _q = quote(redis_password, safe="")
-            if redis_use_tls:
-                anomaly_redis_url = (
-                    f"rediss://:{_q}@{redis_host}:{redis_port}/2"
-                    f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
-                    f"&ssl_certfile={secrets_dir}/backoffice_client.crt"
-                    f"&ssl_keyfile={secrets_dir}/backoffice_client.key"
-                )
-            else:
-                anomaly_redis_url = f"redis://:{_q}@{redis_host}:{redis_port}/2"
 
             import redis as _redis
             anomaly_client = _redis.from_url(anomaly_redis_url, decode_responses=False)

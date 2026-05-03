@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (self-signed certificate mode)
-# Last updated: 2026-04-30T05:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 #
 # ╔══════════════════════════════════════════════════════════╗
 # ║  WARNING: SELF-SIGNED MODE — LOCAL / DEMO USE ONLY      ║
@@ -39,7 +39,7 @@
 (internal-mtls) {
     transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+        tls_trust_pool file /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         # Force HTTP/1.1 upstream to ensure header modifications from
         # reverse_proxy.headers.request.set are correctly serialized.

@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (Let's Encrypt / ACME mode)
-# Last updated: 2026-04-30T05:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 # Set YASHIGANI_TLS_DOMAIN in your .env before starting.
 # Caddy will auto-obtain and renew the certificate via ACME HTTP-01 or TLS-ALPN-01.
 #
@@ -11,7 +11,7 @@
 # TLS policy: TLS 1.3 minimum (Tiago directive 2026-04-30; closes Ava R3 finding).
 # Key exchange: hybrid post-quantum (X25519+ML-KEM-768) preferred, X25519 fallback.
 # Cipher suites: GCM-only (TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256).
-# HSTS: max-age 1 year, includeSubDomains.
+# HSTS: max-age 2 years (63072000 s), includeSubDomains, preload.
 # OCSP stapling: enabled automatically by Caddy.
 #
 # ── DDoS / Connection Protection ────────────────────────────────────────────
@@ -48,7 +48,7 @@
 (internal-mtls) {
     transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+        tls_trust_pool file /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         # Force HTTP/1.1: Caddy v2.11.x drops headers set via
         # reverse_proxy.headers.request.set on HTTP/2 upstream connections.
@@ -119,7 +119,7 @@
     # server-side controls (OPA, session validation, CSRF via SameSite)
     # provide equivalent protection without client-side enforcement.
     header {
-        Strict-Transport-Security  "max-age=31536000; includeSubDomains; preload"
+        Strict-Transport-Security  "max-age=63072000; includeSubDomains; preload"
         X-Content-Type-Options     "nosniff"
         X-Frame-Options            "DENY"
         Referrer-Policy            "no-referrer"

@@ -90,28 +90,23 @@ def _bootstrap():
     )
 
     # ── Session store (Redis db/1) ──────────────────────────────────────────
-    from urllib.parse import quote
-    redis_host = os.getenv("REDIS_HOST", "redis")
-    redis_port = os.getenv("REDIS_PORT", "6380")
+    from yashigani.gateway._redis_url import build_redis_url
     redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
     _secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
 
     def _backoffice_redis_url(db: int) -> str:
-        """Build a redis URL for the given DB index, TLS-aware.
+        """Build a redis URL for the given DB index using the shared helper.
 
-        v2.23.1 default: rediss:// with client cert auth. Cert paths point
-        at this service's leaf cert under /run/secrets. Setting
-        REDIS_USE_TLS=false flips to plaintext — used only for local dev.
+        Passes _redis_password explicitly so the helper skips file-read
+        (password is already loaded above into creds.redis_password).
         """
-        _q = quote(_redis_password, safe='')
-        if redis_use_tls:
-            return (
-                f"rediss://:{_q}@{redis_host}:{redis_port}/{db}"
-                f"?ssl_cert_reqs=required&ssl_ca_certs={_secrets_dir}/ca_root.crt"
-                f"&ssl_certfile={_secrets_dir}/backoffice_client.crt"
-                f"&ssl_keyfile={_secrets_dir}/backoffice_client.key"
-            )
-        return f"redis://:{_q}@{redis_host}:{redis_port}/{db}"
+        return build_redis_url(
+            db,
+            password=_redis_password,
+            use_tls=redis_use_tls,
+            secrets_dir=_secrets_dir,
+            client_cert_name="backoffice_client",
+        )
 
     redis_url = _backoffice_redis_url(1)
     session_store = SessionStore(redis_url=redis_url)

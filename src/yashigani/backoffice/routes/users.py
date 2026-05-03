@@ -243,6 +243,9 @@ def _suspend_identity_registry_for_account(account_id: str) -> None:
     agent tokens registered under the same account, not only browser sessions.
     This prevents a disabled user's API key from remaining usable.
 
+    SEC-240-7: now delegates to suspend_owned_by() — O(1) org_id index lookup
+    instead of a full registry scan + Python filter.
+
     Fail-soft: if identity_registry is unavailable (e.g. community tier with
     no IdentityRegistry wired), log a warning and continue — the session
     invalidation has already executed.
@@ -257,17 +260,7 @@ def _suspend_identity_registry_for_account(account_id: str) -> None:
         )
         return
     try:
-        # IdentityRegistry.list_all() returns dicts.  Filter by org_id or
-        # by convention: identities registered by an admin carry the account_id
-        # in the org_id field.  We suspend any identity whose org_id matches.
-        # This is a best-effort sweep — the account_id→identity mapping is not
-        # enforced at registry level yet (v2.23.2 backlog: add account_id index).
-        all_ids = registry.list_all()
-        suspended = 0
-        for identity in all_ids:
-            if identity.get("org_id") == account_id:
-                registry.suspend(identity["identity_id"])
-                suspended += 1
+        suspended = registry.suspend_owned_by(account_id)
         import logging as _log
         _log.getLogger(__name__).info(
             "LF-DISABLE-PARTIAL: suspended %d identity-registry entries for account %s",
