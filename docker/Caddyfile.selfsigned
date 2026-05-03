@@ -382,7 +382,7 @@ Hiring: https://agnosticsec.com/careers
         reverse_proxy open-webui:8080 {
 
             import inject-caddy-verified
-            header_upheader_up X-Forwarded-Proto https
+            header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
             # Explicitly pass the trusted identity headers from forward_auth
             header_up X-Forwarded-User {http.request.header.X-Forwarded-User}
