@@ -27,15 +27,20 @@ class RateLimitConfig:
         > 0.80        → ×0.25  (−75%, critical pressure)
 
     fail_mode:
-        ``open``   (default) — Redis errors allow the request through.
-        ``closed`` — Redis errors reject the request with HTTP 503 +
-                   ``Retry-After``.  Set via RATE_LIMITER_FAIL_MODE=closed.
+        ``closed`` (default) — Redis errors reject the request with HTTP 503 +
+                   ``Retry-After``.  Customer-facing message indicates the
+                   system is recovering; auto-heal typically completes in
+                   under 2 minutes.
+        ``open``   — Redis errors allow the request through (availability-
+                   prioritised; opt-in via RATE_LIMITER_FAIL_MODE=open for
+                   high-availability deployments where coarser controls
+                   (per-IP throttle, WAF, audit) are sufficient defense.
     """
     enabled: bool = True
     adaptive_enabled: bool = True
 
-    # ``open`` → Redis errors allow (default). ``closed`` → Redis errors reject HTTP 503.
-    fail_mode: Literal["open", "closed"] = "open"
+    # ``closed`` (default) → Redis errors reject HTTP 503. ``open`` → allow.
+    fail_mode: Literal["open", "closed"] = "closed"
 
     # ── Global ───────────────────────────────────────────────────────────────
     # Applied to the total request rate across all clients

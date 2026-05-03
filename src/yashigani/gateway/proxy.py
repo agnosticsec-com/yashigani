@@ -358,7 +358,12 @@ async def _proxy_request_body(
                 return JSONResponse(
                     status_code=503,
                     content={
-                        "error": "RATE_LIMITER_UNAVAILABLE",
+                        "error": "SERVICE_TEMPORARILY_UNAVAILABLE",
+                        "message": (
+                            f"The system is recovering. Please retry in "
+                            f"{retry_sec} seconds. If the problem persists, "
+                            "contact your administrator."
+                        ),
                         "detail": "Rate limiter backend unavailable; request rejected (fail-closed mode).",
                         "request_id": request_id,
                         "retry_after_seconds": retry_sec,

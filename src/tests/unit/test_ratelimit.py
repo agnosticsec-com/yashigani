@@ -21,15 +21,18 @@ class TestRateLimitConfig:
         after = time.time()
         assert before <= cfg.updated_at <= after
 
-    def test_fail_mode_default_is_open(self):
+    def test_fail_mode_default_is_closed(self):
+        # Security default: rate limiter rejects requests when Redis backend
+        # is unavailable. Operators may opt back into fail-open availability
+        # mode via RATE_LIMITER_FAIL_MODE=open for high-availability deployments.
         from yashigani.ratelimit.config import RateLimitConfig
         cfg = RateLimitConfig()
-        assert cfg.fail_mode == "open"
-
-    def test_fail_mode_closed_accepted(self):
-        from yashigani.ratelimit.config import RateLimitConfig
-        cfg = RateLimitConfig(fail_mode="closed")
         assert cfg.fail_mode == "closed"
+
+    def test_fail_mode_open_accepted(self):
+        from yashigani.ratelimit.config import RateLimitConfig
+        cfg = RateLimitConfig(fail_mode="open")
+        assert cfg.fail_mode == "open"
 
 
 class TestRateLimiter:
