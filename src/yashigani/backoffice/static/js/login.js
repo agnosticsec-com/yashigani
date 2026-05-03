@@ -1,5 +1,42 @@
+// Last updated: 2026-05-03
 document.addEventListener('DOMContentLoaded', function() {
     var savedPassword = '';
+
+    /**
+     * safeNext — validate a `next` redirect parameter before using it.
+     *
+     * V232-CSCAN-01d: the old guard (startsWith('/') && !startsWith('//'))
+     * admitted `/\attacker.com` because the backslash passes both checks, but
+     * browsers normalise `/\…` → `//…` in location.assign(), producing an
+     * off-origin redirect.
+     *
+     * This function closes that bypass with two independent layers:
+     *   1. Regex: must start with exactly one `/` followed by a char that is
+     *      neither `/` nor `\` (blocks `//`, `/\`, `///`, `/\\`, etc.)
+     *   2. URL parse: construct a URL against the current origin; reject if
+     *      the parsed origin differs, if the protocol differs, or if parse
+     *      throws (malformed input).
+     *
+     * Returns the sanitised path+search+hash on-origin string, or '/' if
+     * the input fails either check.
+     *
+     * ASVS V5.1.5, OWASP A01:2021, CWE-601.
+     */
+    function safeNext(rawNext) {
+        if (!rawNext) return '/';
+        // Layer 1: reject anything that doesn't start with a single forward-slash
+        // followed by a non-slash, non-backslash char.
+        if (!/^\/[^/\\]/.test(rawNext)) return '/';
+        // Layer 2: parse against current origin; reject if origin or protocol differs.
+        try {
+            var parsed = new URL(rawNext, window.location.origin);
+            if (parsed.origin !== window.location.origin) return '/';
+            if (parsed.protocol !== window.location.protocol) return '/';
+            return parsed.pathname + parsed.search + parsed.hash;
+        } catch (e) {
+            return '/';
+        }
+    }
 
     function showMsg(type, text) {
         var b = document.getElementById('msg-box');
@@ -49,7 +86,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     var params = new URLSearchParams(window.location.search);
                     var next = params.get('next');
-                    window.location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/admin/';
+                    window.location.href = safeNext(next) || '/admin/';
                 }
             } else {
                 showMsg('error', parseError(data));
