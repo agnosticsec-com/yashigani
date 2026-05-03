@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T02:30:07+01:00 (fix: #3d postgres key 0600, #2 YASHIGANI_VERSION in .env, #3h disk preflight + tee install.log)
 # last-updated: 2026-05-01T12:00:00+01:00 (fix: --mode argv guard prevents TTY/non-interactive overwrite — P1 #3bg)
 # last-updated: 2026-05-03T00:30:00+01:00 (fix: chown password files + bootstrap tokens + HMAC secret to UID 1001 — gate #ROOTLESS-11)
 # last-updated: 2026-05-03T00:15:00+01:00 (fix: _pki_runtime_cmd honours YSG_RUNTIME=podman on --skip-pull path — gate #ROOTLESS-10)
@@ -1065,6 +1066,33 @@ check_installer_preflight() {
     fi
   fi
 
+  # --- Check 1b: Podman disk space preflight (#3h-fix) ----------------------
+  # Warn if Podman has a large reclaimable corpus (>= 50 GB). A "no space left
+  # on device" mid-build is one of the hardest errors to diagnose because the
+  # build output is swallowed by the tail-1 pipe. This preflight surfaces the
+  # issue before any pull/build begins so the admin can prune first.
+  # Only runs for Podman runtime; Docker has its own storage manager and the
+  # same `podman system df` format is not guaranteed under Docker.
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+    if command -v podman >/dev/null 2>&1; then
+      local _reclaimable_raw
+      _reclaimable_raw="$(podman system df --format '{{.Reclaimable}}' 2>/dev/null | \
+        grep -oE '[0-9]+(\.[0-9]+)?[[:space:]]*(GB|GiB)' | head -1 || echo "")"
+      if [[ -n "$_reclaimable_raw" ]]; then
+        # Extract numeric value (drop unit; treat GiB == GB for warning threshold).
+        local _reclaimable_gb
+        _reclaimable_gb="$(echo "$_reclaimable_raw" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)"
+        # awk comparison: warn if reclaimable >= 50 GB.
+        if awk "BEGIN { exit !($_reclaimable_gb >= 50) }"; then
+          printf "\n"
+          printf "${C_YELLOW}[WARN] Podman has %.0f GB reclaimable storage.${C_RESET}\n" "$_reclaimable_gb"
+          printf "       Run 'podman system prune -af' to free space before the image pull/build.\n"
+          printf "       A 'no space left on device' mid-build can leave the stack in a broken state.\n\n"
+        fi
+      fi
+    fi
+  fi
+
   # --- Check 2: bind-mount directory ownership (UID 1001) -------------------
   # PKI issuer and backoffice services run as UID 1001 inside containers and
   # write to the bind-mounted secrets dir.  The installer no longer runs chown
@@ -1676,6 +1704,54 @@ _backup_existing_data() {
     log_error "CWE-732: group/world-readable key file(s) in backup ${backup_dir}/secrets"
     exit 1
   fi
+
+  # RETRO-R4-3: sign the backup manifest so restore.sh can cryptographically verify
+  # integrity before touching any live secrets. Signing key is the CA intermediate
+  # private key (already present at install time; 0400 owner-only). The signature
+  # covers a SHA-256 manifest of every file under the backup dir. restore.sh
+  # validate_backup() verifies the signature with the CA intermediate public cert
+  # (extracted from ca_intermediate.crt) — reject-if-invalid, warn-if-absent.
+  #
+  # Threat model: an attacker who can modify backup files on disk but cannot read
+  # the CA intermediate key (0400, requires host root or the issuer container) cannot
+  # forge a valid signature. Without the signature check, a tampered backup silently
+  # overwrites live secrets and breaks mTLS for all services.
+  #
+  # Implementation:
+  #   1. Build a sorted SHA-256 manifest of all files in the backup dir.
+  #   2. Sign the manifest with openssl dgst -sign (ECDSA/RSA depending on key type).
+  #   3. Write manifest + .sig into the backup dir (0400).
+  #   The intermediate key is used rather than the root to avoid root key exposure;
+  #   both are equally trusted for this purpose since we control both.
+  local _ca_key="${WORK_DIR}/docker/secrets/ca_intermediate.key"
+  local _manifest_file="${backup_dir}/MANIFEST.sha256"
+  local _sig_file="${backup_dir}/MANIFEST.sha256.sig"
+  if [[ -f "$_ca_key" ]]; then
+    # Build sorted deterministic manifest: "sha256hash  relative/path" per line.
+    # find with -print0 + sort -z to handle spaces in names; awk strips leading ./
+    if (
+      cd "$backup_dir" && \
+      find . -type f ! -name 'MANIFEST.sha256' ! -name 'MANIFEST.sha256.sig' -print0 | \
+        sort -z | \
+        xargs -0 sha256sum | \
+        awk '{gsub(/^\.\//, "", $2); print}' > MANIFEST.sha256
+    ); then
+      chmod 0400 "$_manifest_file"
+      # Sign: openssl dgst -sign reads the raw key (PEM), outputs binary DER sig.
+      if openssl dgst -sha256 -sign "$_ca_key" -out "$_sig_file" "$_manifest_file" 2>/dev/null; then
+        chmod 0400 "$_sig_file"
+        log_success "Backup manifest signed (RETRO-R4-3): ${_manifest_file##*/} + ${_sig_file##*/}"
+      else
+        log_warn "Backup manifest signing failed (openssl dgst -sign error) — backup is unsigned"
+        rm -f "$_sig_file"
+      fi
+    else
+      log_warn "Backup manifest generation failed — backup is unsigned"
+    fi
+  else
+    log_warn "CA intermediate key not found at ${_ca_key} — backup is unsigned (expected on first-run before PKI bootstrap)"
+  fi
+
   log_success "Backup saved to ${backup_dir}"
 }
 
@@ -3184,6 +3260,15 @@ generate_secrets() {
       echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
     fi
 
+    # #2-fix: sync installer version into .env on upgrade path (same as fresh install).
+    if grep -q "^YASHIGANI_VERSION=" "$env_file" 2>/dev/null; then
+      local tmp_env; tmp_env="$(mktemp)"
+      sed "s|^YASHIGANI_VERSION=.*|YASHIGANI_VERSION=${YASHIGANI_VERSION}|" "$env_file" > "$tmp_env"
+      mv "$tmp_env" "$env_file"
+    else
+      echo "YASHIGANI_VERSION=${YASHIGANI_VERSION}" >> "$env_file"
+    fi
+
     return 0
   fi
 
@@ -3366,6 +3451,17 @@ generate_secrets() {
 
   # --- HIBP breach check on generated passwords (defense-in-depth) ---
   _hibp_check_passwords
+
+  # #2-fix: write YASHIGANI_VERSION to .env so `compose build` tags images
+  # consistently with the installer version (`:${YASHIGANI_VERSION}`) and the
+  # version is visible to Compose for any `${YASHIGANI_VERSION}` interpolation.
+  if grep -q "^YASHIGANI_VERSION=" "$env_file" 2>/dev/null; then
+    local tmp_env; tmp_env="$(mktemp)"
+    sed "s|^YASHIGANI_VERSION=.*|YASHIGANI_VERSION=${YASHIGANI_VERSION}|" "$env_file" > "$tmp_env"
+    mv "$tmp_env" "$env_file"
+  else
+    echo "YASHIGANI_VERSION=${YASHIGANI_VERSION}" >> "$env_file"
+  fi
 
   log_success "All passwords and 2FA secrets generated (${secrets_dir}/)"
 }
@@ -4271,13 +4367,19 @@ _pki_chown_client_keys() {
     local _svc="${_svc_uid%%:*}"; local _uid="${_svc_uid#*:}"
     local _keyfile="${_secrets_dir}/${_svc}_client.key"
     if [[ -f "$_keyfile" ]]; then
-      _do_chown "${_uid}" "$_keyfile" "${_svc}_client.key" || return 1
+      # #3d-fix: pass "0600" as 4th arg so every service key is set to owner-read-write
+      # (not 0400 from issuer). Postgres in particular: 05-enable-ssl.sh runs `install`
+      # as root to copy the key into PGDATA at 0600; psycopg2/postgres itself also
+      # requires the key be accessible to the postgres user (UID 999 after chown).
+      # 0600 owner-read-write is the canonical mode for service TLS keys (#3d-fix).
+      _do_chown "${_uid}" "$_keyfile" "${_svc}_client.key" "0600" || return 1
     fi
   done
 
   # Chmod all certificate files to 0644. Certs are public material and must
   # be readable by every container that verifies peer identity (pgbouncer,
-  # gateway, backoffice, postgres, redis, etc.). Keys remain 0600.
+  # gateway, backoffice, postgres, redis, etc.). Keys are 0600 (set above via
+  # _do_chown 4th arg — #3d-fix closes the 0o400 issuer-default → 0600 gap).
   # This find+chmod is runtime-agnostic — it runs as the host caller and only
   # changes mode bits (not ownership), so it works for both root and non-root.
   log_info "Chmod'ing client certs + CA certs to 0644 (public material)"
@@ -4613,6 +4715,28 @@ main() {
   # Move into the repo now that we know where it is
   if [[ "$DRY_RUN" != "true" && -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     cd "$WORK_DIR"
+  fi
+
+  # #3h-fix: tee all install output to install.log so "no space left on device"
+  # and other mid-build errors are always recoverable from disk. Activated once
+  # WORK_DIR is resolved so the log lands in the right place. Skipped when:
+  #   * DRY_RUN — no side-effects, logging unnecessary.
+  #   * PKI subcommands — they exit before this point (handled above).
+  #   * YSG_NO_LOG=true — escape hatch for CI runners that capture stdout natively.
+  # The re-exec guard (YSG_LOGGING_ACTIVE) prevents a double-log loop.
+  # stdout and stderr are merged (2>&1) before tee so the log is interleaved in
+  # chronological order, matching what the operator sees in the terminal.
+  if [[ "$DRY_RUN" != "true" && "${YSG_NO_LOG:-false}" != "true" && "${YSG_LOGGING_ACTIVE:-false}" != "true" ]]; then
+    local _log_dir="${WORK_DIR:-$(pwd)}"
+    local _log_file="${_log_dir}/install.log"
+    export YSG_LOGGING_ACTIVE=true
+    # Re-exec via tee: all subsequent output from this process is duplicated to
+    # install.log. exec replaces the shell's stdout/stderr — the tee process
+    # inherits both and copies to the log file. ANSI escape codes are preserved
+    # in the log (they do not affect file readability and strip cleanly with
+    # `cat -v` or `sed 's/\x1b\[[0-9;]*m//g'`).
+    exec > >(tee -a "$_log_file") 2>&1
+    log_info "Install log: ${_log_file}"
   fi
 
   # ---- Step 2: Platform detection ----
