@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T00:30:00+01:00 (fix: chown password files + bootstrap tokens + HMAC secret to UID 1001 — gate #ROOTLESS-11)
+# last-updated: 2026-05-03T00:15:00+01:00 (fix: _pki_runtime_cmd honours YSG_RUNTIME=podman on --skip-pull path — gate #ROOTLESS-10)
+# last-updated: 2026-05-03T00:00:00+01:00 (fix: separate mount opts for manifest vs secrets in _pki_run_issuer for Podman rootless — gate #ROOTLESS-9)
 # last-updated: 2026-05-02T21:55:00+01:00 (fix: guard podman unshare data/audit mkdir on rootful installs — gate #ROOTFUL-1)
 # 2026-05-02: preflight check now accepts subuid-remapped UID for Podman rootless (gate #ROOTLESS-1 blocker)
 # 2026-05-02: data/audit subdirectory created via podman unshare for Podman rootless (gate #ROOTLESS-2 blocker)
@@ -3802,11 +3805,19 @@ _pki_runtime_cmd() {
   # Pick docker vs podman. Priority:
   #   1. Explicit request: YSG_PODMAN_RUNTIME=true -> podman (even if docker is
   #      installed, honour the operator's choice).
+  #   1b. gate #ROOTLESS-10: also honour YSG_RUNTIME=podman directly. When
+  #      --skip-pull is passed, compose_pull() returns before resolve_compose_cmd()
+  #      is called, so YSG_PODMAN_RUNTIME stays false even though the operator
+  #      chose podman via YSG_RUNTIME=podman. Reading YSG_RUNTIME here as a
+  #      fallback ensures _pki_run_issuer uses podman on --skip-pull paths.
   #   2. Docker available -> docker (fastest path on typical dev machines).
   #   3. Podman fallback.
   # Su Review Finding fix — earlier version had inverted logic that ignored
   # YSG_PODMAN_RUNTIME when docker was also present.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    echo "podman"; return
+  fi
+  if [[ "${YSG_RUNTIME:-}" == "podman" ]]; then
     echo "podman"; return
   fi
   if command -v docker >/dev/null 2>&1; then
@@ -3923,12 +3934,36 @@ _pki_run_issuer() {
   #   - ":U" (podman-only) recursively chowns the mount source to the
   #     container's user/group, so a non-root USER inside the image can
   #     write. Docker has no equivalent and errors on ":U".
-  # Without ":U", rootful podman fails with EACCES when the image runs as
-  # a non-root user (the image sets `USER yashigani`), since the host dir
-  # is owned by root. Retro: v2.23.1 Ubuntu podman clean-slate failure.
-  local _mount_opts="rw,Z"
+  # Without ":U" on secrets_dir, rootful podman fails with EACCES when the
+  # image runs as a non-root user (the image sets `USER yashigani`), since
+  # the host dir is owned by root. Retro: v2.23.1 Ubuntu podman clean-slate.
+  #
+  # gate #ROOTLESS-9: ":U" MUST NOT be applied to the manifest file mount.
+  # ":U" calls lchown on the mount source. For directories this is recursive;
+  # for a single file it is still called. On Podman rootless, the lchown
+  # target UID (subuid-mapped 1001 = e.g. 428680) is outside the host
+  # user's UID (1005), so the kernel rejects lchown with EPERM even though
+  # the user owns the file and is namespace-root inside the container.
+  # The secrets dir is pre-chowned to the remapped UID by
+  # _prepare_secrets_dir_for_pki(), so it does not need :U; but keeping :U
+  # on secrets_dir is harmless and helps rootful Podman. The manifest is
+  # pre-chowned via podman unshare (rootless) or plain chown (docker) so the
+  # container can write back bootstrap_token_sha256 fields. ":U" is NOT
+  # applied to the manifest mount on any path.
+  local _secrets_mount_opts="rw,Z"
+  local _manifest_mount_opts="rw,Z"
   if [[ "$runtime" == "podman" ]]; then
-    _mount_opts="rw,Z,U"
+    _secrets_mount_opts="rw,Z,U"
+    # Manifest: pre-chown to container UID so the issuer can write back.
+    # Use podman unshare for rootless (non-root caller); direct chown for rootful.
+    if [[ "$(id -u)" != "0" ]]; then
+      # Rootless: map container UID 1001 → host subuid-remapped UID via unshare.
+      podman unshare chown 1001:1001 "$manifest_in" 2>/dev/null \
+        || log_warn "Could not chown manifest via podman unshare — PKI may fail to write bootstrap_token_sha256"
+    else
+      # Rootful Podman: direct chown is safe.
+      chown 1001:1001 "$manifest_in" 2>/dev/null || true
+    fi
   else
     # Docker: no :U support — manually chown the secrets dir to the container
     # UID (1001 = yashigani user in our image) so the issuer can write.
@@ -3938,23 +3973,20 @@ _pki_run_issuer() {
     # Retro #3ah (v2.23.1): the issuer also writes back to
     # service_identities.yaml (bootstrap_token_sha256 fields) via the
     # /manifest.yaml bind mount. Without ownership match the write fails
-    # with PermissionError and the whole PKI bootstrap aborts. Podman's
-    # :U handles this automatically, but Docker doesn't, so chown the
-    # manifest to UID 1001 too. Restored after the run by _pki_persist_env's
-    # callers (manifest is regenerated on rotation).
+    # with PermissionError and the whole PKI bootstrap aborts.
     chown 1001:1001 "$manifest_in" 2>/dev/null || true
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    dry_print "$runtime run --rm --network=none -v ${secrets_in}:/secrets:${_mount_opts} -v ${manifest_in}:/manifest.yaml:${_mount_opts} $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
+    dry_print "$runtime run --rm --network=none -v ${secrets_in}:/secrets:${_secrets_mount_opts} -v ${manifest_in}:/manifest.yaml:${_manifest_mount_opts} $image python -m yashigani.pki.issuer --secrets-dir /secrets --manifest /manifest.yaml $subcmd $*"
     return 0
   fi
 
   # --network=none: issuer does no network I/O, and cutting the network
   # prevents any accidental telemetry exfil.
   "$runtime" run --rm --network=none \
-    -v "${secrets_in}:/secrets:${_mount_opts}" \
-    -v "${manifest_in}:/manifest.yaml:${_mount_opts}" \
+    -v "${secrets_in}:/secrets:${_secrets_mount_opts}" \
+    -v "${manifest_in}:/manifest.yaml:${_manifest_mount_opts}" \
     "$image" \
     python -m yashigani.pki.issuer \
       --secrets-dir /secrets \
@@ -4262,6 +4294,61 @@ _pki_chown_client_keys() {
     # owned by uid 1001 from the host shell after the in-container chown exits.
     _do_chown "1001" "$_prom_key" "prometheus_client.key" "0640" || return 1
   fi
+
+  # gate #ROOTLESS-11: password files, bootstrap tokens, and HMAC secret are
+  # written by generate_secrets() as the installer user (e.g. UID 1005 on Podman
+  # rootless, UID 0 on Docker root installs). They are mode 0600 (owner-read-only).
+  # Containers running as UID 1001 (gateway, backoffice) cannot read their own
+  # Redis password, Postgres password, admin credentials, or bootstrap token
+  # without an explicit chown to 1001.
+  #
+  # _pki_chown_client_keys previously only re-owned *_client.key files; all other
+  # secrets remained owned by the installer user and were unreadable by UID 1001
+  # containers. This caused Redis AuthenticationError (gateway falls back to empty
+  # password → connect rejected) and backoffice PermissionError on admin_initial_password.
+  #
+  # Fix: enumerate all "container-consumed" secret files and chown to 1001:1001.
+  # Files NOT listed here (admin1/2_password, admin1/2_totp_secret) are also read
+  # by the backoffice (to bootstrap TOTP) — they are included in the list below.
+  # This is correct: the admin password files are "installer-display-only" on the
+  # host side; ownership by UID 1001 does not weaken them (mode stays 0600).
+  log_info "Chown'ing password files + bootstrap tokens + HMAC to UID 1001 (gate #ROOTLESS-11)"
+  local _uid1001_secrets=(
+    redis_password
+    postgres_password
+    license_key
+    admin_initial_password
+    admin1_password
+    admin1_username
+    admin1_totp_secret
+    admin2_password
+    admin2_username
+    admin2_totp_secret
+    grafana_admin_password
+    caddy_internal_hmac
+    openclaw_gateway_token
+    # wazuh passwords are read by the wazuh containers (run as root inside docker),
+    # not by the UID 1001 services. Chowning them to 1001 is harmless: root (UID 0)
+    # inside the wazuh containers can still read them; the mode stays 0600.
+    wazuh_indexer_password
+    wazuh_api_password
+    wazuh_dashboard_password
+  )
+  for _sf in "${_uid1001_secrets[@]}"; do
+    local _sfpath="${_secrets_dir}/${_sf}"
+    if [[ -f "$_sfpath" ]]; then
+      _do_chown "1001" "$_sfpath" "$_sf" || return 1
+    fi
+  done
+
+  # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
+  # bootstrap token at startup to verify identity; all services run as UID 1001
+  # (or, for root-inside-container services like caddy/redis, as UID 0 which
+  # can always read the file after the chown).
+  log_info "Chown'ing *_bootstrap_token files to UID 1001"
+  while IFS= read -r -d '' _btoken; do
+    _do_chown "1001" "$_btoken" "$(basename "$_btoken")" || return 1
+  done < <(find "${_secrets_dir}" -maxdepth 1 -name '*_bootstrap_token' -print0 2>/dev/null)
 }
 
 # ---------------------------------------------------------------------------
