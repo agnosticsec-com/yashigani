@@ -33,6 +33,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from yashigani.auth.spiffe import require_spiffe_id
+from yashigani.pki.client import internal_httpx_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _content_hash(content: str) -> str:
 @dataclass
 class GatewayConfig:
     upstream_base_url: str              # Target MCP server URL
-    opa_url: str = "http://policy:8181"
+    opa_url: str = "https://policy:8181"
     opa_policy_path: str = "/v1/data/yashigani/allow"
     request_timeout_seconds: float = 30.0
     max_request_body_bytes: int = 4 * 1024 * 1024  # 4 MB
@@ -762,7 +763,7 @@ async def _opa_check(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 cfg.opa_url + cfg.opa_policy_path,
                 json={"input": input_doc},

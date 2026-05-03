@@ -352,7 +352,7 @@ def _bootstrap():
     backoffice_state.agent_registry = agent_registry
     backoffice_state.backend_registry = backend_registry
     backoffice_state.backend_config_store = backend_config_store
-    backoffice_state.opa_url = os.getenv("YASHIGANI_OPA_URL", "http://policy:8181")
+    backoffice_state.opa_url = os.getenv("YASHIGANI_OPA_URL", "https://policy:8181")
     backoffice_state.admin_min_total = int(os.getenv("YASHIGANI_ADMIN_MIN_TOTAL", "2"))
     backoffice_state.admin_min_active = int(os.getenv("YASHIGANI_ADMIN_MIN_ACTIVE", "2"))
     backoffice_state.admin_soft_target = int(os.getenv("YASHIGANI_ADMIN_SOFT_TARGET", "3"))

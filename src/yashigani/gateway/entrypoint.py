@@ -92,7 +92,7 @@ def _build_app():
 
     # Gateway config
     upstream_url = os.environ["YASHIGANI_UPSTREAM_URL"]
-    opa_url = os.getenv("YASHIGANI_OPA_URL", "http://policy:8181")
+    opa_url = os.getenv("YASHIGANI_OPA_URL", "https://policy:8181")
 
     cfg = GatewayConfig(
         upstream_base_url=upstream_url,

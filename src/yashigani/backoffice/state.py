@@ -58,7 +58,7 @@ class BackofficeState:
     siem_backend: str = "none"
     siem_endpoint: Optional[str] = None
     siem_wazuh_auto_deploy: bool = False
-    opa_url: str = "http://policy:8181"
+    opa_url: str = "https://policy:8181"
     ollama_url: str = "http://ollama:11434"
     # Admin minimum enforcement
     admin_min_total: int = 2

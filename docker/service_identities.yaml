@@ -73,13 +73,12 @@ services:
     dns_sans: [policy, policy.internal, opa, opa.internal, yashigani-policy]
     spiffe_id: spiffe://yashigani.internal/policy
     purpose: "Open Policy Agent (policy decisions)"
-    # v2.23.1: mtls_capable flipped to false — OPA retains plaintext HTTP in
-    # this release. Gateway's ~6 direct httpx calls to OPA (proxy.py,
-    # agent_router.py, openai_router.py) need coordinated updates before OPA
-    # can enforce mTLS. Scheduled for v2.23.2 (task #54) alongside the
-    # observability-plane mTLS rollout. Policy decisions are lower-sensitivity
-    # than user credentials / sessions which are the focus of v2.23.1.
-    mtls_capable: false
+    # v2.23.2: mtls_capable flipped to true — OPA now serves TLS on port 8181
+    # using its own leaf cert (policy_client.crt / policy_client.key). All
+    # Python callers (proxy.py, agent_router.py, openai_router.py, opa_push.py)
+    # updated to use internal_httpx_client / internal_httpx_sync_client
+    # (EX-231-01 closure, task #54).
+    mtls_capable: true
     bootstrap_token_sha256: "f774c741261f959aa0469020f44bd5c3f3a37affed2b1f6ffdcf7ad07c475a04"
     revoked: false
 

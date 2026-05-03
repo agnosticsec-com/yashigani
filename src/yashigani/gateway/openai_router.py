@@ -48,6 +48,8 @@ from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from yashigani.pki.client import internal_httpx_client
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
@@ -133,7 +135,7 @@ class OpenAIRouterState:
         self.pii_detector = None          # PiiDetector | None
         self.pii_cloud_bypass: bool = False  # True = skip PII for cloud-routed requests
         # OPA policy enforcement
-        self.opa_url: str = "http://policy:8181"
+        self.opa_url: str = "https://policy:8181"
         # Content relay detection (agent-to-agent laundering)
         self.content_relay_detector = None
 
@@ -157,7 +159,7 @@ def configure(
     ddos_protector=None,  # v2.2 — DDoSProtector | None
     pii_detector=None,    # v2.2 — PiiDetector | None
     pii_cloud_bypass: bool = False,  # v2.2 — True = skip PII for cloud-routed requests
-    opa_url: str = "http://policy:8181",
+    opa_url: str = "https://policy:8181",
     content_relay_detector=None,
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
@@ -1178,8 +1180,7 @@ async def _opa_v1_check(
     }
 
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 _state.opa_url.rstrip("/") + "/v1/data/yashigani/v1/decision",
                 json={"input": opa_input},
@@ -1232,8 +1233,7 @@ async def _opa_response_check(
     }
 
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 _state.opa_url.rstrip("/") + "/v1/data/yashigani/v1/response_decision",
                 json={"input": opa_input},

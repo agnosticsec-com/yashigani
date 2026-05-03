@@ -26,7 +26,7 @@ pdb:
   minAvailable: 1
 env:
   upstreamUrl: ""
-  opaUrl: "http://policy:8181"
+  opaUrl: "https://yashigani-policy:8181"
   ollamaUrl: "http://ollama:11434"
   redisHost: "redis"
   redisPort: "6379"

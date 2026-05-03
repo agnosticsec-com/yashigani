@@ -114,7 +114,7 @@ helm test yashigani -n yashigani --logs
 | `gateway.replicaCount` | `2` | Minimum replicas |
 | `gateway.hpa.maxReplicas` | `10` | HPA ceiling |
 | `gateway.env.upstreamUrl` | `""` | **REQUIRED** — upstream MCP server URL |
-| `gateway.env.opaUrl` | `http://policy:8181` | OPA policy endpoint |
+| `gateway.env.opaUrl` | `https://yashigani-policy:8181` | OPA policy endpoint (mTLS, v2.23.2+) |
 | `gateway.env.ollamaUrl` | `http://ollama:11434` | Ollama inference endpoint |
 | `gateway.existingSecretName` | `yashigani-gateway-secrets` | Secret with `redis_password` |
 
