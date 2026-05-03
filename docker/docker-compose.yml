@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-05-03T05:00:00+01:00
+# Last updated: 2026-05-03T05:30:00+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -218,7 +218,11 @@ services:
       redis:
         condition: service_healthy
       policy:
-        condition: service_healthy
+        # OPA healthcheck disabled in compose (scratch image, podman-compose
+        # CMD translation incompatibility — V232-SMOKE-003). Using service_started
+        # instead; gateway fails-closed per-request if OPA unreachable.
+        # K8s uses httpGet probe on port 8282 (policy.yaml readinessProbe).
+        condition: service_started
       ollama:
         condition: service_healthy
       pgbouncer:
@@ -473,17 +477,16 @@ services:
       - ../policy/data:/policies/data:ro
       - ./secrets:/run/secrets:ro
     healthcheck:
-      # OPA image is scratch-based — no shell, no curl, no wget.
-      # CMD-SHELL is unavailable. Use the /opa binary itself with http.send
-      # to poll the diagnostic HTTP endpoint (--diagnostic-addr=0.0.0.0:8282)
-      # which is unauthenticated HTTP. --fail exits 1 when result is undefined
-      # (i.e. when OPA server is not yet responding).
-      # V232-SMOKE-003 — caught by Linux smoke gate 2026-05-03.
-      test: ["CMD", "/opa", "eval", "--fail", "http.send({\"method\":\"GET\",\"url\":\"http://localhost:8282/health\"}).status_code == 200"]
-      interval: 10s
-      timeout: 5s
-      retries: 8
-      start_period: 15s
+      # OPA image is scratch-based: only /opa binary, no shell, no curl, no wget.
+      # podman-compose 1.0.6 translates CMD form to /bin/sh -c which fails on
+      # scratch images (V232-SMOKE-003). There is no exec-form healthcheck that
+      # works on both Docker Engine and podman-compose without shell.
+      # Mitigation: disable compose healthcheck. OPA liveness is verified at the
+      # K8s layer via httpGet probe against port 8282 (policy.yaml readinessProbe).
+      # In compose, gateway uses condition: service_started (not service_healthy)
+      # and fails-closed per request if OPA is unreachable (deny by default).
+      # Healthcheck is re-enabled in K8s only.
+      disable: true
     # EX-231-10: OPA is a data-plane dep only. Never needs to reach caddy_internal.
     networks:
       - data
