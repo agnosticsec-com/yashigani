@@ -1,4 +1,4 @@
-# Last updated: 2026-05-03T03:00:00+01:00
+# Last updated: 2026-05-03T12:00:00+01:00
 # install-smoke.yml — Install smoke-test matrix (V232-P1)
 #
 # Matrix: ubuntu-latest × (docker|podman) — GATE
@@ -165,6 +165,20 @@ jobs:
       # amd64 SHA or to use a multi-arch pin + explicit --platform in Dockerfiles
       # (tracked as V232-SMOKE-001 in the v2.23.2 backlog).
       # -----------------------------------------------------------------------
+      # Node.js setup (V232-CSCAN-01i)
+      # Ava's open-redirect JS-execution tests (test_v2232_open_redirect_cscan_01d.py)
+      # call `node --input-type=module` via subprocess.  Without Node on PATH the 26
+      # dynamic tests in TestSafeNextRejectsOffOriginCases and TestSafeNextAcceptsLegitimatePaths
+      # silently skip.  Node 22 LTS is pre-installed on ubuntu-latest and macos-latest
+      # GH runners, but actions/setup-node@v4 guarantees the exact version and adds it
+      # to PATH regardless of runner vintage.
+      # -----------------------------------------------------------------------
+      - name: "Setup Node.js 22 LTS for JS unit tests"
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # -----------------------------------------------------------------------
       # V232-SMOKE-001 (pre-existing): Dockerfiles AND docker-compose.yml pin arm64
       # digest SHAs (built/generated on an M-chip Mac dev machine). On amd64 GH
       # runners those layers fail with "exec /bin/sh: exec format error" for both
@@ -303,6 +317,26 @@ jobs:
           done
           echo "SMOKE FAIL: gateway /healthz did not return 200 within 300 s (last port: ${port})"
           exit 1
+
+      # -----------------------------------------------------------------------
+      # V232-CSCAN-01i: Run Ava's JS open-redirect unit tests
+      # These tests are pure-static + Node.js subprocess — no running stack needed.
+      # 26 tests call safeNext() via `node --input-type=module`; 10 static source
+      # checks run without Node.  All 36 must PASS (not skip) now that Node 22 is
+      # on PATH.
+      # -----------------------------------------------------------------------
+      - name: "Run JS open-redirect unit tests (V232-CSCAN-01d, V232-CSCAN-01i)"
+        run: |
+          pip install pytest --quiet
+          python -m pytest src/tests/unit/test_v2232_open_redirect_cscan_01d.py \
+            -v --tb=short 2>&1 | tee cscan01d-results.txt
+          pytest_exit="${PIPESTATUS[0]}"
+          # Fail if any test was skipped — a skip means Node is still missing
+          if grep -q " skipped" cscan01d-results.txt; then
+            echo "CSCAN-01i FAIL: tests still skipping — Node may not be on PATH"
+            exit 1
+          fi
+          exit "${pytest_exit}"
 
       # -----------------------------------------------------------------------
       # Diagnostics on failure
