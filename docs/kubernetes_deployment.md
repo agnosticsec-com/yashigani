@@ -1,6 +1,6 @@
 # Yashigani — Kubernetes Deployment Guide
 
-Version: v2.23.1 | Chart version: 2.23.1 | Last updated: 2026-05-01T00:09:28+01:00
+Version: v2.23.2 | Chart version: 2.23.2 | Last updated: 2026-05-03T00:00:00+01:00
 
 ---
 

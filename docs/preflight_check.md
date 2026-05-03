@@ -1,7 +1,7 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v2.23.1
-**Last updated:** 2026-04-23
+**Version:** v2.23.2
+**Last updated:** 2026-05-03
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
 
 ---

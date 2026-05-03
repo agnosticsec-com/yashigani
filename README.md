@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-02T11:14:40+01:00 -->
+<!-- last-updated: 2026-05-03T00:00:00+01:00 -->
 # Yashigani
 ---
 
@@ -16,12 +16,14 @@
 *Yashigani — Security enforcement for agentic AI. Every call inspected. Every policy enforced. Every action audited.*
 ---
 ---
-**Latest Tagged Release:** v2.23.1 (`v2.23.1` branch) — Core-plane mTLS, two-tier PKI, hardening; all five clean-slate gates GREEN (macOS Podman + Docker, Linux Podman + Docker, K8s Helm)
+**Latest Tagged Release:** v2.23.2 (`2.23.x` branch, 2026-05-03) — Security hardening, supply-chain hygiene, ASVS L3 92%; all gates GREEN
+
+> **Lifecycle notice:** v2.23.2 is the final public-cadence Yashigani release. The `2.23.x` branch continues to receive security-maintenance patches (Medium severity and above); new features ship on a private cadence from v2.24.0 onward. Existing community deployments on v2.23.1 should upgrade to v2.23.2 for the security hardening batch.
 
 ---
 **Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, agent bundles, and the optional Smallstep step-ca runtime ACME service are all gated behind compose profiles / install flags. **Core-plane mTLS is default-on**: per-service leaf certificates are issued at install time by the in-tree two-tier PKI (`src/yashigani/pki/issuer.py`) — no optional services required.
 ---
-**Document Date:** 2026-05-02
+**Document Date:** 2026-05-03
 ---
 **Classification:** ***Public — Product Overview***
 ---
@@ -143,7 +145,7 @@ gpg --import docs/release-signing-key.asc
 git fetch --tags --force origin
 
 # Verify:
-git tag -v v2.23.1
+git tag -v v2.23.2
 # Expected: "Good signature from 'Agnostic Security Releases <releases@agnosticsec.com>'"
 ```
 
@@ -153,7 +155,7 @@ git tag -v v2.23.1
 cosign verify \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2
 ```
 
 For the full release verification process and SBOM attestation commands, see [`docs/release-process.md §10`](docs/release-process.md).
@@ -170,7 +172,41 @@ For a more detailed explanation, see the [Compliance Reports](docs/compliance/RE
 
 ## 7. Current Release Highlights
 
-Two in-flight releases on the v2.23 line. v2.23.0 is the single-branch / API-first / strict-CSP foundation; v2.23.1 layers core-plane mTLS, the two-tier PKI, and the full pre-release Lu / Ava review hardening on top of it. For the full per-version history (v0.1.0 → v2.22.x), see [Architecture.md §4 Security Features by Version](Architecture.md#4-security-features-by-version).
+The v2.23 line currently ships three releases. v2.23.0 is the single-branch / API-first / strict-CSP foundation; v2.23.1 adds core-plane mTLS and the two-tier PKI; v2.23.2 delivers the security hardening batch, supply-chain controls, and N-1 upgrade validation. For the full per-version history (v0.1.0 → v2.22.x), see [Architecture.md §4 Security Features by Version](Architecture.md#4-security-features-by-version).
+
+### v2.23.2 — Security Hardening, Supply-Chain Controls, and ASVS L3 92%
+
+v2.23.2 is a security and quality hardening release on top of v2.23.1. It closes the remaining deferred findings from the v2.23.1 release cycle, strengthens the supply chain, hardens container and network posture, and introduces continuous install-and-upgrade validation. ASVS v5 L3 coverage reaches 92% (166/180) with zero release-blocking failures.
+
+**XFF Spoofing Closed** -- The gateway no longer trusts `X-Forwarded-For` headers set by callers. Caddy is the sole edge: it strips any incoming XFF and sets a clean one before forwarding. Rate limiting and audit logging now bind to the address Caddy observed, not one the client claimed.
+
+**Rate Limiter Fail-Closed Default** -- The rate limiter now defaults to `RATE_LIMITER_FAIL_MODE=closed`. When Redis is temporarily unreachable the request is rejected with `HTTP 503` and a `Retry-After` header rather than silently allowed through. Operators who need fail-open behaviour for specific environments can opt in explicitly. A human-readable recovery message is included in the 503 body.
+
+**Login Throttle `Retry-After` Header** -- Locked-out callers now receive an RFC 6585-compliant `Retry-After` header on the login response, so automated tooling and administrators know exactly when to retry without polling.
+
+**OPA and Jaeger mTLS** -- The OPA policy engine and Jaeger tracing collector are now gated with mutual TLS on both Docker Compose and Kubernetes Helm deployments. Service identities are verified by the in-tree PKI; plaintext access to these components from the data plane is no longer possible.
+
+**Kyverno Admission Policies** -- Kubernetes deployments now ship Kyverno admission policies that enforce the container hardening posture at the cluster level: non-root UID, read-only root filesystem, dropped capabilities, and no privilege escalation. Policy violations block pod scheduling before containers start.
+
+**Container Hardening: Uniform Non-Root UIDs** -- All services now run as non-root. The Ollama inference service, previously running as root for convenience, has been migrated to UID 1000. Combined with the Kyverno admission policies, this closes the root-in-container gap across the full stack.
+
+**Caddy Reverse Proxy Coverage: All 73 Blocks** -- The Caddy verified-secret header (`X-Caddy-Verified-Secret`) is now injected on all 73 `reverse_proxy` blocks across all Caddyfile variants (selfsigned, ACME, CA, WAF) and the Kubernetes ConfigMap. A contract test asserts this on every CI run; a missing injection causes a test failure with a precise diff identifying the missing block.
+
+**GPG Release Tag Signing** -- All releases from v2.23.1 onward are GPG-signed. The signing infrastructure (CI workflow, key ceremony procedure, public key in-repo) is complete and documented in `docs/release-process.md §9`. Verification: `git tag -v v2.23.2`.
+
+**Supply-Chain Hardening** -- GitHub Actions workflow steps are pinned to SHA digest (not just tag). The `pip` package manager is removed from runtime images to reduce the CVE surface. A CI job annotates every Trivy scan with the exact image digest that was scanned. SBOM generation includes a service-identity SHA gate.
+
+**Contract Tests as Anti-Rot** -- A new contract-test suite (`tests/contracts/`) asserts structural invariants across the Caddyfile family and Helm templates on every CI run. The cascade of Caddyfile drift that required multiple rounds of fixes in v2.23.1 is now caught before merge.
+
+**Install + Upgrade Smoke Matrix** -- A CI matrix validates fresh installs and N-1 upgrades (v2.23.1 → v2.23.2) across four platform combinations: macOS Podman, macOS Docker, Linux Podman, and Linux Docker. The harness performs a real install, backs up, upgrades, restores, and verifies both admin accounts are reachable before marking the run green.
+
+**Open-Redirect Hardening** -- The backslash-bypass variant of the `next=` open-redirect in the admin login flow is now blocked. A regression test suite covers the known bypass patterns.
+
+**Safe Error Envelopes** -- All error responses from backoffice and gateway routes now go through a `safe_error_envelope` helper that strips exception class names and stack details from customer-visible responses, preventing information disclosure via error bodies.
+
+**`/tmp` Elimination** -- All use of the host `/tmp` path in `install.sh`, `restore.sh`, and CI scripts has been removed. Temporary files are written to the working directory or to `RUNNER_TEMP` in CI, making the installer safe to use on macOS with strict filesystem sandboxing.
+
+**OWASP ASVS v5 L3: 92% (166/180)** -- Zero release-blocking failures. All six failures carried over from v2.23.1 remain closed in v2.23.2. Per-chapter pass rates: V1 Encoding 89%, V2 Authentication 96%, V3 Session 100%, V4 Access Control 100%, V5 File Handling 63% (3 N/A due to gateway architecture), V6 Cryptography 100%, V7 Logging 100%, V8 Data Protection 89%, V9 Communications 100%, V10 Malicious Code 88%, V11 Business Logic 100%, V12 API 100%, V13 Config 100%, V14 Software Lifecycle 78% (2 manual items), V15 Architecture 100%, V16 Security Logging 100%, V17 WebRTC 0% (3 N/A by architecture).
 
 ### v2.23.1 — Core-Plane mTLS, Two-Tier PKI, and Release Hardening
 
@@ -202,13 +238,13 @@ v2.23.1 is a security-hardening release on top of v2.23.0. It makes mutual TLS m
 
 **PCI Password Expiry Profile** -- Optional expiry profile of ≤90 days for deployments with PCI-DSS scope. Default remains admin-configurable per `YASHIGANI_PASSWORD_MAX_AGE_DAYS`.
 
-**TOTP Enrolment Split** -- TOTP enrolment now follows a two-step provision/confirm flow (Ava issue C). The secret is never active without a confirmation code round-trip.
+**TOTP Enrolment Split** -- TOTP enrolment now follows a two-step provision/confirm flow. The secret is never active without a confirmation code round-trip.
 
 **Auth-Throttle Admin Self-Visibility** -- Authenticated admins can see their own and other IPs' throttle and permanent-block state at `/admin → Security → Blocked IPs` (backed by `/auth/blocked-ips`, returns the caller's `self` block plus all currently throttled and permanently blocked IPs). The locked-out *unauthenticated* operator case (RFC 6585 `Retry-After` on the login response) is tracked as a v2.23.2 follow-up.
 
-**Agent Tier-Limit Returns 402** -- Exceeding an agent tier limit now returns `402 Payment Required` (was `500`), with the correct error body (Ava issue A).
+**Agent Tier-Limit Returns 402** -- Exceeding an agent tier limit now returns `402 Payment Required` (was `500`), with the correct error body.
 
-**AGENT_REGISTERED Audit Persistence** -- Agent-registration events now persist to the audit log (Ava issue B). Previously they fired only to the in-memory channel.
+**AGENT_REGISTERED Audit Persistence** -- Agent-registration events now persist to the audit log. Previously they fired only to the in-memory channel.
 
 **`/.well-known/security.txt`** -- Published per RFC 9116, pointing at the coordinated-disclosure contact.
 
@@ -227,14 +263,12 @@ v2.23.1 is a security-hardening release on top of v2.23.0. It makes mutual TLS m
 - **K8s Helm: DSN_DIRECT for gateway** (1a6db9f) -- `YASHIGANI_DB_DSN_DIRECT` injected into the gateway pod so Alembic migrations bypass PgBouncer's transaction-pool mode during startup.
 - **K8s Helm: secret lookup preserve on upgrade** (6c8f660) -- Helm `lookup` used to preserve existing secrets across `helm upgrade`; prevents `randAlphaNum` regenerating credentials on every upgrade cycle.
 - **Caddy TLS 1.3 + GCM-only ciphers** (bc9cd0d, d7f6447) -- All Caddyfile variants (`Caddyfile`, `Caddyfile.ca`, `Caddyfile.waf`) and Helm ConfigMaps enforce `tls_min_version TLS1.3` with explicit GCM cipher suite list. Applies to all listeners including the WAF variant.
-- **Caddyfile.ca: client_auth at site-level** (63c5351) -- `client_auth` directive moved from individual `handle` blocks to the site-level TLS block in `Caddyfile.ca`. Fixes Laura finding LAURA-V231-008 where client cert verification could be bypassed by routing to an unhandled block.
-- **inject-caddy-verified on admin reverse_proxy blocks** (e0d3869) -- `import inject-caddy-verified` added to all admin `reverse_proxy` blocks in `Caddyfile.ca` (Laura finding LAURA-V231-007), ensuring the verified-secret header is injected on admin paths as well as the main proxy path.
+- **Caddyfile.ca: client_auth at site-level** (63c5351) -- `client_auth` directive moved from individual `handle` blocks to the site-level TLS block in `Caddyfile.ca`. Fixes a bypass where client cert verification could be skipped by routing to an unhandled block.
+- **inject-caddy-verified on admin reverse_proxy blocks** (e0d3869) -- `import inject-caddy-verified` added to all admin `reverse_proxy` blocks in `Caddyfile.ca`, ensuring the verified-secret header is injected on admin paths as well as the main proxy path.
 - **macOS Podman: chown warn-not-abort** (d5247b7) -- `_pki_chown_client_keys` in `install.sh` no longer aborts on chown failure under macOS Podman (TCC/permission restriction). A warning is logged and the install continues; the keys are still created with correct ownership where permissions allow.
 - **restore.sh: chmod u+w sweep** (f1ecf11) -- `restore.sh` widens all secret files to `u+w` before `cp` to handle cases where the backup contains read-only secrets. Fixes restore failures on Linux Podman when secret files were 0400 in the backup archive.
 - **install.sh: macOS Podman remote-client chown fallback** (17d369c) -- Installer detects the Podman remote-client case (macOS host, VM-backed socket) and falls back gracefully when `chown` cannot be applied from the host.
 - **CI: v2.23.x branch filter** (8ed29e6) -- GitHub Actions workflow branch filter extended to cover `v2.23.x` release tracks, ensuring CI runs on release branches without manual filter edits.
-
-For full root-cause analysis and retro items see `/Internal/Compliance/yashigani/v2.23.1/retro.md`.
 
 ### v2.23.0 — Single Branch, API-First Admin, Strict CSP, and Compose Profiles
 

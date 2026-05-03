@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-03T00:00:00+00:00 -->
+<!-- last-updated: 2026-05-03T12:00:00+01:00 -->
 
 # Changelog
 
@@ -13,6 +13,59 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 ## [Unreleased]
 
 No unreleased changes yet for the next version.
+
+---
+
+## [v2.23.2] — 2026-05-03
+
+Theme: **Security Hardening + Supply-Chain Controls + ASVS L3 92%**.
+
+> **Lifecycle notice:** v2.23.2 is the final public-cadence release. The `2.23.x` branch continues as a security-maintenance line (Medium+ patches only). New features ship on a private cadence from v2.24.0 onward.
+
+### Security
+
+- **XFF spoofing** — Caddy strips and re-sets `X-Forwarded-For` at the edge; rate limiting and audit logging now bind to the Caddy-observed address, not caller-supplied headers.
+- **Rate limiter fail-closed default** — `RATE_LIMITER_FAIL_MODE` now defaults to `closed`; Redis errors produce `HTTP 503` + `Retry-After: 5` rather than silent allow-through. Fail-open opt-in is documented for operators who need it. Customer-facing recovery message included.
+- **Login throttle `Retry-After` header** — RFC 6585-compliant `Retry-After` on 429/401 throttle responses; closes the locked-out operator information gap deferred from v2.23.1.
+- **OPA and Jaeger mTLS** — Both services now require mutual TLS in Docker Compose and Kubernetes Helm deployments; plaintext access from the data plane is no longer possible.
+- **Kyverno admission policies** — Kubernetes deployments enforce non-root UID, read-only root filesystem, no privilege escalation, and dropped capabilities at the admission level; policy violations block pod scheduling.
+- **Ollama UID 1000** — Ollama inference service migrated from root to UID 1000, closing the last root-in-container exception.
+- **All 73 Caddy `reverse_proxy` blocks gated** — `X-Caddy-Verified-Secret` injected on every `reverse_proxy` block across all Caddyfile variants and the Kubernetes ConfigMap. Asserted by contract test in CI.
+- **Backslash open-redirect patch** — `next=` parameter in the admin login flow now rejects backslash-encoded path bypass variants. Regression test suite covers the known bypass patterns.
+- **Safe error envelopes** — All backoffice and gateway error responses go through `safe_error_envelope`; exception class names and stack details are stripped from customer-visible responses.
+- **GPG release tag signing** — Signing infrastructure complete: CI workflow (`tag-sign.yml`), one-time key ceremony procedure, and public key (`docs/release-signing-key.asc`) all landed. `git tag -v v2.23.2` verifies the signature.
+- **SSRF on alert webhook** — Host allowlist enforced on webhook SSRF guard in addition to the v2.23.1 SSRF batch.
+
+### Supply Chain
+
+- **GitHub Actions SHA pinning** — All workflow steps pinned to digest, not mutable tag.
+- **`pip` removed from runtime images** — Eliminates pip CVE surface in production containers; package installs are build-time only.
+- **SBOM service-identity SHA gate** — SBOM generation now includes a content-hash assertion on `service_identities.yaml`.
+- **Trivy CI digest annotation** — Every Trivy scan annotates the job summary with the exact image digest scanned, creating an auditable linkage between scan result and image content.
+- **CI `/tmp` path lint gate** — A CI check rejects any code path that writes to host `/tmp`; `RUNNER_TEMP` and working-directory temporaries are used throughout.
+
+### Infrastructure / Ops
+
+- **Install + N-1 upgrade smoke matrix** — CI validates fresh install and v2.23.1 → v2.23.2 upgrade across macOS Podman, macOS Docker, Linux Podman, and Linux Docker. Harness performs real install → backup → upgrade → restore → admin login verification.
+- **Caddyfile contract test** — New test suite (`tests/contracts/test_caddyfile_family.py`) asserts `inject-caddy-verified` count, TLS 1.3 presence, cipher suite correctness, and `client_auth` placement on every CI run.
+- **Host `/tmp` eliminated** — `install.sh`, `restore.sh`, and all CI scripts rewritten to use working-directory and `RUNNER_TEMP` paths.
+- **Compose bind-mount auto-create** — `install.sh` now pre-creates bind-mount directories before starting the stack; eliminates a class of startup race on Docker rootful installs.
+- **K8s Helm: `kubeconfig` to `RUNNER_TEMP`** — CI `deploy.yml` writes the kubeconfig to `RUNNER_TEMP` rather than `$HOME/.kube`, preventing credential leakage between concurrent runs.
+- **`skip-pull` guard** — Installer detects when images are already present and skips the pull phase safely; prevents stale-image confusion on re-install.
+
+### Compliance
+
+- **OWASP ASVS v5 L3: 92% (166/180)** — Zero release-blocking FAILs. All six v2.23.1 FAILs remain closed. Per-chapter rates available at `docs/yashigani_owasp.md`.
+- **OWASP API Security Top 10**: 9/10 PASS, 1/10 PARTIAL — no failures.
+- **OWASP Agentic AI + LLM Top 10**: 22/25 PASS, 2/25 PARTIAL, 1/25 N/A (out-of-architecture) — no failures.
+
+### Bug Fixes
+
+- **str(exc) information disclosure** — `str(exc)` calls in internal result fields and error responses migrated to `safe_error_envelope` to prevent exception-class name leakage.
+- **Agent-name path injection** — Regex + resolve guard prevents path traversal via crafted agent names.
+- **CI workflow injection** — `env` indirection on `head_branch` + regex guard closes the GitHub Actions `workflow_run` injection vector.
+- **Upgrade harness post-restore restart** — Network reconciliation bypass on post-restore restart prevents Compose from re-creating networks that already exist.
+- **Postgres SSL injection** — Installer uses `podman cp` for postgres SSL cert injection when the bind-mount directory predates the certs, avoiding a startup ordering race.
 
 ---
 

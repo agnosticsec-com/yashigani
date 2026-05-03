@@ -1,6 +1,6 @@
 # Yashigani Release Process
 
-**Last updated:** 2026-05-02T06:58:47+01:00
+**Last updated:** 2026-05-03T00:00:00+01:00
 
 This document covers the end-to-end process for cutting a Yashigani release from a clean branch tip to a signed, published GitHub release with full evidence archive. It is the authoritative source for M7 gate-check procedures.
 
@@ -246,6 +246,17 @@ The workflow re-creates the tag as signed at the same commit and force-pushes it
 
 ---
 
+## 11. Release History
+
+| Version | Date | Tag SHA (short) | Branch tip SHA | Notes |
+|---------|------|-----------------|----------------|-------|
+| v2.23.2 | 2026-05-03 | `7dcd498` | `7dcd498` | Security hardening, supply-chain, ASVS L3 92%. GPG-signed (see §9 ceremony). Final public-cadence release. |
+| v2.23.1 | 2026-05-02 | `3b49d0e` | `3b49d0e` | Core-plane mTLS, two-tier PKI, release hardening. GPG signing available via §7.4 retroactive dispatch. |
+
+> **GPG signing status:** Tag signing infrastructure (key ceremony + CI workflow `tag-sign.yml`) landed in the v2.23.2 release cycle. Both v2.23.2 and v2.23.1 can be verified via `git tag -v <tag>` after completing the key ceremony in §9. See §9.6 for the remaining Tiago action required to complete the ceremony and retroactively sign v2.23.1.
+
+---
+
 ## 9. GPG Release Signing Key Setup (one-time, per team)
 
 This section documents the one-time key-generation ceremony. It must be performed by Tiago or a designated release manager with access to add GitHub repository secrets.
@@ -292,18 +303,18 @@ In the yashigani repository settings -> Secrets and variables -> Actions:
 
 Push a test tag on a non-main branch (e.g. `v0.0.0-test`) and confirm the `tag-sign.yml` workflow completes with "Signature: GOOD". Delete the test tag afterward.
 
-### 9.6 Status — v2.23.2 release (V232-N03 / V232-NEG02)
+### 9.6 Status — v2.23.2 release (GPG signing)
 
-The GPG key for `releases@agnosticsec.com` has NOT yet been generated as of 2026-05-02. This is a **required prerequisite** before:
+The v2.23.2 tag (`7dcd498`) has been pushed. The GPG key ceremony (§9.1–§9.4) must be completed to activate tag-signing CI. Until the ceremony is complete, the tag is unsigned.
 
-- Cutting the v2.23.2 release tag.
-- Retroactively signing the v2.23.1 tag via `tag-sign.yml` workflow dispatch.
+**Tiago action required:** complete §9.1 through §9.4 to generate the `releases@agnosticsec.com` key and add `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` to GitHub Secrets. Then dispatch `tag-sign.yml` twice:
 
-**Tiago action required:** complete §9.1 through §9.4, then dispatch `tag-sign.yml` with:
-- `tag: v2.23.1`
-- `commit_sha: 733c3624ed04bc51e1982fca690b33232861884a`
+1. Retroactive v2.23.1 sign:
+   - `tag: v2.23.1`, `commit_sha: 3b49d0e` (or the full SHA from `git rev-parse v2.23.1`)
+2. v2.23.2 sign:
+   - `tag: v2.23.2`, `commit_sha: 7dcd498b906a5dab8ba7e1456db6c7001f2a98a6`
 
-This closes V232-N03 (new signing infrastructure) and V232-NEG02 (retroactive v2.23.1 signing).
+After both dispatches succeed, verify with `git fetch --tags --force origin && git tag -v v2.23.2`.
 
 ---
 

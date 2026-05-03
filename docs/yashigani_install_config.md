@@ -1,7 +1,7 @@
 # Yashigani — Installation and Configuration Guide
 
-**Version:** 2.23.1
-**Last updated:** 2026-05-02T14:00:00+00:00
+**Version:** 2.23.2
+**Last updated:** 2026-05-03T00:00:00+00:00
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
 
 ---
@@ -328,7 +328,7 @@ cd yashigani
 
 ```bash
 git tag --list | grep "v2."
-git checkout v2.23.1
+git checkout v2.23.2
 ```
 
 **Step 3.** Verify file integrity (if the project provides checksums):
@@ -1318,24 +1318,24 @@ Update via Admin → Rate Limiting → Adaptive Thresholds. Changes take effect 
 
 > **Tip:** After any rate limit change, verify it is in effect by watching the Redis key for your agent: `docker compose exec redis redis-cli keys "rl:*"`. Changes take effect within 60 seconds.
 
-### 12.5 Fail Mode (v2.23.2)
+### 12.5 Fail Mode
 
-By default the rate limiter **fails open**: if Redis is temporarily unreachable the request is allowed through and a warning is logged. This preserves availability during transient Redis hiccups.
+The rate limiter defaults to **fail-closed**: if Redis is temporarily unreachable the request is rejected with `HTTP 503 Service Unavailable` and a `Retry-After: 5` header, and the response body includes a human-readable message explaining the condition.
 
-For regulated environments where an unenforced rate limit is unacceptable, set **fail-closed mode**. When closed, any Redis error causes the limiter to reject the request immediately with `HTTP 503 Service Unavailable` and a `Retry-After` header.
+For deployments where continued availability during transient Redis outages takes precedence over rate enforcement, set **fail-open mode**. When open, Redis errors allow the request through and log a warning.
 
 ```
-RATE_LIMITER_FAIL_MODE=closed   # default: open
+RATE_LIMITER_FAIL_MODE=open   # default: closed
 ```
 
 Set this environment variable for the `gateway` service in `docker-compose.override.yml` (or the equivalent Helm values key `gateway.env.RATE_LIMITER_FAIL_MODE`).
 
 | Value | Behaviour on Redis error |
 |-------|--------------------------|
-| `open` (default) | Request allowed; warning logged |
-| `closed` | Request rejected with `HTTP 503` + `Retry-After: 5` |
+| `closed` (default) | Request rejected with `HTTP 503` + `Retry-After: 5`; human-readable recovery message in body |
+| `open` | Request allowed; warning logged |
 
-> **When to use `closed`:** Payment card processors, healthcare data handlers, or any deployment where regulatory requirements mandate that rate controls are always enforced. Note that `closed` mode means Redis availability is on the critical request path — plan accordingly with Redis HA or Sentinel.
+> **When to use `open`:** Deployments where continued availability during transient Redis outages takes precedence over strict rate enforcement, and where rate controls are enforced by a secondary mechanism (network policy, upstream WAF). Note that `open` mode means an uncontrolled burst is possible during Redis outages — plan accordingly.
 
 ---
 
@@ -1655,7 +1655,7 @@ For backup recovery, use `restore.sh` to restore from a previous backup.
 
 ```bash
 git fetch origin
-git checkout v2.23.1   # replace with target version
+git checkout v2.23.2   # replace with target version
 ```
 
 **Step 2.** Pull updated images:
@@ -2380,7 +2380,7 @@ Images are signed with cosign using keyless signing (Sigstore Fulcio CA + Rekor 
 cosign verify \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2
 ```
 
 **Verify backoffice image:**
@@ -2389,13 +2389,13 @@ cosign verify \
 cosign verify \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.2
 ```
 
 A successful verification prints:
 
 ```
-Verification for ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 --
+Verification for ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - Existence of the claims in the transparency log was verified offline
@@ -2411,7 +2411,7 @@ cosign verify-attestation \
   --type cyclonedx \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 \
   | jq '.[0].payload | @base64d | fromjson'
 ```
 
@@ -2422,7 +2422,7 @@ cosign verify-attestation \
   --type cyclonedx \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 \
   | jq '.[0].payload | @base64d | fromjson | .predicate.components[] | {name,version,purl}'
 ```
 
@@ -2431,14 +2431,14 @@ cosign verify-attestation \
 The SBOM and CryptoBoM are also attached directly to each GitHub release:
 
 ```bash
-# Download SBOM for v2.23.1
-gh release download v2.23.1 \
+# Download SBOM for v2.23.2
+gh release download v2.23.2 \
   --repo agnosticsec-com/yashigani \
   --pattern 'sbom-yashigani-*.cdx.json' \
   --dir ./dist
 
-# Download CryptoBoM for v2.23.1
-gh release download v2.23.1 \
+# Download CryptoBoM for v2.23.2
+gh release download v2.23.2 \
   --repo agnosticsec-com/yashigani \
   --pattern 'cryptobom-yashigani-*.json' \
   --dir ./dist
@@ -2460,7 +2460,7 @@ The CryptoBoM (`cryptobom-yashigani-<version>.json`) lists every cryptographic a
 To query which algorithms are not post-quantum resistant:
 
 ```bash
-cat dist/cryptobom-yashigani-2.23.1.json \
+cat dist/cryptobom-yashigani-2.23.2.json \
   | jq '.algorithms[] | select(.pq_status == "not_resistant") | {id, name, usage}'
 ```
 
@@ -2474,11 +2474,11 @@ cosign generate-key-pair
 
 # Sign with local key
 COSIGN_PASSWORD=<passphrase> bash scripts/sign_image.sh \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
-  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 \
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.2
 
 # Verify with public key
-cosign verify --key cosign.pub ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
+cosign verify --key cosign.pub ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2
 ```
 
 The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVATE_KEY` is set or `cosign.key` is present it uses local-key mode; otherwise it falls back to keyless.
@@ -2487,4 +2487,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.23.1 — Installation and Configuration Guide — 2026-04-25T21:43:38+01:00*
+*Yashigani v2.23.2 — Installation and Configuration Guide — 2026-05-03T00:00:00+01:00*
