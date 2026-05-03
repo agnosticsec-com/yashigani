@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-03T04:30:00+01:00 (fix: add OPA/otel-collector/jaeger UIDs to _pki_chown_client_keys — V232-SMOKE-002)
 # last-updated: 2026-05-03T03:45:00+01:00 (fix: parallel Podman pull wait deadlock with exec+tee coprocess)
 # last-updated: 2026-05-01T12:00:00+01:00 (fix: --mode argv guard prevents TTY/non-interactive overwrite — P1 #3bg)
 # last-updated: 2026-05-03T00:30:00+01:00 (fix: chown password files + bootstrap tokens + HMAC secret to UID 1001 — gate #ROOTLESS-11)
@@ -4189,6 +4190,18 @@ _pki_chown_client_keys() {
     # pgbouncer verify-ca to refuse the plaintext upstream.
     # Retro #3ad — v2.23.1.
     "postgres:999"
+    # OPA runs as UID 1000 (openpolicyagent/opa Dockerfile: ARG USER=1000:1000).
+    # Without this chown, OPA crashes on startup: "open /run/secrets/policy_client.key:
+    # permission denied". The gateway depends on OPA for policy decisions, so OPA
+    # startup failure cascades to a gateway healthcheck timeout.
+    # V232-SMOKE-002 — caught by Linux smoke gate 2026-05-03.
+    "policy:1000"
+    # otel-collector and jaeger both run as UID 10001 (upstream Dockerfile:
+    # ARG USER_UID=10001; USER ${USER_UID}). Without chown they crash with
+    # "open /run/secrets/*_client.key: permission denied".
+    # V232-SMOKE-002 — caught by Linux smoke gate 2026-05-03.
+    "otel-collector:10001"
+    "jaeger:10001"
   )
 
   # Determine chown strategy for this runtime.
