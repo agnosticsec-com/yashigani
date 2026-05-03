@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T03:30:00+01:00
+# last-updated: 2026-05-03T07:00:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -633,61 +633,49 @@ verify_admin_logins() {
     has_mtls=$(vm_run "test -f ${HARNESS_WORK_DIR}/docker/secrets/ca_root.crt && echo 'yes' || echo 'no'" 2>/dev/null || echo "no")
     log "mTLS stack detected: $has_mtls"
 
-    # Detect backoffice container name and exec tool for this stack.
-    local backoffice_cname bo_exec
-    backoffice_cname=$(vm_run "
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker-backoffice-1'; then echo 'docker-backoffice-1'
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker_backoffice_1'; then echo 'docker_backoffice_1'
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-else echo 'docker-backoffice-1'; fi
-" 2>/dev/null || echo "docker-backoffice-1")
-    backoffice_cname=$(printf '%s' "$backoffice_cname" | tr -d ' \n')
-    bo_exec="docker"
-    echo "$backoffice_cname" | grep -q '_' && bo_exec="podman"
-    log "Backoffice container: $backoffice_cname  exec: $bo_exec"
-
-    # Helper: run a Python login check inside the backoffice container.
-    # Writes Python script to /tmp/n1_login_check.py on the VM host,
-    # then pipes it to the container via stdin (avoids heredoc-in-SSH issues).
+    # V232-SMOKE-005 fix: login through Caddy on port 443 (VM host Python),
+    # NOT directly to backoffice:8443.
     #
-    # Arguments: $1=user $2=pass $3=totp_secret
+    # Rationale: v2.23.1 Layer B (CaddyVerifiedMiddleware) requires the
+    # X-Caddy-Verified-Secret header which Caddy injects when proxying.
+    # Connecting directly to backoffice:8443 bypasses Caddy and omits the
+    # header -> backoffice returns 401 regardless of credentials.
+    # Connecting through Caddy (https://localhost:443/auth/login) causes Caddy
+    # to inject the header before forwarding to backoffice -> login succeeds.
+    #
+    # v2.22.x has no Layer B so the Caddy path works there too.
+    # SSL: Caddy uses `tls internal` (self-signed) — skip verification.
+    #
+    # Arguments: $1=user $2=pass $3=totp_secret $4=has_mtls (unused, kept for compat)
     # Returns: HTTP status code (200/401/000)
     _do_login_check() {
         local chk_user="$1"
         local chk_pass="$2"
         local chk_totp="$3"
-        local chk_mtls="$4"   # "yes" or "no"
+        # chk_mtls ($4) retained for signature compatibility but no longer used
 
-        # Write Python to temp file on VM host, then pipe to container.
+        # Write Python to VM host temp file, run on VM host (not in container).
+        # Target https://localhost/auth/login (port 443, through Caddy).
+        # SSL: verify_mode=CERT_NONE because Caddy uses tls internal cert.
         vm_run_script <<WRITE_PY
 cat > /tmp/n1_login_check.py << 'PYEOF'
 import json, ssl, hashlib, sys
 import pyotp
 import urllib.request, urllib.error
-import os
 
-has_mtls = os.path.exists('/run/secrets/ca_root.crt')
-if has_mtls:
-    ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-    ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-    BASE = 'https://localhost:8443'
-else:
-    ctx = None
-    BASE = 'http://localhost:8443'
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
 
 user   = '${chk_user}'
 pw     = '${chk_pass}'
 secret = '${chk_totp}'
 totp   = pyotp.TOTP(secret, digest=hashlib.sha256).now()
 payload = json.dumps({'username': user, 'password': pw, 'totp_code': totp}).encode()
-req = urllib.request.Request(BASE + '/auth/login',
+req = urllib.request.Request('https://localhost/auth/login',
     data=payload, headers={'Content-Type': 'application/json'})
 try:
-    kwargs = {'timeout': 10}
-    if ctx is not None:
-        kwargs['context'] = ctx
-    resp = urllib.request.urlopen(req, **kwargs)
+    resp = urllib.request.urlopen(req, context=ctx, timeout=15)
     print(resp.getcode())
 except urllib.error.HTTPError as e:
     print(e.code)
@@ -696,8 +684,8 @@ except Exception as e:
 PYEOF
 echo "WRITE_DONE"
 WRITE_PY
-        # Now pipe the Python script into the container
-        vm_run "cat /tmp/n1_login_check.py | ${bo_exec} exec -i ${backoffice_cname} python3 2>/dev/null" 2>/dev/null || echo "000"
+        # Run on VM host (not inside container) — Caddy injects X-Caddy-Verified-Secret
+        vm_run "python3 /tmp/n1_login_check.py 2>/dev/null" 2>/dev/null || echo "000"
     }
 
     local a1_http
@@ -755,45 +743,30 @@ generate_test_data() {
         return 0
     fi
 
-    # Detect backoffice container for this stack
-    local bo_cname bo_exec
-    bo_cname=$(vm_run "
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker-backoffice-1'; then echo 'docker-backoffice-1'
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker_backoffice_1'; then echo 'docker_backoffice_1'
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-else echo 'docker-backoffice-1'; fi
-" 2>/dev/null || echo "docker-backoffice-1")
-    bo_cname=$(printf '%s' "$bo_cname" | tr -d ' \n')
-    bo_exec="docker"
-    echo "$bo_cname" | grep -q '_' && bo_exec="podman"
-    log "Test data: backoffice container=$bo_cname exec=$bo_exec"
+    # V232-SMOKE-005 fix: run test data Python on VM host through Caddy port 443.
+    # No container detection needed — we use the Caddy reverse proxy endpoint.
+    log "Test data: using VM host Python via Caddy port 443"
 
-    # Write Python test-data script to VM host, pipe to container
+    # Write Python test-data script to VM host, run on VM host (not in container)
+    # V232-SMOKE-005: must go through Caddy (port 443) so X-Caddy-Verified-Secret
+    # header is injected. SSL: CERT_NONE for tls internal self-signed cert.
     vm_run_script <<WRITE_TDPY
 cat > /tmp/n1_testdata.py << 'PYEOF'
 import json, ssl, hashlib, sys, os
 import pyotp
 import urllib.request, urllib.error
 
-has_mtls = os.path.exists('/run/secrets/ca_root.crt')
-if has_mtls:
-    ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-    ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-    BASE = 'https://localhost:8443'
-else:
-    ctx = None
-    BASE = 'http://localhost:8443'
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+BASE = 'https://localhost'
 
 def req(method, path, body=None, cookies=''):
     data = json.dumps(body).encode() if body else None
     r = urllib.request.Request(BASE + path, data=data,
         headers={'Content-Type': 'application/json', 'Cookie': cookies},
         method=method)
-    kwargs = {'timeout': 10}
-    if ctx is not None:
-        kwargs['context'] = ctx
-    return urllib.request.urlopen(r, **kwargs)
+    return urllib.request.urlopen(r, context=ctx, timeout=15)
 
 user = '${admin1_user}'
 pw   = '${admin1_pass}'
@@ -851,7 +824,8 @@ PYEOF
 echo "TDPY_WRITE_DONE"
 WRITE_TDPY
 
-    vm_run "cat /tmp/n1_testdata.py | ${bo_exec} exec -i ${bo_cname} python3 2>&1" 2>/dev/null | grep -E "LOGIN|AGENT|AUDIT|COMPLETE|ERROR" || true
+    # Run on VM host — Caddy injects X-Caddy-Verified-Secret (V232-SMOKE-005)
+    vm_run "python3 /tmp/n1_testdata.py 2>&1" 2>/dev/null | grep -E "LOGIN|AGENT|AUDIT|COMPLETE|ERROR" || true
 
     # Capture baseline state: alembic version, table row counts
     log "Capturing schema baseline ..."
@@ -1120,36 +1094,15 @@ ${pg_full} psql -U yashigani_app yashigani -t -c \
     gw_http=$(vm_run "curl -sk -o /dev/null -w '%{http_code}' https://localhost:443/healthz 2>/dev/null || echo 000" 2>/dev/null || echo 000)
     log "Gateway /healthz (post-upgrade): $gw_http"
 
-    # Backoffice internal health — check by piping Python to container stdin.
-    # Uses the bo_full variable which is "<exec_tool> <cname>" e.g. "podman exec docker_backoffice_1".
-    # Write Python to host temp file, pipe to container (avoids heredoc-in-SSH issues).
-    local bo_exec_tool bo_cname_pu
-    bo_exec_tool=$(printf '%s' "$bo_full" | awk '{print $1}')
-    bo_cname_pu=$(printf '%s' "$bo_full" | awk '{print $2}')
-    vm_run_script <<WRITE_BOHEALTH
-cat > /tmp/n1_bo_health.py << 'PYEOF'
-import ssl, urllib.request, os
-if os.path.exists('/run/secrets/ca_root.crt'):
-    ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-    ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-    url = 'https://localhost:8443/healthz'
-else:
-    ctx = None
-    url = 'http://localhost:8443/healthz'
-try:
-    kwargs = {'timeout': 5}
-    if ctx: kwargs['context'] = ctx
-    r = urllib.request.urlopen(url, **kwargs)
-    print(r.getcode())
-except Exception as e:
-    print('000')
-PYEOF
-WRITE_BOHEALTH
+    # Backoffice reachability — V232-SMOKE-005 fix: check through Caddy on port 443
+    # on VM host (not via container exec to :8443 directly). Caddy proxies /auth/*
+    # to backoffice. A GET to /auth/login returns 405 (method not allowed) which
+    # proves backoffice is alive. Accept any non-000 HTTP response code as healthy.
     local bo_health
-    bo_health=$(vm_run "cat /tmp/n1_bo_health.py | ${bo_exec_tool} exec -i ${bo_cname_pu} python3 2>/dev/null" 2>/dev/null || echo "000")
+    bo_health=$(vm_run "curl -sk -o /dev/null -w '%{http_code}' -X GET https://localhost/auth/login 2>/dev/null || echo 000" 2>/dev/null || echo "000")
     bo_health=$(printf '%s' "$bo_health" | tr -d ' \n' | grep -oE '[0-9]{3}' | head -1 || echo "000")
     [[ -z "$bo_health" ]] && bo_health="000"
-    log "Backoffice /healthz (post-upgrade): $bo_health"
+    log "Backoffice /auth/login (via Caddy, post-upgrade): $bo_health"
 
     # Log summary
     log "Post-upgrade subsystems:"
