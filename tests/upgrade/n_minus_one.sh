@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-03T11:00:00+01:00
+# last-updated: 2026-05-03T11:15:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -1146,6 +1146,18 @@ set -euo pipefail
 WORK="${HARNESS_WORK_DIR}"
 BACKUP="${backup_path}"
 RUNTIME="${RUNTIME}"
+
+# V232-SMOKE-008 fix: restore.sh preflight checks that docker/data, docker/certs,
+# and docker/logs exist and are owned by the container UID (1001 in container =
+# subuid_start+1000 on the Podman rootless host). The harness must fulfil this
+# operator-side prerequisite before calling restore.sh.
+echo "[remote] Pre-creating bind-mount dirs for restore preflight ..."
+mkdir -p "\$WORK/docker/data" "\$WORK/docker/certs" "\$WORK/docker/logs"
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    podman unshare chown 1001:1001 "\$WORK/docker/data" "\$WORK/docker/certs" "\$WORK/docker/logs"
+else
+    chown 1001:1001 "\$WORK/docker/data" "\$WORK/docker/certs" "\$WORK/docker/logs" 2>/dev/null || true
+fi
 
 echo "[remote] Running restore.sh against backup: \$BACKUP"
 cd "\$WORK"
