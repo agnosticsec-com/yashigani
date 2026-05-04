@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-04T18:00:00+01:00 (v2.23.2: postgres+redis password files set 0644 — readable by root containers under cap_drop ALL; gate V232-SMOKE-018)
 # last-updated: 2026-05-04T12:00:00+01:00 (v2.23.2: bump YASHIGANI_VERSION; podman unshare mkdir falls back to plain mkdir when unshare unsupported by remote client)
 # last-updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp sites; V232-P27+F-NEW-03: skip-pull guard; F-NEW-04: bind-mount auto-create for rootful/Docker)
 # last-updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-012: _pki_chown_client_keys enforces secrets dir mode 0755 so OPA inotify watcher can read dir)
@@ -4746,6 +4747,51 @@ _pki_chown_client_keys() {
       _do_chown "1001" "$_sfpath" "$_sf" || return 1
     fi
   done
+
+  # gate V232-SMOKE-018 (2026-05-04): postgres + redis containers run as root
+  # inside the image (no `user:` override in compose) AND `cap_drop: [ALL]`,
+  # which strips CAP_DAC_OVERRIDE. Without DAC_OVERRIDE root cannot read files
+  # outside its DAC reach — and the host bind-mount of secrets/ exposes
+  # `postgres_password` / `redis_password` as 1001:1001 mode 0600. Result:
+  # postgres docker-entrypoint.sh fails reading POSTGRES_PASSWORD_FILE; redis
+  # fails reading the password supplied to --requirepass; both crash-loop.
+  #
+  # Both files are also read by gateway/backoffice (UID 1001) when constructing
+  # their DSN, so split-ownership (chown to 999, group 1001) would require
+  # adding `group_add: ["1001"]` to every consumer — fragile across the matrix
+  # (Docker / Podman rootful / Podman rootless / K8s).
+  #
+  # Pragmatic fix: chmod 0644 these two files. The secrets dir is already
+  # 0755 (V232-SMOKE-012, OPA inotify), and the host trust boundary is shell
+  # access to WORK_DIR — not the file mode of *_password. The only thing 0644
+  # changes is "any host user can `cat docker/secrets/postgres_password`",
+  # which was already true via the dir mode for *.crt files.
+  for _shared_pw in postgres_password redis_password; do
+    local _pwpath="${_secrets_dir}/${_shared_pw}"
+    if [[ -f "$_pwpath" ]]; then
+      if ! chmod 0644 "$_pwpath" 2>/dev/null; then
+        log_warn "chmod 0644 failed on ${_shared_pw} — fall through to docker/podman_run"
+        local _rel_pw="${_pwpath#"${_secrets_dir}/"}"
+        case "$_chown_mode" in
+          docker_run)
+            docker run --rm --volume "${_secrets_dir}:/s:rw" \
+              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
+              || { log_error "docker_run chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+          podman_run)
+            podman run --rm --volume "${_secrets_dir}:/s:rw" \
+              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
+              || { log_error "podman_run chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+          unshare)
+            podman unshare chmod 0644 "$_pwpath" 2>/dev/null \
+              || { log_error "podman unshare chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+        esac
+      fi
+    fi
+  done
+  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; postgres/redis shared passwords also 0644 (gate V232-SMOKE-018)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001
