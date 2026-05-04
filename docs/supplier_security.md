@@ -134,7 +134,7 @@ All dependency manifests must use lockfiles with pinned versions:
 2. Security impact assessment (does the CVE affect Yashigani's usage of the component?)
 3. Update the dependency in the lockfile
 4. Run the full test suite (523 unit tests + 25 e2e tests)
-5. Pre-push review by Tom/Su/Captain agents
+5. Pre-push review by internal security, code-quality, and integration reviewers
 6. Release with updated SBOM
 
 ## 7. Supplier Incident Notification

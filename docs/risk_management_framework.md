@@ -183,7 +183,7 @@ Risk management is integrated into the development lifecycle:
 
 1. **Design phase**: Threat modelling for new features
 2. **Implementation**: OWASP-aware coding practices, pre-commit checks
-3. **Review**: Tom/Su/Captain agents assess security risk
+3. **Review**: Internal security, code-quality, and integration reviewers assess security risk
 4. **Testing**: 523 unit tests + 25 e2e tests + compliance scan
 5. **Release**: Risk assessment for each release, updated SBOM
 6. **Operation**: Continuous monitoring via Wazuh, Grafana, and audit logs

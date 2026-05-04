@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-04T12:00:00+01:00 (v2.23.2: bump YASHIGANI_VERSION; podman unshare mkdir falls back to plain mkdir when unshare unsupported by remote client)
 # last-updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp sites; V232-P27+F-NEW-03: skip-pull guard; F-NEW-04: bind-mount auto-create for rootful/Docker)
 # last-updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-012: _pki_chown_client_keys enforces secrets dir mode 0755 so OPA inotify watcher can read dir)
 # last-updated: 2026-05-03T06:00:00+01:00 (fix: use podman cp for postgres SSL injection when old bind-mount lacks new certs — V232-SMOKE-004b)
@@ -31,7 +32,7 @@ set -euo pipefail
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="2.23.1"
+YASHIGANI_VERSION="2.23.2"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -2548,9 +2549,15 @@ compose_up() {
   # Gate #ROOTFUL-1: podman unshare is a rootless-only primitive — calling it as
   # UID 0 (rootful install) prints "please use unshare with rootless" and aborts.
   # Guard on id -u != 0 so rootful installs use the plain mkdir -p path instead.
+  # Remote-client fallback: `podman unshare` is unsupported when the local podman
+  # binary is configured as a remote client (e.g. macOS Podman tunnels to a VM,
+  # or `podman --remote`). On failure, fall back to plain mkdir -p — the dir
+  # will be uid-mapped on first container write.
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" ]]; then
-    podman unshare mkdir -p "${data_dir}/audit" \
-      || { log_error "Cannot create ${data_dir}/audit via podman unshare"; exit 1; }
+    if ! podman unshare mkdir -p "${data_dir}/audit" 2>/dev/null; then
+      log_warn "podman unshare unavailable (likely remote client) — falling back to plain mkdir -p"
+      mkdir -p "${data_dir}/audit"
+    fi
   else
     mkdir -p "${data_dir}/audit"
   fi

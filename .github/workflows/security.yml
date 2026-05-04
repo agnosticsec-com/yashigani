@@ -202,7 +202,7 @@ jobs:
         # opengrep scan exits 0 when findings exist (scan ran successfully with no error),
         # exits 1 on scan infrastructure error. We don't use --error so the step doesn't
         # abort before both output files are written.
-        # Per feedback_opengrep_not_semgrep.md: opengrep, never semgrep.
+        # SAST tooling: opengrep (project standard).
         # --json-output / --sarif-output write to file (verified v1.20.0).
         # Single scan produces both outputs; two separate scans would double the work.
         run: |

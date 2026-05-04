@@ -29,7 +29,7 @@ data:
   # pgbouncer.ini: rendered with K8s service name substitution. The shipped
   # static file (helm/yashigani/files/pgbouncer.ini) declares `host=postgres`
   # for Compose; K8s ClusterIP service is `<release>-postgres` (typically
-  # `yashigani-postgres`). Captain #58c #3bq evidence (2026-04-28): without
+  # `yashigani-postgres`). Internal K8s integration evidence: without
   # this substitution, pgbouncer logs `DNS lookup failed: postgres` and
   # backoffice exits 3 on lifespan timeout.
   pgbouncer.ini: |

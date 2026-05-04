@@ -210,7 +210,7 @@ v2.23.2 is a security and quality hardening release on top of v2.23.1. It closes
 
 ### v2.23.1 — Core-Plane mTLS, Two-Tier PKI, and Release Hardening
 
-v2.23.1 is a security-hardening release on top of v2.23.0. It makes mutual TLS mandatory for all core-plane services, introduces a two-tier internal PKI, enables mandatory container isolation (seccomp + AppArmor) on every install, and lands the full Lu / Ava pre-release review findings. Every clean-slate gate (macOS Podman, macOS Docker, Linux Podman, Linux Docker, K8s Helm) has been re-tested on this release.
+v2.23.1 is a security-hardening release on top of v2.23.0. It makes mutual TLS mandatory for all core-plane services, introduces a two-tier internal PKI, enables mandatory container isolation (seccomp + AppArmor) on every install, and lands the full pre-release security and QA review findings. Every clean-slate gate (macOS Podman, macOS Docker, Linux Podman, Linux Docker, K8s Helm) has been re-tested on this release.
 
 **Core-Plane mTLS (Default-On)** -- Gateway, backoffice, Postgres, PgBouncer, Redis, and OPA all terminate mutual TLS using per-service leaf certificates issued at install time by the in-tree PKI issuer (`src/yashigani/pki/issuer.py`). Clients present certificates; servers verify against the trusted CA. Plaintext traffic on the core plane is no longer possible, even for local debugging. mTLS is enabled regardless of the `--with-internal-ca` flag.
 

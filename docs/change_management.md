@@ -54,11 +54,11 @@ Before a commit is accepted, the following automated checks run:
 
 Before pushing to the remote repository, changes are reviewed by three automated review agents:
 
-| Agent | Role | Focus |
-|-------|------|-------|
-| **Tom** | Security reviewer | Vulnerabilities, authentication, encryption, injection, OPA policy integrity |
-| **Su** | Code quality reviewer | Architecture, maintainability, test coverage, performance |
-| **Captain** | Integration reviewer | Cross-service compatibility, Docker configuration, upgrade path, data migration |
+| Reviewer | Focus |
+|----------|-------|
+| Security review | Vulnerabilities, authentication, encryption, injection, OPA policy integrity |
+| Code quality review | Architecture, maintainability, test coverage, performance |
+| Integration review | Cross-service compatibility, Docker configuration, upgrade path, data migration |
 
 All three agents must approve before the push proceeds.
 
@@ -156,7 +156,7 @@ An emergency change is permitted only when:
 2. **Implementation**: Apply the fix with targeted testing
 3. **Documentation**: Create the commit with `[EMERGENCY]` prefix in the commit message
 4. **Post-deployment review**: Within 2 business days, conduct a full review including:
-   - Tom/Su/Captain agent review of the changes
+   - Full security/code/integration review of the changes
    - Full test suite execution
    - Compliance scan
    - Documentation update

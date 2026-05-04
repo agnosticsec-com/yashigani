@@ -5,7 +5,7 @@
 This document describes the SQL injection prevention controls in Yashigani,
 covering both application code and database maintenance scripts.
 
-Reviewed by Lu (Senior GRC Auditor). Findings reference: YCS-20260502-v2.23.1-CWE89-reaudit-001.
+Reviewed by the internal GRC audit function. Findings reference: YCS-20260502-v2.23.1-CWE89-reaudit-001.
 
 ---
 
@@ -13,7 +13,7 @@ Reviewed by Lu (Senior GRC Auditor). Findings reference: YCS-20260502-v2.23.1-CW
 
 | File | Control class | Status |
 |------|--------------|--------|
-| `scripts/partition_maintenance.py` | Parameterised identifiers + DDL date-literal exception | PASS (Lu re-audit) |
+| `scripts/partition_maintenance.py` | Parameterised identifiers + DDL date-literal exception | PASS (internal re-audit) |
 | `src/yashigani/db/migrations/` | Alembic `op.drop_table()` native API | PASS (YSG-RISK-002) |
 | All gateway routes | asyncpg parameterised queries (`$1`, `$2`, …) | PASS |
 
@@ -85,8 +85,7 @@ This is functionally equivalent to `psycopg.sql.Identifier` semantics.
 
 ### Audit evidence
 
-- Lu re-audit: `YCS-20260502-v2.23.1-CWE89-reaudit-001` (PASS)
-- Lu audit file: `/Users/max/Documents/Claude/Internal/Compliance/yashigani/v2.23.1/lu-reaudit-af114f7/`
+- Internal re-audit: `YCS-20260502-v2.23.1-CWE89-reaudit-001` (PASS) — evidence held in the internal compliance archive.
 - Closing commits: `75536a5` (identifier quoting), `af114f7` (DDL date-literal exception)
 - CHANGELOG entry: `YSG-RISK-001 (CWE-89, HIGH)`
 
@@ -133,4 +132,4 @@ commit `9d867be`.
 ---
 
 *For controls not covered here, refer to `docs/yashigani_owasp.md` (ASVS v5 L3 mapping)
-and the compliance archive at `/Users/max/Documents/Claude/Internal/Compliance/yashigani/`.*
+and the internal compliance archive.*
