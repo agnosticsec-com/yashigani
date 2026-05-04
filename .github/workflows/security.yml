@@ -1,4 +1,5 @@
-# Last updated: 2026-05-03 (V232-CSCAN-01h: Trivy SARIF digest annotation)
+# Last updated: 2026-05-04 (Trivy: strip arm64 digest pins on amd64 runner; pip-audit: ignore unfixed pip CVE)
+# Previous: 2026-05-03 (V232-CSCAN-01h: Trivy SARIF digest annotation)
 name: Security Scan
 
 on:
@@ -19,6 +20,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # V232-SMOKE-001 (pre-existing): Dockerfiles + docker-compose.yml pin arm64
+      # digest SHAs generated on an M-chip Mac dev machine. On amd64 GH runners
+      # those layers fail with "exec /bin/sh: exec format error" the moment
+      # docker build tries to RUN anything in the FROM image. Mirrors the strip
+      # step the install-smoke matrix uses (linux cells). Only affects the
+      # workspace copy; committed files are untouched. Permanent fix: update
+      # digest pins to amd64 or use multi-arch + explicit --platform directives.
+      - name: "[ci] Strip arm64 digest pins for amd64 runner compatibility"
+        run: |
+          python3 - <<'PYEOF'
+          import re, glob
+
+          # Dockerfile FROM lines: FROM <image>@sha256:... [AS stage]
+          for path in glob.glob("docker/Dockerfile*"):
+              with open(path) as f:
+                  content = f.read()
+              patched = re.sub(
+                  r'(^FROM\s+\S+)@sha256:[a-f0-9]{64}',
+                  r'\1',
+                  content,
+                  flags=re.MULTILINE,
+              )
+              if patched != content:
+                  with open(path, 'w') as f:
+                      f.write(patched)
+                  print(f"Dockerfile stripped: {path}")
+              else:
+                  print(f"Dockerfile no pins: {path}")
+          PYEOF
       - name: Build gateway for scan
         run: docker build -f docker/Dockerfile.gateway -t yashigani/gateway:scan .
       # V232-CSCAN-01h: surface scanned image digest in job summary so stale-image
