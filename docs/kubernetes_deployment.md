@@ -1,6 +1,6 @@
 # Yashigani — Kubernetes Deployment Guide
 
-Version: v2.23.2 | Chart version: 2.23.2 | Last updated: 2026-05-03T00:00:00+01:00
+Version: v2.23.2 | Chart version: 2.23.2 | Last updated: 2026-05-04T00:00:00+01:00
 
 ---
 
@@ -18,6 +18,24 @@ Optional but recommended:
 
 - **KEDA** — if `global.keda.enabled: true` (default). Required for event-driven autoscaling.
 - **Prometheus Operator** — if you want ServiceMonitor CRDs; plain Prometheus works without it.
+
+### Docker Desktop Kubernetes — Image Preflight
+
+If you are testing on **Docker Desktop's built-in Kubernetes** (single-node, local development): a Docker Desktop restart, K8s reset, or Docker Engine upgrade evicts all images from the embedded containerd runtime. After any of these events, the gateway/backoffice images that Helm references will not be present locally and pods will hang in `ImagePullBackOff` (since `imagePullPolicy: IfNotPresent` is the chart default and no remote pull is configured for locally-built images).
+
+Run this preflight before `helm install` / `helm upgrade` whenever Docker Desktop K8s has restarted:
+
+```bash
+# Rebuild local images
+docker build -f docker/Dockerfile.gateway -t yashigani/gateway:2.23.2 .
+docker build -f docker/Dockerfile.backoffice -t yashigani/backoffice:2.23.2 .
+
+# Re-pull base images that DD K8s evicted alongside
+docker pull redis:7-alpine
+docker pull postgres:16-alpine
+```
+
+This step is **not required** on managed K8s (EKS/GKE/AKS/k3s/k8s-on-VMs) where the container runtime persists images across cluster restarts.
 
 ---
 
