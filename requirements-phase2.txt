@@ -9,7 +9,7 @@ redis>=5.0
 # Inspection pipeline
 # NOTE: litellm, presidio-analyzer, and presidio-anonymizer were removed — zero imports in codebase; not yet used.
 # Ollama Python client (local models)
-ollama>=0.2
+ollama>=0.6.2
 
 # Web framework
 fastapi>=0.111
