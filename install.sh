@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-04T19:30:00+01:00 (v2.23.2: chown caddy_client.key to UID 0 — cap_drop ALL strips DAC_OVERRIDE; gate V232-SMOKE-019. sudo mkdir promtail dir; gate V232-SMOKE-020)
 # last-updated: 2026-05-04T18:00:00+01:00 (v2.23.2: postgres+redis password files set 0644 — readable by root containers under cap_drop ALL; gate V232-SMOKE-018)
 # last-updated: 2026-05-04T12:00:00+01:00 (v2.23.2: bump YASHIGANI_VERSION; podman unshare mkdir falls back to plain mkdir when unshare unsupported by remote client)
 # last-updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp sites; V232-P27+F-NEW-03: skip-pull guard; F-NEW-04: bind-mount auto-create for rootful/Docker)
@@ -2432,9 +2433,15 @@ compose_up() {
       export YASHIGANI_HTTPS_PORT=8443
     fi
 
-    # 3. Create Docker-compatible directories for promtail (best-effort, no sudo)
+    # 3. Create Docker-compatible directories for promtail (best-effort).
+    # On CI runners (GitHub Actions / Podman) /var/lib/docker does not exist and
+    # is owned by root, so a plain mkdir fails with EPERM. Try sudo first, then
+    # fall back to a warning. Without this directory promtail cannot mount its
+    # container-log volume and fails to start.
+    # V232-SMOKE-020 — Podman smoke gate 2026-05-04.
     if [[ ! -d "/var/lib/docker/containers" ]]; then
       mkdir -p /var/lib/docker/containers 2>/dev/null || \
+      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
         log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
     fi
 
@@ -4438,6 +4445,16 @@ _pki_chown_client_keys() {
   fi
 
   local _uid_mapped_services=(
+    # Caddy runs as UID 0 (root) inside the container but has cap_drop: [ALL].
+    # Without CAP_DAC_OVERRIDE, UID 0 cannot read a 0o400 file owned by the
+    # installer user (e.g. UID 1000 on the GitHub runner). The PKI issuer writes
+    # caddy_client.key as 0o400 owned by the installer; without this chown
+    # Caddy crashes at startup with "open /run/secrets/caddy_client.key:
+    # permission denied". cap_drop removes DAC_OVERRIDE — the same issue that
+    # affected postgres/redis in V232-SMOKE-018. chown 0:0 restores access
+    # while keeping the key unreadable by other UIDs inside the container.
+    # V232-SMOKE-019 — caught by linux/docker smoke gate 2026-05-04.
+    "caddy:0"
     "gateway:1001"
     "backoffice:1001"
     "redis:999"
