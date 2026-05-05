@@ -417,7 +417,7 @@ def _verify_primary_signature(payload_bytes: bytes, sig_bytes: bytes) -> bool:
     raises InvalidSignature on mismatch — no timing-vulnerable byte comparison
     occurs at the Python level.
 
-    Algorithm allowlist (Lu Review Finding #11): we dispatch verify() only
+    Algorithm allowlist (Internal review finding #11): we dispatch verify() only
     when the embedded public key is EllipticCurvePublicKey on curve SECP256R1
     (aka P-256 / NIST P-256 / prime256v1). Any other key type — even if it
     parses successfully from the bundled PEM — raises RuntimeError before

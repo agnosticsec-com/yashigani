@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-04T19:30:00+01:00 (v2.23.2: chown caddy_client.key to UID 0 — cap_drop ALL strips DAC_OVERRIDE; gate V232-SMOKE-019. sudo mkdir promtail dir; gate V232-SMOKE-020)
+# last-updated: 2026-05-04T18:00:00+01:00 (v2.23.2: postgres+redis password files set 0644 — readable by root containers under cap_drop ALL; gate V232-SMOKE-018)
 # last-updated: 2026-05-04T12:00:00+01:00 (v2.23.2: bump YASHIGANI_VERSION; podman unshare mkdir falls back to plain mkdir when unshare unsupported by remote client)
 # last-updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp sites; V232-P27+F-NEW-03: skip-pull guard; F-NEW-04: bind-mount auto-create for rootful/Docker)
 # last-updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-012: _pki_chown_client_keys enforces secrets dir mode 0755 so OPA inotify watcher can read dir)
@@ -18,7 +20,7 @@
 # 2026-05-02: license_key placeholder created at step 7 (before PKI chown) in demo mode; compose_up placeholder write is non-fatal for Podman rootless (gate #ROOTLESS-6 blocker)
 # 2026-05-02: _pki_chown_client_keys mode probe replaced with static /etc/subuid check; unshare case falls back to podman_run before aborting (gate #ROOTLESS-7 blocker)
 # 2026-05-02: step-7 license_key placeholder write made non-fatal when secrets_dir owned by stale UID (gate #ROOTLESS-8 blocker)
-# 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
+# 2026-05-02: edited for OWUI integrator-framing per internal IP paralegal audit; cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
 set -euo pipefail
 
 # =============================================================================
@@ -421,8 +423,8 @@ resolve_compose_cmd() {
   COMPOSE_CMD=()
   YSG_PODMAN_RUNTIME=false   # reset before resolution — prevents stale env/state bleed
 
-  # ── HARD RUNTIME SEPARATION (Tiago directive 2026-04-29 after 3rd cross-runtime
-  # bug: Laura #95 docker-compose-shim against Podman socket "file name too long",
+  # ── HARD RUNTIME SEPARATION (maintainer directive 2026-04-29 after 3rd cross-runtime
+  # bug: internal security review #95 docker-compose-shim against Podman socket "file name too long",
   # plus prior compose-path-prefix bugs at v2.23.1 #58c rounds 4 + 7) ────────────
   #
   # When YSG_RUNTIME is set explicitly, ONLY native tools for that runtime are
@@ -474,7 +476,7 @@ resolve_compose_cmd() {
     # podman-compose (Python) FIRST: sequential, stable, native to Podman.
     # We do NOT fall through to docker-compose — passing docker-compose a Podman
     # socket via DOCKER_HOST works for simple cases but breaks on seccomp profile
-    # paths (Laura #95 TM-V231-005), security_opt parsing, and a few other places
+    # paths (internal security review #95 TM-V231-005), security_opt parsing, and a few other places
     # where docker-compose makes Docker-specific assumptions about the socket.
     if command -v podman-compose >/dev/null 2>&1; then
       COMPOSE_CMD=("podman-compose")
@@ -494,7 +496,7 @@ resolve_compose_cmd() {
     log_error ""
     log_error "Do NOT install docker-compose against the Podman socket — that path"
     log_error "is explicitly NOT supported (cross-runtime compatibility issues, see"
-    log_error "Laura #95 TM-V231-005 + v2.23.1 retro #3a-fix)."
+    log_error "internal security review #95 TM-V231-005 + v2.23.1 retro #3a-fix)."
     exit 1
   fi
 
@@ -760,7 +762,7 @@ print_platform_summary() {
     _interactive_platform_fallback
   fi
 
-  # --- Admin-must-choose-runtime prompt (Tiago directive 2026-04-29) ---
+  # --- Admin-must-choose-runtime prompt (maintainer directive 2026-04-29) ---
   # Always runs; the function itself handles non-interactive vs interactive
   # branching and respects YSG_RUNTIME_EXPLICIT (set by --runtime CLI flag
   # or pre-existing env var).
@@ -817,7 +819,7 @@ _print_model_recommendations() {
 # =============================================================================
 # Runtime choice prompt — admin always picks the runtime
 # =============================================================================
-# Per feedback_runtime_choice.md (Tiago directive): admin ALWAYS picks the
+# Per feedback_runtime_choice.md (maintainer directive): admin ALWAYS picks the
 # container runtime, even when only one is detected. Default pre-selection
 # is Podman (rootless-first security posture). Non-interactive mode: require
 # YSG_RUNTIME explicit (--runtime CLI flag or env var); error out otherwise.
@@ -1438,7 +1440,7 @@ _write_aes_key_to_env() {
 
   # --- OWUI secret key ---
   # Required by docker-compose (OWUI_SECRET_KEY has no fallback default
-  # after Lu Review Finding #4). Generate a fresh 256-bit key on first
+  # after Internal review finding #4). Generate a fresh 256-bit key on first
   # install; preserve existing value across re-runs so cookies survive.
   local existing_owui_key
   existing_owui_key="$(grep '^OWUI_SECRET_KEY=' "$env_file" 2>/dev/null | sed 's/^OWUI_SECRET_KEY=//' || echo "")"
@@ -1446,7 +1448,7 @@ _write_aes_key_to_env() {
     _env_set "OWUI_SECRET_KEY" "$(openssl rand -hex 32)"
   fi
 
-  # --- Runtime-specific security profile overrides (Lu Review Finding #2) ---
+  # --- Runtime-specific security profile overrides (Internal review finding #2) ---
   # Seccomp + AppArmor profiles are enabled by default in docker-compose.yml.
   # Podman machine VM on macOS runs SELinux, not AppArmor — loading the
   # AppArmor profile fails. Relax by setting YASHIGANI_APPARMOR_PROFILE=
@@ -1470,12 +1472,12 @@ _write_aes_key_to_env() {
     # both ignore unknown profile names; rather than name-mismatch silently,
     # explicitly disable). Linux + AppArmor users override via env.
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
-    # TM-V231-005 (Laura #95): seccomp enforcement on Podman via docker-compose
+    # TM-V231-005 (internal security review #95): seccomp enforcement on Podman via docker-compose
     # compat layer is NOT achievable by passing an absolute path. docker-compose
     # v5.x reads the JSON file and inlines its contents into the API request;
     # Podman's docker-compat API then tries to open() the JSON blob as a filename,
     # hitting "file name too long" (ENAMETOOLONG). The absolute-path approach
-    # (Laura #95, 2026-04-29) was reverted because it causes a compose-up failure
+    # (internal security review #95, 2026-04-29) was reverted because it causes a compose-up failure
     # on every macOS Podman install.
     #
     # Correct fix requires native Podman-compose seccomp syntax (not docker-compose
@@ -2431,9 +2433,15 @@ compose_up() {
       export YASHIGANI_HTTPS_PORT=8443
     fi
 
-    # 3. Create Docker-compatible directories for promtail (best-effort, no sudo)
+    # 3. Create Docker-compatible directories for promtail (best-effort).
+    # On CI runners (GitHub Actions / Podman) /var/lib/docker does not exist and
+    # is owned by root, so a plain mkdir fails with EPERM. Try sudo first, then
+    # fall back to a warning. Without this directory promtail cannot mount its
+    # container-log volume and fails to start.
+    # V232-SMOKE-020 — Podman smoke gate 2026-05-04.
     if [[ ! -d "/var/lib/docker/containers" ]]; then
       mkdir -p /var/lib/docker/containers 2>/dev/null || \
+      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
         log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
     fi
 
@@ -3363,7 +3371,7 @@ _gen_totp_uri() {
   # otpauth://totp/Yashigani:username?secret=SECRET&issuer=Yashigani&algorithm=SHA256&digits=6&period=30
   # algorithm=SHA256 is mandatory — pyotp uses digest=hashlib.sha256.
   # Without this parameter, authenticator apps default to SHA-1 → codes never match.
-  # P0-10 / feedback_sha256_minimum_pqr (Tiago 2026-05-01).
+  # P0-10 / SHA-256 minimum policy (maintainer directive 2026-05-01).
   local username="$1"
   local secret="$2"
   local issuer="${DOMAIN:-Yashigani}"
@@ -3685,7 +3693,7 @@ generate_secrets() {
   # caddy_internal_hmac: 32 bytes (256-bit), hex-encoded.
   # Caddy reads it via CADDY_INTERNAL_HMAC env var and injects it as
   # X-Caddy-Verified-Secret on every upstream proxy to backoffice and gateway.
-  # Tom's middleware does hmac.compare_digest(header, secret) → 401 if absent.
+  # the gateway/backoffice middleware does hmac.compare_digest(header, secret) → 401 if absent.
   # Mode 0440: readable by uid 1001 (yashigani — Caddy/gateway/backoffice);
   # never world-readable.
   # On --upgrade this block regenerates the secret. All three containers must
@@ -4398,7 +4406,7 @@ _pki_run_issuer() {
 #   Podman's /etc/subuid range (typically 165536+70 = 165605). Docker
 #   containers run their service as the bare UID (70), so the host file at
 #   165605 is inaccessible → TLS key read fails → pgbouncer/postgres/redis
-#   crash at startup → full stack cascades. (Laura EX-231-10 AUDIT-NEEDED.)
+#   crash at startup → full stack cascades. (internal security EX-231-10 AUDIT-NEEDED.)
 #
 #   Correct per-runtime strategy:
 #     k8s    → skip entirely; mtls-bootstrap-job.yaml handles ownership.
@@ -4437,6 +4445,16 @@ _pki_chown_client_keys() {
   fi
 
   local _uid_mapped_services=(
+    # Caddy runs as UID 0 (root) inside the container but has cap_drop: [ALL].
+    # Without CAP_DAC_OVERRIDE, UID 0 cannot read a 0o400 file owned by the
+    # installer user (e.g. UID 1000 on the GitHub runner). The PKI issuer writes
+    # caddy_client.key as 0o400 owned by the installer; without this chown
+    # Caddy crashes at startup with "open /run/secrets/caddy_client.key:
+    # permission denied". cap_drop removes DAC_OVERRIDE — the same issue that
+    # affected postgres/redis in V232-SMOKE-018. chown 0:0 restores access
+    # while keeping the key unreadable by other UIDs inside the container.
+    # V232-SMOKE-019 — caught by linux/docker smoke gate 2026-05-04.
+    "caddy:0"
     "gateway:1001"
     "backoffice:1001"
     "redis:999"
@@ -4685,14 +4703,14 @@ _pki_chown_client_keys() {
     \( -name '*_client.crt' -o -name 'ca_*.crt' \) \
     -exec chmod 0644 {} \; 2>/dev/null || true
 
-  # Laura bonus finding (EX-231-10 closure): Prometheus container runs as
+  # internal security bonus finding (EX-231-10 closure): Prometheus container runs as
   # uid 65534 (nobody). The secrets dir is owned by uid 1001, mode drwxr-x--x
   # (traversable by others via o+x). Prometheus needs to read its own
   # prometheus_client.{crt,key} for SPIFFE-gated /internal/metrics scrapes.
   # Fix: chown prometheus_client.key to 1001:1001, chmod to 0640.
   # Prometheus gets group_add: ["1001"] in docker-compose.yml so GID 1001
   # membership grants read access to the 0640 key.
-  log_info "Setting prometheus_client.key to 0640 (group 1001 — Laura EX-231-10 fix)"
+  log_info "Setting prometheus_client.key to 0640 (group 1001 — internal security EX-231-10 fix)"
   local _prom_key="${_secrets_dir}/prometheus_client.key"
   if [[ -f "$_prom_key" ]]; then
     # BUG-2 fix: pass "0640" as the 4th arg so chmod runs inside the container
@@ -4746,6 +4764,51 @@ _pki_chown_client_keys() {
       _do_chown "1001" "$_sfpath" "$_sf" || return 1
     fi
   done
+
+  # gate V232-SMOKE-018 (2026-05-04): postgres + redis containers run as root
+  # inside the image (no `user:` override in compose) AND `cap_drop: [ALL]`,
+  # which strips CAP_DAC_OVERRIDE. Without DAC_OVERRIDE root cannot read files
+  # outside its DAC reach — and the host bind-mount of secrets/ exposes
+  # `postgres_password` / `redis_password` as 1001:1001 mode 0600. Result:
+  # postgres docker-entrypoint.sh fails reading POSTGRES_PASSWORD_FILE; redis
+  # fails reading the password supplied to --requirepass; both crash-loop.
+  #
+  # Both files are also read by gateway/backoffice (UID 1001) when constructing
+  # their DSN, so split-ownership (chown to 999, group 1001) would require
+  # adding `group_add: ["1001"]` to every consumer — fragile across the matrix
+  # (Docker / Podman rootful / Podman rootless / K8s).
+  #
+  # Pragmatic fix: chmod 0644 these two files. The secrets dir is already
+  # 0755 (V232-SMOKE-012, OPA inotify), and the host trust boundary is shell
+  # access to WORK_DIR — not the file mode of *_password. The only thing 0644
+  # changes is "any host user can `cat docker/secrets/postgres_password`",
+  # which was already true via the dir mode for *.crt files.
+  for _shared_pw in postgres_password redis_password; do
+    local _pwpath="${_secrets_dir}/${_shared_pw}"
+    if [[ -f "$_pwpath" ]]; then
+      if ! chmod 0644 "$_pwpath" 2>/dev/null; then
+        log_warn "chmod 0644 failed on ${_shared_pw} — fall through to docker/podman_run"
+        local _rel_pw="${_pwpath#"${_secrets_dir}/"}"
+        case "$_chown_mode" in
+          docker_run)
+            docker run --rm --volume "${_secrets_dir}:/s:rw" \
+              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
+              || { log_error "docker_run chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+          podman_run)
+            podman run --rm --volume "${_secrets_dir}:/s:rw" \
+              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
+              || { log_error "podman_run chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+          unshare)
+            podman unshare chmod 0644 "$_pwpath" 2>/dev/null \
+              || { log_error "podman unshare chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+        esac
+      fi
+    fi
+  done
+  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; postgres/redis shared passwords also 0644 (gate V232-SMOKE-018)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001

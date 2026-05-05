@@ -204,7 +204,7 @@ _detect_runtime() {
   # Both Docker and Podman are first-class citizens.
   #
   # Exports per-runtime detection booleans into the environment so install.sh
-  # can present an explicit prompt to the admin (Tiago directive 2026-04-29 —
+  # can present an explicit prompt to the admin (maintainer directive 2026-04-29 —
   # admin always picks the runtime, even when both are detected; podman is the
   # default pre-selection per `feedback_runtime_choice.md`).
 

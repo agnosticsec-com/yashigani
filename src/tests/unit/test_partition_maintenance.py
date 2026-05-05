@@ -8,7 +8,7 @@ Verifies that:
   - The CREATE TABLE DDL uses _quote_ident for identifier slots and
     date.isoformat() for date-range slots.
   - date.isoformat() output can never contain SQL-injectable characters
-    (defence-in-depth regression guard per Lu follow-up #5,
+    (defence-in-depth regression guard per Internal follow-up #5,
      YCS-20260502-v2.23.1-CWE89-reaudit-001).
 
 Background on DDL date-literal exception:
@@ -158,7 +158,7 @@ class TestNoFstringInDDL:
 class TestDateLiteralInjectionImpossible:
     """Defence-in-depth regression tests for the DDL date-literal slots.
 
-    Lu follow-up #5 (YCS-20260502-v2.23.1-CWE89-reaudit-001):
+    Internal follow-up #5 (YCS-20260502-v2.23.1-CWE89-reaudit-001):
     Even though start/end come from Python date arithmetic (not user input),
     we assert here that date.isoformat() CANNOT produce SQL-injectable output,
     so any future refactor that accidentally lets external data reach the date

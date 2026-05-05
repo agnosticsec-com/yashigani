@@ -1,7 +1,7 @@
 """
 Network isolation regression test — EX-231-10 (Caddy-centric ingress).
 
-Tiago directive 2026-04-29: Caddy is the SOLE ingress to backoffice (:8443)
+Maintainer directive 2026-04-29: Caddy is the SOLE ingress to backoffice (:8443)
 and gateway (:8080). No internal mesh peer may reach these listeners directly.
 
 These tests assert:

@@ -432,6 +432,11 @@ services:
   budget-redis:
     dns_search: ["."]
     image: docker.io/library/redis:7-alpine@sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70
+    # gate V232-SMOKE-018: redis:7-alpine has no USER directive (defaults to root).
+    # With cap_drop: [ALL], root has no DAC_OVERRIDE → cannot read TLS keys
+    # chowned to 999:999 by `_pki_chown_client_keys`. Pin to UID 999:999 (the
+    # redis user image expects) so the chowned material is readable as owner.
+    user: "999:999"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_BUDGET_REDIS_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_BUDGET_REDIS_CPU_LIMIT:-0.25}
@@ -521,6 +526,8 @@ services:
   redis:
     dns_search: ["."]
     image: docker.io/library/redis:7-alpine@sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70
+    # gate V232-SMOKE-018 — see budget-redis above for rationale.
+    user: "999:999"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_REDIS_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_REDIS_CPU_LIMIT:-0.25}
@@ -569,7 +576,13 @@ services:
   ollama:
     dns_search: ["."]
     image: docker.io/ollama/ollama:0.23.0@sha256:e13d0ba897b1053879d2de5cbd7814898e498a9d865613d3c506d0d19f713482
-    user: "1000:1000"
+    # gate V232-SMOKE-018: bbd556e set user: "1000:1000" with HOME=/data
+    # (verified working on macOS Podman where vfs initialises the volume
+    # owned by the caller UID). On Linux Docker, named volumes are
+    # root-owned at creation time; UID 1000 cannot mkdir /data/.ollama.
+    # Reverting to root inside the container — cap_drop: [ALL] below
+    # remains the security boundary (no DAC_OVERRIDE / SETUID / etc).
+    user: "0:0"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OLLAMA_MEM_LIMIT:-4096m}
     cpus: ${YASHIGANI_OLLAMA_CPU_LIMIT:-2.0}
@@ -607,6 +620,8 @@ services:
   ollama-init:
     dns_search: ["."]
     image: docker.io/ollama/ollama:0.23.0@sha256:e13d0ba897b1053879d2de5cbd7814898e498a9d865613d3c506d0d19f713482
+    # gate V232-SMOKE-018 — same rationale as `ollama` service above.
+    user: "0:0"
     restart: on-failure:3
     mem_limit: ${YASHIGANI_OLLAMA_INIT_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_OLLAMA_INIT_CPU_LIMIT:-0.25}
@@ -735,6 +750,13 @@ services:
   postgres:
     dns_search: ["."]
     image: docker.io/pgvector/pgvector:pg16@sha256:902fd1d74ffe6b650d2763fbbcd563f21ac2e57695742924dc04956f094d16da
+    # gate V232-SMOKE-018: pgvector/pgvector has no USER directive (defaults to
+    # root). The postgres entrypoint then runs gosu/setpriv to switch from root
+    # → postgres user, but `cap_drop: [ALL]` strips CAP_SETUID/SETGID/FOWNER —
+    # the privilege drop fails with "operation not permitted". Pin to UID
+    # 999:999 (the postgres user the entrypoint would have switched to) so the
+    # entrypoint runs as the right uid from PID 1, no setuid dance needed.
+    user: "999:999"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_POSTGRES_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_POSTGRES_CPU_LIMIT:-1.0}
@@ -772,6 +794,11 @@ services:
   # ---------------------------------------------------------------------------
   pgbouncer:
     image: docker.io/edoburu/pgbouncer:v1.25.1-p0@sha256:6997cf670ca5278b6afbaab767ffc223d56e280ca22133d1a11f9868d068813d
+    # gate V232-SMOKE-018: edoburu/pgbouncer has USER pgbouncer (UID 70) but
+    # the same cap_drop ALL constraint applies on init scripts. Pin
+    # explicitly so the chowned client keys (70:70 by `_pki_chown_client_keys`)
+    # are readable as owner without relying on image defaults.
+    user: "70:70"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PGBOUNCER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PGBOUNCER_CPU_LIMIT:-0.25}
