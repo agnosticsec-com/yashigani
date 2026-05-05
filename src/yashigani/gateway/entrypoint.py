@@ -440,9 +440,20 @@ def _build_app():
 
         container_backend = create_backend()
 
+        # LIC-002 / GROUP-5-1: read tier from the verified LicenseState rather
+        # than the YASHIGANI_LICENSE_TIER env var. An attacker who can set env
+        # vars could elevate the pool manager to Enterprise tier without a valid
+        # license. The env var is now removed; tier comes exclusively from the
+        # cryptographically-verified license loaded at startup.
+        try:
+            from yashigani.licensing.enforcer import get_license as _get_license
+            _verified_tier = _get_license().tier.value
+        except Exception:
+            _verified_tier = "community"
+
         pool_manager = PoolManager(
             backend=container_backend,
-            tier=os.getenv("YASHIGANI_LICENSE_TIER", "community"),
+            tier=_verified_tier,
         )
         pool_health = PoolHealthMonitor(pool_manager)
         pool_health.start()
