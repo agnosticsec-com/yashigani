@@ -97,13 +97,13 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# SSRF / scheme allowlist for agent upstream_url (TM-V231-004, internal security review #95 2026-04-29)
+# SSRF / scheme allowlist for agent upstream_url (TM-V231-004, Pentest #95 2026-04-29)
 # ---------------------------------------------------------------------------
 
 def _assert_safe_upstream_url(url: str) -> str:
     """Assert that ``url`` is safe to store as an agent's upstream_url.
 
-    internal security review #95 (TM-V231-004): the prior validator was just `Field(min_length=1,
+    Pentest #95 (TM-V231-004): the prior validator was just `Field(min_length=1,
     max_length=512)`. An authenticated admin could register an agent with
     ``file:///etc/passwd``, ``gopher://redis:6380/``, ``http://169.254.169.254/``
     (cloud metadata SSRF), or any internal-service URL. OPA's identity-active
@@ -400,7 +400,7 @@ def _push_openwebui_model(agent_name: str, upstream_url: str) -> None:
             # Fail-closed: OWUI integration requires an explicit secret. The
             # installer generates this; refusing to fall back to a literal
             # default prevents compose-without-installer deployments from
-            # shipping a publicly-known JWT signing key. See Internal P0-1
+            # shipping a publicly-known JWT signing key. See Compliance P0-1
             # (YCS-20260423-v2.23.1-OWASP-3X).
             raise RuntimeError(
                 "OWUI_SECRET_KEY is not set — cannot authenticate to Open WebUI. "
@@ -514,7 +514,7 @@ async def register_agent(
     # the cap is surfaced as HTTP 402 with an explicit error code so the
     # admin UI and CLI can branch on it. Without this guard, the registry
     # rejection surfaces as a generic HTTP 500, violating the API contract
-    # (internal QA Wave 2 Issue A).
+    # (QA Wave 2 Issue A).
     from yashigani.licensing.enforcer import check_agent_limit, LicenseLimitExceeded
     try:
         check_agent_limit(registry.count())
@@ -541,7 +541,7 @@ async def register_agent(
     # Audit. Use session.account_id (mirrors users.py pattern) — Session
     # dataclass has no `username` attribute; the previous `session.username`
     # reference silently failed and AGENT_REGISTERED events never landed in
-    # the audit log (internal QA Wave 2 Issue B).
+    # the audit log (QA Wave 2 Issue B).
     if audit is not None:
         try:
             from yashigani.audit.schema import AgentRegisteredEvent

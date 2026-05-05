@@ -1,5 +1,5 @@
 ---
-# Yashigani v2.23.1 — Release digest overlay
+# Yashigani v2.23.2 — Release digest overlay
 # Last updated: 2026-04-27T21:59:11+01:00
 #
 # Purpose: overrides every `image:` field in docker-compose.yml to pin the

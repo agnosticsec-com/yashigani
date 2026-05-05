@@ -58,7 +58,7 @@ Yashigani proxies ALL traffic to one primary upstream. You must know where it is
 | 22/tcp | Inbound | Recommended | SSH admin access |
 | 5432/tcp | Internal only | Must NOT be exposed externally | PostgreSQL |
 | 6379/tcp | Internal only | Must NOT be exposed externally | Redis |
-| 6380/tcp | Internal only | Must NOT be exposed externally | Budget-Redis (v2.0) |
+| 6380/tcp | Internal only | Must NOT be exposed externally | Budget-Redis (since v2.0) |
 | 8181/tcp | Internal only | Must NOT be exposed externally | OPA |
 | 11434/tcp | Internal only | Must NOT be exposed externally | Ollama |
 | 8080/tcp | Internal only | Must NOT be exposed externally | Gateway |
@@ -185,7 +185,7 @@ The installer auto-detects these but you should confirm them in advance for non-
 
 ---
 
-## Section 4a — GPU Detection (v0.8.4)
+## Section 4a — GPU Detection (since v0.8.4)
 
 The installer runs GPU detection automatically via `platform-detect.sh`. No action is required for the detection itself. Use this section to verify your GPU is supported and to choose an appropriate Ollama model before installation.
 
@@ -492,7 +492,7 @@ Edit `config/alertmanager.yml` after installation. Pre-collect:
 | Twilio From number | Required | e.g. `+15551234567` |
 | Recipient phone number(s) | Required | On-call mobile numbers |
 
-### 9.5 Direct Webhook Alert Sinks (v0.7.0)
+### 9.5 Direct Webhook Alert Sinks (since v0.7.0)
 
 Yashigani has a second, independent alerting channel — direct webhook sinks configured in the backoffice. These fire immediately on security events (credential exfil, licence expiry) without going through Alertmanager. Collect these separately from the Alertmanager credentials above.
 
@@ -511,13 +511,13 @@ Yashigani has a second, independent alerting channel — direct webhook sinks co
 [ ] PagerDuty: integration key obtained (for critical/production alerts)
 [ ] Slack: webhook URL created
 [ ] SMS: Twilio credentials obtained (optional)
-[ ] (v0.7.0) Direct webhook sink URLs gathered if using lightweight alerting
-[ ] (v0.7.0) Microsoft Teams webhook URL created if applicable
+[ ] (since v0.7.0) Direct webhook sink URLs gathered if using lightweight alerting
+[ ] (since v0.7.0) Microsoft Teams webhook URL created if applicable
 ```
 
 ---
 
-## Section 9b — AES Key Provisioning (v0.9.0)
+## Section 9b — AES Key Provisioning (since v0.9.0)
 
 v0.9.0 requires an AES-256-GCM key for PostgreSQL column encryption. The installer manages this automatically, but review the options before starting.
 
@@ -557,7 +557,7 @@ For each agent, note:
 - **Description**: what it does (e.g. `VSCode Claude Code extension`)
 - **Path prefix**: the MCP sub-path it should access (e.g. `/tools`)
 - **Rate limit override**: if different from global default
-- **IP allowlist** (v0.7.0): if the agent will only ever connect from known CIDRs (e.g. `10.0.0.0/8`), prepare the CIDR list now — it can be set at registration time or updated later
+- **IP allowlist** (since v0.7.0): if the agent will only ever connect from known CIDRs (e.g. `10.0.0.0/8`), prepare the CIDR list now — it can be set at registration time or updated later
 
 The registration response includes a `quick_start` field with copy-paste curl, Python httpx, and health-check snippets using the live bearer token. Save these along with the token.
 
@@ -566,7 +566,7 @@ The registration response includes a `quick_start` field with copy-paste curl, P
 ```
 [ ] Agent inventory created (name, description, path prefix for each)
 [ ] Token storage method decided (secret manager, vault, encrypted file)
-[ ] (v0.7.0) IP CIDR allowlists defined for agents with known source IPs
+[ ] (since v0.7.0) IP CIDR allowlists defined for agents with known source IPs
 [ ] Community: agents ≤ 5, end users ≤ 10, admin seats ≤ 2
 [ ] Starter: agents ≤ 100, end users ≤ 250, admin seats ≤ 25
 [ ] Professional: agents ≤ 500, end users ≤ 1,000, admin seats ≤ 50
@@ -726,7 +726,7 @@ These are not installer inputs but must be planned before go-live.
 
 ---
 
-## Section 16 — Interactive Fallback Prompts (v0.8.4)
+## Section 16 — Interactive Fallback Prompts (since v0.8.4)
 
 In v0.8.4, when automatic detection fails for OS, container runtime, or GPU, the installer falls back to interactive selection menus rather than aborting. This section documents what to expect and what to have ready.
 
@@ -762,7 +762,7 @@ If `--non-interactive` is set and required detection fails, the installer aborts
 
 ---
 
-## Section 17 — Updating an Existing Installation (v0.8.4)
+## Section 17 — Updating an Existing Installation (since v0.8.4)
 
 `update.sh` handles updating an existing Yashigani installation. It is the recommended path for patch and minor version updates.
 

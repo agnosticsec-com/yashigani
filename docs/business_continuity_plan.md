@@ -3,6 +3,7 @@
 
 > Version: 1.0.1
 > Date: 2026-05-01
+> Last reviewed: 2026-05-05 (v2.23.2 release — no content changes since v2.23.1 revision)
 > Compliance: ISO 27001 A.5.29, A.5.30 | HIPAA §164.308(a)(7)(i)
 
 ## 1. Purpose

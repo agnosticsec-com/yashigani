@@ -85,7 +85,7 @@ Cloud LLM costs spiral without visibility or limits. A single team can burn thro
 
 Sensitive data — PII, PCI cardholder data, intellectual property, PHI — is sent to cloud LLM APIs without detection or classification. Once transmitted, data may be retained, logged, or used for training. Traditional DLP solutions were not designed for LLM payloads: they do not understand prompt structure, they cannot classify at inference speed, and they cannot enforce routing decisions based on sensitivity.
 
-**Yashigani's response:** The three-layer sensitivity pipeline classifies every prompt before routing. Layer 1: regex pattern matching catches structured sensitive data (credit card numbers, SSNs, API keys). Layer 2: FastText ML classifier detects semantic sensitivity at under 5ms, fully offline. Layer 3: Ollama LLM classification provides deep contextual analysis for ambiguous cases. Data classified as CONFIDENTIAL or RESTRICTED is routed to local models only — this is an immutable rule enforced by the Optimization Engine. No override exists. No admin can bypass it. No configuration can disable it. CHS additionally strips credential-shaped patterns from payloads before any AI inspection backend sees them. The dedicated PII detection module (v2.20) adds 10 entity types (SSN, credit card with Luhn validation, email, phone, IBAN, passport, NHS number, driver's licence, IP address, date of birth) with three enforcement modes: LOG (detect and audit), REDACT (replace with `[REDACTED:TYPE]` before forwarding to cloud), and BLOCK (reject requests containing PII destined for cloud models). PII filtering runs on both request and response paths — bidirectional, on all traffic, by default. Cloud bypass requires explicit admin opt-in.
+**Yashigani's response:** The three-layer sensitivity pipeline classifies every prompt before routing. Layer 1: regex pattern matching catches structured sensitive data (credit card numbers, SSNs, API keys). Layer 2: FastText ML classifier detects semantic sensitivity at under 5ms, fully offline. Layer 3: Ollama LLM classification provides deep contextual analysis for ambiguous cases. Data classified as CONFIDENTIAL or RESTRICTED is routed to local models only — this is an immutable rule enforced by the Optimization Engine. No override exists. No admin can bypass it. No configuration can disable it. CHS additionally strips credential-shaped patterns from payloads before any AI inspection backend sees them. The dedicated PII detection module (since v2.20) adds 10 entity types (SSN, credit card with Luhn validation, email, phone, IBAN, passport, NHS number, driver's licence, IP address, date of birth) with three enforcement modes: LOG (detect and audit), REDACT (replace with `[REDACTED:TYPE]` before forwarding to cloud), and BLOCK (reject requests containing PII destined for cloud models). PII filtering runs on both request and response paths — bidirectional, on all traffic, by default. Cloud bypass requires explicit admin opt-in.
 
 ### 2.5 Routing Opacity
 
@@ -317,11 +317,11 @@ The table below lists only rows that **differ across tiers**. Rows that are iden
 | OpenID Connect (OIDC) SSO | No | Yes (free) | Yes | Yes | Yes | Yes | Yes |
 | SAML v2 SSO | No | Yes (free) | No | No | Yes | Yes | Yes |
 | SCIM automated provisioning | No | Yes (free) | No | No | Yes | Yes | Yes |
-| Multi-IdP Identity Broker (v2.0) | Local only | Unlimited IdPs | 1 OIDC | 1 OIDC | 1 OIDC + 1 SAML | 5 IdPs | Unlimited |
+| Multi-IdP Identity Broker (since v2.0) | Local only | Unlimited IdPs | 1 OIDC | 1 OIDC | 1 OIDC + 1 SAML | 5 IdPs | Unlimited |
 | **Authorization** | | | | | | | |
 | Multi-tenant org isolation | No | No | No | No | No | Partial (5 orgs) | Yes |
 | **Deployment** | | | | | | | |
-| Container Pool Manager (v2.0) | 1/identity, 3 total | Unlimited | 1/identity, 5 total | 1/identity, 5 total | 3/identity, 15 total | 5/identity, 50 total | Unlimited |
+| Container Pool Manager (since v2.0) | 1/identity, 3 total | Unlimited | 1/identity, 5 total | 1/identity, 5 total | 3/identity, 15 total | 5/identity, 50 total | Unlimited |
 
 **User-count bundles (paid tiers — ramped overflow premium):**
 
@@ -342,24 +342,24 @@ The following features are included in **all seven tiers** at parity. They are d
 **Authentication and identity**
 - Username + password (Argon2 / bcrypt)
 - TOTP / 2FA
-- WebAuthn / Passkeys (v0.9.0)
+- WebAuthn / Passkeys (since v0.9.0)
 - API key authentication
 - Session authentication
 - Bearer token (agent routing)
 - JWT introspection / JWKS waterfall
 - Multiple admin accounts with minimum-count enforcement
 - Admin lockout protection
-- Unified identity model (v2.0)
+- Unified identity model (since v2.0)
 
 **Authorization and policy**
 - OPA policy engine
 - RBAC via OPA
 - Per-tool / per-route policy
-- OPA routing safety net + LLM policy review (v2.0)
+- OPA routing safety net + LLM policy review (since v2.0)
 
 **Content inspection and AI safety**
 - FastText ML classifier (offline, <5ms)
-- Response-path inspection (v0.9.0)
+- Response-path inspection (since v0.9.0)
 - All 5 inspection backends — Ollama, Anthropic Claude, Google Gemini, Azure OpenAI, LM Studio
 - Fail-closed sentinel
 - Prompt injection detection
@@ -368,10 +368,10 @@ The following features are included in **all seven tiers** at parity. They are d
 - Response masking / sanitization
 - Anomaly detection (Redis ZSET sliding window)
 - Inference payload logging (AES-256-GCM encrypted)
-- Sensitivity classification pipeline (v2.0)
-- Optimization Engine — 4D routing (v2.0)
+- Sensitivity classification pipeline (since v2.0)
+- Optimization Engine — 4D routing (since v2.0)
 
-**Budget governance (v2.0)**
+**Budget governance (since v2.0)**
 - Three-tier budget system (org / group / individual)
 - Budget-redis dedicated container (noeviction)
 - Budget response headers
@@ -379,16 +379,16 @@ The following features are included in **all seven tiers** at parity. They are d
 **Audit and compliance**
 - Structured JSON audit log (file)
 - PostgreSQL audit storage (RLS + AES-256-GCM)
-- SHA-384 Merkle audit hash chain (v0.9.0)
+- SHA-384 Merkle audit hash chain (since v0.9.0)
 - Audit log search (7 filters, cursor pagination)
 - Audit log export (CSV / JSON, 10k rows)
 - Splunk SIEM integration
 - Elasticsearch SIEM integration
 - Wazuh SIEM integration
-- Async SIEM delivery queue (v0.9.0)
+- Async SIEM delivery queue (since v0.9.0)
 - Monthly partition management (pg_partman)
-- P1-P5 alert severity with SIEM integration (v2.0)
-- Routing decisions as audit events (v2.0)
+- P1-P5 alert severity with SIEM integration (since v2.0)
+- Routing decisions as audit events (since v2.0)
 
 **Rate limiting**
 - Per-endpoint rate limiting (Redis)
@@ -399,12 +399,12 @@ The following features are included in **all seven tiers** at parity. They are d
 - Offline licence verification (ECDSA P-256, v0.9.0)
 - Multi-KMS (Docker, AWS, Azure, GCP, Keeper, Vault)
 - AES-256-GCM column encryption (Postgres)
-- Agent PSK auto-rotation (v0.9.0)
+- Agent PSK auto-rotation (since v0.9.0)
 
 **Observability**
 - Prometheus metrics
 - Grafana dashboards (12, including 3 v2.0 additions: budget / OE / pool manager)
-- Real-time SSE inspection feed (v0.9.0)
+- Real-time SSE inspection feed (since v0.9.0)
 - OpenTelemetry / Jaeger tracing
 - Loki + Promtail log aggregation
 - Alertmanager escalation (Slack / email / PagerDuty)
@@ -418,7 +418,7 @@ The following features are included in **all seven tiers** at parity. They are d
 - Container hardening (seccomp, AppArmor, non-root)
 - Trivy container scanning
 - Agent bundles (Langflow / Letta / OpenClaw)
-- Open WebUI integration (v2.0)
+- Open WebUI integration (since v2.0)
 
 ---
 

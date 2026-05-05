@@ -2,6 +2,7 @@
 
 > Version: 1.0.0
 > Date: 2026-04-12
+> Last reviewed: 2026-05-05 (v2.23.2 release — no content changes; the change-management process itself is unchanged for v2.23.2)
 > Compliance: SOC 2 CC8.1 | ISO 27001 A.8.32
 
 ## 1. Purpose
