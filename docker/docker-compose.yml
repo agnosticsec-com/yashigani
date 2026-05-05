@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.2 — Docker Compose stack
-# Last updated: 2026-05-04T18:30:00+01:00 (image bumps Phase 1+2: opa, open-webui, langflow, prometheus, alertmanager, loki/promtail, keycloak, ollama, pgbouncer)
+# Last updated: 2026-05-05T20:00:00+01:00 (image bumps Phase 1+2: opa, open-webui, langflow, prometheus, alertmanager, loki/promtail, keycloak, ollama, pgbouncer; Phase 3: grafana 12.4.3, otel 0.151.0, wazuh 4.14.5)
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -709,7 +709,7 @@ services:
   # ---------------------------------------------------------------------------
   grafana:
     dns_search: ["."]
-    image: docker.io/grafana/grafana:11.5.2@sha256:4230a176e6f220e5aab2633463823a45392f12933f954e96643140a3611e482f
+    image: docker.io/grafana/grafana:12.4.3@sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b
     restart: unless-stopped
     mem_limit: ${YASHIGANI_GRAFANA_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_GRAFANA_CPU_LIMIT:-0.25}
@@ -937,7 +937,7 @@ services:
   # ---------------------------------------------------------------------------
   otel-collector:
     dns_search: ["."]
-    image: docker.io/otel/opentelemetry-collector-contrib:0.100.0@sha256:dfb4bdba4049130bb2f8226cc1b45977e2b34eab3ae0858eca95a98215aea5ba
+    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OTEL_COLLECTOR_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_OTEL_COLLECTOR_CPU_LIMIT:-0.5}
@@ -1242,7 +1242,7 @@ services:
   # ---------------------------------------------------------------------------
   wazuh-manager:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-manager:4.9.2@sha256:b906ebfc77d78446e9b676e1a0b3cd78e2bf3ac2341688f1726b09c29e0aa826
+    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3721f1b3acd5961e877855ae481d92c4fbf6553b50a9009aee93e40fa9162899
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
@@ -1288,7 +1288,7 @@ services:
 
   wazuh-indexer:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-indexer:4.9.2@sha256:654bd546b92627974ac65f97836665a387647d6a299bc4c55614620bec1b56de
+    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:120d95f44c944495425a1f05ae555624f7d82a909c21860c4353fff4197efc83
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
@@ -1313,7 +1313,7 @@ services:
 
   wazuh-dashboard:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-dashboard:4.9.2@sha256:7622129f46c44f9fceb06a5e3ef7366f965e45aac60da1bafd828705e582100a
+    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:037277575cbaac23bb09d17d415b72ea08a7cf094433c512f2889fccec266325
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}

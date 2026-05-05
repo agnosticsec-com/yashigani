@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.2 — Release digest overlay
-# Last updated: 2026-04-27T21:59:11+01:00
+# Last updated: 2026-05-05T20:00:00+01:00
 #
 # Purpose: overrides every `image:` field in docker-compose.yml to pin the
 # exact digest verified at release time. This closes ASVS V10.3.1 (H-02
@@ -33,23 +33,23 @@
 #   openpolicyagent/opa:1.15.1                  sha256:c3e940a236811f34a9bdf1b98e1a441db7f1ef81151a0bb4a9706467a11c8cd9
 #   ollama/ollama:0.6.2                         sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721
 #   prom/prometheus:v3.2.1                      sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
-#   grafana/grafana:11.5.2                      sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+#   grafana/grafana:12.4.3                      sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b
 #   pgvector/pgvector:pg16                      sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
 #   edoburu/pgbouncer:v1.23.1-p0                sha256:09454d066b2b2a220c8f95690be542079b89dfde09a6a4d72eb65cdfdb493426
 #   prom/alertmanager:v0.27.0                   sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
 #   grafana/loki:3.0.0                          sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253
 #   grafana/promtail:3.0.0                      sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
-#   otel/opentelemetry-collector-contrib:0.100.0  sha256:cea61bd39d318b3ec7664794f6be9ed0cce9321059a08b4ec5d3b8d310a4b609
-#   jaegertracing/all-in-one:1.57               sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9
-#   hashicorp/vault:1.16                        sha256:c5e04689611cb864b8b6247a6a845e0bdc059998f39b5c8a659562287379525c
+#   otel/opentelemetry-collector-contrib:0.151.0  sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
+#   jaegertracing/all-in-one:1.57               sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9  [PENDING v2 migration — Phase 3b]
+#   hashicorp/vault:1.16                        sha256:c5e04689611cb864b8b6247a6a845e0bdc059998f39b5c8a659562287379525c  [PENDING v2 migration — Phase 3b]
 #   smallstep/step-ca:0.30.2                    sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
 #   ghcr.io/open-webui/open-webui:v0.9.1        sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978
 #   langflowai/langflow:1.9.0                   sha256:01b48149017d0a211cb4dd0b7454bd4ff68870937b9037c0c2c0928d24868ce1
 #   letta/letta:0.16.7                          sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c
 #   ghcr.io/openclaw/openclaw:2026.3.1          sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
-#   wazuh/wazuh-manager:4.9.2                   sha256:b906ebfc77d78446e9b676e1a0b3cd78e2bf3ac2341688f1726b09c29e0aa826
-#   wazuh/wazuh-indexer:4.9.2                   sha256:654bd546b92627974ac65f97836665a387647d6a299bc4c55614620bec1b56de
-#   wazuh/wazuh-dashboard:4.9.2                 sha256:7622129f46c44f9fceb06a5e3ef7366f965e45aac60da1bafd828705e582100a
+#   wazuh/wazuh-manager:4.14.5                  sha256:3721f1b3acd5961e877855ae481d92c4fbf6553b50a9009aee93e40fa9162899
+#   wazuh/wazuh-indexer:4.14.5                  sha256:120d95f44c944495425a1f05ae555624f7d82a909c21860c4353fff4197efc83
+#   wazuh/wazuh-dashboard:4.14.5                sha256:037277575cbaac23bb09d17d415b72ea08a7cf094433c512f2889fccec266325
 #   quay.io/keycloak/keycloak:26.0              sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
 #
 # NOTE: yashigani/gateway and yashigani/backoffice are our own images (built
@@ -79,7 +79,7 @@ services:
     image: docker.io/prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
 
   grafana:
-    image: docker.io/grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+    image: docker.io/grafana/grafana:12.4.3@sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b
 
   postgres:
     image: docker.io/pgvector/pgvector:pg16@sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
@@ -97,7 +97,7 @@ services:
     image: docker.io/grafana/promtail:3.0.0@sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
 
   otel-collector:
-    image: docker.io/otel/opentelemetry-collector-contrib:0.100.0@sha256:cea61bd39d318b3ec7664794f6be9ed0cce9321059a08b4ec5d3b8d310a4b609
+    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
 
   jaeger:
     image: docker.io/jaegertracing/all-in-one:1.57@sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9
@@ -124,13 +124,13 @@ services:
     image: ghcr.io/openclaw/openclaw:2026.3.1@sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
 
   wazuh-manager:
-    image: docker.io/wazuh/wazuh-manager:4.9.2@sha256:b906ebfc77d78446e9b676e1a0b3cd78e2bf3ac2341688f1726b09c29e0aa826
+    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3721f1b3acd5961e877855ae481d92c4fbf6553b50a9009aee93e40fa9162899
 
   wazuh-indexer:
-    image: docker.io/wazuh/wazuh-indexer:4.9.2@sha256:654bd546b92627974ac65f97836665a387647d6a299bc4c55614620bec1b56de
+    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:120d95f44c944495425a1f05ae555624f7d82a909c21860c4353fff4197efc83
 
   wazuh-dashboard:
-    image: docker.io/wazuh/wazuh-dashboard:4.9.2@sha256:7622129f46c44f9fceb06a5e3ef7366f965e45aac60da1bafd828705e582100a
+    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:037277575cbaac23bb09d17d415b72ea08a7cf094433c512f2889fccec266325
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
