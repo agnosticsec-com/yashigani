@@ -29,6 +29,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 import logging
+from collections.abc import Set as AbstractSet
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ def _is_unsafe_address(addr: str) -> bool:
     )
 
 
-def assert_webhook_url(url: str, *, allowed_hosts: set[str]) -> None:
+def assert_webhook_url(url: str, *, allowed_hosts: AbstractSet[str]) -> None:
     """Assert that *url* is safe to use as a webhook destination.
 
     Parameters
@@ -118,12 +119,14 @@ def assert_webhook_url(url: str, *, allowed_hosts: set[str]) -> None:
         raise WebhookUrlForbidden(f"dns_resolution_failed:{exc}", url) from exc
 
     for _family, _type, _proto, _canonname, sockaddr in addrinfos:
-        addr = sockaddr[0]
+        # sockaddr[0] is typed as `str | int` in typeshed (covers IPv4/IPv6 union);
+        # in practice always a string IP literal — coerce explicitly for the type checker.
+        addr = str(sockaddr[0])
         if _is_unsafe_address(addr):
             raise WebhookUrlForbidden(f"resolves_to_private_or_reserved:{addr}", url)
 
     # 6. Host must be in allowed_hosts (exact) or be a subdomain of an entry.
-    def _host_allowed(h: str, allowed: set[str]) -> bool:
+    def _host_allowed(h: str, allowed: AbstractSet[str]) -> bool:
         if h in allowed:
             return True
         for ah in allowed:

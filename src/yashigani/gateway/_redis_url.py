@@ -70,7 +70,7 @@ def build_redis_url(
     str
         A redis:// or rediss:// URL suitable for ``redis.from_url()``.
     """
-    _secrets_dir = secrets_dir or os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
+    _secrets_dir: str = secrets_dir or os.getenv("YASHIGANI_SECRETS_DIR") or "/run/secrets"
     _host = host or os.getenv("REDIS_HOST", "redis")
     _port = port or os.getenv("REDIS_PORT", "6380")
 

@@ -26,8 +26,12 @@ except ImportError:
     class _NoopCtx:
         def __enter__(self): return self
         def __exit__(self, *a): pass
-    Counter = Gauge = Histogram = _Noop
-    REGISTRY = None
+    # Conditional-import fallback: re-bind the public names to the no-op
+    # placeholders so callers can construct metrics even without the package
+    # installed. mypy sees the union of types between branches and flags the
+    # rebind; the runtime behaviour is intentional.
+    Counter = Gauge = Histogram = _Noop  # type: ignore[misc,assignment]
+    REGISTRY = None  # type: ignore[assignment]
 
 
 def _C(name, doc, labelnames=()):
