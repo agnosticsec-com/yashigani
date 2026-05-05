@@ -1,89 +1,71 @@
-# Python
+
 __pycache__/
-*.py[cod]
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-.venv/
-venv/
-env/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Yashigani runtime data
-docker/secrets/
-data/*
 !data/fasttext
-docker/data/
-*.log
-
-# FastText model binaries — train locally, never commit
-models/*.bin
-models/*.vec
-models/*.ftz
-
-# License signing keys — NEVER commit private key
-keys/
-*.pem
-scripts/keygen.py
-scripts/sign_license.py
-
-# cosign key pair — private key must never be committed
-cosign.key
-
-# Customer license files — do not commit
-*.ysg
-
-# Environment config — contains secrets
+.claude_agent_addendum.txt
+.claude-tmp/
+.claude/
+.coverage
+.eggs/
 .env
 .env.local
-
-# TLS certificates
-docker/tls/
-
-# Alembic generated (keep versions/ in VCS)
-src/yashigani/db/migrations/__pycache__/
-
-# OS
-**/.DS_Store
-Thumbs.db
-
-# IDE — editor-specific settings
-.vscode/
 .idea/
-
-# Internal / agent memory — never publish
-.claude/
-prompt_logs/
-
-# Internal testing — never commit
-scripts/deploy-vm.sh
-scripts/test-ui.py
-.claude_agent_addendum.txt
-
-# Compliance suite (product IP — not public)
-scripts/owasp_prerelease_check.py
-scripts/_asvs_*.py
-
-# License signing (NEVER public)
-scripts/sign_license.py
-scripts/generate_license.py
-backups/
-
-# Backup data (contains secrets)
-backups/
-
-# Docker secrets (never commit)
-docker/secrets/
-
-# Any secret files
-*.secret
-*.pem
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vscode/
+*.egg
+*.egg-info/
 *.key
-.claude-tmp/
+*.log
+*.pem
+*.py[cod]
+*.secret
+*.so
+*.ysg
+**/.DS_Store
+# Alembic generated (keep versions/ in VCS)
+# Any secret files
+# Backup data (contains secrets)
+# Compliance suite (product IP — not public)
+# cosign key pair — private key must never be committed
+# Customer license files — do not commit
+# Docker secrets (never commit)
+# Environment config — contains secrets
+# FastText model binaries — train locally, never commit
+# IDE — editor-specific settings
+# Internal / agent memory — never publish
+# Internal agent operating config — never commit
+# Internal testing — never commit
+# License signing (NEVER public)
+# License signing keys — NEVER commit private key
+# OS
+# Python
+# TLS certificates
+# Yashigani runtime data
+backups/
+build/
+CLAUDE.md
+cosign.key
+data/*
+dist/
+docker/data/
+docker/secrets/
+docker/tls/
+env/
+htmlcov/
+keys/
+models/*.bin
+models/*.ftz
+models/*.vec
+prompt_logs/
+scripts/_asvs_*.py
+scripts/deploy-vm.sh
+scripts/generate_license.py
+scripts/keygen.py
+scripts/owasp_prerelease_check.py
+scripts/sign_license.py
+scripts/test-ui.py
+src/yashigani/db/migrations/__pycache__/
+Thumbs.db
+venv/
