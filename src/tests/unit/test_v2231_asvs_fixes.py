@@ -228,8 +228,8 @@ class TestEscapeCsvCell:
         assert escape_csv_cell("12345") == "12345"
 
     # -------------------------------------------------------------------------
-    # LF-CSV-BYPASS regression tests (Lu 2026-04-27)
-    # These are the six bypasses Lu empirically reproduced against the original
+    # LF-CSV-BYPASS regression tests (internal review 2026-04-27)
+    # These are the six bypasses internal review empirically reproduced against the original
     # fix.  All must be escaped by the strip-and-test approach.
     # -------------------------------------------------------------------------
 
@@ -376,7 +376,7 @@ class TestDashboardJsEscapeHtmlPresent:
 
     This is a static-analysis proxy test — it reads the JS file and checks
     for structural invariants.  An XSS-capable integration test would require
-    a browser; that belongs to Ava's Playwright suite.
+    a browser; that belongs to the internal QA Playwright suite.
     """
 
     DASHBOARD_JS = (

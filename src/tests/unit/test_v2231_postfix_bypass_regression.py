@@ -1,5 +1,5 @@
 """
-Regression tests for Lu/Laura post-fix bypass findings (2026-04-27).
+Regression tests for internal review post-fix bypass findings (2026-04-27).
 
 LF-CSV-BYPASS     — V1.2.10 leading-whitespace bypass (added to test_v2231_asvs_fixes.py)
 LF-SPIFFE-FORGE   — V10.3.5 peer-cert extraction middleware + openai_router fix

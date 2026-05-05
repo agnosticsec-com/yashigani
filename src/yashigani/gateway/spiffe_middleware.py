@@ -29,7 +29,7 @@ falls back to the client-supplied ``x-spiffe-id`` header.
 This is a complete authentication bypass on the direct-mesh path.
 
 PoC: ``gateway_client.crt`` + forged ``X-SPIFFE-ID: spiffe://yashigani.internal/prometheus``
-→ HTTP 200 on ``/internal/metrics`` (Laura V232-002 2026-04-30).
+→ HTTP 200 on ``/internal/metrics`` (internal security V232-002 2026-04-30).
 
 Double-strip fix:
 - This middleware strips BOTH ``x-spiffe-id-peer-cert`` AND ``x-spiffe-id``
@@ -92,7 +92,7 @@ route handler sees it — the forge cannot reach the gate.
 
 References
 ----------
-- Lu sanity-check: /Users/max/Documents/Claude/Internal/ACS/v3/asvs-sanity-check-post-fix-2026-04-29.md §LF-SPIFFE-FORGE
+- Internal sanity-check: /Users/max/Documents/Claude/Internal/ACS/v3/asvs-sanity-check-post-fix-2026-04-29.md §LF-SPIFFE-FORGE
 - ASVS v5 V10.3.5 (CWE-287)
 - LAURA-V232-002 (2026-04-30)
 """
