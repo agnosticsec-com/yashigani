@@ -39,7 +39,41 @@ This step is **not required** on managed K8s (EKS/GKE/AKS/k3s/k8s-on-VMs) where 
 
 ---
 
-## Quick Start
+## Quick Install (recommended)
+
+For most operators, the canonical entry point is the K8s install wrapper:
+
+```bash
+bash scripts/k8s-install.sh \
+  --domain yashigani.example.com \
+  --admin-email admin@example.com \
+  --namespace yashigani \
+  --deploy production
+```
+
+The wrapper sets Kubernetes-sensible defaults before delegating to `install.sh`:
+
+| Default applied | Why |
+|---|---|
+| `--mode k8s` | Tells the installer to render Helm rather than docker-compose. |
+| `--non-interactive` | K8s installs typically run in CI/CD with no TTY. |
+| `YSG_RUNTIME=k8s` | Skips runtime-specific local checks (Podman / Docker daemon probes). |
+| `helm install --qps 50 --no-hooks` | Avoids the default `qps=5` client-side rate limiter when applying the chart's many resources. |
+
+Pre-conditions checked before delegating (hard-stop on failure):
+
+1. `kubectl` is in `PATH` and reaches the target cluster.
+2. `helm` is in `PATH`.
+3. Either `--domain` or `YASHIGANI_DOMAIN` env is set.
+4. Namespace is not `default` (accidental-deployment guard).
+
+All flags are forwarded to `install.sh` unchanged. Use `--dry-run` to print the steps without applying.
+
+If you need a fully manual flow (BYO secret management, custom Helm values, multi-cluster federation, etc.) follow the **Manual Quick Start** below instead.
+
+---
+
+## Manual Quick Start
 
 ### 1. Create the namespace and secrets
 
