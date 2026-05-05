@@ -18,25 +18,25 @@
 8. [SSO Configuration (Professional/Enterprise)](#8-sso-configuration-professionalenterprise)
 9. [SIEM Integration](#9-siem-integration)
 10. [Alertmanager Configuration](#10-alertmanager-configuration)
-10a. [Direct Webhook Alert Sinks (v0.7.0)](#10a-direct-webhook-alert-sinks-v070)
+10a. [Direct Webhook Alert Sinks (since v0.7.0)](#10a-direct-webhook-alert-sinks-v070)
 11. [Agent Registration](#11-agent-registration)
 12. [Rate Limiting Configuration](#12-rate-limiting-configuration)
 13. [Kubernetes Deployment](#13-kubernetes-deployment)
 14. [Production Hardening Checklist](#14-production-hardening-checklist)
 15. [Troubleshooting](#15-troubleshooting)
 16. [Upgrade Procedure](#16-upgrade-procedure)
-17. [Optional Agent Bundles (v0.8.0)](#17-optional-agent-bundles-v080)
-18. [Response Path Inspection (v0.9.0)](#18-response-path-inspection-v090)
-19. [WebAuthn / Passkeys Configuration (v0.9.0)](#19-webauthn--passkeys-configuration-v090)
-20. [Credential Summary and Dual Admin Accounts (v0.9.1)](#20-credential-summary-and-dual-admin-accounts-v091)
-21. [Open WebUI Configuration (v2.0)](#21-open-webui-configuration-v20)
-22. [Optimization Engine (v2.0)](#22-optimization-engine-v20)
-23. [Budget System (v2.0)](#23-budget-system-v20)
-24. [Container Pool Manager (v2.0)](#24-container-pool-manager-v20)
-25. [Multi-IdP Identity Broker (v2.0)](#25-multi-idp-identity-broker-v20)
-26. [WAF and DDoS Protection (v2.2)](#26-waf-and-ddos-protection-v22)
-26. [Container Hardening (v2.2)](#26-container-hardening-v22)
-27. [SBOM and Image Verification (v2.2)](#27-sbom-and-image-verification-v22)
+17. [Optional Agent Bundles (since v0.8.0)](#17-optional-agent-bundles-v080)
+18. [Response Path Inspection (since v0.9.0)](#18-response-path-inspection-v090)
+19. [WebAuthn / Passkeys Configuration (since v0.9.0)](#19-webauthn--passkeys-configuration-v090)
+20. [Credential Summary and Dual Admin Accounts (since v0.9.1)](#20-credential-summary-and-dual-admin-accounts-v091)
+21. [Open WebUI Configuration (since v2.0)](#21-open-webui-configuration-v20)
+22. [Optimization Engine (since v2.0)](#22-optimization-engine-v20)
+23. [Budget System (since v2.0)](#23-budget-system-v20)
+24. [Container Pool Manager (since v2.0)](#24-container-pool-manager-v20)
+25. [Multi-IdP Identity Broker (since v2.0)](#25-multi-idp-identity-broker-v20)
+26. [WAF and DDoS Protection (since v2.2)](#26-waf-and-ddos-protection-v22)
+26. [Container Hardening (since v2.2)](#26-container-hardening-v22)
+27. [SBOM and Image Verification (since v2.2)](#27-sbom-and-image-verification-v22)
 
 ---
 
@@ -75,13 +75,13 @@ sudo dnf install -y git       # RHEL/Fedora
 
 **macOS:**
 
-1. Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (version 4.x or later — includes Docker Compose v2). The installer detects Docker Desktop by checking `/Applications/Docker.app` (v0.8.4).
+1. Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) (version 4.x or later — includes Docker Compose v2). The installer detects Docker Desktop by checking `/Applications/Docker.app` (since v0.8.4).
 2. If the `docker` CLI is not in your PATH after installing Docker Desktop, the preflight check will detect this and offer to create the symlink automatically: `sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker` — just press Y when prompted.
 3. Alternatively, install Podman Desktop or the Podman CLI — Podman is supported as a first-class runtime (v0.8.4+). The installer auto-detects the container runtime, resolves the correct compose command (`docker compose`, `docker-compose`, or `podman compose`), and auto-applies the Podman Compose override file when Podman is the active runtime.
 4. Install Git via Homebrew: `brew install git`
 5. In Docker Desktop preferences, increase memory to at least 6 GB and disk to at least 30 GB.
 
-> **Shell compatibility (v0.8.4):** The installer runs on macOS default bash (3.2) without errors. No need to install bash 4+ via Homebrew. The preflight check reports your login shell (`$SHELL`, typically zsh on modern macOS) rather than the script executor.
+> **Shell compatibility (since v0.8.4):** The installer runs on macOS default bash (3.2) without errors. No need to install bash 4+ via Homebrew. The preflight check reports your login shell (`$SHELL`, typically zsh on modern macOS) rather than the script executor.
 
 > **Verify your environment before installing:** Run `bash scripts/test-installer.sh` for a 28-check automated verification of your setup (platform detection, GPU, runtime, bash compatibility, file integrity).
 
@@ -219,7 +219,7 @@ Alternatively, supply the flag non-interactively:
 
 ### 3.2 Full Wizard (Production / Enterprise)
 
-**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. GPU hardware is detected via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed based on detected VRAM (v0.8.4). The health check script auto-detects the compose command for Docker or Podman environments. The preflight now also verifies that the sensitivity pipeline prerequisites (regex, FastText, Ollama) are available (v2.0).
+**Step 1 — Preflight checks.** Verifies container runtime (Docker Engine, Docker Desktop, or Podman), available disk space, and available RAM. GPU hardware is detected via `platform-detect.sh` — Apple Silicon M-series, NVIDIA (nvidia-smi), AMD (rocm-smi), and lspci fallback. Model recommendations are printed based on detected VRAM (since v0.8.4). The health check script auto-detects the compose command for Docker or Podman environments. The preflight now also verifies that the sensitivity pipeline prerequisites (regex, FastText, Ollama) are available (since v2.0).
 
 **Step 2 — Container platform.** Asks whether you are deploying to Docker Compose or Kubernetes (Helm). Choose **Docker Compose** for standalone hosts; choose **Kubernetes** if you have an existing cluster and `kubectl` configured.
 
@@ -235,7 +235,7 @@ Alternatively, supply the flag non-interactively:
 
 **Step 5 — Upstream MCP URL.** Enter the URL of your backend MCP server. Example: `http://mcp-server.internal:8080`. Maps to `UPSTREAM_MCP_URL`. Multiple comma-separated URLs are accepted for load balancing.
 
-**Step 6 — AES key provisioning (v0.9.0).** Choose how the AES-256-GCM column encryption key is provisioned:
+**Step 6 — AES key provisioning (since v0.9.0).** Choose how the AES-256-GCM column encryption key is provisioned:
 - Auto-generate (default) — the installer generates a cryptographically random 32-byte key and stores it in the configured KMS.
 - BYOK — supply your own key with `--aes-key /path/to/key.bin`. The installer loads the file and stores it in KMS.
 
@@ -261,7 +261,7 @@ The installer prompts for API keys immediately if you select a cloud backend, an
 
 **Step 11 — License key.** Enter the path to your `.ysg` license file if you have one, or press Enter to skip for Community tier. The installer copies the file to `docker/secrets/license_key`. License files are signed with ECDSA P-256 (ML-DSA-65 migration planned when cryptography ships FIPS 204).
 
-**Step 12 — Admin accounts (v0.9.1).** Set `YASHIGANI_ADMIN_USERNAME` to your primary admin email address. The installer creates **two** admin accounts at bootstrap — each with a random themed username (animals/flowers/robots theme, e.g. "phoenix", "condor") and an independent 36-character password. Both accounts are configured with TOTP 2FA at install time; the TOTP secret key and `otpauth://` URI are printed for each account.
+**Step 12 — Admin accounts (since v0.9.1).** Set `YASHIGANI_ADMIN_USERNAME` to your primary admin email address. The installer creates **two** admin accounts at bootstrap — each with a random themed username (animals/flowers/robots theme, e.g. "phoenix", "condor") and an independent 36-character password. Both accounts are configured with TOTP 2FA at install time; the TOTP secret key and `otpauth://` URI are printed for each account.
 
 > **Anti-lockout design:** Two independent admin accounts are provisioned so that a lost password or lost TOTP device for one account does not lock out the system. Treat both accounts as equally privileged and store their credentials separately.
 
@@ -422,7 +422,7 @@ The following tables document every significant variable, grouped by category.
 |---|---|---|---|
 | `POSTGRES_PASSWORD` | No | string | Set in `.env` for Compose interpolation; PgBouncer uses this via `DATABASE_URL` for proper auth. Auto-generated by the installer. |
 | `REDIS_PASSWORD` | No | string | Set in `.env` for Compose interpolation. Auto-generated by the installer. |
-| `BUDGET_REDIS_PASSWORD` | No | string | Set in `.env` for Compose interpolation. Dedicated budget-redis instance (v2.0). Auto-generated by the installer. |
+| `BUDGET_REDIS_PASSWORD` | No | string | Set in `.env` for Compose interpolation. Dedicated budget-redis instance (since v2.0). Auto-generated by the installer. |
 | `YASHIGANI_DB_DSN` | No | PostgreSQL DSN | Auto-constructed from the `postgres_password` secret on first run. Override only if using an external Postgres instance. |
 
 ---
@@ -453,7 +453,7 @@ The following tables document every significant variable, grouped by category.
 
 ### 4.3 TLS Configuration
 
-> **Post-quantum TLS (v0.9.0):** A hybrid X25519+ML-KEM-768 Caddyfile configuration is included in the repository as a commented block (`caddy/Caddyfile.pq`). This requires Caddy 2.10 (not yet released). Enable it once Caddy 2.10 ships to provide quantum-resistant key exchange while maintaining full backward compatibility with classical TLS clients.
+> **Post-quantum TLS (since v0.9.0):** A hybrid X25519+ML-KEM-768 Caddyfile configuration is included in the repository as a commented block (`caddy/Caddyfile.pq`). This requires Caddy 2.10 (not yet released). Enable it once Caddy 2.10 ships to provide quantum-resistant key exchange while maintaining full backward compatibility with classical TLS clients.
 
 #### ACME Mode (Production — Let's Encrypt)
 
@@ -574,8 +574,8 @@ On first start, the backoffice service automatically runs `scripts/bootstrap_pos
 4. **Runs all Alembic migrations** in order, creating the full schema (`yashigani` database, all tables including identity, billing, optimization, and pool tables, indexes, and constraint definitions). Alembic migrations are bundled in the backoffice Docker image.
 5. **Seeds initial configuration** rows (default OPA policy including `policy/v1_routing.rego`, default rate limits, default audit retention settings, default budget tiers).
 6. **Writes `admin_initial_password`** to `docker/secrets/` for bootstrap detection. TOTP secrets are pre-provisioned from the installer secrets directory during bootstrap.
-7. **Initializes the budget-redis instance** with `noeviction` policy and seeds default org-cap, group, and individual budget tiers (v2.0).
-8. **Starts the Container Pool Manager** which pre-warms per-identity isolation containers and begins self-healing monitors (v2.0).
+7. **Initializes the budget-redis instance** with `noeviction` policy and seeds default org-cap, group, and individual budget tiers (since v2.0).
+8. **Starts the Container Pool Manager** which pre-warms per-identity isolation containers and begins self-healing monitors (since v2.0).
 
 If this process fails (e.g., because Postgres is not yet ready), backoffice will retry with exponential backoff for up to 5 minutes before exiting. Check `docker compose logs backoffice` and `docker compose logs postgres` together if the backoffice container restarts repeatedly.
 
@@ -1176,7 +1176,7 @@ docker compose exec alertmanager \
 
 ---
 
-## 10a. Direct Webhook Alert Sinks (v0.7.0)
+## 10a. Direct Webhook Alert Sinks (since v0.7.0)
 
 In addition to the Alertmanager pipeline (section 10), Yashigani v0.7.0 introduced lightweight **direct webhook alerting** to Slack, Microsoft Teams, and PagerDuty. These sinks are configured entirely within the backoffice and fire on security-critical events within the same request cycle — no separate Alertmanager configuration required.
 
@@ -1224,8 +1224,8 @@ Replace `slack` with `teams` or `pagerduty` for the other sinks. Returns `{"stat
 
 | Event | Trigger condition |
 |-------|------------------|
-| Credential exfil | Fired immediately on detection within the inspection pipeline (v0.7.1) |
-| Licence expiry warning | Fired once per calendar day when `days_until_expiry ≤ license_expiry_warning_days` (v0.7.1) |
+| Credential exfil | Fired immediately on detection within the inspection pipeline (since v0.7.1) |
+| Licence expiry warning | Fired once per calendar day when `days_until_expiry ≤ license_expiry_warning_days` (since v0.7.1) |
 
 > **Note:** Direct alert sinks complement Alertmanager — they are not a replacement. Alertmanager remains the recommended path for metric-based alerts, multi-team routing, and deduplication. Direct sinks are for security event push notifications.
 
@@ -1278,7 +1278,7 @@ The response includes the generated token and a `quick_start` snippet:
 
 > **Note:** Token minimum length is controlled by `YASHIGANI_AGENT_TOKEN_MIN_LENGTH` (default: 64). Tokens shorter than this value are rejected. For high-security environments, set this to 128.
 
-### 11.4 IP Allowlisting (v0.7.0)
+### 11.4 IP Allowlisting (since v0.7.0)
 
 Restrict which source IPs can use an agent token by setting `allowed_cidrs` at registration time or via the edit form. An empty list (default) means no IP restriction — any source IP may use the token once it passes PSK verification.
 
@@ -1332,7 +1332,7 @@ Admin → RBAC → Groups → select group → Set Rate Limit Override.
 
 Enter the per-minute request limit for members of this group.
 
-### 12.4 Adaptive Throttle Thresholds (v0.7.0)
+### 12.4 Adaptive Throttle Thresholds (since v0.7.0)
 
 The adaptive rate limiter reduces effective limits when the Resource Pressure Index (RPI) exceeds configurable thresholds. These thresholds are now runtime-configurable without a gateway restart:
 
@@ -1725,7 +1725,7 @@ docker compose ps
 
 ---
 
-## 17. Optional Agent Bundles (v0.8.0)
+## 17. Optional Agent Bundles (since v0.8.0)
 
 > **Disclaimer:** These third-party agent containers are provided **AS IS** by Agnostic Security as a courtesy integration. Image digests are pinned to upstream-tagged releases and updated as part of the Yashigani release cycle. **All support, bug reports, and feature requests must go to the upstream maintainers.** Agnostic Security accepts no support obligation for these integrations.
 
@@ -1818,7 +1818,7 @@ Each bundle is assigned a **restricted RBAC policy** by default — it can only 
 
 ---
 
-## 18. Response Path Inspection (v0.9.0)
+## 18. Response Path Inspection (since v0.9.0)
 
 v0.9.0 adds `ResponseInspectionPipeline` — a bidirectional inspection layer that applies the same FastText + LLM fallback pipeline to upstream responses before they are returned to the client. This closes the indirect prompt injection vector where a malicious upstream response could hijack an agent's next action.
 
@@ -1859,7 +1859,7 @@ YASHIGANI_RESPONSE_THRESHOLD=0.85       # Suspicion threshold for response class
 
 ---
 
-## 19. WebAuthn / Passkeys Configuration (v0.9.0)
+## 19. WebAuthn / Passkeys Configuration (since v0.9.0)
 
 v0.9.0 adds phishing-resistant WebAuthn/Passkey MFA for backoffice admin accounts. Supported authenticators include: Face ID, Touch ID, Windows Hello, Android biometrics, YubiKey (FIDO2), and other FIDO2-compatible hardware tokens.
 
@@ -1913,7 +1913,7 @@ YASHIGANI_WEBAUTHN_ORIGIN=https://your-domain.example.com  # Must match the exac
 
 ---
 
-## 20. Credential Summary and Dual Admin Accounts (v0.9.1)
+## 20. Credential Summary and Dual Admin Accounts (since v0.9.1)
 
 ### 20.1 Dual Admin Accounts
 
@@ -1971,7 +1971,7 @@ All credentials are also written to `docker/secrets/` with chmod 600. On upgrade
 
 ---
 
-## 21. Open WebUI Configuration (v2.0)
+## 21. Open WebUI Configuration (since v2.0)
 
 v2.0 integrates Open WebUI as the primary chat interface, served at `/chat/*` behind Caddy. Open WebUI uses trusted headers injected by the gateway for seamless identity propagation.
 
@@ -1992,7 +1992,7 @@ Set `YASHIGANI_OPENWEBUI_ENABLED=false` in `.env` and restart Caddy. The `/chat/
 
 ---
 
-## 22. Optimization Engine (v2.0)
+## 22. Optimization Engine (since v2.0)
 
 The Optimization Engine provides 4-signal routing with P1-P9 priority levels for all MCP requests.
 
@@ -2013,7 +2013,7 @@ The Optimization Engine consults `policy/v1_routing.rego` as a safety net before
 
 ---
 
-## 23. Budget System (v2.0)
+## 23. Budget System (since v2.0)
 
 v2.0 introduces a three-tier budget system: organization cap, group budget, and individual budget. Budget state is stored in a dedicated budget-redis instance with `noeviction` policy to prevent data loss.
 
@@ -2040,7 +2040,7 @@ Budget tiers are managed via the backoffice: Admin -> Budget -> Organization Cap
 
 ---
 
-## 24. Container Pool Manager (v2.0)
+## 24. Container Pool Manager (since v2.0)
 
 The Container Pool Manager provides per-identity container isolation with self-healing and postmortem capabilities.
 
@@ -2084,7 +2084,7 @@ The Pool Manager requires access to the container runtime API to create, monitor
 
 ---
 
-## 25. Multi-IdP Identity Broker (v2.0)
+## 25. Multi-IdP Identity Broker (since v2.0)
 
 v2.0 adds a multi-IdP identity broker supporting both OIDC and SAML v2, with tier-gated access.
 
@@ -2108,7 +2108,7 @@ Multiple OIDC and SAML v2 identity providers can be configured simultaneously. T
 
 ---
 
-## 26. WAF and DDoS Protection (v2.2)
+## 26. WAF and DDoS Protection (since v2.2)
 
 Yashigani ships three complementary layers of DDoS and WAF protection.
 Layers 1 and 2 work with the standard Caddy image and require no additional
@@ -2248,7 +2248,7 @@ Yashigani.  All tiers can run a WAF-enabled Caddy image.
 
 ---
 
-## 26. Container Hardening (v2.2)
+## 26. Container Hardening (since v2.2)
 
 Yashigani's gateway and backoffice containers are hardened at three layers: seccomp syscall filtering, AppArmor mandatory access control, and read-only root filesystems. These controls apply to the two Yashigani-owned services. Third-party services (Caddy, Redis, Postgres, Ollama, etc.) use the Docker engine defaults.
 
@@ -2353,7 +2353,7 @@ Persistent data (audit logs, bootstrap state) is written through named volume mo
 
 ---
 
-## 27. SBOM and Image Verification (v2.2)
+## 27. SBOM and Image Verification (since v2.2)
 
 Every Yashigani release ships two supply-chain artifacts and signed container images. This section explains how to generate, verify, and use them.
 

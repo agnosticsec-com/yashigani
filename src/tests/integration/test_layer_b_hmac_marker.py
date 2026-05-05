@@ -32,7 +32,7 @@ All three tests are skipped gracefully when:
   - No running compose stack is detected, OR
   - The caddy_internal_hmac secret is not readable on disk (test isolation).
 
-the internal review follow-on dispatch: implement caddy_verified_secret middleware in
+Engineering follow-on dispatch: implement caddy_verified_secret middleware in
 backoffice + gateway, then run this file — all three tests must be GREEN.
 """
 from __future__ import annotations
@@ -191,7 +191,7 @@ class TestLayerBHmacMarker:
 
     These tests will FAIL until the gateway/backoffice middleware lands (caddy_verified_secret
     middleware in yashigani.middleware.caddy_auth). That is intentional — this
-    file is the scaffold; the internal review dispatch makes it green.
+    file is the scaffold; Engineering dispatch makes it green.
     """
 
     @pytest.fixture(autouse=True)

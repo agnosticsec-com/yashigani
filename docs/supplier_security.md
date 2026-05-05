@@ -2,6 +2,7 @@
 
 > Version: 1.0.0
 > Date: 2026-04-12
+> Last reviewed: 2026-05-05 (v2.23.2 release — supplier inventory in §4.2 unchanged; no new suppliers introduced; image-version bumps tracked in CHANGELOG, not this document)
 > Compliance: ISO 27001 A.5.19–A.5.22
 
 ## 1. Purpose
