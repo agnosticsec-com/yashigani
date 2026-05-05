@@ -1,5 +1,5 @@
 ---
-# Yashigani v2.23.1 — Docker Compose stack
+# Yashigani v2.23.2 — Docker Compose stack
 # Last updated: 2026-05-03T12:00:00+01:00
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
