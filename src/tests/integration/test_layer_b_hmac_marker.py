@@ -11,18 +11,18 @@ Design (static-shared-secret variant — Caddy 2 has no inline HMAC module):
   - install.sh generates caddy_internal_hmac (32-byte hex).
   - Caddy reads CADDY_INTERNAL_HMAC env var and injects the raw value as
     X-Caddy-Verified-Secret on every reverse_proxy to backoffice/gateway.
-  - Tom's middleware reads the same secret at lifespan startup and checks:
+  - the gateway/backoffice middleware reads the same secret at lifespan startup and checks:
       hmac.compare_digest(request.headers["X-Caddy-Verified-Secret"], secret)
     → 401 if header absent or value mismatched.
 
 TESTS IN THIS FILE:
   TEST 1 — data-network attacker: mTLS cert + forged X-SPIFFE-ID, NO valid
             X-Caddy-Verified-Secret → expected 401.
-            STATUS: WILL FAIL until Tom's middleware lands (intentional).
+            STATUS: WILL FAIL until the gateway/backoffice middleware lands (intentional).
 
   TEST 2 — data-network attacker WITH a valid X-Caddy-Verified-Secret (same
             value as the installed secret — proves the middleware accepts it).
-            STATUS: WILL FAIL until Tom's middleware lands (intentional).
+            STATUS: WILL FAIL until the gateway/backoffice middleware lands (intentional).
 
   TEST 3 — legitimate Caddy-proxied request → expected 200 (regression).
             STATUS: PASS once the stack is up (with or without Layer B
@@ -32,7 +32,7 @@ All three tests are skipped gracefully when:
   - No running compose stack is detected, OR
   - The caddy_internal_hmac secret is not readable on disk (test isolation).
 
-Tom's follow-on dispatch: implement caddy_verified_secret middleware in
+the internal review follow-on dispatch: implement caddy_verified_secret middleware in
 backoffice + gateway, then run this file — all three tests must be GREEN.
 """
 from __future__ import annotations
@@ -189,9 +189,9 @@ class TestLayerBHmacMarker:
     container that has mTLS cert access but NOT the caddy_internal_hmac secret.
     Backoffice middleware MUST reject it with 401.
 
-    These tests will FAIL until Tom's middleware lands (caddy_verified_secret
+    These tests will FAIL until the gateway/backoffice middleware lands (caddy_verified_secret
     middleware in yashigani.middleware.caddy_auth). That is intentional — this
-    file is the scaffold; Tom's dispatch makes it green.
+    file is the scaffold; the internal review dispatch makes it green.
     """
 
     @pytest.fixture(autouse=True)
@@ -298,8 +298,8 @@ class TestLayerBHmacMarker:
         TEST 1 — data-network bypass attempt: mTLS cert + forged X-SPIFFE-ID,
         NO X-Caddy-Verified-Secret.
 
-        EXPECTED: 401 — Tom's middleware rejects it.
-        WILL FAIL until Tom's caddy_verified_secret middleware lands.
+        EXPECTED: 401 — the gateway/backoffice middleware rejects it.
+        WILL FAIL until the gateway/backoffice caddy_verified_secret middleware lands.
 
         When this test turns GREEN it proves Layer B is active.
         """
@@ -307,7 +307,7 @@ class TestLayerBHmacMarker:
         assert status == 401, (
             f"LAYER B FAILURE — direct probe without X-Caddy-Verified-Secret "
             f"returned HTTP {status}, expected 401. "
-            "Tom's middleware is not yet active OR has a fail-open defect. "
+            "the gateway/backoffice middleware is not yet active OR has a fail-open defect. "
             "EX-231-10 Layer B is INCOMPLETE."
         )
 
@@ -324,7 +324,7 @@ class TestLayerBHmacMarker:
         accessible from the obs or data networks without container compromise.
 
         EXPECTED: 200 — the middleware accepts the matching secret value.
-        WILL FAIL until Tom's middleware lands.
+        WILL FAIL until the gateway/backoffice middleware lands.
         """
         valid_marker = self.secret   # same value Caddy would inject
         status = self._probe_backoffice_direct(
@@ -346,7 +346,7 @@ class TestLayerBHmacMarker:
         proxy. This test confirms that the normal front-door path is intact
         (i.e. we haven't broken /healthz via Caddy by adding the new header).
 
-        EXPECTED: 200 — always (even before Tom's middleware lands, since Caddy
+        EXPECTED: 200 — always (even before the gateway/backoffice middleware lands, since Caddy
         correctly injects the secret on the proxied path).
         """
         tls_domain = _TLS_DOMAIN

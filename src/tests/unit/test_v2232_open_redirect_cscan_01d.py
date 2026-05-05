@@ -228,7 +228,7 @@ class TestSafeNextRejectsOffOriginCases:
     def test_case7_percent_encoded_tab_slash(self, js_file):
         """
         Case 7 — `/%09/attacker.com` (tab as second separator before slash).
-        Laura noted this as a potential bypass.
+        Internal security review noted this as a potential bypass.
         Layer 1: second char is `%` → regex passes.
         Layer 2: `new URL('/%09/attacker.com', origin)` → same-origin path → accepted.
         This is a SAME-ORIGIN path (the tab doesn't make it a host), so accept is correct.

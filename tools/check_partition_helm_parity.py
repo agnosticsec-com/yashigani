@@ -15,7 +15,7 @@ Run as a pre-commit hook or CI step:
 Exit 0 = PASS.
 Exit 1 = FAIL — lists all differing lines with context.
 
-Background (Lu re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001, follow-up #3):
+Background (Internal re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001, follow-up #3):
   Any drift in _quote_ident, _SAFE_IDENT_RE, _PARTITIONED_TABLES, or the
   CREATE TABLE DDL string between the source and the helm-embedded copy would
   silently erode the CWE-89 / YSG-RISK-001 controls for Kubernetes deployments
@@ -42,7 +42,7 @@ _CONFIGMAP = _REPO_ROOT / "helm" / "yashigani" / "templates" / "configmaps.yaml"
 # verbatim (modulo leading whitespace introduced by YAML indentation) in
 # the embedded copy.
 #
-# Items here are drawn from Lu re-audit Q1–Q4 evidence table.
+# Items here are drawn from Internal re-audit Q1–Q4 evidence table.
 # ---------------------------------------------------------------------------
 CRITICAL_LINES = [
     # Identifier allowlist regex
@@ -63,7 +63,7 @@ CRITICAL_LINES = [
 # Lines that are intentionally allowed to differ (cosmetic).
 # Matched as prefix-stripped and stripped strings.
 ALLOWED_DIFFS = {
-    # Timestamp in docstring — Lu follow-up #2 (now fixed, but keep as safety)
+    # Timestamp in docstring — Internal follow-up #2 (now fixed, but keep as safety)
     "Last updated:",
     # YAML-only comment
     "# Rebuild DSN without the extracted params",

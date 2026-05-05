@@ -26,7 +26,7 @@ Contract assertions (all three Caddyfiles: selfsigned / acme / ca)
 4. client_auth blocks are site-level only:
    ``client_auth`` must not appear inside a ``handle {`` block.  Caddy v2 only
    honours client_auth at the server-block TLS directive level; placing it
-   inside a handle silently ignores it (Captain #58c #3br evidence 2026-04-28).
+   inside a handle silently ignores it (internal gate #58c #3br evidence 2026-04-28).
 
 5. caddy adapt exits 0 on env-substituted copy (skipped unless caddy binary
    available or Docker is reachable; controlled by the ``--caddy-adapt``
@@ -183,7 +183,7 @@ def test_inject_caddy_verified_on_all_mtls_proxies(name: str, path: Path) -> Non
     """
     Every reverse_proxy targeting gateway:8080 or backoffice:8443 must import
     inject-caddy-verified.  Missing import → X-Caddy-Verified-Secret not set →
-    Tom's middleware returns 401 for 100% of requests through that route.
+    the gateway/backoffice middleware returns 401 for 100% of requests through that route.
     """
     text = _load(path)
     lines = text.splitlines()
@@ -210,7 +210,7 @@ def test_inject_caddy_verified_on_all_mtls_proxies(name: str, path: Path) -> Non
 def test_tls13_on_all_public_listeners(name: str, path: Path) -> None:
     """
     Every TLS listener must enforce TLS 1.3 minimum.  A listener without
-    ``protocols tls1.3`` will negotiate TLS 1.2 by default — closed Ava R3
+    ``protocols tls1.3`` will negotiate TLS 1.2 by default — closed internal QA R3
     finding; must not regress.  The test asserts at least one occurrence (the
     public HTTPS site block) is present — absence means the directive was
     removed entirely.
@@ -221,7 +221,7 @@ def test_tls13_on_all_public_listeners(name: str, path: Path) -> None:
     assert protocol_lines, (
         f"\n{name} (Caddyfile.{name}) — NO 'protocols tls1.3' directive found.\n"
         "Every public TLS listener must declare 'protocols tls1.3' to prevent "
-        "TLS 1.2 negotiation.  This closes Ava R3 (TLS downgrade finding)."
+        "TLS 1.2 negotiation.  This closes internal QA R3 (TLS downgrade finding)."
     )
 
 
@@ -257,7 +257,7 @@ def test_client_auth_not_inside_handle_block(name: str, path: Path) -> None:
     """
     client_auth must only appear at the site-block tls directive level, NEVER
     inside a handle{} block.  Caddy v2 silently ignores client_auth inside
-    handle — Captain #58c #3br evidence (2026-04-28).  A violation means SPIFFE
+    handle — internal gate #58c #3br evidence (2026-04-28).  A violation means SPIFFE
     sender-constrained token verification is silently disabled for that route.
     """
     text = _load(path)
