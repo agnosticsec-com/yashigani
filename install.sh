@@ -2471,8 +2471,15 @@ compose_up() {
       log_info "Images already built — skipping rebuild (upgrade path)"
     else
       log_info "Building images with Podman..."
-      podman build -f "${WORK_DIR}/docker/Dockerfile.gateway" -t yashigani/gateway:latest "${WORK_DIR}" 2>&1 | tail -1
-      podman build -f "${WORK_DIR}/docker/Dockerfile.backoffice" -t yashigani/backoffice:latest "${WORK_DIR}" 2>&1 | tail -1
+      # retro #32: do NOT pipe through `tail -1`. The script's outer exec
+      # redirect at the top of main() already tees stdout+stderr to
+      # install.log. Piping through `tail -1` here truncates build output
+      # to a single line BEFORE it reaches the outer tee, so disk-full
+      # errors ("no space left on device"), Dockerfile syntax errors, and
+      # cache-eviction warnings are silently dropped from the log.
+      # Verbose terminal output is the explicit tradeoff for visibility.
+      podman build -f "${WORK_DIR}/docker/Dockerfile.gateway" -t yashigani/gateway:latest "${WORK_DIR}"
+      podman build -f "${WORK_DIR}/docker/Dockerfile.backoffice" -t yashigani/backoffice:latest "${WORK_DIR}"
       log_success "Images built with Podman"
     fi
   fi
