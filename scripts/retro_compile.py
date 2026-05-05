@@ -20,7 +20,7 @@ the install repo):
 Usage:
   scripts/retro_compile.py --version v2.23.2
   scripts/retro_compile.py --version v2.23.2 --memory-dir /custom/path
-  scripts/retro_compile.py --version v2.23.2 --output /tmp/retro.md
+  scripts/retro_compile.py --version v2.23.2 --output ./retro-out.md
   scripts/retro_compile.py --version v2.23.2 --dry-run
 """
 
