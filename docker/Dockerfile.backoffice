@@ -72,6 +72,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    # LIC-003 / LAURA-LICENSE-06: disable Python user-site to prevent
+    # sitecustomize.py monkey-patch attacks via ~/.local/lib/pythonX.Y/site-packages/.
+    PYTHONNOUSERSITE=1 \
     YASHIGANI_SERVICE_NAME=backoffice
 
 # Internal mTLS (v2.23.1) — mutual TLS terminated by uvicorn.
