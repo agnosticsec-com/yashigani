@@ -19,22 +19,23 @@ spec:
         - name: jaeger
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          env:
-            - name: COLLECTOR_OTLP_ENABLED
-              value: "true"
-            - name: SPAN_STORAGE_TYPE
-              value: "memory"
+          # v2: config via YAML file (no env vars). v1 COLLECTOR_OTLP_ENABLED +
+          # SPAN_STORAGE_TYPE env vars removed. For standalone use, mount a
+          # jaeger.yml ConfigMap at /etc/jaeger/jaeger.yml and add:
+          #   args: ["--config=/etc/jaeger/jaeger.yml"]
+          # See config/jaeger/jaeger.yml in the main yashigani repo for an example.
           ports:
             - containerPort: 16686
               name: ui
             - containerPort: 4317
               name: otlp-grpc
-            - containerPort: 14269
+            - containerPort: 13133
+              # v2: healthcheckv2 extension replaces v1 admin port :14269
               name: admin
           livenessProbe:
             httpGet:
               path: /
-              port: 14269
+              port: 13133
             initialDelaySeconds: 10
             periodSeconds: 15
           resources: {{- toYaml .Values.resources | nindent 12 }}
