@@ -19,6 +19,12 @@ _PROVIDER_MAP: dict[str, str] = {
 
 _DEV_ENVS = {"dev", "development", "local", "test", "demo"}
 
+# LIC-001 / LAURA-LICENSE-05: explicit allowlist of normalised YASHIGANI_ENV
+# values.  Anything outside this set is rejected at startup so that typos or
+# injected garbage strings (e.g. "Dev", "DEVELOPMENT", "prod", "0") can never
+# accidentally match the "dev" branch and skip license integrity checks.
+_VALID_ENV_VALUES = {"dev", "staging", "production"}
+
 
 def create_provider() -> KSMProvider:
     """
@@ -26,14 +32,26 @@ def create_provider() -> KSMProvider:
 
     YASHIGANI_KSM_PROVIDER  — provider name (default: 'keeper', or 'docker'
                                when YASHIGANI_ENV is dev/local/test)
-    YASHIGANI_ENV           — environment scope label (required)
+    YASHIGANI_ENV           — environment scope label (required).
+                              Permitted values: dev | staging | production.
+                              Any other value is rejected at startup (LIC-001).
     """
     env_scope = os.environ.get("YASHIGANI_ENV", "").strip()
     if not env_scope:
         raise ProviderError(
             "YASHIGANI_ENV environment variable is required and must not be empty. "
-            "Set it to e.g. 'production', 'staging', 'dev', or 'local'."
+            "Set it to e.g. 'production', 'staging', or 'dev'."
         )
+
+    # LIC-001 / LAURA-LICENSE-05: normalise + validate against explicit allowlist.
+    # Fail-closed: an unrecognised value is never treated as "dev" accidentally.
+    env_scope_normalised = env_scope.lower()
+    if env_scope_normalised not in _VALID_ENV_VALUES:
+        raise ProviderError(
+            f"YASHIGANI_ENV value '{env_scope}' is not in the permitted set "
+            f"{sorted(_VALID_ENV_VALUES)}. Correct the value and restart."
+        )
+    env_scope = env_scope_normalised
 
     default_provider = "docker" if env_scope in _DEV_ENVS else "keeper"
     provider_name = os.environ.get("YASHIGANI_KSM_PROVIDER", default_provider).strip().lower()
