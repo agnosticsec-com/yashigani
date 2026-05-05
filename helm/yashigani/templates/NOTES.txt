@@ -1,0 +1,28 @@
+Yashigani {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+Release name: {{ .Release.Name }}
+mTLS:         {{ if .Values.mtls.enabled }}ENABLED{{ else }}DISABLED — see security notice below{{ end }}
+Environment:  {{ .Values.global.environment }}
+
+{{- if not .Values.mtls.enabled }}
+
+SECURITY WARNING: mtls.enabled is false.
+Internal mTLS is a core security control. In production, mtls.enabled MUST be
+true. A deployment with mtls disabled has no mutual-authentication between
+gateway, backoffice, postgres, redis, and OPA. Document this in your risk
+register and set a remediation deadline.
+{{- end }}
+
+SECURITY NOTICE — LIC-002 (YASHIGANI_LICENSE_TIER):
+YASHIGANI_LICENSE_TIER is NOT an operator-settable env var. It must never
+appear in values overrides, ConfigMaps, or Secrets. Injecting it bypasses
+signed-license tier enforcement. This chart has no extraEnv escape hatch by
+design. If you need a new env var, add it as a named chart value.
+
+Access:
+  https://{{ .Values.global.tlsDomain }}/
+  (or: kubectl port-forward -n {{ .Release.Namespace }} svc/yashigani-caddy 443:443)
+
+Logs:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name=yashigani-gateway --tail=50
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name=yashigani-backoffice --tail=50
