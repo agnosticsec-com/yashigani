@@ -1,5 +1,5 @@
 ---
-# Yashigani v2.23.1 — Helm release digest overlay
+# Yashigani v2.23.2 — Helm release digest overlay
 # Last updated: 2026-05-02T23:00:00+01:00
 #
 # Purpose: pins every upstream image in values.yaml to its sha256 digest,

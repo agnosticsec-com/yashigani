@@ -1103,4 +1103,4 @@ Yashigani does **not** implement application-level memory encryption. Python's g
 
 ---
 
-*This document assesses Yashigani v2.23.1 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment. The v2.23.1 manual evidence sweep is produced separately by the internal GRC audit function and held in the internal compliance archive outside the code repo per policy.*
+*This document assesses Yashigani v2.23.2 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment. The v2.23.2 manual evidence sweep is produced separately by the internal GRC audit function and held in the internal compliance archive outside the code repo per policy.*
