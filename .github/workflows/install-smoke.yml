@@ -1,4 +1,4 @@
-# Last updated: 2026-05-03T12:00:00+01:00
+# Last updated: 2026-05-05T14:00:00+01:00 (v2.23.2: add httpx to pip install — conftest collection fix V232-CSCAN-01i)
 # install-smoke.yml — Install smoke-test matrix (V232-P1)
 #
 # Matrix: ubuntu-latest × (docker|podman) — GATE
@@ -327,7 +327,10 @@ jobs:
       # -----------------------------------------------------------------------
       - name: "Run JS open-redirect unit tests (V232-CSCAN-01d, V232-CSCAN-01i)"
         run: |
-          pip install pytest --quiet
+          # httpx is required by src/tests/conftest.py (imported during pytest collection).
+          # Without it, collection fails with ImportError and pytest exits 4.
+          # V232-CSCAN-01i: httpx added 2026-05-05.
+          pip install pytest httpx --quiet
           python -m pytest src/tests/unit/test_v2232_open_redirect_cscan_01d.py \
             -v --tb=short 2>&1 | tee cscan01d-results.txt
           pytest_exit="${PIPESTATUS[0]}"

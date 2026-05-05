@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-04T19:30:00+01:00 (v2.23.2: chown caddy_client.key to UID 0 — cap_drop ALL strips DAC_OVERRIDE; gate V232-SMOKE-019. sudo mkdir promtail dir; gate V232-SMOKE-020)
+# last-updated: 2026-05-04T18:00:00+01:00 (v2.23.2: postgres+redis password files set 0644 — readable by root containers under cap_drop ALL; gate V232-SMOKE-018)
 # last-updated: 2026-05-04T12:00:00+01:00 (v2.23.2: bump YASHIGANI_VERSION; podman unshare mkdir falls back to plain mkdir when unshare unsupported by remote client)
 # last-updated: 2026-05-03T14:00:00+01:00 (V232-NEG04: replace /tmp mktemp sites; V232-P27+F-NEW-03: skip-pull guard; F-NEW-04: bind-mount auto-create for rootful/Docker)
 # last-updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-012: _pki_chown_client_keys enforces secrets dir mode 0755 so OPA inotify watcher can read dir)
@@ -2431,9 +2433,15 @@ compose_up() {
       export YASHIGANI_HTTPS_PORT=8443
     fi
 
-    # 3. Create Docker-compatible directories for promtail (best-effort, no sudo)
+    # 3. Create Docker-compatible directories for promtail (best-effort).
+    # On CI runners (GitHub Actions / Podman) /var/lib/docker does not exist and
+    # is owned by root, so a plain mkdir fails with EPERM. Try sudo first, then
+    # fall back to a warning. Without this directory promtail cannot mount its
+    # container-log volume and fails to start.
+    # V232-SMOKE-020 — Podman smoke gate 2026-05-04.
     if [[ ! -d "/var/lib/docker/containers" ]]; then
       mkdir -p /var/lib/docker/containers 2>/dev/null || \
+      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
         log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
     fi
 
@@ -4437,6 +4445,16 @@ _pki_chown_client_keys() {
   fi
 
   local _uid_mapped_services=(
+    # Caddy runs as UID 0 (root) inside the container but has cap_drop: [ALL].
+    # Without CAP_DAC_OVERRIDE, UID 0 cannot read a 0o400 file owned by the
+    # installer user (e.g. UID 1000 on the GitHub runner). The PKI issuer writes
+    # caddy_client.key as 0o400 owned by the installer; without this chown
+    # Caddy crashes at startup with "open /run/secrets/caddy_client.key:
+    # permission denied". cap_drop removes DAC_OVERRIDE — the same issue that
+    # affected postgres/redis in V232-SMOKE-018. chown 0:0 restores access
+    # while keeping the key unreadable by other UIDs inside the container.
+    # V232-SMOKE-019 — caught by linux/docker smoke gate 2026-05-04.
+    "caddy:0"
     "gateway:1001"
     "backoffice:1001"
     "redis:999"
@@ -4746,6 +4764,51 @@ _pki_chown_client_keys() {
       _do_chown "1001" "$_sfpath" "$_sf" || return 1
     fi
   done
+
+  # gate V232-SMOKE-018 (2026-05-04): postgres + redis containers run as root
+  # inside the image (no `user:` override in compose) AND `cap_drop: [ALL]`,
+  # which strips CAP_DAC_OVERRIDE. Without DAC_OVERRIDE root cannot read files
+  # outside its DAC reach — and the host bind-mount of secrets/ exposes
+  # `postgres_password` / `redis_password` as 1001:1001 mode 0600. Result:
+  # postgres docker-entrypoint.sh fails reading POSTGRES_PASSWORD_FILE; redis
+  # fails reading the password supplied to --requirepass; both crash-loop.
+  #
+  # Both files are also read by gateway/backoffice (UID 1001) when constructing
+  # their DSN, so split-ownership (chown to 999, group 1001) would require
+  # adding `group_add: ["1001"]` to every consumer — fragile across the matrix
+  # (Docker / Podman rootful / Podman rootless / K8s).
+  #
+  # Pragmatic fix: chmod 0644 these two files. The secrets dir is already
+  # 0755 (V232-SMOKE-012, OPA inotify), and the host trust boundary is shell
+  # access to WORK_DIR — not the file mode of *_password. The only thing 0644
+  # changes is "any host user can `cat docker/secrets/postgres_password`",
+  # which was already true via the dir mode for *.crt files.
+  for _shared_pw in postgres_password redis_password; do
+    local _pwpath="${_secrets_dir}/${_shared_pw}"
+    if [[ -f "$_pwpath" ]]; then
+      if ! chmod 0644 "$_pwpath" 2>/dev/null; then
+        log_warn "chmod 0644 failed on ${_shared_pw} — fall through to docker/podman_run"
+        local _rel_pw="${_pwpath#"${_secrets_dir}/"}"
+        case "$_chown_mode" in
+          docker_run)
+            docker run --rm --volume "${_secrets_dir}:/s:rw" \
+              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
+              || { log_error "docker_run chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+          podman_run)
+            podman run --rm --volume "${_secrets_dir}:/s:rw" \
+              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
+              || { log_error "podman_run chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+          unshare)
+            podman unshare chmod 0644 "$_pwpath" 2>/dev/null \
+              || { log_error "podman unshare chmod 0644 failed on ${_shared_pw}"; return 1; }
+            ;;
+        esac
+      fi
+    fi
+  done
+  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; postgres/redis shared passwords also 0644 (gate V232-SMOKE-018)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001
