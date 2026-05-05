@@ -312,7 +312,7 @@ class TestSsoTwoFaFlagDefault:
         default_val = match.group(1)
         assert default_val == "true", (
             f"YASHIGANI_SSO_2FA_REQUIRED default is '{default_val}', expected 'true'. "
-            "Internal review Stage B found it was 'false'; maintainer instructed flip to 'true' (V6.8.4)."
+            "Compliance Stage B found it was 'false'; maintainer instructed flip to 'true' (V6.8.4)."
         )
 
 

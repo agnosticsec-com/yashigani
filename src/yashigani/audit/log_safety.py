@@ -1,5 +1,5 @@
 """
-Log-injection defence helpers (ASVS 16.6.1, internal QA Wave 2 Issue #48).
+Log-injection defence helpers (ASVS 16.6.1, QA Wave 2 Issue #48).
 
 Python's stdlib logging does not sanitise interpolated strings, so an
 attacker-controlled value containing ``\\n``, ANSI escapes, or other

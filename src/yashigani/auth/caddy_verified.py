@@ -34,13 +34,13 @@ Design (static-shared-secret variant — Caddy 2 has no inline HMAC module):
     startup silently failed) → 401, never pass-through.
 
 Security note (replay):
-Replay is accepted as residual risk (internal evidence doc da3dc08, §HMAC
+Replay is accepted as residual risk (DevOps evidence doc da3dc08, §HMAC
 Pattern).  The secret only flows over caddy_internal — the mTLS-protected
 bridge. An attacker able to sniff this network has already broken mTLS, which
 is a more severe finding.  The secret is rotated on every ``install.sh
 --upgrade`` restart.
 
-Closes: EX-231-10 Layer B (internal review dispatch 2026-04-29, Round 2).
+Closes: EX-231-10 Layer B (Engineering dispatch 2026-04-29, Round 2).
 Ref: captain-layer-b-2026-04-29.md (Agnostic Security Internal/Compliance).
 """
 from __future__ import annotations

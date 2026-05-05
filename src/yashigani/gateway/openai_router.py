@@ -994,7 +994,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 async def list_models(request: Request):
     """List available models (for Open WebUI model picker).
 
-    AUTH REQUIRED. internal QA #59 / FINDING-59-01 (2026-04-29): unauthenticated
+    AUTH REQUIRED. QA #59 / FINDING-59-01 (2026-04-29): unauthenticated
     callers were receiving the full Ollama model list + every active service
     identity slug + every active agent slug — internal-topology disclosure
     (OWASP API9 Improper Inventory Management, A01 Broken Access Control).
