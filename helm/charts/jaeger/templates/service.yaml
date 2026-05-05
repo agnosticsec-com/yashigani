@@ -16,6 +16,6 @@ spec:
       port: 4317
       targetPort: 4317
     - name: admin
-      port: 14269
-      targetPort: 14269
+      port: 13133
+      targetPort: 13133
   type: ClusterIP
