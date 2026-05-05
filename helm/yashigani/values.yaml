@@ -421,7 +421,7 @@ grafana:
   enabled: true
   image:
     repository: grafana/grafana
-    tag: "11.5.2@sha256:4230a176e6f220e5aab2633463823a45392f12933f954e96643140a3611e482f"
+    tag: "12.4.3@sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -523,7 +523,7 @@ otelCollector:
   enabled: true
   image:
     repository: otel/opentelemetry-collector-contrib
-    tag: "0.100.0@sha256:dfb4bdba4049130bb2f8226cc1b45977e2b34eab3ae0858eca95a98215aea5ba"
+    tag: "0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.

@@ -1,4 +1,7 @@
-# Last updated: 2026-05-02T00:00:00+01:00
+# Last updated: 2026-05-05T20:00:00+01:00
+# v2.23.2 (phase-3 image bump): otel-collector 0.100.0 → 0.151.0.
+# Breaking change v0.104+: 'logging' exporter removed; replaced by 'debug'.
+# Pipeline updated: traces now export to [otlp/jaeger, debug] instead of [otlp/jaeger, logging].
 # M-01 fix: OTLP receivers upgraded to mTLS (Pattern B).
 # Trust anchor: ca_intermediate.crt (never ca_root.crt — Pattern B rule).
 # Server cert: otel-collector_client.crt / otel-collector_client.key
@@ -73,7 +76,9 @@ exporters:
       cert_file: /run/secrets/otel-collector_client.crt
       key_file: /run/secrets/otel-collector_client.key
       ca_file: /run/secrets/ca_intermediate.crt
-  logging:
+  # v0.104+ breaking change: 'logging' exporter removed; use 'debug' exporter.
+  # Functionally equivalent at verbosity=basic (structured logs to stdout).
+  debug:
     verbosity: basic
   # Loki log exporter — ships OTLP log records from gateway and backoffice.
   # Uses the collector-contrib loki exporter (included in otel/opentelemetry-collector-contrib).
@@ -98,7 +103,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch, tail_sampling]
-      exporters: [otlp/jaeger, logging]
+      exporters: [otlp/jaeger, debug]
     # Logs pipeline: receives OTLP log records from gateway/backoffice,
     # ships them to Loki. Promtail's docker_sd_configs approach is
     # incompatible with macOS Podman (no /var/lib/docker/containers on host).
