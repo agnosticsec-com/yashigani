@@ -110,7 +110,6 @@
         "newfstatat",
         "open", "openat", "openat2",
         "pause",
-        "perf_event_open",
         "pipe", "pipe2",
         "poll", "ppoll", "ppoll_time64",
         "prctl",
@@ -197,7 +196,7 @@
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "_comment": "Yashigani-specific denials — container-escape and kernel-modification vectors not required by Python/FastAPI/Redis workloads. These override the allowlist above via explicit ERRNO.",
+      "_comment": "Yashigani-specific denials — container-escape, kernel-modification, and code-flow-inspection vectors not required by Python/FastAPI/Redis workloads. These override the allowlist above via explicit ERRNO.",
       "names": [
         "kexec_load",
         "kexec_file_load",
@@ -222,7 +221,10 @@
         "bpf",
         "keyctl",
         "add_key",
-        "request_key"
+        "request_key",
+        "perf_event_open",
+        "process_vm_readv",
+        "process_vm_writev"
       ],
       "action": "SCMP_ACT_ERRNO"
     }
