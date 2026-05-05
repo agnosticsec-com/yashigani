@@ -1,6 +1,6 @@
 """
 Yashigani Agent Registry — Manages registered agent identities and PSK tokens.
-# Last updated: 2026-05-03T00:00:00+01:00
+# Last updated: 2026-05-05T00:00:00+01:00
 
 Key schema (Redis db/3, namespace agent:*):
   agent:reg:{agent_id}      Hash: name, upstream_url, status, created_at,
@@ -21,7 +21,7 @@ import secrets
 import uuid
 from typing import Optional
 
-from yashigani.licensing.enforcer import check_agent_limit, LicenseLimitExceeded
+from yashigani.licensing.enforcer import LicenseLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,43 @@ class AgentRegistry:
     PSK tokens are 256-bit hex strings (64 chars).
     Token hashes use bcrypt cost 12 — never store plaintext.
     """
+
+    # LAURA-LIMIT-AGENTS-01 + AGENTS-03 (GROUP-4-1): atomic Lua script for
+    # agent registration. Replaces the non-atomic count→check→hset→sadd
+    # pipeline which had a TOCTOU race:
+    #   Thread A: count() = 9 (limit = 10) → passes check
+    #   Thread B: count() = 9 (limit = 10) → passes check
+    #   Thread A: hset + sadd → active count = 10
+    #   Thread B: hset + sadd → active count = 11 → LIMIT BYPASSED
+    #
+    # The Lua script executes atomically under Redis's single-threaded model.
+    # KEYS[1] = agent:index:active
+    # KEYS[2] = agent:index:all
+    # KEYS[3] = agent:reg:{agent_id}
+    # KEYS[4] = agent:token:{agent_id}
+    # ARGV[1] = limit (int, -1 = unlimited)
+    # ARGV[2] = agent_id
+    # ARGV[3] = token_hash
+    # ARGV[4..N] = flat key-value pairs for HSET
+    _REGISTER_LUA = """
+local limit = tonumber(ARGV[1])
+local current = tonumber(redis.call("SCARD", KEYS[1]))
+if limit ~= -1 and current >= limit then
+    return redis.error_reply("LIMIT_EXCEEDED:" .. current .. ":" .. limit)
+end
+local agent_id = ARGV[2]
+local token_hash = ARGV[3]
+-- Build HSET mapping from ARGV[4..] (pairs: field, value, field, value, ...)
+local hset_args = {}
+for i = 4, #ARGV do
+    table.insert(hset_args, ARGV[i])
+end
+redis.call("HSET", KEYS[3], unpack(hset_args))
+redis.call("SET", KEYS[4], token_hash)
+redis.call("SADD", KEYS[2], agent_id)
+redis.call("SADD", KEYS[1], agent_id)
+return 1
+"""
 
     def __init__(self, redis_client) -> None:
         self._r = redis_client
@@ -90,13 +127,21 @@ class AgentRegistry:
         protocol: str = "openai",
     ) -> tuple[str, str]:
         """
-        Register a new agent.
+        Register a new agent atomically via Lua script.
+
+        The Lua script performs an atomic SCARD → limit check → HSET + SET + SADD
+        sequence. This eliminates the TOCTOU race in the previous count → check →
+        pipeline pattern (LAURA-LIMIT-AGENTS-01 / AGENTS-03, GROUP-4-1).
 
         Returns (agent_id, plaintext_token). The plaintext token is never
         stored again — the caller is responsible for delivering it securely.
+
+        Raises LicenseLimitExceeded when the active agent count is at the limit.
         """
-        current_count = self.count("active")
-        check_agent_limit(current_count)
+        from yashigani.licensing.enforcer import get_license
+
+        lic = get_license()
+        limit = lic.max_agents  # -1 = unlimited
 
         agent_id = f"agnt_{uuid.uuid4().hex[:12]}"
         plaintext_token = secrets.token_bytes(32).hex()
@@ -107,28 +152,51 @@ class AgentRegistry:
 
         now = _now_iso()
 
-        # Store the registration hash
-        reg_key = f"agent:reg:{agent_id}"
-        self._r.hset(reg_key, mapping={
-            b"name": name.encode("utf-8"),
-            b"upstream_url": upstream_url.encode("utf-8"),
-            b"protocol": protocol.encode("utf-8"),
-            b"status": b"active",
-            b"created_at": now.encode("utf-8"),
-            b"last_seen_at": b"",
-            b"groups": json.dumps(groups).encode("utf-8"),
-            b"allowed_caller_groups": json.dumps(allowed_caller_groups).encode("utf-8"),
-            b"allowed_paths": json.dumps(allowed_paths).encode("utf-8"),
-            b"allowed_cidrs": json.dumps(allowed_cidrs or []).encode("utf-8"),
-        })
+        # Flat HSET argv list: field, value, field, value, ...
+        hset_pairs: list[str] = [
+            "name",                    name,
+            "upstream_url",            upstream_url,
+            "protocol",                protocol,
+            "status",                  "active",
+            "created_at",              now,
+            "last_seen_at",            "",
+            "groups",                  json.dumps(groups),
+            "allowed_caller_groups",   json.dumps(allowed_caller_groups),
+            "allowed_paths",           json.dumps(allowed_paths),
+            "allowed_cidrs",           json.dumps(allowed_cidrs or []),
+        ]
 
-        # Store bcrypt hash
-        token_key = f"agent:token:{agent_id}"
-        self._r.set(token_key, token_hash.encode("utf-8"))
+        keys = [
+            "agent:index:active",          # KEYS[1]
+            "agent:index:all",             # KEYS[2]
+            f"agent:reg:{agent_id}",       # KEYS[3]
+            f"agent:token:{agent_id}",     # KEYS[4]
+        ]
+        argv = [
+            str(limit),                    # ARGV[1]
+            agent_id,                      # ARGV[2]
+            token_hash,                    # ARGV[3]
+        ] + hset_pairs                     # ARGV[4..]
 
-        # Update indexes
-        self._r.sadd("agent:index:all", agent_id.encode("utf-8"))
-        self._r.sadd("agent:index:active", agent_id.encode("utf-8"))
+        try:
+            self._r.eval(self._REGISTER_LUA, len(keys), *keys, *argv)
+        except Exception as exc:
+            err_str = str(exc)
+            if "LIMIT_EXCEEDED" in err_str:
+                # Parse "LIMIT_EXCEEDED:current:max" from Redis error reply
+                try:
+                    parts = err_str.split(":")
+                    current = int(parts[1])
+                    max_val = int(parts[2])
+                except (IndexError, ValueError):
+                    current = self.count("active")
+                    max_val = limit
+                raise LicenseLimitExceeded(
+                    limit_name="max_agents",
+                    current=current,
+                    max_val=max_val,
+                ) from exc
+            raise
 
         logger.info("AgentRegistry: registered %s (%s)", agent_id, name)
         return agent_id, plaintext_token
