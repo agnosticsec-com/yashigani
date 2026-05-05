@@ -495,13 +495,14 @@ loki:
     storageClass: ""
 
 # ---------------------------------------------------------------------------
-# Jaeger — distributed tracing UI (v0.5.0)
+# Jaeger — distributed tracing UI (v2.17.0)
+# Migrated from v1 (all-in-one image) to v2 (jaeger image, YAML config).
 # ---------------------------------------------------------------------------
 jaeger:
   enabled: true
   image:
-    repository: jaegertracing/all-in-one
-    tag: "1.57@sha256:84d2b9664cea496af47fb58077319b55569542804884041a87b175475e183628"
+    repository: jaegertracing/jaeger
+    tag: "2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.

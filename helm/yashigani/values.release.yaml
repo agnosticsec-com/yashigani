@@ -103,9 +103,9 @@ otelCollector:
 
 jaeger:
   image:
-    repository: docker.io/jaegertracing/all-in-one
-    tag: "1.57@sha256:84d2b9664cea496af47fb58077319b55569542804884041a87b175475e183628"
-    digest: "sha256:84d2b9664cea496af47fb58077319b55569542804884041a87b175475e183628"
+    repository: docker.io/jaegertracing/jaeger
+    tag: "2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058"
+    digest: "sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058"
 
 openWebui:
   image:

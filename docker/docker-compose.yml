@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.2 — Docker Compose stack
-# Last updated: 2026-05-05T20:00:00+01:00 (image bumps Phase 1+2: opa, open-webui, langflow, prometheus, alertmanager, loki/promtail, keycloak, ollama, pgbouncer; Phase 3: grafana 12.4.3, otel 0.151.0, wazuh 4.14.5)
+# Last updated: 2026-05-05T20:30:00+01:00 (image bumps Phase 1+2: opa, open-webui, langflow, prometheus, alertmanager, loki/promtail, keycloak, ollama, pgbouncer; Phase 3a: grafana 12.4.3, otel 0.151.0, wazuh 4.14.5; Phase 3b: jaeger 2.17.0 v2 migration, vault 2.0.0)
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -966,40 +966,34 @@ services:
       - obs
 
   # ---------------------------------------------------------------------------
-  # Jaeger — distributed trace UI
-  # EX-231-09 fix (v2.23.2): OTLP gRPC collector port now uses mTLS.
-  # Jaeger presents jaeger_client.crt to otel-collector; mutual auth via
-  # ca_intermediate.crt (Pattern B — Go x509, partial-chain accepted).
-  # otel-collector must present a valid leaf cert signed by the same
-  # intermediate. The UI port (16686) and admin port (14269) remain HTTP
-  # on the obs-internal bridge (not host-mapped, Caddy-proxied only).
-  # Cert: jaeger_client.crt / jaeger_client.key (issued by install.sh).
+  # Jaeger — distributed trace UI (v2.17.0)
+  # Migrated from v1 (all-in-one image, env-var config) to v2 (jaeger image, YAML config).
+  # v2 is built on OpenTelemetry Collector; config in config/jaeger/jaeger.yml.
+  #
+  # EX-231-09 fix (v2.23.2): OTLP gRPC collector port uses mTLS (Pattern B).
+  # TLS config moved from v1 env vars to jaeger.yml receivers.otlp.protocols.grpc.tls.
+  # Jaeger presents jaeger_client.crt; otel-collector must present a valid leaf
+  # signed by ca_intermediate.crt.
+  # UI port (16686) and admin port (13133) remain HTTP on obs-internal network.
   # ---------------------------------------------------------------------------
   jaeger:
     dns_search: ["."]
-    image: docker.io/jaegertracing/all-in-one:1.57@sha256:84d2b9664cea496af47fb58077319b55569542804884041a87b175475e183628
+    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058
     restart: unless-stopped
     mem_limit: ${YASHIGANI_JAEGER_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_JAEGER_CPU_LIMIT:-0.5}
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-      SPAN_STORAGE_TYPE: memory   # dev/demo only — production must use persistent storage (e.g. Elasticsearch or Cassandra)
-      # EX-231-09: mTLS on OTLP gRPC collector port.
-      # Jaeger presents its leaf cert; otel-collector must present a valid
-      # leaf signed by ca_intermediate.crt. TLS 1.2 minimum (SHA-256 posture).
-      COLLECTOR_OTLP_GRPC_TLS_ENABLED: "true"
-      COLLECTOR_OTLP_GRPC_TLS_CERT: /run/secrets/jaeger_client.crt
-      COLLECTOR_OTLP_GRPC_TLS_KEY: /run/secrets/jaeger_client.key
-      COLLECTOR_OTLP_GRPC_TLS_CLIENT_CA: /run/secrets/ca_intermediate.crt
+    command: ["--config=/etc/jaeger/jaeger.yml"]
     volumes:
       - ./secrets:/run/secrets:ro
+      - ../config/jaeger/jaeger.yml:/etc/jaeger/jaeger.yml:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:14269/"]
+      # v2: healthcheckv2 extension listens on :13133 (replaces v1 admin port :14269)
+      test: ["CMD-SHELL", "wget -qO- http://localhost:13133/ || curl -sf http://localhost:13133/"]
       interval: 15s
       timeout: 5s
       retries: 3
     # V232-CSCAN-01k-RES-01: align cap_drop with Helm (jaeger.yaml:48).
-    # No cap_add: jaeger binds ports 14269/16686/4317 (non-privileged).
+    # No cap_add: jaeger binds ports 13133/16686/4317 (non-privileged).
     cap_drop: [ALL]
     # EX-231-10: jaeger is obs-plane only.
     networks:
@@ -1056,7 +1050,7 @@ services:
   # ---------------------------------------------------------------------------
   vault:
     dns_search: ["."]
-    image: docker.io/hashicorp/vault:1.16@sha256:8f24288a1ff506e7b37f82ed43d64d748ff03e27553ae248912663828ed8b88b
+    image: docker.io/hashicorp/vault:2.0.0@sha256:59a8a82a11bbb1e95aa563174add4e91d66e70a5aeac612b5d9e9c710369f09c
     restart: unless-stopped
     mem_limit: ${YASHIGANI_VAULT_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_VAULT_CPU_LIMIT:-0.5}

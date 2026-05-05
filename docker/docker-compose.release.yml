@@ -40,8 +40,8 @@
 #   grafana/loki:3.0.0                          sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253
 #   grafana/promtail:3.0.0                      sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
 #   otel/opentelemetry-collector-contrib:0.151.0  sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
-#   jaegertracing/all-in-one:1.57               sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9  [PENDING v2 migration — Phase 3b]
-#   hashicorp/vault:1.16                        sha256:c5e04689611cb864b8b6247a6a845e0bdc059998f39b5c8a659562287379525c  [PENDING v2 migration — Phase 3b]
+#   jaegertracing/jaeger:2.17.0                 sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058
+#   hashicorp/vault:2.0.0                       sha256:59a8a82a11bbb1e95aa563174add4e91d66e70a5aeac612b5d9e9c710369f09c
 #   smallstep/step-ca:0.30.2                    sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
 #   ghcr.io/open-webui/open-webui:v0.9.1        sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978
 #   langflowai/langflow:1.9.0                   sha256:01b48149017d0a211cb4dd0b7454bd4ff68870937b9037c0c2c0928d24868ce1
@@ -100,10 +100,10 @@ services:
     image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
 
   jaeger:
-    image: docker.io/jaegertracing/all-in-one:1.57@sha256:8f165334f418ca53691ce358c19b4244226ed35c5d18408c5acf305af2065fb9
+    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058
 
   vault:
-    image: docker.io/hashicorp/vault:1.16@sha256:c5e04689611cb864b8b6247a6a845e0bdc059998f39b5c8a659562287379525c
+    image: docker.io/hashicorp/vault:2.0.0@sha256:59a8a82a11bbb1e95aa563174add4e91d66e70a5aeac612b5d9e9c710369f09c
 
   step-ca:
     image: docker.io/smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270

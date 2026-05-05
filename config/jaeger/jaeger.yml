@@ -1,0 +1,91 @@
+# Last updated: 2026-05-05T20:30:00+01:00
+# Yashigani v2.23.2 — Jaeger v2 all-in-one configuration
+#
+# Migrated from Jaeger v1 (env-var based config) to Jaeger v2 (YAML config).
+# Jaeger v2 is built on OpenTelemetry Collector; config format follows
+# the OTEL Collector component schema.
+#
+# Key changes from v1:
+#   - Image renamed: jaegertracing/all-in-one → jaegertracing/jaeger
+#   - TLS config moved from env vars (COLLECTOR_OTLP_GRPC_TLS_*) to YAML
+#   - OTLP gRPC receiver TLS uses same configtls schema as otel-collector-contrib
+#   - SPAN_STORAGE_TYPE env var replaced by jaeger_storage backend config
+#   - Admin port 14269 replaced by healthcheckv2 extension (port 13133 default)
+#
+# mTLS posture (EX-231-09, v2.23.2):
+#   - OTLP gRPC collector port (4317): mTLS required, Pattern B.
+#     Jaeger presents jaeger_client.crt to otel-collector.
+#     otel-collector must present a valid leaf signed by ca_intermediate.crt.
+#     Trust anchor: ca_intermediate.crt (Pattern B — Go x509).
+#   - UI port (16686) and admin port (13133): HTTP only, obs-internal network.
+#     Not host-mapped; Caddy-proxied only (/admin/jaeger path).
+#
+# Cert: jaeger_client.crt / jaeger_client.key (issued by install.sh PKI bootstrap).
+# CA: ca_intermediate.crt (Pattern B — Go x509 partial-chain accepted).
+
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    resource:
+      service.name: jaeger
+    metrics:
+      level: basic
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+    logs:
+      level: info
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: 0.0.0.0:13133
+
+  jaeger_query:
+    storage:
+      traces: in_memory_storage
+    ui:
+      # Use default Jaeger UI settings (no custom config file required)
+
+  jaeger_storage:
+    backends:
+      in_memory_storage:
+        memory:
+          # Dev/demo only — not persisted across restarts.
+          # Production: switch to Elasticsearch, OpenSearch, or Cassandra.
+          max_traces: 100000
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        tls:
+          # EX-231-09 (v2.23.2): mTLS on OTLP gRPC port.
+          # Jaeger presents its leaf cert; otel-collector must present a valid
+          # leaf signed by ca_intermediate.crt (Pattern B).
+          cert_file: /run/secrets/jaeger_client.crt
+          key_file: /run/secrets/jaeger_client.key
+          client_ca_file: /run/secrets/ca_intermediate.crt
+      http:
+        # HTTP OTLP endpoint — no mTLS on HTTP port; obs-internal network only.
+        # otel-collector forwards traces via gRPC, not HTTP.
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: in_memory_storage

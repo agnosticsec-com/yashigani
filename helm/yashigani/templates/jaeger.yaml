@@ -1,5 +1,7 @@
-{{- /* Last updated: 2026-05-02T00:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-05T20:30:00+01:00 */ -}}
 {{- /* EX-231-09 fix (v2.23.2): Jaeger OTLP gRPC collector port mTLS-enabled. */ -}}
+{{- /* v2.23.2 Phase 3b: Jaeger v2 migration. Image renamed all-in-one→jaeger; env-var */ -}}
+{{- /* TLS config replaced by YAML config file (yashigani-jaeger-config ConfigMap). */ -}}
 {{- if .Values.jaeger.enabled }}
 ---
 apiVersion: apps/v1
@@ -58,30 +60,15 @@ spec:
               containerPort: 4318
               protocol: TCP
             - name: admin
-              containerPort: 14269
+              # v2: healthcheckv2 extension on :13133 (replaces v1 admin port :14269)
+              containerPort: 13133
               protocol: TCP
-          env:
-            - name: COLLECTOR_OTLP_ENABLED
-              value: "true"
-            - name: SPAN_STORAGE_TYPE
-              value: "memory"
-            {{- if .Values.mtls.enabled }}
-            # EX-231-09 fix: mTLS on OTLP gRPC collector port.
-            # Jaeger presents jaeger leaf cert; otel-collector must present
-            # a valid leaf signed by ca_bundle.crt (root+intermediate, K8s).
-            - name: COLLECTOR_OTLP_GRPC_TLS_ENABLED
-              value: "true"
-            - name: COLLECTOR_OTLP_GRPC_TLS_CERT
-              value: /run/secrets/jaeger_client.crt
-            - name: COLLECTOR_OTLP_GRPC_TLS_KEY
-              value: /run/secrets/jaeger_client.key
-            - name: COLLECTOR_OTLP_GRPC_TLS_CLIENT_CA
-              value: /run/secrets/ca_bundle.crt
-            {{- end }}
+          args:
+            - "--config=/etc/jaeger/jaeger.yml"
           readinessProbe:
             httpGet:
               path: /
-              port: 14269
+              port: 13133
             initialDelaySeconds: 5
             periodSeconds: 15
             timeoutSeconds: 5
@@ -89,31 +76,37 @@ spec:
           livenessProbe:
             httpGet:
               path: /
-              port: 14269
+              port: 13133
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
           resources:
             {{- toYaml .Values.jaeger.resources | nindent 12 }}
-          {{- if .Values.mtls.enabled }}
           volumeMounts:
+            - name: jaeger-config
+              mountPath: /etc/jaeger
+              readOnly: true
+            {{- if .Values.mtls.enabled }}
             - name: secrets
               mountPath: /run/secrets
               readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
-          {{- end }}
-      {{- if .Values.mtls.enabled }}
       volumes:
+        - name: jaeger-config
+          configMap:
+            name: yashigani-jaeger-config
+        {{- if .Values.mtls.enabled }}
         - name: secrets
           secret:
             secretName: {{ .Values.mtls.existingSecretName | default .Values.mtls.secretName }}
             defaultMode: 0440
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 50Mi
-      {{- end }}
 ---
 apiVersion: v1
 kind: Service
