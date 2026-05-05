@@ -7,7 +7,7 @@ Resolution order:
 3. ./license.ysg in CWD
 4. Not found → COMMUNITY_LICENSE (no error, no warning about absence)
 
-Last updated: 2026-04-27T21:08:49+01:00
+Last updated: 2026-05-05T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -19,6 +19,39 @@ from yashigani.licensing.model import COMMUNITY_LICENSE, LicenseState
 from yashigani.licensing.verifier import verify_license
 
 logger = logging.getLogger(__name__)
+
+
+def _normalise_domain(d: str) -> str:
+    """
+    Normalise a domain string for comparison.
+
+    Steps:
+      1. Strip whitespace
+      2. Lowercase
+      3. Remove trailing dot (DNS fully-qualified notation)
+      4. Attempt IDNA/punycode encode for internationalised domains
+
+    Returns the normalised domain, or the lowercased stripped original
+    if IDNA encoding fails (e.g. for IP addresses or localhost).
+
+    GROUP-2-2 / LAURA-LIMIT-DOMAINS-01: prevents domain-binding bypass via
+    case differences, trailing dots, or IDN equivalence attacks.
+    """
+    d = d.strip().lower().rstrip(".")
+    if not d:
+        return d
+    try:
+        # encodedname() encodes each label; handles unicode -> punycode
+        parts = d.split(".")
+        encoded_parts = []
+        for part in parts:
+            if part:
+                encoded_parts.append(part.encode("idna").decode("ascii"))
+            else:
+                encoded_parts.append(part)
+        return ".".join(encoded_parts)
+    except (UnicodeError, UnicodeDecodeError):
+        return d
 
 _CANDIDATES = [
     lambda: os.environ.get("YASHIGANI_LICENSE_FILE"),
@@ -68,9 +101,12 @@ def load_license() -> LicenseState:
         # runtime's YASHIGANI_TLS_DOMAIN env matches.  If the env is unset or
         # mismatches, downgrade to COMMUNITY tier and log CRITICAL so that
         # stolen license files cannot be silently replayed across tenants.
+        #
+        # GROUP-2-2 / LAURA-LIMIT-DOMAINS-01: comparison uses _normalise_domain()
+        # on both sides to prevent bypass via case, trailing dot, or IDN variants.
         if lic.valid and lic.org_domain != "*":
             runtime_domain = os.environ.get("YASHIGANI_TLS_DOMAIN", "")
-            if not runtime_domain or runtime_domain != lic.org_domain:
+            if not runtime_domain or _normalise_domain(runtime_domain) != _normalise_domain(lic.org_domain):
                 logger.critical(
                     "License loader: domain mismatch — license binds to '%s' but "
                     "YASHIGANI_TLS_DOMAIN='%s'; falling back to COMMUNITY tier "
