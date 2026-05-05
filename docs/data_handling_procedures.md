@@ -2,6 +2,7 @@
 
 > Version: 1.0.0
 > Date: 2026-04-12
+> Last reviewed: 2026-05-05 (v2.23.2 release — no content changes; v2.23.2 changes do not touch the policy areas covered by this document)
 > Compliance: HIPAA §164.312 | SOC 2 P1–P8 | ISO 27001 A.5.12–A.5.14
 
 ## 1. Purpose
