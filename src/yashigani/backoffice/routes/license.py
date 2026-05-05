@@ -165,6 +165,38 @@ async def activate_license(
             detail={"error": "INVALID_LICENSE", "detail": new_lic.error},
         )
 
+    # LAURA-LICENSE-01 / GROUP-2-1: cross-tenant activate check.
+    # A domain-bound license must match this deployment's YASHIGANI_TLS_DOMAIN.
+    # Without this check an admin could activate a license issued to a different
+    # org's domain — it would load but be rejected at the loader level after
+    # restart, causing silent Community downgrade. Reject explicitly here.
+    if new_lic.org_domain != "*":
+        from yashigani.licensing.loader import _normalise_domain
+        runtime_domain = os.environ.get("YASHIGANI_TLS_DOMAIN", "")
+        if not runtime_domain:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "domain_mismatch",
+                    "detail": (
+                        "License is domain-bound but YASHIGANI_TLS_DOMAIN is not set. "
+                        "Set YASHIGANI_TLS_DOMAIN to match the license org_domain."
+                    ),
+                },
+            )
+        if _normalise_domain(runtime_domain) != _normalise_domain(new_lic.org_domain):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "domain_mismatch",
+                    "detail": (
+                        f"License is bound to '{new_lic.org_domain}' but this "
+                        f"deployment's YASHIGANI_TLS_DOMAIN is '{runtime_domain}'. "
+                        "Activate a license issued for this deployment's domain."
+                    ),
+                },
+            )
+
     set_license(new_lic)
 
     try:
