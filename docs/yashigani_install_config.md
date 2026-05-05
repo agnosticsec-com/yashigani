@@ -676,6 +676,34 @@ YASHIGANI_LICENSE_FILE=/absolute/path/to/license.ysg
 
 ---
 
+## 5a. Operator Helper Scripts
+
+These scripts ship in `scripts/` for operators who want a tighter loop than the full installer. They're optional — `install.sh` does not call them — but they're the canonical answers to two recurring operator questions.
+
+### 5a.1 `scripts/wait-for-bootstrap.sh` — find first-run credentials when running compose by hand
+
+If you ran `docker compose up -d` directly (skipping `install.sh`), the backoffice prints its first-run admin credentials to its container log under a `FIRST-RUN CREDENTIALS` marker. This script polls the log and extracts them:
+
+```bash
+bash scripts/wait-for-bootstrap.sh [compose-file] [timeout-seconds]
+# Defaults: docker/docker-compose.yml, 300
+```
+
+You don't need this if you used `install.sh` — the installer writes `secrets_dir/admin1_password` (and `admin2_password`) directly **before** compose starts and prints them at the end of the run per the credentials-echo policy.
+
+### 5a.2 `scripts/import-kms-secrets.sh` — bulk-import cloud KMS API keys post-install
+
+Once the stack is up, this script prompts for cloud-provider API keys at the terminal, writes them to a mode-`0600` tempfile, imports them via the backoffice's `/admin/kms/secrets/import` API, then `shred -u`s the tempfile:
+
+```bash
+bash scripts/import-kms-secrets.sh [--backoffice-url URL]
+# Defaults: BACKOFFICE_URL=https://localhost:8443
+```
+
+Equivalent to the backoffice UI **KMS → Secrets → Import** flow, but CLI-only and shell-history-safe. Useful for scripted/headless onboarding.
+
+---
+
 ## 6. KMS Configuration
 
 Yashigani stores all sensitive credentials (API keys, passwords, tokens) through its Key Management Service (KMS) abstraction layer. The provider is set via `YASHIGANI_KSM_PROVIDER`.
