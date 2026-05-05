@@ -224,9 +224,32 @@ async def disable_user(username: str, session: StepUpAdminSession):
 
 @router.post("/{username}/enable")
 async def enable_user(username: str, session: AdminSession):
+    """
+    Re-enable a disabled user account.
+
+    Iris MISSING-04 / GROUP-2-6: enforce end-user seat limit before re-enabling.
+    A disabled user is not counted in the canonical end-user count, so re-enabling
+    one could push the deployment over the licensed seat limit.
+    """
     state = backoffice_state
     assert state.auth_service is not None  # set unconditionally at startup
     assert state.audit_writer is not None  # set unconditionally at startup
+
+    # Check seat limit before re-enable — same limit as new user creation.
+    from yashigani.licensing.enforcer import (
+        check_end_user_limit,
+        count_canonical_end_users,
+        LicenseLimitExceeded,
+        license_limit_exceeded_response,
+    )
+    try:
+        check_end_user_limit(count_canonical_end_users())
+    except LicenseLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=license_limit_exceeded_response(exc),
+        )
+
     if not await state.auth_service.enable(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})

@@ -219,7 +219,11 @@ def _resolve_or_create_identity(
     Resolve an existing identity by slug or create a new one.
 
     Returns the identity_id.
-    Raises RuntimeError if the registry is unavailable.
+    Raises RuntimeError("identity_suspended:...") if the identity is suspended
+    (GROUP-2-4 / Iris MISSING-03).
+    Raises RuntimeError("end_user_limit_exceeded:...") if seat limit is hit
+    on new registration (GROUP-2-3).
+    Raises RuntimeError("IdentityRegistry is not available") if registry unset.
     """
     # IdentityRegistry lives on the RBAC store Redis client (db/3).
     # We access it via backoffice_state if wired, otherwise instantiate locally.
@@ -228,11 +232,21 @@ def _resolve_or_create_identity(
         raise RuntimeError("IdentityRegistry is not available")
 
     from yashigani.identity.registry import IdentityKind
+    from yashigani.licensing.enforcer import LicenseLimitExceeded
 
     slug = _email_to_slug(email)
     existing = registry.get_by_slug(slug)
     if existing:
         identity_id = existing["identity_id"]
+        # GROUP-2-4 / Iris MISSING-03: suspended users must not re-enter via SSO.
+        # A user disabled by an admin (status="suspended" or status="inactive")
+        # would otherwise bypass the suspension by initiating a fresh SSO flow.
+        if existing.get("status") in ("suspended", "inactive"):
+            logger.warning(
+                "SSO: rejected suspended identity %s (email_hash=%s)",
+                identity_id, _email_hash(email),
+            )
+            raise RuntimeError(f"identity_suspended:{identity_id}")
         # Keep groups and last_seen_at fresh.
         registry.update(identity_id, groups=groups)
         logger.info(
@@ -242,15 +256,24 @@ def _resolve_or_create_identity(
         return identity_id
 
     # New user — register with HUMAN kind.
-    identity_id, _key = registry.register(
-        kind=IdentityKind.HUMAN,
-        name=name or email,
-        slug=slug,
-        description=f"SSO user via {idp_name}",
-        groups=groups,
-        sensitivity_ceiling=default_sensitivity,
-        org_id=org_id,
-    )
+    # GROUP-4-1: LicenseLimitExceeded is raised atomically by Lua script inside
+    # registry.register() when the end-user seat limit is at capacity.
+    try:
+        identity_id, _key = registry.register(
+            kind=IdentityKind.HUMAN,
+            name=name or email,
+            slug=slug,
+            description=f"SSO user via {idp_name}",
+            groups=groups,
+            sensitivity_ceiling=default_sensitivity,
+            org_id=org_id,
+        )
+    except LicenseLimitExceeded as exc:
+        logger.warning(
+            "SSO: end-user seat limit reached for new identity (email_hash=%s): %s",
+            _email_hash(email), exc,
+        )
+        raise RuntimeError(f"end_user_limit_exceeded:{exc.current}:{exc.max_val}") from exc
     logger.info(
         "SSO: created new identity %s slug=%s (email_hash=%s)",
         identity_id, slug, _email_hash(email),
@@ -657,6 +680,28 @@ async def oidc_callback(
             ),
         )
     except RuntimeError as exc:
+        err_str = str(exc)
+        if err_str.startswith("identity_suspended:"):
+            # GROUP-2-4: suspended user tried to re-enter via SSO
+            _write_sso_failure_audit(
+                idp_id, sso_result.idp_name, "identity_suspended", client_ip
+            )
+            return RedirectResponse(
+                url="/login?error=account_suspended",
+                status_code=status.HTTP_302_FOUND,
+            )
+        if err_str.startswith("end_user_limit_exceeded:"):
+            # GROUP-2-3: end-user seat limit reached
+            _write_sso_failure_audit(
+                idp_id, sso_result.idp_name, "end_user_limit_exceeded", client_ip
+            )
+            return JSONResponse(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                content={
+                    "error": "end_user_limit_exceeded",
+                    "upgrade_url": "https://agnosticsec.com/pricing",
+                },
+            )
         logger.error("SSO identity resolution failed: %s", exc)
         _write_sso_failure_audit(
             idp_id, sso_result.idp_name, "identity_registry_unavailable", client_ip
@@ -1039,6 +1084,22 @@ async def saml_acs(idp_id: str, request: Request):
             default_sensitivity=idp.default_sensitivity,
         )
     except RuntimeError as exc:
+        err_str = str(exc)
+        if err_str.startswith("identity_suspended:"):
+            _write_saml_failure_audit(idp_id, idp.name, "identity_suspended", client_ip)
+            return RedirectResponse(
+                url="/login?error=account_suspended",
+                status_code=status.HTTP_302_FOUND,
+            )
+        if err_str.startswith("end_user_limit_exceeded:"):
+            _write_saml_failure_audit(idp_id, idp.name, "end_user_limit_exceeded", client_ip)
+            return JSONResponse(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                content={
+                    "error": "end_user_limit_exceeded",
+                    "upgrade_url": "https://agnosticsec.com/pricing",
+                },
+            )
         logger.error("SAML identity resolution failed: %s", exc)
         _write_saml_failure_audit(idp_id, idp.name, "identity_registry_unavailable", client_ip)
         raise HTTPException(
