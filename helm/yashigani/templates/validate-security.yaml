@@ -1,0 +1,22 @@
+{{- /*
+  LIC-006 — Security validation: enforce mtls.enabled=true in production.
+
+  Helm template-time validation (fail function) rejects helm install/upgrade
+  before any resources are created. This is the correct layer for configuration
+  guard-rails: a Job hook would run after resources are rendered, which is too
+  late if the operator needs to correct values.
+
+  Additional guard: warn on global.environment unknown values to surface
+  typos that could lead to unexpected behaviour in the kms/factory.py startup
+  assertion (which also validates YASHIGANI_ENV at runtime).
+*/ -}}
+
+{{- /* LIC-006: block production install with mTLS disabled */ -}}
+{{- if and (eq .Values.global.environment "production") (not .Values.mtls.enabled) -}}
+  {{- fail "LIC-006 SECURITY VIOLATION: mtls.enabled must be true when global.environment=production. Internal mTLS is a load-bearing security control — disabling it in production removes mutual-authentication on all inter-service communication and violates the trust boundary model. Set mtls.enabled=true, or document the risk-acceptance in your risk register before overriding this guard with a patched chart." -}}
+{{- end -}}
+
+{{- /* LIC-006: warn on staging without mTLS to catch promotion mistakes */ -}}
+{{- if and (eq .Values.global.environment "staging") (not .Values.mtls.enabled) -}}
+  {{- fail "LIC-006 WARNING: mtls.enabled is false in staging. This is permitted but not recommended — staging should mirror production posture. If intentional, document in your risk register." -}}
+{{- end -}}
