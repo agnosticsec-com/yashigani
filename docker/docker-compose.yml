@@ -333,6 +333,13 @@ services:
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
+      # LIC-007 / LIC-012 (v2.24.0 DEFERRED): This mount is writable because
+      # write_docker_secrets() writes admin credentials + license_key here during
+      # bootstrap. After bootstrap, license_key should be chmod 0400. The trivial
+      # fix (chmod in write_docker_secrets() post-write) is Tom Group 5.1.
+      # Schema-split (separate :ro PKI mount + writable bootstrap mount) = LIC-012
+      # for v2.24.0. K8s is already protected: backoffice.yaml initContainer runs
+      # chmod 0400 on all /secrets-rw/* files including license_key.
       - ./secrets:/run/secrets
       # Internal mTLS — manifest mounted read-only.
       - ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro
