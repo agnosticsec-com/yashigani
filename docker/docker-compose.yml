@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.2 — Docker Compose stack
-# Last updated: 2026-05-03T12:00:00+01:00
+# Last updated: 2026-05-04T18:30:00+01:00 (image bumps Phase 1+2: opa, open-webui, langflow, prometheus, alertmanager, loki/promtail, keycloak, ollama, pgbouncer)
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -376,7 +376,7 @@ services:
   # ---------------------------------------------------------------------------
   open-webui:
     dns_search: ["."]
-    image: ghcr.io/open-webui/open-webui:v0.9.1@sha256:b4ee86c80412d2b9e78b33b27d4c4737c73141676dfdc1418d2a293f1c089c85
+    image: ghcr.io/open-webui/open-webui:v0.9.2@sha256:90225d2bb5cb9251ba92ec1efd1df5b0b4589d0c97f9e6fcbeee5507e89ac8ec
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENWEBUI_MEM_LIMIT:-2048m}
     cpus: ${YASHIGANI_OPENWEBUI_CPU_LIMIT:-1.0}
@@ -481,7 +481,7 @@ services:
   # ---------------------------------------------------------------------------
   policy:
     dns_search: ["."]
-    image: docker.io/openpolicyagent/opa:1.15.1@sha256:d90da198626182c2415596cad6f5f16ad45ac9653ea4fe8572e71eab89d5f8ea
+    image: docker.io/openpolicyagent/opa:1.16.1@sha256:90c20b986968c214bfaf826078a6442ffd79468cdf449f3aaf5c75070c618f28
     restart: unless-stopped
     mem_limit: ${YASHIGANI_POLICY_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_POLICY_CPU_LIMIT:-0.25}
@@ -575,7 +575,7 @@ services:
   # ---------------------------------------------------------------------------
   ollama:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.6.2@sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab
+    image: docker.io/ollama/ollama:0.23.0@sha256:e13d0ba897b1053879d2de5cbd7814898e498a9d865613d3c506d0d19f713482
     # gate V232-SMOKE-018: bbd556e set user: "1000:1000" with HOME=/data
     # (verified working on macOS Podman where vfs initialises the volume
     # owned by the caller UID). On Linux Docker, named volumes are
@@ -619,7 +619,7 @@ services:
   # Model bootstrap — pull classifier model on first start
   ollama-init:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.6.2@sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab
+    image: docker.io/ollama/ollama:0.23.0@sha256:e13d0ba897b1053879d2de5cbd7814898e498a9d865613d3c506d0d19f713482
     # gate V232-SMOKE-018 — same rationale as `ollama` service above.
     user: "0:0"
     restart: on-failure:3
@@ -662,7 +662,7 @@ services:
   # ---------------------------------------------------------------------------
   prometheus:
     dns_search: ["."]
-    image: docker.io/prom/prometheus:v3.2.1@sha256:641f5faf625e3c667e2fb75b89a8a1dbc59a564f982f725fffb314f9293ab150
+    image: docker.io/prom/prometheus:v3.11.3@sha256:8737f27a6102141f06bd38e10e8908a8fa39a649cd187a2fee7c4b8429a366d6
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMETHEUS_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_PROMETHEUS_CPU_LIMIT:-0.5}
@@ -793,7 +793,7 @@ services:
   # PgBouncer — transaction-mode connection pooler
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: docker.io/edoburu/pgbouncer:v1.23.1-p0@sha256:dba33a500894390283662d596feafad55e8dad83162703f8324e3efb7aa6808f
+    image: docker.io/edoburu/pgbouncer:v1.25.1-p0@sha256:6997cf670ca5278b6afbaab767ffc223d56e280ca22133d1a11f9868d068813d
     # gate V232-SMOKE-018: edoburu/pgbouncer has USER pgbouncer (UID 70) but
     # the same cap_drop ALL constraint applies on init scripts. Pin
     # explicitly so the chowned client keys (70:70 by `_pki_chown_client_keys`)
@@ -847,7 +847,7 @@ services:
   # ---------------------------------------------------------------------------
   alertmanager:
     dns_search: ["."]
-    image: docker.io/prom/alertmanager:v0.27.0@sha256:2fbdd4c66d91e740fe3fd462d8f52fc3d305a5b403bab3a58feb62be237a84fb
+    image: docker.io/prom/alertmanager:v0.32.1@sha256:06a1e7960b1a68794ef943744082dc361dd352fd07ed3319ab6de3f929f38ad2
     restart: unless-stopped
     mem_limit: ${YASHIGANI_ALERTMANAGER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_ALERTMANAGER_CPU_LIMIT:-0.25}
@@ -878,7 +878,7 @@ services:
   # ---------------------------------------------------------------------------
   loki:
     dns_search: ["."]
-    image: docker.io/grafana/loki:3.0.0@sha256:e5f7ab1e3a138dbf769cb73ec08144f83943c556ac6dfc8adae035d3669abb39
+    image: docker.io/grafana/loki:3.6.10@sha256:368efbeb788cd2366a4e597f36dcb89bedf5387283a44db681723df42d2ee667
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LOKI_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_LOKI_CPU_LIMIT:-0.25}
@@ -903,7 +903,7 @@ services:
   # ---------------------------------------------------------------------------
   promtail:
     dns_search: ["."]
-    image: docker.io/grafana/promtail:3.0.0@sha256:b55d0fd9c1eff12a3d4c5c03fc4c352344ce6d067c17148ffd891af10c2d81ec
+    image: docker.io/grafana/promtail:3.6.10@sha256:7f512e94cb519e462338ce991922ef4622951bc5e84820c2c4272f4f0e32adbb
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMTAIL_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PROMTAIL_CPU_LIMIT:-0.25}
@@ -1013,7 +1013,7 @@ services:
   # ---------------------------------------------------------------------------
   keycloak:
     dns_search: ["."]
-    image: quay.io/keycloak/keycloak:26.0@sha256:6ef47aef4e2b282b51af60d8ed1df52b8e461c0cc7a0d4250278a5540b6d0cc1
+    image: quay.io/keycloak/keycloak:26.6.1@sha256:93d29259c764330686b6b54814724b7c252355e7bd91e8a73b8323dcc8498621
     restart: unless-stopped
     mem_limit: ${YASHIGANI_KEYCLOAK_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_KEYCLOAK_CPU_LIMIT:-1.0}
@@ -1100,7 +1100,7 @@ services:
   # Users build custom agent workflows visually via the Langflow UI.
   langflow:
     dns_search: ["."]
-    image: docker.io/langflowai/langflow:1.9.0@sha256:e2210f23b99d35bdacbac2640bc56a78629b582df72f83563ddda55dab56ba75
+    image: docker.io/langflowai/langflow:1.9.2@sha256:58e06e0d37be1640128d0d38300e80b038c5235c87e80235abd46c56ddb9c875
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LANGFLOW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_LANGFLOW_CPU_LIMIT:-1.0}
