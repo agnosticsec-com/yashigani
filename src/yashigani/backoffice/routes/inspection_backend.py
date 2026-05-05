@@ -104,7 +104,11 @@ def _get_config_store():
 
 
 def _is_production() -> bool:
-    return os.getenv("YASHIGANI_ENV", "development").lower() == "production"
+    # LIC-001: YASHIGANI_ENV is reserved for license enforcement and is
+    # hardcoded to "production" in deployed images — it cannot serve as a
+    # deployment-mode label here. YASHIGANI_ENVIRONMENT_LABEL carries the
+    # operator-configurable environment name; check that instead.
+    return os.getenv("YASHIGANI_ENVIRONMENT_LABEL", "production").lower() == "production"
 
 
 def _validate_backend_name(name: str) -> None:

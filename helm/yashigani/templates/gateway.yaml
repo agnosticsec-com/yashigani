@@ -59,7 +59,14 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
+            # LIC-001: YASHIGANI_ENV is hardcoded to "production" to prevent
+            # operators from disabling license integrity checks via --set.
+            # Non-license uses of the environment label (telemetry, OTel
+            # resource attributes) use YASHIGANI_ENVIRONMENT_LABEL instead,
+            # which still reads from global.environment.
             - name: YASHIGANI_ENV
+              value: "production"
+            - name: YASHIGANI_ENVIRONMENT_LABEL
               value: {{ .Values.global.environment | quote }}
             - name: YASHIGANI_KSM_PROVIDER
               value: "docker"
