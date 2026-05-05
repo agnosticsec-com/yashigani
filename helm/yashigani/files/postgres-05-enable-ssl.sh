@@ -50,7 +50,7 @@ install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDA
 # When pgbouncer/clients present a chain-bundle, postgres needs ca_root.crt as
 # self-signed anchor at depth 2 to verify the embedded intermediate. Bundling
 # both gives postgres anchors for any client cert format — defense-in-depth
-# (internal gate #58a evidence, 2026-04-28).
+# (Platform gate #58a evidence, 2026-04-28).
 install -m 0640 -o postgres -g postgres /dev/null "${PGDATA}/root.crt"
 cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > "${PGDATA}/root.crt"
 chown postgres:postgres "${PGDATA}/root.crt"

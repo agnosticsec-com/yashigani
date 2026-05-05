@@ -281,7 +281,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
         state.audit_writer.write(
             _make_login_event(body.username, "failure", reason)
         )
-        # internal QA Wave 2 Issue 7 — do NOT disclose server_time to unauthenticated
+        # QA Wave 2 Issue 7 — do NOT disclose server_time to unauthenticated
         # callers. TOTP drift diagnostics only belong in authenticated flows
         # (/auth/password/change, /auth/totp/provision/confirm) where the
         # client has already proved they own an account.
@@ -340,7 +340,7 @@ async def login(body: LoginRequest, request: Request, response: Response):
     #     "pci"    → 90 days (PCI DSS 8.3.9)
     #     "nist"   → 0 days / no expiry (NIST 800-63B discourages rotation)
     #     unset    → 0 days / no expiry (NIST-aligned default)
-    # Hard cap: 395 days (13 months). Internal review finding #9 — PCI-scoped
+    # Hard cap: 395 days (13 months). Compliance review finding #9 — PCI-scoped
     # deployments need a ≤90d option without editing code.
     max_age_env = os.getenv("YASHIGANI_PASSWORD_MAX_AGE_DAYS")
     if max_age_env is not None:
@@ -412,7 +412,7 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
     record = await state.auth_service.get_account(body.username)
 
     # Same generic error for unknown user or wrong TOTP (prevent enumeration).
-    # internal QA Wave 2 Issue 7 — self-service password reset is unauthenticated by
+    # QA Wave 2 Issue 7 — self-service password reset is unauthenticated by
     # design; do NOT leak server_time to callers who have not proved identity.
     generic_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -573,7 +573,7 @@ async def provision_totp_start(
     actions until :func:`provision_totp_confirm` verifies a code derived
     from the returned seed.
 
-    Part of the split-enrolment flow (internal QA Wave 2 Issue C). The previous
+    Part of the split-enrolment flow (QA Wave 2 Issue C). The previous
     atomic ``/totp/provision`` required a ``totp_code`` on the same call
     that returned the seed, which was impossible for a first-time client.
     """
@@ -658,7 +658,7 @@ async def provision_totp(
 
     For the first-time web-UI flow, prefer the split endpoints:
     :func:`provision_totp_start` + :func:`provision_totp_confirm`
-    (internal QA Wave 2 Issue C).
+    (QA Wave 2 Issue C).
     """
     state = backoffice_state
     assert state.auth_service is not None  # set unconditionally at startup
@@ -821,7 +821,7 @@ async def list_blocked_ips(request: Request, session: AdminSession):
 
     Previously only returned permanent blocks, which gave operators no
     self-visibility when they were themselves being slow-throttled
-    (internal QA Wave 2 Issue F). Now includes:
+    (QA Wave 2 Issue F). Now includes:
 
       * ``blocked_ips`` — permanent blocks (auth:blocked:*)
       * ``throttled_ips`` — IPs with a current non-zero throttle level

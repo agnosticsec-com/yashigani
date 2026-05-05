@@ -1,5 +1,5 @@
 """
-Regression tests for internal QA findings AVA-2026-04-29-001 and AVA-2026-04-29-002.
+Regression tests for QA findings AVA-2026-04-29-001 and AVA-2026-04-29-002.
 
   - AVA-2026-04-29-001 [HIGH]  Stored XSS in agent name (ASVS V5.3.3, CWE-79)
   - AVA-2026-04-29-002 [MEDIUM] AuditLogExporter.export_ndjson missing — AttributeError

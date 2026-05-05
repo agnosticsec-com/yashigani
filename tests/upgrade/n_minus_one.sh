@@ -530,7 +530,7 @@ else echo 'unknown'; fi
 
 # ---------------------------------------------------------------------------
 # Helper: stop any currently-running stacks that own port 443 on the VM
-# This handles the case where a prior gate run (e.g. the internal QA stack in
+# This handles the case where a prior gate run (e.g. the QA stack in
 # /home/ava/yashigani) left a live stack that would conflict on port bind.
 # ---------------------------------------------------------------------------
 stop_conflicting_stacks() {
@@ -542,7 +542,7 @@ stop_conflicting_stacks() {
     # Second: stop any Docker containers owned by root/docker group
     vm_run "docker ps --format '{{.Names}}' 2>/dev/null | grep -q caddy && docker stop \$(docker ps -q --filter name=caddy) 2>/dev/null && echo '[remote] Stopped Docker caddy' || true" 2>/dev/null || true
 
-    # Third: if port 443 is still occupied (e.g. the internal QA Podman rootless stack),
+    # Third: if port 443 is still occupied (e.g. the QA Podman rootless stack),
     # find the caddy process by port and kill via sudo.
     # VM_PASSWORD is expanded on the local side, passed as a heredoc variable.
     vm_run_script <<PORT_KILL 2>/dev/null || true

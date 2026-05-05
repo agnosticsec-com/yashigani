@@ -133,7 +133,7 @@ exclude = [
 ]
 
 [tool.ruff]
-# Lint configuration (ASVS 16.6.1 log-injection defence — internal QA Wave 2 #48).
+# Lint configuration (ASVS 16.6.1 log-injection defence — QA Wave 2 #48).
 # Keep the rule set narrow; we're not running ruff as a general formatter,
 # only as a guardrail against log-injection and a handful of other
 # high-value security regressions. Additional rule groups can be enabled
