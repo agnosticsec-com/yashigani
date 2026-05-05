@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI):
             # service first reads/writes. run_migrations() is sync and uses
             # its own psycopg2 connection. Multi-replica safety: alembic
             # acquires a postgres advisory lock internally — see
-            # yashigani/db/__init__.py:run_migrations() (Captain #58c #3bv).
+            # yashigani/db/__init__.py:run_migrations() (internal gate #58c #3bv).
             run_migrations()
 
             await create_pool()
@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI):
             # replica 1 has committed the admin rows; replica 2 then sees
             # count != 0 and skips.
             #
-            # CRITICAL (Captain #58c #3bw + #3bx, 2026-04-29): the lock
+            # CRITICAL (internal gate #58c #3bw + #3bx, 2026-04-29): the lock
             # connection MUST go direct to postgres, NOT through pgbouncer.
             # pgbouncer in txn-pool mode routes each new connection to a
             # different postgres backend, and pg_advisory_lock is session-
@@ -334,7 +334,7 @@ def create_backoffice_app() -> FastAPI:
     from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
     app.add_middleware(CaddyVerifiedMiddleware)
 
-    # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE backoffice leg (Lu F-1B
+    # SPIFFE peer-cert middleware — LF-SPIFFE-FORGE backoffice leg (Internal F-1B
     # EX-231-10, 2026-04-29). Extracts the TLS peer cert URI SAN from the ASGI
     # handshake scope and injects it as X-SPIFFE-ID-Peer-Cert. This is a
     # server-controlled header that cannot be forged by the client.
@@ -452,7 +452,7 @@ def create_backoffice_app() -> FastAPI:
                     )
         return await call_next(request)
 
-    # Uniform 401 for unauthenticated /admin/* requests (Ava Wave 2 Issue 10).
+    # Uniform 401 for unauthenticated /admin/* requests (internal QA Wave 2 Issue 10).
     # Before this middleware, some admin endpoints returned 401 (route exists,
     # auth dep failed) while others returned 404 (no root route under that
     # prefix, e.g. /admin/license/status existed but /admin/license didn't).

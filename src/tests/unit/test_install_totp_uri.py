@@ -1,7 +1,7 @@
 """
 Regression test: install.sh _gen_totp_uri must include algorithm=SHA256.
 
-P0-10 / feedback_sha256_minimum_pqr (Tiago 2026-05-01):
+P0-10 / SHA-256 minimum policy (maintainer directive 2026-05-01):
 pyotp uses digest=hashlib.sha256. Without algorithm=SHA256 in the otpauth URI,
 authenticator apps (Google Authenticator, Authy, 1Password, etc.) default to
 SHA-1 and generate codes that never match. This test FAILS against pre-fix

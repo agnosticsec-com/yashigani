@@ -81,7 +81,7 @@ _BOOTSTRAP_TOKEN_BYTES = 32      # 256-bit
 # psycopg2 rejects it outright (tripped by sqlalchemy+psycopg2 migration
 # step inside the gateway container).
 #
-# Captain's original concern — that container uid 1001 couldn't read a
+# the internal-review concern — that container uid 1001 couldn't read a
 # 0o400 file owned by host uid 501 — is resolved by install.sh calling
 # `podman unshare chown` on the key files for each non-root service,
 # placing them under the user-namespace-mapped uid that matches each

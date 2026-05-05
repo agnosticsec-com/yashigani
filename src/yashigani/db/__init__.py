@@ -21,7 +21,7 @@ def run_migrations() -> None:
     PostgreSQL session-scoped advisory lock BEFORE alembic upgrades, hold it
     for the whole upgrade, then release. Other replicas block on the same key
     until the holder releases, then run alembic which detects "already at
-    head" and is a no-op. Captain #58c #3bv evidence (2026-04-29) — found
+    head" and is a no-op. internal gate #58c #3bv evidence (2026-04-29) — found
     by static audit between Round 7 and Round 8.
     """
     import logging
@@ -52,7 +52,7 @@ def run_migrations() -> None:
     # Use a dedicated psycopg2 connection (not the alembic-internal one) so the
     # lock outlives any of alembic's per-revision transactions.
     #
-    # CRITICAL (Captain #58c #3bw, 2026-04-29): the lock connection MUST go
+    # CRITICAL (internal gate #58c #3bw, 2026-04-29): the lock connection MUST go
     # direct to postgres, NOT through pgbouncer. pgbouncer in transaction-pool
     # mode routes each new connection to a different postgres backend, and
     # postgres advisory locks are session-scoped (per-backend). If both

@@ -57,7 +57,7 @@
 # DESIGN DECISION (2026-04-29):
 #   Standard caddy:2-alpine has NO inline HMAC computation capability.
 #   `caddy list-modules` confirms: no hmac/crypto/sign modules. A custom build
-#   would be required for HMAC-SHA256 inline computation. Per Tiago directive
+#   would be required for HMAC-SHA256 inline computation. Per maintainer directive
 #   "Caddy-centric with hardening cryptography in communications" the pragmatic
 #   fallback is:
 #
@@ -65,7 +65,7 @@
 #   generated) and forwards it verbatim as X-Caddy-Verified-Secret on every
 #   reverse_proxy to backoffice:8443 and gateway:8080.
 #
-#   Tom's middleware (follow-on dispatch) reads the same secret from
+#   the gateway/backoffice middleware (follow-on dispatch) reads the same secret from
 #   /run/secrets/caddy_internal_hmac at lifespan startup and verifies:
 #     hmac.compare_digest(
 #         request.headers["X-Caddy-Verified-Secret"],
@@ -77,7 +77,7 @@
 #   present the cert + forge X-SPIFFE-ID, but CANNOT know the per-install
 #   HMAC secret (it lives only in /run/secrets/caddy_internal_hmac, readable
 #   only by uid 1001 within Caddy, backoffice, and gateway containers).
-#   Without the correct X-Caddy-Verified-Secret → 401 from Tom's middleware.
+#   Without the correct X-Caddy-Verified-Secret → 401 from the gateway/backoffice middleware.
 #
 #   The secret is generated at install time (not per-boot) to survive Caddy
 #   restarts without requiring backoffice/gateway restart. It is regenerated
@@ -120,8 +120,8 @@
 # Serve on HTTPS with self-signed cert
 https://{$YASHIGANI_TLS_DOMAIN}:443 {
     tls internal {
-        # TLS 1.3 minimum + GCM-only ciphers. Tiago directive 2026-04-30.
-        # Closes Ava R3 finding (TLS 1.2 negotiated with ChaCha20-Poly1305).
+        # TLS 1.3 minimum + GCM-only ciphers. maintainer directive 2026-04-30.
+        # Closes internal QA finding (TLS 1.2 negotiated with ChaCha20-Poly1305).
         # caddy adapt ground-truth confirmed: protocol_min=tls1.3,
         # cipher_suites=[TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256].
         protocols tls1.3
@@ -133,7 +133,7 @@ https://{$YASHIGANI_TLS_DOMAIN}:443 {
         # SPIFFE URI from a presented client cert when one is given. Per-path
         # SPIFFE forwarding stays in handle blocks. Caddy v2 requires
         # client_auth at the server-block tls directive, not inside handle —
-        # Captain #58c #3br evidence (2026-04-28).
+        # internal gate #58c #3br evidence (2026-04-28).
         client_auth {
             mode verify_if_given
             trust_pool file /run/secrets/ca_intermediate.crt
@@ -156,7 +156,7 @@ https://{$YASHIGANI_TLS_DOMAIN}:443 {
         Referrer-Policy           "no-referrer"
         Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; report-uri /admin/csp-report; report-to default"
         Cross-Origin-Opener-Policy "same-origin"
-        # Product / fingerprint hygiene (Ava Wave 2 observations 5 + 6).
+        # Product / fingerprint hygiene (internal QA Wave 2 observations 5 + 6).
         -Server
         -Via
         -Alt-Svc

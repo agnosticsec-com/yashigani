@@ -74,7 +74,7 @@ async def get_license_status(session=Depends(require_admin_session)):
     # NOTE: previously called `auth.count_users(admin=False)` which doesn't
     # exist on LocalAuthService — the AttributeError was swallowed by the
     # except clause and current_end_users silently reported 0, disagreeing
-    # with the enforcer which uses total_user_count() correctly (Ava Wave 2
+    # with the enforcer which uses total_user_count() correctly (internal QA Wave 2
     # Issue D).
     current_end_users = 0
     auth = backoffice_state.auth_service
