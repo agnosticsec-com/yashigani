@@ -126,7 +126,7 @@ def _get_hmac_key() -> bytes:
     — clean GDPR Article 17 erasure without breaking the audit chain.
     Multi-tenant: derive per-org key via HKDF if org_id is provided.
 
-    Internal review findings #3 + #8 — this function previously fell back to a
+    Compliance review findings #3 + #8 — this function previously fell back to a
     hardcoded string "yashigani-default-hmac-key" when both the env var
     and the secrets file were missing. That is safe for dev/demo but
     disastrous in production: an attacker able to guess the fallback value
@@ -677,7 +677,7 @@ async def oidc_callback(
 
     # Check if 2FA is required after SSO.
     # Default: true — YASHIGANI_SSO_2FA_REQUIRED=false to disable.
-    # Reconciliation (V6.8.4 fix 2026-04-27): Internal-review Stage B report noted this
+    # Reconciliation (V6.8.4 fix 2026-04-27): Compliance Stage B report noted this
     # was default-OFF ("false"). Maintainer-stated baseline is 2FA always-on.
     # The control is "force Yashigani TOTP on top of IdP-mediated SSO session"
     # — separate from admin local login which always requires TOTP unconditionally.
