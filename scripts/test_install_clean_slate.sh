@@ -66,7 +66,8 @@
 #   - git
 #   - sudo rights for 'su' user
 #
-# Last-Updated: 2026-05-06
+# Version: v2.23.2
+# Last-Updated: 2026-05-06T23:30:26+01:00
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -191,7 +192,7 @@ esac
 # ---------------------------------------------------------------------------
 # The VM sudo password is stored in memory as project_vm_team_accounts.md.
 # We write it to a 0600 tempfile under /Users/max/Documents/Claude/ (never /tmp).
-SUDO_PWD_FILE="/Users/max/Documents/Claude/yashigani/.claude/worktrees/agent-aca62eb2d109bfc3d/.sudo_pw_$$"
+SUDO_PWD_FILE="/Users/max/Documents/Claude/yashigani/.sudo_pw_$$"
 # Ensure cleanup on any exit path
 # shellcheck disable=SC2317  # trap function — not unreachable
 _cleanup_sudo_pw() {
@@ -221,7 +222,7 @@ _vm_cleanup() {
       cd '${VM_CLONE_DIR}' && \
       YSG_RUNTIME=${RUNTIME} bash uninstall.sh --remove-volumes --yes 2>&1 || true
     fi
-    rm -rf '${VM_CLONE_DIR}'
+    ${RUNTIME} unshare rm -rf '${VM_CLONE_DIR}' 2>/dev/null || rm -rf '${VM_CLONE_DIR}' || true
     ${RUNTIME} system prune -f 2>/dev/null || true
     ${RUNTIME} volume prune -f 2>/dev/null || true
   " 2>&1 || _warn "VM cleanup had errors (non-fatal)"
@@ -331,11 +332,24 @@ _vm_ssh "
   fi
 " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
 
-_info "Removing clone directory..."
-_vm_ssh "rm -rf '${VM_CLONE_DIR}'" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
+_info "Removing clone directory (podman unshare rm for namespace-owned files)..."
+# install.sh uses 'podman unshare chown 1001:1001' on bind-mount dirs, so secret
+# files and data dirs are owned by subuid-mapped uids (mode 0400). Plain rm -rf
+# as the host user fails with EPERM. Running rm inside the user namespace via
+# 'podman unshare rm -rf' works because the uid mapping makes the files appear
+# owned by the process.
+_vm_ssh "
+  if [[ -d '${VM_CLONE_DIR}' ]]; then
+    ${RUNTIME} unshare rm -rf '${VM_CLONE_DIR}' 2>/dev/null || rm -rf '${VM_CLONE_DIR}' || true
+  fi
+" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
 
 _info "Removing \$HOME/.yashigani install dir..."
-_vm_ssh "rm -rf \"\${HOME}/.yashigani\"" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
+_vm_ssh "
+  if [[ -d \"\${HOME}/.yashigani\" ]]; then
+    ${RUNTIME} unshare rm -rf \"\${HOME}/.yashigani\" 2>/dev/null || rm -rf \"\${HOME}/.yashigani\" || true
+  fi
+" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
 
 _info "Pruning stale container state..."
 _vm_ssh "
@@ -533,8 +547,8 @@ scp -i "${VM_SSH_KEY}" \
 # Set permissions on VM copy
 _vm_ssh "chmod 755 \"/home/${VM_USER}/release_gate_probe_${TIMESTAMP}.sh\""
 
-# Determine secrets dir on VM
-VM_SECRETS_DIR="/home/${VM_USER}/.yashigani/docker/secrets"
+# Determine secrets dir on VM — install.sh writes secrets into the clone dir
+VM_SECRETS_DIR="${VM_CLONE_DIR}/docker/secrets"
 
 _ev_section "release_gate_probe.sh output"
 
@@ -544,11 +558,22 @@ PROBE_OUTPUT=""
 # Capture probe output regardless of exit code — success/failure is determined
 # by whether the output contains "Admin1 login HTTP: 200" (SOP 4 grep contract).
 # shellcheck disable=SC2030
+# For Podman rootless, admin credential files are chowned to UID 1001 (subuid-mapped)
+# by _pki_chown_client_keys/gate-#ROOTLESS-11 so the backoffice container can read them.
+# After chown, the host user (su) cannot `cat` them directly — they're 0600 owned by
+# the subuid-mapped UID. Use `podman unshare cat` to read within the user namespace.
+# Docker installs leave files owned by the installer user — plain `cat` works there.
+PROBE_CAT_PREFIX="cat"
+if [[ "${RUNTIME}" == "podman" ]]; then
+  PROBE_CAT_PREFIX="podman unshare cat"
+fi
+
 { PROBE_OUTPUT="$(
     _vm_ssh "
       HISTFILE=/dev/null bash '/home/${VM_USER}/release_gate_probe_${TIMESTAMP}.sh' \
         --base-url 'https://${INSTALL_DOMAIN}:${HTTPS_PORT}' \
-        --secrets-dir '${VM_SECRETS_DIR}' 2>&1
+        --secrets-dir '${VM_SECRETS_DIR}' \
+        --cat-prefix '${PROBE_CAT_PREFIX}' 2>&1
     " 2>&1
   )"; } || true
 
