@@ -36,6 +36,8 @@ from yashigani.backoffice.routes.crypto_inventory import router as crypto_invent
 from yashigani.backoffice.routes.csp_report import router as csp_report_router
 # Service management (enable/disable optional compose profiles from admin panel)
 from yashigani.backoffice.routes.services import router as services_router
+# v2.23.2 — Backup status + verify (#47)
+from yashigani.backoffice.routes.backup import router as backup_router
 
 __all__ = [
     "auth_router", "accounts_router", "users_router",
@@ -59,4 +61,6 @@ __all__ = [
     "crypto_inventory_router",
     # ASVS 3.4.7
     "csp_report_router",
+    # v2.23.2 — Backup status + verify (#47)
+    "backup_router",
 ]

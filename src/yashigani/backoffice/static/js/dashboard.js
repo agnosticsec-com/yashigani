@@ -21,6 +21,7 @@ function showPage(name, triggerEl) {
     if (name === 'models') loadModels();
     if (name === 'sensitivity') loadSensitivity();
     if (name === 'settings') loadSettings();
+    if (name === 'backup') loadBackup();
 }
 
 async function api(path) {
@@ -1142,6 +1143,10 @@ document.addEventListener('click', function(e) {
         case 'disableService':
             toggleService(e.target.dataset.service, 'disable');
             break;
+        // Backup
+        case 'verifyBackup':
+            verifyBackup();
+            break;
     }
 });
 
@@ -1182,3 +1187,77 @@ async function toggleService(serviceId, action) {
 }
 
 loadServices();
+
+// Backup status + verify
+async function loadBackup() {
+    var container = document.getElementById('backup-status-container');
+    var btn = document.getElementById('btn-verify-latest');
+    if (!container) return;
+    container.innerHTML = '<span class="loading">Loading...</span>';
+    var data = await api('/admin/backup/status');
+    if (!data) {
+        container.innerHTML = '<p class="error">Failed to load backup status.</p>';
+        return;
+    }
+    if (!data.backups || data.backups.length === 0) {
+        container.innerHTML = '<p style="font-size:0.85rem;color:#64748b;">No backups found.</p>';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    var manifestBadge = function(state) {
+        if (state === 'signed') return '<span class="badge badge-green">Signed</span>';
+        if (state === 'unsigned') return '<span class="badge badge-yellow">Unsigned</span>';
+        return '<span class="badge badge-red">Corrupt</span>';
+    };
+    var rows = data.backups.map(function(b) {
+        return '<tr>' +
+            '<td style="font-family:monospace;font-size:0.8rem">' + escapeHtml(b.name) + '</td>' +
+            '<td>' + escapeHtml(b.type) + '</td>' +
+            '<td style="font-size:0.8rem;color:#64748b">' + (b.created_at ? escapeHtml(b.created_at) : 'unknown') + '</td>' +
+            '<td>' + manifestBadge(b.manifest_state) + '</td>' +
+            '<td style="font-size:0.8rem">' + (b.size_bytes / 1024).toFixed(1) + ' KB</td>' +
+            '</tr>';
+    }).join('');
+    container.innerHTML = '<table><thead><tr><th>Name</th><th>Type</th><th>Created</th><th>Manifest</th><th>Size</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    if (btn) {
+        btn.disabled = false;
+        btn.dataset.backupName = data.latest ? data.latest.name : '';
+    }
+}
+
+async function verifyBackup() {
+    var btn = document.getElementById('btn-verify-latest');
+    var resultDiv = document.getElementById('backup-verify-result');
+    if (!btn || !resultDiv) return;
+    var backupName = btn.dataset.backupName;
+    if (!backupName) return;
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = '<span class="loading">Verifying...</span>';
+    btn.disabled = true;
+    try {
+        var resp = await apiMutate('/admin/backup/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({backup_name: backupName})
+        });
+        if (!resp) { resultDiv.innerHTML = '<span class="badge badge-red">Error</span> <span style="font-size:0.8rem;color:#b91c1c">Request failed or was cancelled</span>'; return; }
+        var data = await resp.json();
+        if (resp.ok && data.ok) {
+            resultDiv.innerHTML = '<span class="badge badge-green">PASS</span> <span style="font-size:0.8rem;color:#334155">' + escapeHtml(data.backup_name) + ' &mdash; manifest: ' + escapeHtml(data.manifest_state) + ' &mdash; verified at ' + escapeHtml(data.verified_at) + '</span>';
+        } else if (resp.ok && !data.ok) {
+            var mismatches = (data.mismatches || []).map(function(m) {
+                var rec = m.recorded ? m.recorded.substring(0, 12) + '...' : 'n/a';
+                var comp = m.computed ? m.computed.substring(0, 12) + '...' : 'n/a';
+                return '<li style="font-size:0.75rem;font-family:monospace">' + escapeHtml(m.file) + ' (' + escapeHtml(m.issue || 'mismatch') + '): recorded=' + rec + ' computed=' + comp + '</li>';
+            }).join('');
+            resultDiv.innerHTML = '<span class="badge badge-red">FAIL</span> <span style="font-size:0.8rem;color:#334155">' + escapeHtml(data.backup_name) + ' &mdash; manifest: ' + escapeHtml(data.manifest_state) + '</span>' + (mismatches ? '<ul style="margin-top:6px;padding-left:16px">' + mismatches + '</ul>' : '');
+        } else {
+            var errDetail = (data && data.detail && data.detail.error) ? data.detail.error : ('HTTP ' + resp.status);
+            resultDiv.innerHTML = '<span class="badge badge-red">Error</span> <span style="font-size:0.8rem;color:#b91c1c">' + escapeHtml(errDetail) + '</span>';
+        }
+    } catch (err) {
+        resultDiv.innerHTML = '<span class="badge badge-red">Error</span> <span style="font-size:0.8rem;color:#b91c1c">Request failed: ' + escapeHtml(err.message) + '</span>';
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}

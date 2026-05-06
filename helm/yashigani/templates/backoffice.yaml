@@ -114,6 +114,10 @@ spec:
               value: "docker"
             - name: YASHIGANI_SERVICE_NAME
               value: "backoffice"
+            # v2.23.2 #47 — Backup status + verify mount path.
+            # Always set; Python falls back gracefully if the dir is empty/absent.
+            - name: YASHIGANI_BACKUPS_DIR
+              value: "/data/backups"
             {{- if .Values.adminBootstrap.enabled }}
             # Retro #3ap — pull the generated admin1 username out of the
             # adminBootstrap Secret. _bootstrap_admin_accounts in app.py uses
@@ -274,6 +278,12 @@ spec:
               mountPath: /etc/yashigani
               readOnly: true
             {{- end }}
+            {{- if .Values.backoffice.backupsHostPath }}
+            # v2.23.2 #47 — Backup status + verify: mount host backups dir read-only.
+            - name: backups
+              mountPath: /data/backups
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -307,6 +317,14 @@ spec:
         - name: secrets
           emptyDir:
             sizeLimit: 10Mi
+        {{- end }}
+        {{- if .Values.backoffice.backupsHostPath }}
+        # v2.23.2 #47 — Backup directory hostPath volume (read-only).
+        # Set backoffice.backupsHostPath in values.yaml to the absolute host path.
+        - name: backups
+          hostPath:
+            path: {{ .Values.backoffice.backupsHostPath | quote }}
+            type: DirectoryOrCreate
         {{- end }}
 ---
 apiVersion: v1

@@ -76,6 +76,8 @@ from yashigani.backoffice.routes import (
     models_router,
     sensitivity_router,
     sso_router,
+    # v2.23.2 — Backup status + verify (#47)
+    backup_router,
 )
 
 
@@ -412,6 +414,7 @@ def create_backoffice_app() -> FastAPI:
         ("/admin/rbac",                 32 * 1024),
         ("/admin/alerts",               32 * 1024),
         ("/admin/budget",               16 * 1024),
+        ("/admin/backup",               256),          # backup_name only (ASVS 4.3.1)
         ("/auth/login",                 4 * 1024),    # u/p/totp
         ("/auth/password/change",       8 * 1024),
         ("/auth/password/self-reset",   4 * 1024),
@@ -572,6 +575,9 @@ def create_backoffice_app() -> FastAPI:
     # Service management — enable/disable optional compose profiles from admin panel
     from yashigani.backoffice.routes.services import router as services_router
     app.include_router(services_router, tags=["services"])
+
+    # v2.23.2 — Backup status + verify (#47)
+    app.include_router(backup_router, tags=["backup"])
 
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)

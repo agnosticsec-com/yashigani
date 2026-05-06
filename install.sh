@@ -2576,6 +2576,11 @@ compose_up() {
   else
     mkdir -p "${data_dir}/audit"
   fi
+  # v2.23.2 #47 — Backup directory: must exist before compose up so that
+  # Podman rootless bind-mount (-v host:container:ro) does not fail on a
+  # missing source path. Docker silently creates missing bind-mount sources;
+  # Podman rootless does not, causing backoffice to crash at startup.
+  mkdir -p "${WORK_DIR}/backups"
   mkdir -p "${WORK_DIR}/docker/tls"
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do

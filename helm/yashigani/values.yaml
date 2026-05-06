@@ -283,6 +283,11 @@ backoffice:
   pdb:
     enabled: true
     minAvailable: 1
+  # v2.23.2 #47 — Backup status + verify.
+  # Set to the absolute host path of the backups directory (created by install.sh).
+  # Empty string = skip the mount (endpoints return empty state gracefully).
+  # Example: /opt/yashigani/backups
+  backupsHostPath: ""
 
 # ---------------------------------------------------------------------------
 # Policy — Open Policy Agent
