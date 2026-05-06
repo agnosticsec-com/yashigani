@@ -594,6 +594,8 @@ async def _proxy_request_body(
     # Inspect the upstream response for indirect prompt injection before
     # returning it to the agent. Raw body is never stored; only a hash.
     response_verdict: Optional[str] = None
+    # F-T10-001: 1.0 = clean pass (no inspection or skipped); overwritten below.
+    proxy_inspection_confidence: float = 1.0
     resp_pipeline = state.get("response_inspection_pipeline")
     if resp_pipeline is not None:
         resp_body_text = _decode_body_safe(upstream_response.content)
@@ -608,6 +610,8 @@ async def _proxy_request_body(
             )
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict
+                # F-T10-001: capture inspection confidence for operator UI
+                proxy_inspection_confidence = resp_result.confidence
             if resp_result.verdict == "BLOCKED":
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 _audit_request(
@@ -726,6 +730,15 @@ async def _proxy_request_body(
     # 5e. Attach response inspection verdict header when present (v0.9.0)
     if response_verdict is not None:
         response.headers["X-Yashigani-Response-Verdict"] = response_verdict
+
+    # 5e-T10. F-T10-001: Generated-content disclaimer + inspection confidence.
+    # X-Yashigani-Generated-Content is always true for proxy responses — the
+    # upstream (MCP server, LLM, tool) produces content that downstream consumers
+    # should not treat as ground truth without verification.
+    response.headers["X-Yashigani-Generated-Content"] = "true"
+    response.headers["X-Yashigani-Response-Inspection-Confidence"] = (
+        f"{proxy_inspection_confidence:.4f}"
+    )
 
     # 5f. PII detection header (v2.2)
     _pii_any = pii_detected_on_request or pii_detected_on_response

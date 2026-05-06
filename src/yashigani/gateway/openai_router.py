@@ -6,6 +6,22 @@ and other OpenAI-compatible clients can use. All requests go through the
 full Yashigani pipeline: identity resolution, sensitivity scan, complexity
 scoring, budget enforcement, OE routing, PII filtering, and audit.
 
+v2.23.2 (F-T10-001): Overreliance UX controls.
+  Every LLM response now carries:
+  - ``X-Yashigani-Generated-Content: true`` — informs operator UIs that the
+    response body is AI-generated content, enabling badge/disclaimer rendering.
+  - ``X-Yashigani-Response-Inspection-Confidence`` — float [0.0–1.0]; the
+    response-inspection pipeline confidence score.  "1.0" when inspection is
+    disabled or skipped (clean-pass default).  Operator UIs render a low-
+    confidence badge when this value is below the configured threshold.
+  - ``X-Yashigani-Low-Confidence-Stepup: required`` — emitted when the
+    response-inspection confidence falls below YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD
+    (default 0.50) **and** the sensitivity level is CONFIDENTIAL or RESTRICTED.
+    The operator UI intercept is expected to surface a "verify before acting"
+    prompt.  This closes OWASP Agentic AI T10 (Overreliance) gap F-T10-001.
+
+  ASVS mapping: V13.2.6 (LLM output handling); OWASP Agentic AI T10 Overreliance.
+
 v1.0: Buffered responses only (Decision 13). Full response collected
 before delivery to enable response inspection and token counting.
 
@@ -138,6 +154,12 @@ class OpenAIRouterState:
         self.opa_url: str = "https://policy:8181"
         # Content relay detection (agent-to-agent laundering)
         self.content_relay_detector = None
+        # F-T10-001: low-confidence step-up threshold.  When response-inspection
+        # confidence falls below this value AND sensitivity >= CONFIDENTIAL,
+        # X-Yashigani-Low-Confidence-Stepup: required is added to the response.
+        self.low_confidence_stepup_threshold: float = float(
+            os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
+        )
 
 
 _state = OpenAIRouterState()
@@ -180,6 +202,10 @@ def configure(
     _state.pii_cloud_bypass = pii_cloud_bypass
     _state.opa_url = opa_url
     _state.content_relay_detector = content_relay_detector
+    # F-T10-001: low-confidence step-up threshold (env-configurable)
+    _state.low_confidence_stepup_threshold = float(
+        os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
+    )
 
     # v2.2 — streaming config from environment
     _state.streaming_enabled = (
@@ -621,6 +647,12 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     # Budget headers intentionally omitted — see module docstring.
                     # PII header reflects request-path scan only (response is streamed).
                     "X-Yashigani-PII-Detected": "true" if pii_detected_on_request else "false",
+                    # F-T10-001: generated-content disclaimer always present.
+                    # Confidence defaults to 1.0 on streaming (response body not
+                    # yet available when headers are committed); StreamingInspector
+                    # flags anomalies in-band via SSE event field, not via header.
+                    "X-Yashigani-Generated-Content": "true",
+                    "X-Yashigani-Response-Inspection-Confidence": "1.0000",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",  # disable Nginx/Caddy buffering
                 },
@@ -810,6 +842,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # *said*, not the JSON envelope wrapping it. Using "text/plain" ensures
     # the exempt_content_types list cannot inadvertently skip this check.
     response_verdict = "clean"
+    # F-T10-001: default to 1.0 (no inspection = clean pass, full confidence).
+    # When inspection runs this is overwritten with the actual pipeline score.
+    response_inspection_confidence: float = 1.0
     if _state.response_inspection_pipeline is not None and assistant_content:
         try:
             # session_id and agent_id are best-effort from identity; fall back
@@ -826,6 +861,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             )
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict.lower()
+                # F-T10-001: capture inspection confidence for operator UI badge
+                response_inspection_confidence = resp_result.confidence
 
             if resp_result.verdict == "BLOCKED":
                 logger.warning(
@@ -978,7 +1015,22 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         "X-Yashigani-Elapsed-Ms": str(elapsed_ms),
         "X-Yashigani-Response-Verdict": response_verdict,
         "X-Yashigani-PII-Detected": "true" if _pii_detected_any else "false",
+        # F-T10-001: Overreliance UX controls — present on every LLM response.
+        # Operator UIs use these to render generated-content badges and
+        # low-confidence warnings (OWASP Agentic AI T10).
+        "X-Yashigani-Generated-Content": "true",
+        "X-Yashigani-Response-Inspection-Confidence": f"{response_inspection_confidence:.4f}",
     }
+    # F-T10-001: low-confidence step-up signal.
+    # Emitted when inspection confidence is below threshold AND the prompt
+    # sensitivity is CONFIDENTIAL or RESTRICTED — the combination that most
+    # warrants human verification before acting on the response.
+    _high_sensitivity = sensitivity_level in ("CONFIDENTIAL", "RESTRICTED")
+    if (
+        response_inspection_confidence < _state.low_confidence_stepup_threshold
+        and _high_sensitivity
+    ):
+        headers["X-Yashigani-Low-Confidence-Stepup"] = "required"
     if budget_total > 0:
         headers["X-Yashigani-Budget-Used"] = str(budget_used)
         headers["X-Yashigani-Budget-Total"] = str(budget_total)
