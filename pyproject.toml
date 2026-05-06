@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T09:00:00+01:00
+# Last updated: 2026-05-06T00:00:00+01:00
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -44,7 +44,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
     "PyJWT>=2.8",
-    "cryptography>=42,<47",   # 47.0.0 crashes with SIGILL on Podman VM aarch64 (macOS Podman gate Round 3, 2026-04-29)
+    "cryptography>=42,<49",   # 48.0.0: PQ mldsa+mlkem (OpenSSL≥3.5), stricter X.509/CRL parsing (see BC note below). 47.0.0 had SIGILL on Podman VM aarch64 (macOS Podman gate Round 3, 2026-04-29); 48.0.0 resolves it.
     "opentelemetry-api>=1.24",
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-grpc>=1.24",
