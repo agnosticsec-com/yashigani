@@ -210,8 +210,14 @@ services:
     security_opt:
       - no-new-privileges:true
       # Seccomp default (Pentest finding #2 — enabled by default in v2.23.1).
-      # Profile ships at docker/seccomp/yashigani.json. Override with
-      # YASHIGANI_SECCOMP_PROFILE=unconfined if a host kernel rejects it.
+      # Path fix (#31/#4): install.sh sets YASHIGANI_SECCOMP_PROFILE to an
+      # absolute path (${WORK_DIR}/docker/seccomp/yashigani.json) so both Docker
+      # Compose and native Podman-compose (podman-compose 1.x / podman compose)
+      # resolve the profile without path-doubling. The ./seccomp/... fallback is
+      # correct for manual `docker compose up` from inside docker/ — Docker
+      # Compose v2 resolves ./ relative to the compose file directory.
+      # Override: set YASHIGANI_SECCOMP_PROFILE=unconfined if a host kernel
+      # rejects the profile (non-standard kernels, nested virtualisation).
       - seccomp=${YASHIGANI_SECCOMP_PROFILE:-./seccomp/yashigani.json}
       # AppArmor default (Linux hosts with apparmor loaded).
       # Load once per host: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
@@ -350,7 +356,7 @@ services:
     security_opt:
       - no-new-privileges:true
       # Seccomp + AppArmor default (Pentest finding #2 — enabled in v2.23.1).
-      # See gateway service above for override env var documentation.
+      # See gateway service above for path resolution and override documentation.
       - seccomp=${YASHIGANI_SECCOMP_PROFILE:-./seccomp/yashigani.json}
       # Backoffice shares the gateway AppArmor profile (same Python/FastAPI
       # surface). A dedicated yashigani-backoffice profile may ship later.
