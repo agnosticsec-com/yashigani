@@ -38,8 +38,9 @@ _MANIFEST_SIG_FILE = "MANIFEST.sha256.sig"
 # CWE-200 sentinel: always return this string, never str(_BACKUPS_DIR).
 _BACKUPS_DIR_RELATIVE = "backups"
 
-# Path traversal: only alphanumerics, underscores, hyphens, and dots allowed.
-_BACKUP_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\.]+$")
+# Path traversal guard: must start with alphanumeric (prevents "." and ".." names).
+# Subsequent chars may include underscores, hyphens, and dots.
+_BACKUP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-\.]*$")
 
 
 def _manifest_state(backup_dir: Path) -> str:

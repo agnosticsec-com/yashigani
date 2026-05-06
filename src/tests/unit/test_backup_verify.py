@@ -184,6 +184,18 @@ async def test_verify_path_traversal(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_name", [".", "..", "./", "../"])
+async def test_verify_dot_only_names_rejected_at_regex(client: AsyncClient, bad_name: str):
+    """Dot-only names ('.', '..', './', '../') must be rejected by _BACKUP_NAME_RE (regex layer),
+    not merely by the resolved-path check.  CWE-22 / ASVS 9.2.1."""
+    r = await client.post("/admin/backup/verify", json={"backup_name": bad_name})
+    assert r.status_code == 422
+    assert r.json()["detail"]["error"] == "invalid_backup_name", (
+        f"Expected regex-layer rejection for {bad_name!r}, got: {r.json()}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_verify_not_found(client: AsyncClient):
     """Valid name but dir doesn't exist → 404."""
     r = await client.post("/admin/backup/verify", json={"backup_name": "nonexistent_backup"})

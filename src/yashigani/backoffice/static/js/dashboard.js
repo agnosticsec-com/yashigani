@@ -1235,13 +1235,12 @@ async function verifyBackup() {
     resultDiv.innerHTML = '<span class="loading">Verifying...</span>';
     btn.disabled = true;
     try {
-        var resp = await fetch('/admin/backup/verify', {
+        var resp = await apiMutate('/admin/backup/verify', {
             method: 'POST',
-            credentials: 'same-origin',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({backup_name: backupName})
         });
-        if (resp.status === 401) { window.location.href = '/admin/login'; return; }
+        if (!resp) { resultDiv.innerHTML = '<span class="badge badge-red">Error</span> <span style="font-size:0.8rem;color:#b91c1c">Request failed or was cancelled</span>'; return; }
         var data = await resp.json();
         if (resp.ok && data.ok) {
             resultDiv.innerHTML = '<span class="badge badge-green">PASS</span> <span style="font-size:0.8rem;color:#334155">' + escapeHtml(data.backup_name) + ' &mdash; manifest: ' + escapeHtml(data.manifest_state) + ' &mdash; verified at ' + escapeHtml(data.verified_at) + '</span>';
