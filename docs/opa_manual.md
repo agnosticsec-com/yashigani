@@ -1,9 +1,18 @@
 # Yashigani — OPA Policy Manual
 
 **Version:** v2.23.2
-**Last updated:** 2026-05-03
+**Last updated:** 2026-05-06
 **Policy engine:** Open Policy Agent (OPA) v0.x, rootless container
 **Policy language:** Rego (v1 import keywords)
+
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](<TBD: agnosticsec.com/yashigani/licensing>).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](<TBD: agnosticsec.com/yashigani/non-profit>).
 
 ---
 
