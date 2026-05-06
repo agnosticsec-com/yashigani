@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -157,9 +158,17 @@ class OpenAIRouterState:
         # F-T10-001: low-confidence step-up threshold.  When response-inspection
         # confidence falls below this value AND sensitivity >= CONFIDENTIAL,
         # X-Yashigani-Low-Confidence-Stepup: required is added to the response.
-        self.low_confidence_stepup_threshold: float = float(
-            os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
-        )
+        # Guard: empty or non-numeric env var must not crash module load.
+        _thresh_raw = os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
+        try:
+            self.low_confidence_stepup_threshold: float = float(_thresh_raw)
+        except ValueError:
+            logger.warning(
+                "YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD is not a valid float "
+                "(got %r); using default 0.50",
+                _thresh_raw,
+            )
+            self.low_confidence_stepup_threshold = 0.50
 
 
 _state = OpenAIRouterState()
@@ -202,10 +211,18 @@ def configure(
     _state.pii_cloud_bypass = pii_cloud_bypass
     _state.opa_url = opa_url
     _state.content_relay_detector = content_relay_detector
-    # F-T10-001: low-confidence step-up threshold (env-configurable)
-    _state.low_confidence_stepup_threshold = float(
-        os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
-    )
+    # F-T10-001: low-confidence step-up threshold (env-configurable).
+    # Guard: empty or non-numeric env var must not crash configure().
+    _thresh_raw = os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
+    try:
+        _state.low_confidence_stepup_threshold = float(_thresh_raw)
+    except ValueError:
+        logger.warning(
+            "YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD is not a valid float "
+            "(got %r); using default 0.50",
+            _thresh_raw,
+        )
+        _state.low_confidence_stepup_threshold = 0.50
 
     # v2.2 — streaming config from environment
     _state.streaming_enabled = (
@@ -862,12 +879,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict.lower()
                 # F-T10-001: capture inspection confidence for operator UI badge.
-                # Clamp to [0.0, 1.0]: classifiers are duck-typed and could return
-                # NaN or Inf; :.4f would propagate those as non-numeric strings,
-                # breaking clients that parse the header as a float.
-                response_inspection_confidence = max(
-                    0.0, min(1.0, float(resp_result.confidence))
-                )
+                # Clamp to [0.0, 1.0] with explicit isfinite guard.  Python's
+                # min/max do not propagate NaN reliably (max(0.0, min(1.0, NaN))
+                # returns 1.0, not 0.0), so we must check isfinite first.
+                # A broken classifier returning NaN/Inf is treated as 0.0
+                # (minimum confidence), ensuring step-up fires conservatively.
+                _raw_conf = float(resp_result.confidence)
+                response_inspection_confidence = max(0.0, min(1.0, _raw_conf)) if math.isfinite(_raw_conf) else 0.0
 
             if resp_result.verdict == "BLOCKED":
                 logger.warning(

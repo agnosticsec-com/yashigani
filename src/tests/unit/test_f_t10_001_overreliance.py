@@ -353,31 +353,42 @@ class TestConfidenceClamping:
 
     def test_t17_router_clamps_confidence(self):
         """
-        T17a: openai_router.py must clamp response_inspection_confidence to
-        [0.0, 1.0] at the capture site.  Checks for max() + min(1.0 + confidence
-        co-presence, which is format-agnostic across single-line and multiline styles.
+        T17a: openai_router.py must guard confidence with math.isfinite before
+        clamping to [0.0, 1.0].  Python's min/max do NOT reliably propagate NaN
+        (max(0.0, min(1.0, NaN)) == 1.0, not 0.0), so an explicit isfinite check
+        is required.  A broken classifier returning NaN is treated as 0.0
+        (minimum confidence), ensuring step-up fires conservatively.
         """
-        assert "min(1.0, float(resp_result.confidence))" in _ROUTER_SRC or \
-               "min(1.0, resp_result.confidence)" in _ROUTER_SRC, (
-            "F-T10-001 Tom review: response_inspection_confidence must be clamped to "
-            "[0.0, 1.0] in openai_router.py via min(1.0, ...) + max(0.0, ...). "
-            "A classifier returning NaN/Inf would produce a non-numeric header value."
+        assert "math.isfinite" in _ROUTER_SRC, (
+            "F-T10-001 Tom review: math.isfinite guard missing from openai_router.py. "
+            "Python min/max return 1.0 for NaN (not 0.0), silently suppressing the "
+            "step-up signal on a broken classifier. Use isfinite check before clamping."
         )
-        assert "max(" in _ROUTER_SRC and "0.0," in _ROUTER_SRC, (
-            "F-T10-001 Tom review: clamp lower bound (max, 0.0) missing from "
-            "openai_router.py — confidence could go negative."
+        assert "_raw_conf" in _ROUTER_SRC, (
+            "F-T10-001 Tom review: _raw_conf intermediate not found in openai_router.py — "
+            "needed to hold float(resp_result.confidence) for the isfinite guard."
+        )
+        assert "min(1.0, _raw_conf)" in _ROUTER_SRC, (
+            "F-T10-001 Tom review: min(1.0, _raw_conf) clamp missing from openai_router.py."
+        )
+        assert "max(0.0," in _ROUTER_SRC, (
+            "F-T10-001 Tom review: max(0.0, ...) lower bound missing from openai_router.py."
         )
 
     def test_t17_proxy_clamps_confidence(self):
         """
-        T17b: proxy.py must also clamp proxy_inspection_confidence to [0.0, 1.0].
+        T17b: proxy.py must apply the same math.isfinite-guarded clamp.
         """
-        assert "min(1.0, float(resp_result.confidence))" in _PROXY_SRC or \
-               "min(1.0, resp_result.confidence)" in _PROXY_SRC, (
-            "F-T10-001 Tom review: proxy_inspection_confidence must be clamped to "
-            "[0.0, 1.0] in proxy.py via min(1.0, ...) + max(0.0, ...)."
+        assert "math.isfinite" in _PROXY_SRC, (
+            "F-T10-001 Tom review: math.isfinite guard missing from proxy.py. "
+            "Python min/max return 1.0 for NaN, not 0.0."
         )
-        assert "max(" in _PROXY_SRC and "0.0," in _PROXY_SRC, (
-            "F-T10-001 Tom review: clamp lower bound (max, 0.0) missing from "
-            "proxy.py — confidence could go negative."
+        assert "_raw_conf" in _PROXY_SRC, (
+            "F-T10-001 Tom review: _raw_conf intermediate not found in proxy.py."
+        )
+        assert "min(1.0, _raw_conf)" in _PROXY_SRC, (
+            "F-T10-001 Tom review: min(1.0, _raw_conf) clamp missing from proxy.py."
+        )
+        assert "max(0.0," in _PROXY_SRC, (
+            "F-T10-001 Tom review: max(0.0, ...) lower bound missing from proxy.py."
         )

@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import ipaddress
 import logging
+import math
 import os
 import time
 import uuid
@@ -611,10 +612,9 @@ async def _proxy_request_body(
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict
                 # F-T10-001: capture inspection confidence for operator UI.
-                # Clamp to [0.0, 1.0] — see openai_router.py comment for rationale.
-                proxy_inspection_confidence = max(
-                    0.0, min(1.0, float(resp_result.confidence))
-                )
+                # isfinite guard + clamp — see openai_router.py comment for rationale.
+                _raw_conf = float(resp_result.confidence)
+                proxy_inspection_confidence = max(0.0, min(1.0, _raw_conf)) if math.isfinite(_raw_conf) else 0.0
             if resp_result.verdict == "BLOCKED":
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 _audit_request(
