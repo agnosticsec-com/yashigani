@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-03T12:00:00+01:00 -->
+<!-- last-updated: 2026-05-06T23:59:00+01:00 -->
 
 # Changelog
 
@@ -16,9 +16,25 @@ No unreleased changes yet for the next version.
 
 ---
 
-## [v2.23.2] — 2026-05-03
+## [v2.23.2] — 2026-05-06 **[LAST PUBLIC RELEASE]**
 
-Theme: **Security Hardening + Supply-Chain Controls + ASVS L3 92%**.
+Theme: **Security Hardening + Supply-Chain Controls + ASVS L3 92% + Agentic AI Overreliance Controls**.
+
+> **This is the last publicly distributed release of Yashigani.** v2.23.3 and beyond are private. See [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md) for the full cutover notice.
+
+Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md)
+
+### Today's batch (2026-05-06)
+
+- **#44** `72a93fa` — feat(security): OWASP Agentic AI T10 overreliance UX controls (F-T10-001) — three `X-Yashigani-*` response headers on every LLM/agent response; `math.isfinite` NaN/Inf clamp; env-var fallback on threshold; 16 regression tests
+- **#43** `43ef0fa` — fix(images): pin all external images to multi-arch manifest INDEX digests — closes Podman parity P-8 (aarch64 exec-format crash) and smoke-gate V232-SMOKE-001
+- **#47** `2b65b0a` — fix(install): non-interactive bind-mount mkdir — `install.sh` pre-creates bind-mount dirs; no sudo in installer body
+- **#46** `8aacdae` — feat(uninstall): `--yes` / `-y` flag for unattended removal
+- **#50** `39f6fee` — chore(release): Gate 6a specialist-per-language review codified in pre-flight checklist
+- **#45** `057faa4` — chore(helm): grafana 12.4.3 → 13.0.1 + close `helm/charts/grafana/values.yaml` "latest" pinning gap
+- **#52** `<#52 SHA>` — fix(compose): Podman healthcheck silent-drop (P-9) — rebased replacement for #49 *(SHA pending merge)*
+
+### Previous batch (2026-05-03)
 
 ### Security
 
