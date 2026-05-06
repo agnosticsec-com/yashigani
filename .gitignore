@@ -74,10 +74,12 @@ scripts/_asvs_*.py
 # License signing (NEVER public)
 scripts/sign_license.py
 scripts/generate_license.py
-backups/
 
-# Backup data (contains secrets)
-backups/
+# Backup data (contains secrets) — all contents ignored except .gitkeep.
+# The directory must be tracked (via .gitkeep) so Podman rootless bind-mount
+# does not fail on a missing host path (Docker auto-creates; Podman does not).
+backups/*
+!backups/.gitkeep
 
 # Docker secrets (never commit)
 docker/secrets/
