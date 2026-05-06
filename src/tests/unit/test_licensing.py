@@ -188,7 +188,7 @@ def _make_payload(
 
 class TestLicenseTier:
     def test_all_expected_tiers_exist(self):
-        expected = {"community", "igniter", "starter", "professional", "professional_plus", "enterprise", "academic_nonprofit"}
+        expected = {"community", "igniter", "starter", "professional", "professional_plus", "enterprise", "academic_nonprofit", "canary"}
         actual = {t.value for t in LicenseTier}
         assert actual == expected
 
