@@ -215,11 +215,11 @@ _vm_cleanup() {
   fi
   _info "VM teardown: stopping containers and removing clone..."
   # Run teardown via uninstall.sh (best-effort — don't fail the runner on teardown errors)
-  # uninstall.sh --remove-volumes prompts interactively; pipe "yes" to stdin.
+  # --yes skips the interactive confirmation added in #87.
   _vm_ssh "
     if [[ -f '${VM_CLONE_DIR}/uninstall.sh' ]]; then
       cd '${VM_CLONE_DIR}' && \
-      echo 'yes' | YSG_RUNTIME=${RUNTIME} bash uninstall.sh --remove-volumes 2>&1 || true
+      YSG_RUNTIME=${RUNTIME} bash uninstall.sh --remove-volumes --yes 2>&1 || true
     fi
     rm -rf '${VM_CLONE_DIR}'
     ${RUNTIME} system prune -f 2>/dev/null || true
