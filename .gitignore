@@ -92,3 +92,6 @@ docker/secrets/
 
 # Internal operating notes for maintainer tooling — never commit
 CLAUDE.md
+
+# CI artifacts downloaded locally for smoke-test triage — never commit
+ci-artifacts/
