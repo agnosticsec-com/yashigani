@@ -207,9 +207,23 @@ def test_register_agent_route_returns_402_at_limit(tier_name: str):
     set_license(_build_license(tier_name))
     max_agents = TIER_DEFAULTS[tier_name]["max_agents"]
 
+    from yashigani.licensing.enforcer import LicenseLimitExceeded as _LLE
+
     class _MockRegistry:
-        def count(self) -> int:
+        def count(self, status: str = "active") -> int:
             return max_agents  # exactly at the boundary
+
+        def register(self, **kwargs):
+            # GROUP-4 moved limit enforcement into register() via Lua; the
+            # mock raises LicenseLimitExceeded to simulate the atomic path.
+            raise _LLE(
+                limit_name="max_agents",
+                current=max_agents,
+                max_val=max_agents,
+            )
+
+        def get(self, agent_id: str):
+            return None  # never reached in the limit-exceeded path
 
     # Save then patch backoffice singleton state.
     original_registry = state_mod.backoffice_state.agent_registry
