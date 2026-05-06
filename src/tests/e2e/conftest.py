@@ -177,7 +177,7 @@ def _stack_running() -> bool:
       * http://localhost:8080/healthz    (gateway direct, when Caddy is off)
       * YASHIGANI_HEALTH_URL              (explicit override for custom deploys)
 
-    Fixed for Ava Wave 2 Issue #33 — previously hard-coded :443 which
+    Fixed for QA Wave 2 Issue #33 — previously hard-coded :443 which
     missed macOS installs (installer uses :8443 to avoid root-privilege
     socket binding), causing all e2e tests to silently skip with
     "Yashigani stack not running".

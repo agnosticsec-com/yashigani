@@ -1,7 +1,7 @@
 """
 yashigani.net — centralised outbound HTTP client with SSRF guardrails.
 
-Lu Wave 2 Finding #5 / Ava API7: 17 outbound `httpx` / `requests` call
+QA Wave 2 finding #5 (API7): 17 outbound `httpx` / `requests` call
 sites across the code base lacked a uniform allowlist wrapper. The gateway
 upstream is admin-configured (fine), but alert sinks, backoffice routes
 for agents/models, and a handful of other callers made raw outbound HTTP

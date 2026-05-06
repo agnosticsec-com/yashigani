@@ -52,7 +52,7 @@ install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDA
 #     verification chain leaf → intermediate (in chain) → ca_root (in trust
 #     store). With ca_intermediate.crt as the only anchor, postgres tries to
 #     verify the intermediate against itself and fails because the intermediate
-#     is signed by ca_root, not self-signed (Su #58a evidence, 2026-04-28).
+#     is signed by ca_root, not self-signed (Platform gate #58a evidence, 2026-04-28).
 #   * Concatenating both gives postgres both anchors: leaf-only clients verify
 #     against ca_intermediate; chain-bundle clients verify against ca_root at
 #     depth 2. Defense-in-depth — works regardless of client cert format.

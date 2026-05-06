@@ -294,7 +294,7 @@ class TestTotpReplayAvaA006:
         AVA-A006: a code used at window T-1 must be rejected when replayed at
         window T (next 30-second window).
 
-        This tests the cross-window replay scenario Ava observed: the code was
+        This tests the cross-window replay scenario QA observed: the code was
         submitted once at T-1 (step-up request 1), then replayed at T (step-up
         request 2).  With the buggy verify_totp(), window_key is always based on
         the CURRENT wall-clock window, so:

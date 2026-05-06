@@ -201,7 +201,7 @@ class LocalAuthService:
         the user proves possession of the seed via
         :meth:`provision_totp_confirm`.
 
-        Part of the split-enrolment flow added for Ava Wave 2 Issue C: the
+        Part of the split-enrolment flow added for QA Wave 2 Issue C: the
         previous atomic ``provision_totp`` required a ``totp_code`` on the
         same call that returned the seed — impossible for a first-time
         client.

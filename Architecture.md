@@ -34,7 +34,7 @@ AI Agent / Human (via Open WebUI or API)
         |                       /admin/* → Backoffice
         |                       /v1/*, /agents/*, /* → Gateway
         v
-[ Identity Broker ]         <-- Multi-IdP: OIDC + SAML v2 (v2.0)
+[ Identity Broker ]         <-- Multi-IdP: OIDC + SAML v2 (since v2.0)
         |                       Unified identity model (kind field)
         v
 [ Authentication Layer ]    <-- Session auth, API key, Bearer token,
@@ -43,7 +43,7 @@ AI Agent / Human (via Open WebUI or API)
 [ RBAC / Authorization ]    <-- OPA policy engine, role resolution
         |
         v
-[ PII Detection ]           <-- 10 PII types, LOG/REDACT/BLOCK (v2.20)
+[ PII Detection ]           <-- 10 PII types, LOG/REDACT/BLOCK (since v2.20)
         |                       Bidirectional, cloud bypass opt-in
         v
 [ Sensitivity Pipeline ]    <-- Three layers (all ON by default):
@@ -53,13 +53,13 @@ AI Agent / Human (via Open WebUI or API)
         |                       + CHS credential detection
         |                       + Payload masking before AI send
         v
-[ Optimization Engine ]     <-- Four-dimensional routing (v2.0):
+[ Optimization Engine ]     <-- Four-dimensional routing (since v2.0):
         |                       sensitivity + complexity + budget + cost
         |                       P1-P9 priority matrix
         |                       CONFIDENTIAL/RESTRICTED → always local
         |                       Budget exhaustion → degrade to local
         v
-[ Budget Enforcement ]      <-- Three-tier hierarchy (v2.0):
+[ Budget Enforcement ]      <-- Three-tier hierarchy (since v2.0):
         |                       org cloud cap → group → individual
         |                       budget-redis (noeviction)
         v
@@ -67,17 +67,17 @@ AI Agent / Human (via Open WebUI or API)
         |
         v
 [ OPA Routing Safety Net ]  <-- Second OPA pass on routing decisions
-        |                       + LLM policy review (v2.0)
+        |                       + LLM policy review (since v2.0)
         v
 [ Upstream LLM / MCP ]      <-- Cloud API / Ollama / MCP tool server
         |
         v
-[ Response Inspection ]     <-- Sensitivity + PII scan on response (v2.20)
-        |                       Streaming: chunk-level inspection (v2.20)
+[ Response Inspection ]     <-- Sensitivity + PII scan on response (since v2.20)
+        |                       Streaming: chunk-level inspection (since v2.20)
         |
         v
 [ Audit Write ]             <-- File + PostgreSQL + SIEM (async)
-        |                       P1-P5 alert severity (v2.0)
+        |                       P1-P5 alert severity (since v2.0)
         v
 AI Agent / Human (response)
 ```
@@ -90,19 +90,19 @@ AI Agent / Human (response)
 |---|---|
 | **Gateway (data plane)** | Reverse proxy, TLS, auth, inspection, rate limiting, routing, Optimization Engine |
 | **Backoffice (control plane)** | Admin UI/API, identity management, policy editor, license validation, budget admin |
-| **Open WebUI** | Chat interface at /chat/*, internal network only, all LLM calls through gateway (v2.0) |
-| **Optimization Engine** | Four-dimensional routing: sensitivity + complexity + budget + cost; P1-P9 priority matrix (v2.0) |
-| **Identity Broker** | Multi-IdP identity broker: OIDC + SAML v2; Caddy delegates auth (v2.0) |
-| **Pool Manager** | Per-identity container lifecycle: create, route, health, replace, scale, postmortem forensics (v2.0) |
-| **OPA Policy Engine** | Declarative, version-controlled authorization for every tool call; routing safety net with LLM policy review (v2.0) |
-| **Sensitivity Pipeline** | Three-layer classification: regex + FastText ML + Ollama; all ON by default (v2.0) |
+| **Open WebUI** | Chat interface at /chat/*, internal network only, all LLM calls through gateway (since v2.0) |
+| **Optimization Engine** | Four-dimensional routing: sensitivity + complexity + budget + cost; P1-P9 priority matrix (since v2.0) |
+| **Identity Broker** | Multi-IdP identity broker: OIDC + SAML v2; Caddy delegates auth (since v2.0) |
+| **Pool Manager** | Per-identity container lifecycle: create, route, health, replace, scale, postmortem forensics (since v2.0) |
+| **OPA Policy Engine** | Declarative, version-controlled authorization for every tool call; routing safety net with LLM policy review (since v2.0) |
+| **Sensitivity Pipeline** | Three-layer classification: regex + FastText ML + Ollama; all ON by default (since v2.0) |
 | **Inspection Pipeline** | FastText ML + multi-backend LLM inspection with fail-closed sentinel |
-| **Audit Pipeline** | Multi-sink writer: file, PostgreSQL, Splunk, Elasticsearch, Wazuh; P1-P5 alert severity with SIEM integration (v2.0) |
+| **Audit Pipeline** | Multi-sink writer: file, PostgreSQL, Splunk, Elasticsearch, Wazuh; P1-P5 alert severity with SIEM integration (since v2.0) |
 | **PgBouncer** | PostgreSQL connection pooler, prevents connection exhaustion (password from .env since v1.09.5) |
 | **Redis** | Rate limiting, response caching, anomaly detection sliding windows |
-| **Budget Redis** | Dedicated budget counter store (noeviction policy), prevents counter eviction under memory pressure (v2.0) |
+| **Budget Redis** | Dedicated budget counter store (noeviction policy), prevents counter eviction under memory pressure (since v2.0) |
 | **Key Management System** | KMS integration: Keeper, AWS KMS, Azure Key Vault, GCP KMS, HashiCorp Vault |
-| **Prometheus / Grafana** | Metrics collection and 12 dashboards (9 existing + 3 new: budget, OE, pool manager) (v2.0) |
+| **Prometheus / Grafana** | Metrics collection and 12 dashboards (9 existing + 3 new: budget, OE, pool manager) (since v2.0) |
 | **Loki / Promtail** | Log aggregation and shipping |
 | **Alertmanager** | 3-channel escalation: Slack/email → PagerDuty |
 | **OpenTelemetry / Jaeger** | Distributed tracing across gateway, inspection, and upstream |
@@ -407,17 +407,17 @@ The initial release established the core security envelope. Yashigani began as a
 - Multiple admin accounts with minimum-count enforcement
 - **Dual admin accounts provisioned at install (v0.9.1, v1.09.5)** — two accounts with fun animal/nature-themed codenames created during installation; TOTP 2FA pre-provisioned for both at install time
 - Admin account lockout protection (brute-force resistance)
-- **HIBP k-Anonymity breach check on password change (v0.9.1)** — `PasswordBreachedError` raised on known-breached passwords; OWASP ASVS V2.1.7 compliant; fail-open if API unreachable
-- **Unified identity model (v2.0)** — every entity (human or service) is an identity with a `kind` field; no separate user/agent stores; same governance, budget, RBAC, and audit for all identity kinds
-- **Multi-IdP Identity Broker (v2.0)** — Yashigani IS the identity broker; OIDC + SAML v2 native; Caddy delegates auth to backoffice; SCIM provisions users/groups; IdP limits tier-gated
-- **User API keys (v2.0)** — 256-bit hex, bcrypt cost 12, max lifetime 1 year hard limit, default rotation 90 days, 7-day grace period, 14-day warning
-- **PKCE on OIDC (v2.22)** — code_verifier/code_challenge on all OIDC flows; prevents authorization code interception
-- **acr/amr validation (v2.22)** — authentication strength enforcement on ID tokens
-- **__Host- cookie prefix (v2.22)** — session cookies enforce Secure, Path=/, no Domain attribute
-- **Fail2ban auth throttle (v2.22)** — per-IP (3 failures) + global (5 failures), x5 escalation (30s-625m), permanent IP block after max
-- **Self-service password reset (v2.22)** — TOTP-verified, no admin needed
-- **Context-specific password word list (v2.22)** — blocks "yashigani", "admin", "password" etc.
-- **Password max age policy (v2.23)** — admin-configurable via `YASHIGANI_PASSWORD_MAX_AGE_DAYS` (max 13 months)
+- **HIBP k-Anonymity breach check on password change (since v0.9.1)** — `PasswordBreachedError` raised on known-breached passwords; OWASP ASVS V2.1.7 compliant; fail-open if API unreachable
+- **Unified identity model (since v2.0)** — every entity (human or service) is an identity with a `kind` field; no separate user/agent stores; same governance, budget, RBAC, and audit for all identity kinds
+- **Multi-IdP Identity Broker (since v2.0)** — Yashigani IS the identity broker; OIDC + SAML v2 native; Caddy delegates auth to backoffice; SCIM provisions users/groups; IdP limits tier-gated
+- **User API keys (since v2.0)** — 256-bit hex, bcrypt cost 12, max lifetime 1 year hard limit, default rotation 90 days, 7-day grace period, 14-day warning
+- **PKCE on OIDC (since v2.22)** — code_verifier/code_challenge on all OIDC flows; prevents authorization code interception
+- **acr/amr validation (since v2.22)** — authentication strength enforcement on ID tokens
+- **__Host- cookie prefix (since v2.22)** — session cookies enforce Secure, Path=/, no Domain attribute
+- **Fail2ban auth throttle (since v2.22)** — per-IP (3 failures) + global (5 failures), x5 escalation (30s-625m), permanent IP block after max
+- **Self-service password reset (since v2.22)** — TOTP-verified, no admin needed
+- **Context-specific password word list (since v2.22)** — blocks "yashigani", "admin", "password" etc.
+- **Password max age policy (since v2.23)** — admin-configurable via `YASHIGANI_PASSWORD_MAX_AGE_DAYS` (max 13 months)
 
 ### 5.2 Authorization and Policy
 
@@ -428,12 +428,12 @@ The initial release established the core security envelope. Yashigani began as a
 - Hot-reloadable policies without gateway restarts
 - Multi-organization support (Enterprise tier)
 - Agent and organization limits enforced per license tier
-- **OPA Policy Assistant** — natural language → RBAC JSON suggestion with admin approve/reject flow and full audit trail (v0.7.0)
+- **OPA Policy Assistant** — natural language → RBAC JSON suggestion with admin approve/reject flow and full audit trail (since v0.7.0)
 - **CIDR-based IP allowlisting per agent** — requests from authenticated agents outside their IP allowlist are blocked 403 and audited
-- **OPA routing safety net (v2.0)** — second OPA pass on every routing decision; local LLM validates OPA policy changes before applying (checks for self-lock, contradictions, scope issues, routing conflicts); SAFE/WARNING/BLOCK verdicts
-- **OPA on ALL /v1 traffic (v2.22)** — request path AND response path enforcement on every `/v1/chat/completions` request; fail-closed if OPA unreachable
-- **IP allowlist + blocklist (v2.22)** — IPv4/IPv6/CIDR, admin manageable; blocklist takes precedence
-- **Content relay detection (v2.22)** — agent-to-agent content laundering detection
+- **OPA routing safety net (since v2.0)** — second OPA pass on every routing decision; local LLM validates OPA policy changes before applying (checks for self-lock, contradictions, scope issues, routing conflicts); SAFE/WARNING/BLOCK verdicts
+- **OPA on ALL /v1 traffic (since v2.22)** — request path AND response path enforcement on every `/v1/chat/completions` request; fail-closed if OPA unreachable
+- **IP allowlist + blocklist (since v2.22)** — IPv4/IPv6/CIDR, admin manageable; blocklist takes precedence
+- **Content relay detection (since v2.22)** — agent-to-agent content laundering detection
 
 ### 5.3 Content Inspection and AI Safety
 
@@ -451,11 +451,11 @@ The initial release established the core security envelope. Yashigani began as a
 - Response masking and sanitization
 - Anomaly detection: repeated-small-call pattern detection (Redis ZSET sliding window)
 - Inference payload logging (AES-256-GCM encrypted, stored in Postgres)
-- **Sensitivity classification pipeline (v2.0)** — three layers, all ON by default: regex pattern matching (PII, PCI, IP, PHI), FastText ML classifier, Ollama LLM classification; admin can opt out of Ollama but cannot disable regex; results feed into Optimization Engine routing
-- **Optimization Engine (v2.0)** — four-dimensional routing (sensitivity + complexity + budget + cost); P1-P9 priority matrix; CONFIDENTIAL/RESTRICTED always local; budget exhaustion degrades to local, never rejects
-- **Model alias table (v2.0)** — DB-driven via admin API, Postgres + Redis cache, CRUD at `/admin/models/aliases`
-- **Agent personas (v2.22)** — Lala (Langflow), Julietta (Letta), Scout (OpenClaw) with descriptions and example prompts
-- **Agent chaining (v2.22)** — invoke multiple agents in one prompt (e.g., `@Scout` -> `@Julietta` -> `@qwen`); `@Help` agent provides chaining guide
+- **Sensitivity classification pipeline (since v2.0)** — three layers, all ON by default: regex pattern matching (PII, PCI, IP, PHI), FastText ML classifier, Ollama LLM classification; admin can opt out of Ollama but cannot disable regex; results feed into Optimization Engine routing
+- **Optimization Engine (since v2.0)** — four-dimensional routing (sensitivity + complexity + budget + cost); P1-P9 priority matrix; CONFIDENTIAL/RESTRICTED always local; budget exhaustion degrades to local, never rejects
+- **Model alias table (since v2.0)** — DB-driven via admin API, Postgres + Redis cache, CRUD at `/admin/models/aliases`
+- **Agent personas (since v2.22)** — Lala (Langflow), Julietta (Letta), Scout (OpenClaw) with descriptions and example prompts
+- **Agent chaining (since v2.22)** — invoke multiple agents in one prompt (e.g., `@Scout` -> `@Julietta` -> `@qwen`); `@Help` agent provides chaining guide
 
 ### 5.4 Audit and Compliance
 
@@ -467,19 +467,19 @@ The initial release established the core security envelope. Yashigani began as a
   - Elasticsearch
   - Wazuh SIEM
 - PostgreSQL audit tables with row-level security
-- Monthly partition management via pg_partman, pg_cron, and Kubernetes CronJob (v0.7.0)
-- Partition bootstrap migration pre-creates 14 months of partitions at install time (v0.7.1)
+- Monthly partition management via pg_partman, pg_cron, and Kubernetes CronJob (since v0.7.0)
+- Partition bootstrap migration pre-creates 14 months of partitions at install time (since v0.7.1)
 - Full request/response payload capture per audit event
 - Inspection verdict recorded per audit event
 - OPA policy decision recorded per audit event
 - Agent identity recorded per audit event
 - Wazuh self-hosted SIEM integration
-- Audit events for: IP allowlist violations, rate limit threshold changes, OPA assistant generate/apply/reject (v0.7.0)
-- **Routing decisions as audit events (v2.0)** — every OE routing decision written to all SIEM sinks via existing audit pipeline
-- **P1-P5 alert severity scale (v2.0)** — sensitivity breach (P1), OPA override (P1), classification conflict (P2), spending anomaly (P2), budget auto-switch (P3); SIEM integration for all severity levels
-- **Audit log viewer (v2.22)** — search, filter, and CSV export from the admin panel
-- **OWASP compliance review (v2.22)** — OWASP ASVS v5 (all 17 chapters) + API Security + Agentic AI / LLM Top 10; per-control verdicts with file:line evidence; pre-release gate
-- **Risk register (v2.22)** — 16 risks with 5x5 matrix and quantitative analysis
+- Audit events for: IP allowlist violations, rate limit threshold changes, OPA assistant generate/apply/reject (since v0.7.0)
+- **Routing decisions as audit events (since v2.0)** — every OE routing decision written to all SIEM sinks via existing audit pipeline
+- **P1-P5 alert severity scale (since v2.0)** — sensitivity breach (P1), OPA override (P1), classification conflict (P2), spending anomaly (P2), budget auto-switch (P3); SIEM integration for all severity levels
+- **Audit log viewer (since v2.22)** — search, filter, and CSV export from the admin panel
+- **OWASP compliance review (since v2.22)** — OWASP ASVS v5 (all 17 chapters) + API Security + Agentic AI / LLM Top 10; per-control verdicts with file:line evidence; pre-release gate
+- **Risk register (since v2.22)** — 16 risks with 5x5 matrix and quantitative analysis
 
 ### 5.5 Rate Limiting and Abuse Prevention
 
@@ -487,10 +487,10 @@ The initial release established the core security envelope. Yashigani began as a
 - Response caching for CLEAN-only verdicts (SHA-256 keyed, Redis-backed)
 - Anomaly detection for enumeration and bulk extraction patterns
 - Admin account lockout on repeated failed authentication
-- **Auth throttle (in-process, fail2ban-style)** — per-IP (3 failures) + global (5 failures) thresholds; ×5 delay escalation (30s → 60s → 300s → 1500s → 7500s, cap 37500s); IP block after maximum escalation. Implemented inline at `backoffice/routes/auth.py` — no separate fail2ban daemon required (v2.22)
-- **Runtime-configurable RPI scale thresholds** — tune medium/high/critical throttle multipliers from the backoffice without a gateway restart; changes audited (v0.7.0)
+- **Auth throttle (in-process, fail2ban-style)** — per-IP (3 failures) + global (5 failures) thresholds; ×5 delay escalation (30s → 60s → 300s → 1500s → 7500s, cap 37500s); IP block after maximum escalation. Implemented inline at `backoffice/routes/auth.py` — no separate fail2ban daemon required (since v2.22)
+- **Runtime-configurable RPI scale thresholds** — tune medium/high/critical throttle multipliers from the backoffice without a gateway restart; changes audited (since v0.7.0)
 
-### 5.6 Budget Governance (v2.0)
+### 5.6 Budget Governance (since v2.0)
 
 - **Three-tier budget hierarchy** — org cloud cap → group budgets → individual budgets; math always enforced
 - Sum of individual budgets never exceeds group budget; sum of group budgets never exceeds org cap
@@ -507,14 +507,14 @@ The initial release established the core security envelope. Yashigani began as a
 - bcrypt password hashing
 - AES-256-GCM column encryption in PostgreSQL via pgcrypto
 - Several KMS supported - Keeper Security, AWS, GCP, Azure and HashiCorp Vault
-- ECDSA P-256 offline licence signature verification (v0.9.0) — ML-DSA-65 migration planned when cryptography library ships FIPS 204 support
-- Hybrid TLS X25519+ML-KEM-768 Caddyfile config included (pending Caddy 2.10) (v0.9.0)
+- ECDSA P-256 offline licence signature verification (since v0.9.0) — ML-DSA-65 migration planned when cryptography library ships FIPS 204 support
+- Hybrid TLS X25519+ML-KEM-768 Caddyfile config included (pending Caddy 2.10) (since v0.9.0)
 - TLS bootstrap: ACME (Let's Encrypt / ACME-compatible), CA-signed, self-signed (demo)
-- **Constant-time TOTP comparison (v2.22)** — `hmac.compare_digest` prevents timing side-channel attacks
-- **Crypto inventory API (v2.22)** — `/admin/crypto/inventory` exposes all algorithms, key sizes, and usages; admin UI with JSON export
-- **In-tree two-tier PKI (v2.23.1)** — `yashigani.pki.issuer` generates root + intermediate + per-service leaves at install time; rotation via `install.sh rotate-*` or `/admin/settings/internal-pki` API
-- **Optional ACME runtime CA (v2.23)** — Smallstep step-ca compose service (`--with-internal-ca`) for deployments that want ACME-style runtime cert lifecycle on top of (or instead of) the in-tree issuer
-- **Domain-bound licensing (v2.23)** — license keys bound to deployment domain via ECDSA P-256 signatures
+- **Constant-time TOTP comparison (since v2.22)** — `hmac.compare_digest` prevents timing side-channel attacks
+- **Crypto inventory API (since v2.22)** — `/admin/crypto/inventory` exposes all algorithms, key sizes, and usages; admin UI with JSON export
+- **In-tree two-tier PKI (since v2.23.1)** — `yashigani.pki.issuer` generates root + intermediate + per-service leaves at install time; rotation via `install.sh rotate-*` or `/admin/settings/internal-pki` API
+- **Optional ACME runtime CA (since v2.23)** — Smallstep step-ca compose service (`--with-internal-ca`) for deployments that want ACME-style runtime cert lifecycle on top of (or instead of) the in-tree issuer
+- **Domain-bound licensing (since v2.23)** — license keys bound to deployment domain via ECDSA P-256 signatures
 
 ### 5.8 Observability and Alerting
 
@@ -523,26 +523,26 @@ The initial release established the core security envelope. Yashigani began as a
 - OpenTelemetry distributed tracing (OTLP export to Jaeger)
 - Loki log aggregation + Promtail log shipping
 - Alertmanager 3-channel escalation: Slack + email (level 1) → PagerDuty (level 2)
-- **Direct webhook alerting** — Slack, Microsoft Teams, PagerDuty as lightweight sinks for P1 events, independent of Alertmanager (v0.7.0)
-- **`yashigani_audit_partition_missing` gauge** — fires when an upcoming monthly audit partition is absent; paired Alertmanager alert rule at `severity: critical` (v0.7.0)
-- **Licence expiry background monitor** — daily check dispatches warning/critical alert when licence is within configurable day threshold (v0.7.1)
+- **Direct webhook alerting** — Slack, Microsoft Teams, PagerDuty as lightweight sinks for P1 events, independent of Alertmanager (since v0.7.0)
+- **`yashigani_audit_partition_missing` gauge** — fires when an upcoming monthly audit partition is absent; paired Alertmanager alert rule at `severity: critical` (since v0.7.0)
+- **Licence expiry background monitor** — daily check dispatches warning/critical alert when licence is within configurable day threshold (since v0.7.1)
 - Structured JSON logging throughout all components
-- **12 Grafana dashboards (v2.0)** — 9 existing + 3 new: budget monitoring, Optimization Engine routing, Pool Manager container lifecycle
-- **Grafana + Prometheus admin access (v2.22)** — accessible at `/admin/grafana/` and `/admin/prometheus/` via Caddy forward_auth
-- **Monitoring tab (v2.22)** — admin UI tab with Grafana dashboard links, Prometheus, and Wazuh
-- **Wazuh SIEM full stack (v2.22)** — manager + indexer + dashboard as optional compose profile (`--wazuh`)
-- **Dashboard auto-refresh (v2.22)** — 15-second interval on admin dashboard
-- **Session timeout warning (v2.22)** — 10-minute banner before session expiry
-- **First-run onboarding checklist (v2.22)** — guided setup for new installations
-- **CSP report endpoint (v2.23)** — Content Security Policy violation reporting
+- **12 Grafana dashboards (since v2.0)** — 9 existing + 3 new: budget monitoring, Optimization Engine routing, Pool Manager container lifecycle
+- **Grafana + Prometheus admin access (since v2.22)** — accessible at `/admin/grafana/` and `/admin/prometheus/` via Caddy forward_auth
+- **Monitoring tab (since v2.22)** — admin UI tab with Grafana dashboard links, Prometheus, and Wazuh
+- **Wazuh SIEM full stack (since v2.22)** — manager + indexer + dashboard as optional compose profile (`--wazuh`)
+- **Dashboard auto-refresh (since v2.22)** — 15-second interval on admin dashboard
+- **Session timeout warning (since v2.22)** — 10-minute banner before session expiry
+- **First-run onboarding checklist (since v2.22)** — guided setup for new installations
+- **CSP report endpoint (since v2.23)** — Content Security Policy violation reporting
 
 ### 5.9 Infrastructure and Deployment
 
 - Universal installer (Linux, macOS, cloud VM, bare-metal; auto-detects OS, arch, cloud provider, GPU, and container runtime)
-- GPU detection at install time: Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA (nvidia-smi, CUDA), AMD (rocm-smi, ROCm), lspci fallback; model recommendations printed based on detected VRAM (v0.8.4)
+- GPU detection at install time: Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA (nvidia-smi, CUDA), AMD (rocm-smi, ROCm), lspci fallback; model recommendations printed based on detected VRAM (since v0.8.4)
 - Podman support as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.4; runtime detection, compose command selection, and auto-apply podman override in v1.09.5)
-- Interactive fallback prompts when OS, runtime, or GPU detection fails (v0.8.4)
-- `update.sh` script for updating existing installations with automatic backup, pull, restart, and rollback (v0.8.4)
+- Interactive fallback prompts when OS, runtime, or GPU detection fails (since v0.8.4)
+- `update.sh` script for updating existing installations with automatic backup, pull, restart, and rollback (since v0.8.4)
 - Docker Compose single-node deployment
 - Kubernetes Helm charts (production-ready)
 - KEDA horizontal autoscaling
@@ -563,30 +563,30 @@ The initial release established the core security envelope. Yashigani began as a
   - **Lala** — Langflow (port 8000) — multi-agent orchestration framework; shares Postgres (separate DB) and Redis (DB 5)
   - **Julietta** — Letta (port 8283) — Stateful agent with persistent memory (formerly MemGPT)
   - **Scout** — OpenClaw (port 18789) — personal AI with 30+ messaging integrations; `OPENCLAW_CONFIG_JSON` routes through gateway
-- **Agent chaining (v2.22)** — invoke multiple agents in a single prompt (`@Scout` -> `@Julietta` -> `@qwen`); `@Help` agent provides chaining guide
-- **Open WebUI integration (v2.0)** — optional chat interface at `/chat/*` (`--with-openwebui`), internal Docker network only (no external port), all LLM calls through gateway, Caddy forwards trusted headers
-- **Container Pool Manager (v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
-- **Dynamic per-identity containers (v2.0)** — managed by Pool Manager; license tier gates container limits
-- **17 always-on core services + 10 optional services via compose profiles (v2.23)** — up from 18 in v1.09.5; plus dynamic per-identity containers managed by the Pool Manager
-- **548 tests passing (v2.20)** — 523 unit + 25 e2e
-- **Optional services via compose profiles (v2.23)** — openwebui, wazuh, internal-ca, langflow, letta, openclaw; controlled by installer flags
-- **Admin service management (v2.23)** — enable/disable any optional service from the admin panel without SSH
-- **Optional ACME runtime CA (v2.23)** — Smallstep step-ca compose service (`--with-internal-ca`) for deployments that want runtime ACME cert management; in-tree two-tier PKI issuer at install time provides default-on mTLS without it
-- **Strict CSP (v2.23)** — `script-src 'self'; style-src 'self'`, zero `unsafe-inline`, `object-src none`, `base-uri none`, `cross-origin-opener-policy: same-origin`
-- **API-first admin UI (v2.23)** — static SPA with external JS/CSS; all logic in backend APIs; no Jinja2 templates, no inline code
-- **restore.sh (v2.23)** — backup recovery for secrets, `.env`, and Postgres dumps
-- **macOS Podman support (v2.23)** — socket detection via `podman machine inspect`
+- **Agent chaining (since v2.22)** — invoke multiple agents in a single prompt (`@Scout` -> `@Julietta` -> `@qwen`); `@Help` agent provides chaining guide
+- **Open WebUI integration (since v2.0)** — optional chat interface at `/chat/*` (`--with-openwebui`), internal Docker network only (no external port), all LLM calls through gateway, Caddy forwards trusted headers
+- **Container Pool Manager (since v2.0)** — per-identity container isolation; universal lifecycle: create, route, health check, replace, scale, postmortem; self-healing (replace, don't fix); postmortem forensics (logs, inspect, filesystem diff preserved before kill); Ollama horizontal scaling on load
+- **Dynamic per-identity containers (since v2.0)** — managed by Pool Manager; license tier gates container limits
+- **17 always-on core services + 10 optional services via compose profiles (since v2.23)** — up from 18 in v1.09.5; plus dynamic per-identity containers managed by the Pool Manager
+- **548 tests passing (since v2.20)** — 523 unit + 25 e2e
+- **Optional services via compose profiles (since v2.23)** — openwebui, wazuh, internal-ca, langflow, letta, openclaw; controlled by installer flags
+- **Admin service management (since v2.23)** — enable/disable any optional service from the admin panel without SSH
+- **Optional ACME runtime CA (since v2.23)** — Smallstep step-ca compose service (`--with-internal-ca`) for deployments that want runtime ACME cert management; in-tree two-tier PKI issuer at install time provides default-on mTLS without it
+- **Strict CSP (since v2.23)** — `script-src 'self'; style-src 'self'`, zero `unsafe-inline`, `object-src none`, `base-uri none`, `cross-origin-opener-policy: same-origin`
+- **API-first admin UI (since v2.23)** — static SPA with external JS/CSS; all logic in backend APIs; no Jinja2 templates, no inline code
+- **restore.sh (since v2.23)** — backup recovery for secrets, `.env`, and Postgres dumps
+- **macOS Podman support (since v2.23)** — socket detection via `podman machine inspect`
 
 ### 5.10 Licensing and Tiers
 
 - 6-tier licensing model: Community / Non-profit & Education / Starter / Professional / Professional Plus / Enterprise
-- ECDSA P-256 offline license verification — no call-home, works air-gapped (v0.9.0) — ML-DSA-65 migration planned when cryptography library ships FIPS 204 support
+- ECDSA P-256 offline license verification — no call-home, works air-gapped (since v0.9.0) — ML-DSA-65 migration planned when cryptography library ships FIPS 204 support
 - Three independent limit dimensions: agents, end users, admin seats
 - **Agent limits per tier:** Community (20), Non-profit & Education (1,500), Starter (300), Professional (1,500), Professional Plus (15,000), Enterprise (unlimited)
 - **End-user limits per tier:** Community (5), Non-profit & Education (500), Starter (100), Professional (500), Professional Plus (5,000), Enterprise (unlimited)
 - **Admin-seat limits per tier:** Community (2), Non-profit & Education (25), Starter (10), Professional (25), Professional Plus (100), Enterprise (unlimited)
-- **Container limits per tier (v2.0):** Community (1 per service per identity, 3 total), Non-profit & Education (3/15), Starter (1/5), Professional (3/15), Professional Plus (5/50), Enterprise (unlimited)
-- **IdP limits per tier (v2.0):** Community (local auth only), Non-profit & Education (1 OIDC; SAML available as optional add-on), Starter (1 OIDC), Professional (1 OIDC + 1 SAML), Professional Plus (5 IdPs), Enterprise (unlimited)
+- **Container limits per tier (since v2.0):** Community (1 per service per identity, 3 total), Non-profit & Education (3/15), Starter (1/5), Professional (3/15), Professional Plus (5/50), Enterprise (unlimited)
+- **IdP limits per tier (since v2.0):** Community (local auth only), Non-profit & Education (1 OIDC; SAML available as optional add-on), Starter (1 OIDC), Professional (1 OIDC + 1 SAML), Professional Plus (5 IdPs), Enterprise (unlimited)
 - Community tier: free, Apache 2.0, 20 agents, 5 end users, 2 admins, 1 org
 - Non-profit & Education tier: £500/yr base (verified institution: 501(c)(3), registered charity, accredited educational institution, or .edu primary domain) — covers verification + admin ops cost. **Partnership waiver available** — fee waived in exchange for non-monetary contribution agreed via MOU (co-authored whitepaper, inclusion in research papers, designated consulting access from institutional experts, or equivalent value). Features: OIDC + SCIM, 1,500 agents, 500 end users, 25 admin seats. SAML v2 available as optional paid add-on
 - Starter, Professional, Professional Plus, Enterprise: signed license key required

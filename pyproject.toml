@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T09:00:00+01:00
+# Last updated: 2026-05-05T00:00:00+01:00 (cleanup: drop stale requirements-{kms,phase2}.txt; KSM providers live in [project.optional-dependencies])
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -25,7 +25,9 @@ dependencies = [
     "redis>=5.0",
     # Inspection / AI
     # (Ollama is accessed via local HTTP — no SDK required)
-    # KSM — base; provider extras listed in requirements-kms.txt
+    # KSM — base scheduler; provider extras live in [project.optional-dependencies]
+    # below (`keeper`, `aws`, `azure`, `gcp`, `vault`). Install one or more via
+    # `pip install -e ".[aws]"` etc., or the convenience aggregate `[kms-all]`.
     "apscheduler>=3.10",
     # SSO
     "authlib>=1.3",
@@ -54,11 +56,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# KSM provider extras — install one (or `kms-all` for every provider).
 keeper  = ["keeper-secrets-manager-core>=16"]
 aws     = ["boto3>=1.34"]
 azure   = ["azure-keyvault-secrets>=4.8", "azure-identity>=1.17"]
 gcp     = ["google-cloud-secret-manager>=2.20"]
 vault   = ["hvac>=2.1"]
+kms-all = [
+    "keeper-secrets-manager-core>=16",
+    "boto3>=1.34",
+    "azure-keyvault-secrets>=4.8",
+    "azure-identity>=1.17",
+    "google-cloud-secret-manager>=2.20",
+    "hvac>=2.1",
+]
 nvidia  = ["pynvml>=11.5"]
 fasttext = ["fasttext-wheel>=0.9.2"]
 cloud-inspection = [
@@ -133,7 +144,7 @@ exclude = [
 ]
 
 [tool.ruff]
-# Lint configuration (ASVS 16.6.1 log-injection defence — Ava Wave 2 #48).
+# Lint configuration (ASVS 16.6.1 log-injection defence — QA Wave 2 #48).
 # Keep the rule set narrow; we're not running ruff as a general formatter,
 # only as a guardrail against log-injection and a handful of other
 # high-value security regressions. Additional rule groups can be enabled

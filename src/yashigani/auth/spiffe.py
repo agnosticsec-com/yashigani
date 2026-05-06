@@ -86,7 +86,7 @@ _DEFAULT_MANIFEST_PATH = "/etc/yashigani/service_identities.yaml"
 # so on the Caddy-proxied path this is also trustworthy.
 #
 # Resolution rule (same as gateway/openai_router.py:_resolve_identity at
-# `a054877` — Lu F-1B EX-231-10 closure 2026-04-29 for the backoffice leg):
+# `a054877` — Internal F-1B EX-231-10 closure 2026-04-29 for the backoffice leg):
 # prefer the peer-cert header when present, fall back to the Caddy-set
 # header. This closes the LF-SPIFFE-FORGE bypass uniformly across both
 # `/internal/metrics` consumers (gateway proxy.py:166 + backoffice app.py:488).
@@ -272,7 +272,7 @@ def require_spiffe_id(path: str) -> Callable[[Request], Coroutine[Any, Any, str]
         # {http.request.tls.client.san.uris.0} at the Caddy→upstream hop —
         # SpiffePeerCertMiddleware does NOT see the Caddy-injected header
         # because it runs on the upstream side, after Caddy injects it).
-        # Lu F-1B EX-231-10 (2026-04-29). LAURA-V232-002 (2026-04-30).
+        # Internal F-1B EX-231-10 (2026-04-29). LAURA-V232-002 (2026-04-30).
         #
         # LAURA-V232-002 defence-in-depth note: SpiffePeerCertMiddleware now
         # strips client-supplied x-spiffe-id before route handlers run, so

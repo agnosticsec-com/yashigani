@@ -48,7 +48,7 @@ async def create_pool() -> Pool:
     #   asyncpg.exceptions.DuplicatePreparedStatementError:
     #     prepared statement "__asyncpg_stmt_1__" already exists
     # This bites multi-replica K8s deployments (replicaCount: 2 by default for
-    # gateway + backoffice) but not single-replica compose. Captain #58c #3bu
+    # gateway + backoffice) but not single-replica compose. Platform gate #58c #3bu
     # evidence (2026-04-29). Cost: every query is parsed each time (no plan
     # cache reuse), but pgbouncer in transaction mode would invalidate the
     # cache anyway — disabling it explicitly is the documented fix.

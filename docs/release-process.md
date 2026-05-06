@@ -104,12 +104,9 @@ opengrep-summary.txt      # Grep-able verdict lines:
 
 ## 4. Evidence Archive
 
-Per `feedback_yashigani_repo_code_only.md`: CI evidence lives OUTSIDE the yashigani repo.
+CI evidence lives OUTSIDE the yashigani repo (in the DevOps evidence repository).
 
-**Archive root:**
-```
-/Users/max/Documents/Claude/Internal/Compliance/yashigani/v<version>/ci-evidence/<sha>/
-```
+**Archive root:** a DevOps evidence directory, organised by version + commit SHA.
 
 **Archive script:** `scripts/archive_ci_artifacts.sh`
 
@@ -140,7 +137,7 @@ Run this one-liner before cutting any release tag. Every line must exit 0.
 # whether SHA is short or full. Resolve with git rev-parse first.
 SHA=$(git rev-parse ec46ab4)
 VER=2.23.1
-BASE="/Users/max/Documents/Claude/Internal/Compliance/yashigani/v${VER}/ci-evidence/${SHA}"
+BASE="${YASHIGANI_EVIDENCE_ROOT:?set to the DevOps evidence directory}/v${VER}/ci-evidence/${SHA}"
 
 grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \
   && grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.13-*/verdict-3.13.txt \
@@ -150,7 +147,7 @@ grep -q "Unit tests: PASS" "${BASE}"/unit-tests-py3.12-*/verdict-3.12.txt \
   || echo "FAIL — one or more gates not green"
 ```
 
-Per `feedback_evidence_bound_task_closure.md` SOP-5: M7 boxes tick ONLY when this grep passes on real downloaded artifacts. CI URL alone is not sufficient.
+SOP-5: M7 boxes tick ONLY when this grep passes on real downloaded artifacts. CI URL alone is not sufficient.
 
 ---
 
@@ -194,5 +191,5 @@ The `build-push.yml` and `release.yml` workflows trigger automatically on `v*.*.
 1. Fast-forward `main` to the release tag: `git push origin 2.23.x:main`.
 2. Update `README.md` and `docs/` for the new version.
 3. Archive the release evidence directory to long-term storage.
-4. Write the release retro (ISO 9001 §9.3/10.2/10.3) at `/Internal/Compliance/yashigani/v<ver>/retro.md`.
+4. Write the release retro (ISO 9001 §9.3/10.2/10.3) in the DevOps evidence repository.
 5. Open the next version milestone on GitHub.

@@ -5,7 +5,7 @@ Revises: 0005
 Create Date: 2026-04-23
 
 Rationale:
-    P0-2 (Lu YCS-20260423-v2.23.1-OWASP-3X): LocalAuthService persisted
+    P0-2 (Internal YCS-20260423-v2.23.1-OWASP-3X): LocalAuthService persisted
     admin accounts in an in-memory dict, so password rotations and TOTP
     re-enrolments silently reverted on backoffice restart — a durability
     failure that violates ASVS V2.1 and V2.8. This migration creates the

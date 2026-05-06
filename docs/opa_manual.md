@@ -35,7 +35,7 @@
 12. [Fail-Closed Guarantee](#12-fail-closed-guarantee)
 13. [Troubleshooting](#13-troubleshooting)
 14. [Reference — All Input Fields](#14-reference--all-input-fields)
-15. [OPA Policy Assistant (v0.7.0)](#15-opa-policy-assistant-v070)
+15. [OPA Policy Assistant (since v0.7.0)](#15-opa-policy-assistant-v070)
 
 ---
 
@@ -83,7 +83,7 @@ policy/
 ├── yashigani.rego          # Main policy — default deny, session gate, blocked paths
 ├── rbac.rego               # RBAC module — user group membership → resource access
 ├── agents.rego             # Agent-to-agent authorization
-├── v1_routing.rego         # Optimization Engine routing safety net (v2.0)
+├── v1_routing.rego         # Optimization Engine routing safety net (since v2.0)
 └── data/
     └── rbac_data.json      # Bootstrap data (empty by default — populated at runtime)
 ```
@@ -111,7 +111,7 @@ Responsibilities:
 - Defines `agent_call_deny_reason`: human-readable string used in audit events (one of three reasons)
 - Path helper `_agent_path_matches`: exact match, `"**"`, `/prefix/**`, or bare prefix (implicit subtree)
 
-### `v1_routing.rego` — Optimization Engine Routing Safety Net (v2.0)
+### `v1_routing.rego` — Optimization Engine Routing Safety Net (since v2.0)
 
 Responsibilities:
 - Validates routing decisions made by the Optimization Engine before they are executed
@@ -190,11 +190,11 @@ The gateway builds a single JSON object and sends it to OPA as `{"input": {...}}
 | `input.target_agent.allowed_caller_groups` | array | Data doc | `agents.rego` | Groups permitted to call the target |
 | `input.target_agent.allowed_paths` | array | Data doc | `agents.rego` | Path patterns the target agent accepts |
 | `input.request.remainder_path` | string | Gateway | `agents.rego` | Path after `/agents/{target_id}` |
-| `input.identity.kind` | string | Gateway | `v1_routing.rego` | `"human"` or `"service"` — unified identity type (v2.0) |
-| `input.routing.priority` | string | Optimization Engine | `v1_routing.rego` | Proposed priority level `"P1"`–`"P9"` (v2.0) |
-| `input.routing.signals` | object | Optimization Engine | `v1_routing.rego` | Four routing signals: identity priority, budget remaining, latency target, model capability (v2.0) |
-| `input.budget.remaining` | number | Budget system | `v1_routing.rego` | Remaining budget for the requesting identity (v2.0) |
-| `input.budget.tier` | string | Budget system | `v1_routing.rego` | Budget tier: `"org"`, `"group"`, or `"individual"` (v2.0) |
+| `input.identity.kind` | string | Gateway | `v1_routing.rego` | `"human"` or `"service"` — unified identity type (since v2.0) |
+| `input.routing.priority` | string | Optimization Engine | `v1_routing.rego` | Proposed priority level `"P1"`–`"P9"` (since v2.0) |
+| `input.routing.signals` | object | Optimization Engine | `v1_routing.rego` | Four routing signals: identity priority, budget remaining, latency target, model capability (since v2.0) |
+| `input.budget.remaining` | number | Budget system | `v1_routing.rego` | Remaining budget for the requesting identity (since v2.0) |
+| `input.budget.tier` | string | Budget system | `v1_routing.rego` | Budget tier: `"org"`, `"group"`, or `"individual"` (since v2.0) |
 
 > **Note:** `input.headers` intentionally omits `Authorization` and `Cookie`. The gateway strips these before building the OPA input to prevent policies from accidentally leaking credential values into audit logs.
 
@@ -288,7 +288,7 @@ The OPA engine evaluates all rules in `package yashigani` and combines them. Her
      AND agent_call_allowed = false
    THEN allow = false  (deny_agent_call fires)
 
-5. Check routing override (v2.0):
+5. Check routing override (since v2.0):
    IF input.routing.priority is set
      AND routing_allowed(input.routing, input.identity, input.budget) = false
    THEN allow = false  (deny_routing fires)
@@ -1376,7 +1376,7 @@ input
 
 ---
 
-## 15. OPA Policy Assistant (v0.7.0)
+## 15. OPA Policy Assistant (since v0.7.0)
 
 The OPA Policy Assistant allows administrators to describe an access control requirement in plain English and receive a validated RBAC data document JSON suggestion, which must be reviewed and explicitly approved before anything changes.
 
