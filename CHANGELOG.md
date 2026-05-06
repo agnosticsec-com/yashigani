@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-06T23:59:00+01:00 -->
+<!-- last-updated: 2026-05-06T22:30:00Z -->
 
 # Changelog
 
@@ -32,7 +32,7 @@ Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.
 - **#46** `8aacdae` — feat(uninstall): `--yes` / `-y` flag for unattended removal
 - **#50** `39f6fee` — chore(release): Gate 6a specialist-per-language review codified in pre-flight checklist
 - **#45** `057faa4` — chore(helm): grafana 12.4.3 → 13.0.1 + close `helm/charts/grafana/values.yaml` "latest" pinning gap
-- **#52** `<#52 SHA>` — fix(compose): Podman healthcheck silent-drop (P-9) — rebased replacement for #49 *(SHA pending merge)*
+- **#52** `10864bd` — fix(compose): Podman healthcheck silent-drop (P-9) — rebased replacement for #49
 
 ### Previous batch (2026-05-03)
 
