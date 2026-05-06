@@ -1,6 +1,6 @@
 # Yashigani Release Process
 
-**Last updated:** 2026-05-03T00:00:00+01:00
+**Last updated:** 2026-05-06T00:00:00+01:00
 
 This document covers the end-to-end process for cutting a Yashigani release from a clean branch tip to a signed, published GitHub release with full evidence archive. It is the authoritative source for M7 gate-check procedures.
 
@@ -163,6 +163,7 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 | 4 | Opengrep scan | CI | `ci-evidence/<sha>/opengrep-<sha>/opengrep-summary.txt` | `Opengrep: PASS` |
 | 5 | Bandit SAST | CI | `bandit-report-<sha>.json` in evidence dir | No HIGH/CRITICAL net-new |
 | 6 | pip-audit | CI | `pip-audit-report-<sha>.json` | Exit 0 |
+| 6a | Specialist PR review | Release Coordinator | GitHub PR approval trail for each merged PR in release range | See §6a |
 | 7 | Docker restore | Release Engineer | `macos-podman-<sha>-closure-*.log` | `RESTORE TEST GREEN` + both admin 200 lines |
 | 8 | Podman restore | Release Engineer | same format | same |
 | 9 | K8s Helm restore | Release Engineer | `k8s-helm-<sha>-closure-*.log` | `RESTORE TEST GREEN` + both admin 200 lines |
@@ -171,6 +172,48 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 | 12 | Risk register updated | Compliance Reviewer | exception-register.md | All accepted risks logged |
 | 13 | Maintainer HITL GO | Release Coordinator | Verbal/chat confirmation | "GO release" |
 | 14 | Tag + push | Release Engineer | `git tag v<ver>` | Tag visible on GitHub |
+
+---
+
+## 6a. Specialist PR Review Gate
+
+**Rationale:** F-T10-001 (2026-05-06) — Captain authored Python `gateway/` code that shipped two correctness bugs (`math.isfinite` NaN clamp, `float(os.getenv(...))` DoS on bad env value). Tom caught both on review. Root cause: wrong specialist dispatched for the language domain. Rule codified in `~/.claude/projects/-Users-max-Documents-Claude/memory/feedback_right_specialist_per_language.md`.
+
+**Domain-to-specialist mapping (MUST have approval before merge):**
+
+| Files changed | Required reviewer | Identity |
+|---|---|---|
+| `src/yashigani/gateway/**/*.py` | Tom | `tom@agnosticsec.com` |
+| Any other `**/*.py` (services, tests, migrations) | Tom | `tom@agnosticsec.com` |
+| `install.sh`, `uninstall.sh`, `restore.sh`, `update.sh`, `scripts/*.sh`, `*.sh` entrypoints | Su | `su@agnosticsec.com` |
+| `Dockerfile*`, `docker-compose*.yml`, `helm/**`, `**/*.yaml` K8s manifests | Captain | `captain@agnosticsec.com` |
+
+**Hard rule:** A PR touching files in one of the above domains MUST carry an approved review from the listed specialist before it is counted as merged for the purposes of this gate. An approval from any other reviewer does not substitute.
+
+**How to verify at release time:**
+
+For each PR merged into the release branch since the previous release tag, run:
+
+```sh
+# List PRs merged in release range:
+gh pr list --state merged --base 2.23.x --limit 100 --json number,title,mergedAt,reviews
+
+# For each PR touching gateway/ Python:
+gh pr view <number> --json reviews | jq '.reviews[] | select(.state=="APPROVED") | .author.login'
+# Must include "tom" or "tomYSG" (check team slug for the repo).
+
+# For each PR touching install.sh / scripts/:
+# Must include "su" or "suYSG".
+
+# For each PR touching Dockerfiles / helm/:
+# Must include "captain" or "captainYSG".
+```
+
+**Evidence format:** paste the `gh pr view` output per PR (or the `gh pr list` JSON) into the release evidence directory as `ci-evidence/<sha>/specialist-review-gate.txt`. Gate 6a is GREEN only when every in-scope PR has the required approval recorded in that file.
+
+**Cross-domain PRs:** decompose at review time — a PR touching Python and Helm needs both Tom and Captain approvals. A PR touching Python and shell needs both Tom and Su approvals.
+
+**Rule reference:** `~/.claude/projects/-Users-max-Documents-Claude/memory/feedback_right_specialist_per_language.md`
 
 ---
 
