@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-06T12:00:00+01:00 (fix #85: bind-mount dirs auto-created for all runtimes incl. rootless Podman; sudo mkdir removed from promtail path; fail-loud on backups/tls mkdir)
 # last-updated: 2026-05-04T19:30:00+01:00 (v2.23.2: chown caddy_client.key to UID 0 — cap_drop ALL strips DAC_OVERRIDE; gate V232-SMOKE-019. sudo mkdir promtail dir; gate V232-SMOKE-020)
 # last-updated: 2026-05-04T18:00:00+01:00 (v2.23.2: postgres+redis password files set 0644 — readable by root containers under cap_drop ALL; gate V232-SMOKE-018)
 # last-updated: 2026-05-04T12:00:00+01:00 (v2.23.2: bump YASHIGANI_VERSION; podman unshare mkdir falls back to plain mkdir when unshare unsupported by remote client)
@@ -1112,17 +1113,18 @@ check_installer_preflight() {
   # PKI issuer and backoffice services run as UID 1001 inside containers and
   # write to the bind-mounted secrets dir.
   #
-  # F-NEW-04: For Docker (rootful) and rootful Podman installs, the installer
-  # runs as root (or via sudo) and CAN create + chown the bind-mount dirs
-  # directly.  Do this automatically rather than asking the operator to run
-  # separate commands before re-running the installer.
+  # Fix #85 (non-interactive/CI): the installer now creates and chowns all
+  # bind-mount dirs automatically for every runtime path, eliminating the
+  # manual pre-step that was required in CI and cloud-init environments.
   #
-  # Podman rootless: container UID 1001 maps to host UID (subuid_start + 1000).
-  # `podman unshare chown 1001:1001` is the correct operator command — the
-  # resulting host UID is the subuid-remapped value, not literal 1001. We
-  # cannot do this automatically (would require a nested podman unshare call
-  # with a shell that hasn't been set up yet), so we still error with
-  # instructions on the Podman rootless path.
+  # Docker / rootful Podman (id -u == 0): mkdir + chown 1001:1001 directly.
+  #
+  # Podman rootless (id -u != 0): mkdir as the current user (we own WORK_DIR),
+  # then `podman unshare chown 1001:1001` to remap container UID 1001 to the
+  # correct subuid on the host. If `podman unshare` is unavailable (remote
+  # client), fall back with a warning — the dir will be uid-remapped on first
+  # container write. Only falls through to the hard-stop error block when the
+  # directory still can't be created at all (e.g. WORK_DIR itself is unwritable).
   local _bm_failed=0
   local _secrets_dir="${WORK_DIR}/docker/secrets"
 
@@ -1141,15 +1143,34 @@ check_installer_preflight() {
     fi
   fi
 
-  # F-NEW-04: pre-create bind-mount dirs for Docker (rootful) and rootful
-  # Podman (id -u == 0).  Podman rootless is excluded — it needs `podman
-  # unshare chown` which cannot run here.
-  if [[ "$_is_rootless_podman" == "false" ]]; then
-    for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
-      if [[ ! -d "$_bm_dir" ]]; then
-        mkdir -p "$_bm_dir"
-        log_info "Created bind-mount dir: $_bm_dir"
+  # Auto-create bind-mount dirs for all runtime paths (fix #85).
+  for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
+    if [[ ! -d "$_bm_dir" ]]; then
+      if ! mkdir -p "$_bm_dir" 2>/dev/null; then
+        log_error "Cannot create bind-mount directory: $_bm_dir"
+        log_error "Check that ${WORK_DIR}/docker/ is writable by the current user."
+        _bm_failed=1
+        continue
       fi
+      log_info "Created bind-mount dir: $_bm_dir"
+    fi
+
+    if [[ "$_is_rootless_podman" == "true" ]]; then
+      # Podman rootless: remap container UID 1001 to the subuid-mapped host UID
+      # via podman unshare. This is idempotent — already-chowned dirs are a no-op.
+      # shellcheck disable=SC2012
+      local _dir_uid
+      _dir_uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
+      if [[ "$_dir_uid" != "$_expected_uid" ]]; then
+        if podman unshare chown 1001:1001 "$_bm_dir" 2>/dev/null; then
+          log_info "podman unshare chown 1001:1001 applied to $_bm_dir"
+        else
+          log_warn "podman unshare unavailable — $_bm_dir will be uid-mapped on first container write"
+          # Not a hard failure: Podman rootless will remap ownership at mount time.
+        fi
+      fi
+    else
+      # Docker / rootful Podman: direct chown to container UID 1001.
       # shellcheck disable=SC2012
       local _dir_uid
       _dir_uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
@@ -1161,9 +1182,10 @@ check_installer_preflight() {
           _bm_failed=1
         fi
       fi
-    done
-  fi
+    fi
+  done
 
+  # Verify the dirs exist and have the expected owner after the auto-create pass.
   for _bm_dir in "${WORK_DIR}/docker/data" "${WORK_DIR}/docker/certs" "${WORK_DIR}/docker/logs"; do
     if [[ ! -d "$_bm_dir" ]]; then
       _bm_failed=1
@@ -1172,21 +1194,32 @@ check_installer_preflight() {
     # shellcheck disable=SC2012
     local _uid
     _uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
-    if [[ "$_uid" != "1001" && "$_uid" != "$_expected_uid" ]]; then
-      _bm_failed=1
-      break
+    # For Podman rootless where unshare was unavailable, accept installer UID too —
+    # the dir will be re-owned on first container write.
+    if [[ "$_is_rootless_podman" == "true" ]]; then
+      if [[ "$_uid" != "$_expected_uid" && "$_uid" != "$(id -u)" ]]; then
+        _bm_failed=1
+        break
+      fi
+    else
+      if [[ "$_uid" != "1001" ]]; then
+        _bm_failed=1
+        break
+      fi
     fi
   done
 
   if [[ "$_bm_failed" -eq 1 ]]; then
-    printf "\nPre-flight failed: bind-mount directories missing or wrong owner.\n\n"
+    printf "\nPre-flight failed: bind-mount directories could not be created or chowned.\n\n"
     if [[ "$_is_rootless_podman" == "true" ]]; then
+      printf "Manual fix:\n"
       printf "  cd %s/docker\n" "${WORK_DIR}"
       printf "  mkdir -p data certs logs\n"
       printf "  podman unshare chown 1001:1001 data certs logs\n\n"
       printf "(Podman rootless: 'podman unshare chown' maps container UID 1001 to the\n"
       printf " correct host subuid. Do NOT use 'sudo chown' for rootless Podman.)\n\n"
     else
+      printf "Manual fix:\n"
       printf "  cd %s/docker\n" "${WORK_DIR}"
       printf "  mkdir -p data certs logs\n"
       printf "  sudo chown -R 1001:1001 data certs logs\n\n"
@@ -2447,14 +2480,15 @@ compose_up() {
 
     # 3. Create Docker-compatible directories for promtail (best-effort).
     # On CI runners (GitHub Actions / Podman) /var/lib/docker does not exist and
-    # is owned by root, so a plain mkdir fails with EPERM. Try sudo first, then
-    # fall back to a warning. Without this directory promtail cannot mount its
-    # container-log volume and fails to start.
+    # is owned by root, so a plain mkdir fails with EPERM. The installer body
+    # never escalates privilege (feedback_audience_sysadmins.md) — warn and
+    # continue; promtail will start with reduced container-log coverage.
     # V232-SMOKE-020 — Podman smoke gate 2026-05-04.
     if [[ ! -d "/var/lib/docker/containers" ]]; then
-      mkdir -p /var/lib/docker/containers 2>/dev/null || \
-      sudo mkdir -p /var/lib/docker/containers 2>/dev/null || \
+      if ! mkdir -p /var/lib/docker/containers 2>/dev/null; then
         log_warn "Could not create /var/lib/docker/containers — promtail may not collect container logs"
+        log_warn "(run 'sudo mkdir -p /var/lib/docker/containers' before install to suppress this warning)"
+      fi
     fi
 
     # 4. Use podman-compose if available (sequential, no socket crashes)
@@ -2592,8 +2626,15 @@ compose_up() {
   # Podman rootless bind-mount (-v host:container:ro) does not fail on a
   # missing source path. Docker silently creates missing bind-mount sources;
   # Podman rootless does not, causing backoffice to crash at startup.
-  mkdir -p "${WORK_DIR}/backups"
-  mkdir -p "${WORK_DIR}/docker/tls"
+  # Fix #85: fail loud on mkdir failure rather than silently continuing.
+  if ! mkdir -p "${WORK_DIR}/backups" 2>/dev/null; then
+    log_error "Cannot create backups directory: ${WORK_DIR}/backups"
+    exit 1
+  fi
+  if ! mkdir -p "${WORK_DIR}/docker/tls" 2>/dev/null; then
+    log_error "Cannot create TLS directory: ${WORK_DIR}/docker/tls"
+    exit 1
+  fi
 
   for _secret_file in license_key redis_password postgres_password grafana_admin_password; do
     if [[ ! -s "${secrets_dir}/${_secret_file}" ]]; then
