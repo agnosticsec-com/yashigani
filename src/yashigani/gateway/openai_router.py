@@ -861,8 +861,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             )
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict.lower()
-                # F-T10-001: capture inspection confidence for operator UI badge
-                response_inspection_confidence = resp_result.confidence
+                # F-T10-001: capture inspection confidence for operator UI badge.
+                # Clamp to [0.0, 1.0]: classifiers are duck-typed and could return
+                # NaN or Inf; :.4f would propagate those as non-numeric strings,
+                # breaking clients that parse the header as a float.
+                response_inspection_confidence = max(
+                    0.0, min(1.0, float(resp_result.confidence))
+                )
 
             if resp_result.verdict == "BLOCKED":
                 logger.warning(

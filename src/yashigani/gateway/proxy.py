@@ -610,8 +610,11 @@ async def _proxy_request_body(
             )
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict
-                # F-T10-001: capture inspection confidence for operator UI
-                proxy_inspection_confidence = resp_result.confidence
+                # F-T10-001: capture inspection confidence for operator UI.
+                # Clamp to [0.0, 1.0] — see openai_router.py comment for rationale.
+                proxy_inspection_confidence = max(
+                    0.0, min(1.0, float(resp_result.confidence))
+                )
             if resp_result.verdict == "BLOCKED":
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 _audit_request(

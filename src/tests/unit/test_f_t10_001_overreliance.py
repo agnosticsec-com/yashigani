@@ -337,3 +337,47 @@ class TestStreamingPath:
             "F-T10-001: Streaming path must emit X-Yashigani-Response-Inspection-Confidence "
             "with value '1.0000' (clean-pass default) in openai_router.py."
         )
+
+
+# ---------------------------------------------------------------------------
+# T-17 — Confidence value clamped to [0.0, 1.0] (Tom review finding, 2026-05-06)
+# ---------------------------------------------------------------------------
+
+class TestConfidenceClamping:
+    """
+    The confidence captured from resp_result must be clamped to [0.0, 1.0]
+    before being formatted into the response header.  A duck-typed classifier
+    backend could return NaN or Inf; :.4f propagates those as non-numeric
+    strings ('nan', 'inf'), breaking clients that parse the header as a float.
+    """
+
+    def test_t17_router_clamps_confidence(self):
+        """
+        T17a: openai_router.py must clamp response_inspection_confidence to
+        [0.0, 1.0] at the capture site.  Checks for max() + min(1.0 + confidence
+        co-presence, which is format-agnostic across single-line and multiline styles.
+        """
+        assert "min(1.0, float(resp_result.confidence))" in _ROUTER_SRC or \
+               "min(1.0, resp_result.confidence)" in _ROUTER_SRC, (
+            "F-T10-001 Tom review: response_inspection_confidence must be clamped to "
+            "[0.0, 1.0] in openai_router.py via min(1.0, ...) + max(0.0, ...). "
+            "A classifier returning NaN/Inf would produce a non-numeric header value."
+        )
+        assert "max(" in _ROUTER_SRC and "0.0," in _ROUTER_SRC, (
+            "F-T10-001 Tom review: clamp lower bound (max, 0.0) missing from "
+            "openai_router.py — confidence could go negative."
+        )
+
+    def test_t17_proxy_clamps_confidence(self):
+        """
+        T17b: proxy.py must also clamp proxy_inspection_confidence to [0.0, 1.0].
+        """
+        assert "min(1.0, float(resp_result.confidence))" in _PROXY_SRC or \
+               "min(1.0, resp_result.confidence)" in _PROXY_SRC, (
+            "F-T10-001 Tom review: proxy_inspection_confidence must be clamped to "
+            "[0.0, 1.0] in proxy.py via min(1.0, ...) + max(0.0, ...)."
+        )
+        assert "max(" in _PROXY_SRC and "0.0," in _PROXY_SRC, (
+            "F-T10-001 Tom review: clamp lower bound (max, 0.0) missing from "
+            "proxy.py — confidence could go negative."
+        )
