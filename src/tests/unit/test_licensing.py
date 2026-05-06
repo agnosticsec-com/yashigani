@@ -15,11 +15,12 @@ Covers:
   - enforcer: HTTP response helpers
   - enforcer: upgrade URL points to agnosticsec.com
   - _safe_int: null/None/empty/non-numeric/float/sentinel coverage (LAURA-V231-002)
+  - _safe_int: negative values other than -1 clamped to default (LAURA-LICENSE-08)
   - verify_license(): null seat fields → fail-closed, no TypeError (LAURA-V231-002)
   - load_license(): corrupt/null-field license → COMMUNITY, no crash (LAURA-V231-002)
   - LAURA-V231-003: 2-segment (v3) licenses rejected with license_format_too_old
 
-Last updated: 2026-04-27T21:53:12+01:00
+Last updated: 2026-05-06T12:40:00+01:00
 """
 from __future__ import annotations
 
@@ -741,9 +742,11 @@ class TestSafeInt:
     def test_float_truncated(self):
         assert self._si(3.9) == 3
 
-    def test_negative_non_sentinel_returned(self):
-        # Values like -2, -42 pass through (enforcer decides meaning)
-        assert self._si(-2) == -2
+    def test_negative_non_sentinel_clamped_to_default(self):
+        # LAURA-LICENSE-08: negative values other than -1 are adversarial
+        # (a seat count of -2 bypasses enforcer's >= check) — clamp to default.
+        assert self._si(-2) == 100
+        assert self._si(-42) == 100
 
     def test_unlimited_sentinel_preserved(self):
         # -1 is the documented unlimited sentinel — must never be clamped
