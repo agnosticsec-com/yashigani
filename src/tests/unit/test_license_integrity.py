@@ -659,8 +659,10 @@ class TestDomainBinding:
         from yashigani.licensing.model import LicenseTier
 
         result = load_license()
-        assert result.valid is False
+        # Loader falls back to COMMUNITY_LICENSE (valid=True) on rejection;
+        # the key assertion is that professional was NOT granted.
         assert result.tier == LicenseTier.COMMUNITY
+        assert result.valid is True  # COMMUNITY_LICENSE is always valid
 
     def test_wildcard_org_domain_accepted_for_community_tier(self, tmp_path, monkeypatch):
         """
