@@ -1454,11 +1454,22 @@ _write_aes_key_to_env() {
   # AppArmor profile fails. Relax by setting YASHIGANI_APPARMOR_PROFILE=
   # unconfined when we detect Podman.
   #
-  # v2.23.1: seccomp path in compose ("docker/seccomp/yashigani.json") gets
-  # double-prefixed by podman-compose (compose file is already inside docker/
-  # so the path resolves to .../docker/docker/seccomp/...). Setting
-  # YASHIGANI_SECCOMP_PROFILE=unconfined on Podman sidesteps the path
-  # resolution bug until the compose-file path layout is reworked in v2.23.2.
+  # v2.23.2 fix (#31/#4): install.sh now sets YASHIGANI_SECCOMP_PROFILE to an
+  # absolute path for both Docker and Podman runtimes.
+  #
+  # Root cause of the v2.23.1 Podman seccomp failure (TM-V231-005):
+  #   podman-compose 1.x passes security_opt strings directly to `podman run
+  #   --security-opt` without path resolution — so `./seccomp/yashigani.json`
+  #   was resolved relative to the shell CWD ($WORK_DIR), not the compose file
+  #   directory ($WORK_DIR/docker), causing "file not found". The prior v2.23.1
+  #   fix (YASHIGANI_SECCOMP_PROFILE=unconfined on Podman) disabled seccomp
+  #   enforcement on Podman entirely.
+  #
+  #   Note: the earlier absolute-path attempt (Pentest #95, 2026-04-29) was
+  #   reverted because docker-compose v5.x inlines JSON and Podman's compat API
+  #   hit ENAMETOOLONG. That applied only to docker-compose-against-Podman-socket,
+  #   NOT to native podman-compose. install.sh now enforces native podman-compose
+  #   (not docker-compose compat), making the absolute path safe on Podman.
   #
   # Retro note: the prior apparmor override checked ${RUNTIME:-} which is
   # NEVER SET anywhere in this script — the correct variable is
@@ -1467,25 +1478,24 @@ _write_aes_key_to_env() {
   # silently let apparmor default to the profile name all along; compose
   # tolerated it because Podman on macOS ignores unknown apparmor profile
   # names silently, but fails HARD when the seccomp FILE path is wrong.
+
+  # Seccomp: set absolute path for both runtimes. Admin can still override to
+  # "unconfined" via YASHIGANI_SECCOMP_PROFILE env var if a host kernel rejects
+  # the profile (e.g. nested virtualisation, non-standard kernels).
+  local _seccomp_profile="${WORK_DIR}/docker/seccomp/yashigani.json"
+  if [[ ! -f "$_seccomp_profile" ]]; then
+    log_warn "Seccomp profile not found at ${_seccomp_profile} — falling back to unconfined"
+    _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
+  else
+    _env_set "YASHIGANI_SECCOMP_PROFILE" "${_seccomp_profile}"
+    log_info "Seccomp profile: ${_seccomp_profile}"
+  fi
+
   if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" || "${YSG_RUNTIME:-}" == "podman" ]]; then
     # AppArmor stays unconfined on Podman (macOS Podman, rootful Linux Podman
     # both ignore unknown profile names; rather than name-mismatch silently,
     # explicitly disable). Linux + AppArmor users override via env.
     _env_set "YASHIGANI_APPARMOR_PROFILE" "unconfined"
-    # TM-V231-005 (Pentest #95): seccomp enforcement on Podman via docker-compose
-    # compat layer is NOT achievable by passing an absolute path. docker-compose
-    # v5.x reads the JSON file and inlines its contents into the API request;
-    # Podman's docker-compat API then tries to open() the JSON blob as a filename,
-    # hitting "file name too long" (ENAMETOOLONG). The absolute-path approach
-    # (Pentest #95, 2026-04-29) was reverted because it causes a compose-up failure
-    # on every macOS Podman install.
-    #
-    # Correct fix requires native Podman-compose seccomp syntax (not docker-compose
-    # compat). Deferred to v2.23.2 (project_v232_backlog.md TM-V231-005). Until
-    # then, seccomp on Podman stays unconfined. The gateway + backoffice seccomp
-    # profile IS enforced on Docker (Linux and macOS Docker Desktop).
-    _env_set "YASHIGANI_SECCOMP_PROFILE" "unconfined"
-    log_warn "Podman seccomp: unconfined (TM-V231-005 — docker-compose v5 compat cannot pass file path to Podman; deferred to v2.23.2)"
   elif [[ "${YSG_OS:-}" == "linux" && "${YSG_RUNTIME:-}" == "docker" ]]; then
     # Docker on Linux: auto-load our AppArmor profile so containers start without
     # requiring a manual 'apparmor_parser -r' step. If loading fails (no apparmor,
