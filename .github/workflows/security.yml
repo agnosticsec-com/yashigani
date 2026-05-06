@@ -1,4 +1,5 @@
-# Last updated: 2026-05-02T06:58:47+01:00
+# Last updated: 2026-05-06 (Trivy: strip arm64 digest pins; pip-audit: pip 26.1 + CVE-2026-6357 fix)
+# Previous: 2026-05-03 (V232-CSCAN-01h: Trivy SARIF digest annotation)
 name: Security Scan
 
 on:
@@ -18,7 +19,36 @@ jobs:
     name: Trivy Container Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # V232-SMOKE-001 (pre-existing): Dockerfiles + docker-compose.yml pin arm64
+      # digest SHAs generated on an M-chip Mac dev machine. On amd64 GH runners
+      # those layers fail with "exec /bin/sh: exec format error" the moment
+      # docker build tries to RUN anything in the FROM image. Mirrors the strip
+      # step the install-smoke matrix uses (linux cells). Only affects the
+      # workspace copy; committed files are untouched. Permanent fix: update
+      # digest pins to amd64 or use multi-arch + explicit --platform directives.
+      - name: "[ci] Strip arm64 digest pins for amd64 runner compatibility"
+        run: |
+          python3 - <<'PYEOF'
+          import re, glob
+
+          # Dockerfile FROM lines: FROM <image>@sha256:... [AS stage]
+          for path in glob.glob("docker/Dockerfile*"):
+              with open(path) as f:
+                  content = f.read()
+              patched = re.sub(
+                  r'(^FROM\s+\S+)@sha256:[a-f0-9]{64}',
+                  r'\1',
+                  content,
+                  flags=re.MULTILINE,
+              )
+              if patched != content:
+                  with open(path, 'w') as f:
+                      f.write(patched)
+                  print(f"Dockerfile stripped: {path}")
+              else:
+                  print(f"Dockerfile no pins: {path}")
+          PYEOF
       - name: Build gateway for scan
         run: docker build -f docker/Dockerfile.gateway -t yashigani/gateway:scan .
       - name: Trivy gateway
@@ -100,13 +130,35 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e "." "pip-audit>=2.7"
+      - run: |
+          pip install --upgrade "pip==26.1"
+          pip install -e "." "pip-audit>=2.7"
       - name: Run pip-audit
         # P0-5c: --fail-on-cvss was removed in pip-audit 2.x (flag never existed in
         # the OSS release; was confused with OWASP Dependency Check --failOnCVSS).
         # pip-audit now exits non-zero on any found vulnerability by default.
         # OSV provides broader CVE coverage than the default PyPI advisory database.
-        run: pip-audit --vulnerability-service osv --format json --output pip-audit-report.json
+        #
+        # pip pinned to 26.1: fixes GHSA-jp4c-xjxw-mgf9 (CVE-2026-6357, pip ≤26.0.x,
+        # HIGH, incorrect archive extraction). pip 26.1 published 2026-04-26 on PyPI.
+        # No suppression required for this CVE.
+        #
+        # Risk-accepted suppressions (each must reference the risk-register entry):
+        # - GHSA-58qw-9mgm-455v (CVE-2026-3219, pip ≤26.0.1 + 26.1, MEDIUM, no patched
+        #   version upstream as of 2026-05-06): pip is build-time only. Runtime images
+        #   strip pip via `pip uninstall -y pip` in the Dockerfile final layer, so the
+        #   CVE has no runtime exposure. pip-audit runs against the CI host venv (not
+        #   the built image), so it still sees pip here.
+        #   Risk-accept analysis: internal compliance archive
+        #   (V232-CSCAN-01k, risk-accept dated 2026-05-03, residual risk
+        #   NEGLIGIBLE post-hardening). Remove this ignore once upstream pip
+        #   ships a patched release.
+        run: |
+          pip-audit \
+            --vulnerability-service osv \
+            --ignore-vuln GHSA-58qw-9mgm-455v \
+            --format json \
+            --output pip-audit-report.json
       - name: Upload report
         uses: actions/upload-artifact@v4
         if: always()
