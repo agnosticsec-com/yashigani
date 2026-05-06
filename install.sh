@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-06T20:00:00+01:00 (P-9 fix: _podman_verify_healthchecks() post-compose-up gate; called on Podman path in compose_up())
 # last-updated: 2026-05-06T12:00:00+01:00 (fix #85: bind-mount dirs auto-created for all runtimes incl. rootless Podman; sudo mkdir removed from promtail path; fail-loud on backups/tls mkdir)
 # last-updated: 2026-05-04T19:30:00+01:00 (v2.23.2: chown caddy_client.key to UID 0 — cap_drop ALL strips DAC_OVERRIDE; gate V232-SMOKE-019. sudo mkdir promtail dir; gate V232-SMOKE-020)
 # last-updated: 2026-05-04T18:00:00+01:00 (v2.23.2: postgres+redis password files set 0644 — readable by root containers under cap_drop ALL; gate V232-SMOKE-018)
@@ -2909,6 +2910,98 @@ echo '[postgres-ssl-upgrade] pg_hba.conf updated'
       log_warn "prometheus /-/ready not green after 20s — check 'docker compose logs prometheus' if /targets is empty"
     fi
   fi
+
+  # ---------------------------------------------------------------------------
+  # P-9 fix: Podman healthcheck wiring verification.
+  #
+  # podman-compose and podman compose (Docker backend) both wire compose-file
+  # healthcheck: blocks into --healthcheck-command at container create time.
+  # However, image-baked OCI HEALTHCHECK directives are silently dropped by
+  # podman when compose starts the container (unlike Docker Engine which inherits
+  # the image-baked HEALTHCHECK as a fallback when no compose-level override is
+  # set). All Yashigani compose services carry explicit healthcheck: blocks to
+  # avoid this silent-drop class of bug. This gate verifies wiring after
+  # compose up. If any container reports a null healthcheck it means a new
+  # service was added without a compose healthcheck block — block-close here.
+  # ---------------------------------------------------------------------------
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    _podman_verify_healthchecks
+  fi
+}
+
+# =============================================================================
+# _podman_verify_healthchecks — P-9 post-compose-up healthcheck wiring gate
+# =============================================================================
+# Iterates running Yashigani containers and asserts each has a non-null
+# healthcheck config. Services with intentionally disabled healthchecks
+# (OPA scratch image, one-shot init containers) are exempted by name.
+# Failure is blocking: a missing healthcheck means depends_on: service_healthy
+# will never resolve, causing deadlocks in dependent services.
+#
+# Exemption list (container name contains substring):
+#   policy        — OPA scratch image; no shell for healthcheck (V232-SMOKE-003)
+#   ollama-init   — one-shot model-pull job; no persistent healthcheck needed
+#   promtail      — disabled in podman-override (no /var/lib/docker mount)
+_podman_verify_healthchecks() {
+  log_info "P-9: verifying Podman healthcheck wiring for all running containers..."
+
+  # Podman names containers as {project}_{service}_{index} (podman-compose)
+  # or {project}-{service}-{index} (podman compose / Docker Compose backend).
+  # We check every container whose name contains "yashigani" or matches the
+  # compose project prefix.
+
+  local _exempt_patterns=("policy" "ollama-init" "promtail")
+  local _missing=()
+  local _ok_count=0
+  local _skip_count=0
+
+  # List all running containers — capture names into an array
+  local _containers
+  mapfile -t _containers < <(podman ps --format '{{.Names}}' 2>/dev/null || true)
+
+  if [[ "${#_containers[@]}" -eq 0 ]]; then
+    log_warn "P-9: no running containers found via 'podman ps' — skipping healthcheck wiring check"
+    return 0
+  fi
+
+  for _ctr in "${_containers[@]}"; do
+    # Skip exempted containers
+    local _is_exempt=false
+    for _pat in "${_exempt_patterns[@]}"; do
+      if [[ "$_ctr" == *"${_pat}"* ]]; then
+        _is_exempt=true
+        break
+      fi
+    done
+    if [[ "$_is_exempt" == "true" ]]; then
+      log_info "  P-9: exempt: $_ctr"
+      (( _skip_count++ )) || true
+      continue
+    fi
+
+    # Inspect healthcheck config
+    local _hc
+    _hc="$(podman inspect --format '{{json .Config.Healthcheck}}' "$_ctr" 2>/dev/null || echo "null")"
+    if [[ "$_hc" == "null" || -z "$_hc" ]]; then
+      log_warn "  P-9: MISSING healthcheck: $_ctr (Config.Healthcheck is null)"
+      _missing+=("$_ctr")
+    else
+      log_info "  P-9: OK: $_ctr"
+      (( _ok_count++ )) || true
+    fi
+  done
+
+  if [[ "${#_missing[@]}" -gt 0 ]]; then
+    log_error "P-9: ${#_missing[@]} container(s) have no healthcheck wired:"
+    for _m in "${_missing[@]}"; do
+      log_error "  - $_m (add healthcheck: block to docker-compose.yml for this service)"
+    done
+    log_error "P-9: Missing healthcheck = depends_on: service_healthy deadlock risk."
+    log_error "P-9: Fix: add explicit healthcheck: block to docker/docker-compose.yml."
+    return 1
+  fi
+
+  log_success "P-9: healthcheck wiring verified — ${_ok_count} containers OK, ${_skip_count} exempt"
 }
 
 # =============================================================================
