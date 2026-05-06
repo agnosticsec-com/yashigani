@@ -366,27 +366,9 @@ _vm_ssh "
 " 2>&1 | tee -a "${EVIDENCE_FILE}"
 _ok "Clone complete: ${VM_CLONE_DIR}"
 
-# ---------------------------------------------------------------------------
-# PHASE 3b: Pre-install bind-mount directories
-# ---------------------------------------------------------------------------
-# install.sh requires docker/data, docker/certs, docker/logs to exist with
-# container-UID (1001) ownership before it runs. This is documented as
-# BIND-MOUNT-001 (Low) in runtime-evidence/dispatch-verdict.txt.
-# The runner creates these dirs as the "operator manual step" that is required
-# prior to a non-automated install.
-_section "Phase 3b: Create bind-mount directories (BIND-MOUNT-001 workaround)"
-
-_ev_section "bind-mount dir setup"
-_ev "Creating docker/data docker/certs docker/logs with container UID 1001 ownership."
-_ev "Ref: BIND-MOUNT-001 (Low, deferred v2.23.2) — installer should create these."
-
-_vm_ssh "
-  cd '${VM_CLONE_DIR}/docker' && \
-  mkdir -p data certs logs && \
-  podman unshare chown 1001:1001 data certs logs && \
-  echo 'bind-mount dirs created and chowned to container UID 1001'
-" 2>&1 | tee -a "${EVIDENCE_FILE}"
-_ok "Bind-mount dirs ready"
+# PHASE 3b removed: bind-mount dir pre-creation was BIND-MOUNT-001 workaround,
+# now fixed in install.sh (#85). install.sh auto-creates docker/data, docker/certs,
+# docker/logs with correct ownership (podman unshare chown for rootless Podman).
 
 # ---------------------------------------------------------------------------
 # PHASE 4: Run install.sh on VM
