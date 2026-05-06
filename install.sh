@@ -1588,8 +1588,10 @@ sys.exit(1)
   _env_set "PROMETHEUS_BASICAUTH_USER" "prometheus"
 
   # --- Environment mode ---
+  # LIC-001: YASHIGANI_ENV permitted values are "dev", "staging", "production".
+  # "development" (long-form) is no longer accepted by kms/factory.py; use "dev".
   if [[ "$DEPLOY_MODE" == "demo" ]]; then
-    _env_set "YASHIGANI_ENV" "development"
+    _env_set "YASHIGANI_ENV" "dev"
   else
     _env_set "YASHIGANI_ENV" "production"
   fi

@@ -1,5 +1,5 @@
 """License model — tiers, state, community defaults."""
-# Last updated: 2026-05-04T00:00:00+01:00 (retro #42 + website-as-source-of-truth: tier values aligned with README §8 / pricing page; IGNITER tier added; academic_nonprofit set to unlimited)
+# Last updated: 2026-05-06T00:00:00+01:00 (retro #42 website-truth alignment + LIC-001..007 hardening rebased)
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -15,6 +15,10 @@ class LicenseTier(str, Enum):
     PROFESSIONAL_PLUS  = "professional_plus"
     ENTERPRISE         = "enterprise"
     ACADEMIC_NONPROFIT = "academic_nonprofit"
+    # v2.23.2 GROUP-5-3: canary sentinel — never issued to customers.
+    # If verify_license() accepts a CANARY token, the verifier has been patched
+    # to remove tier filtering. Tested by canary-token integration test.
+    CANARY             = "canary"
 
 
 class LicenseFeature(str, Enum):
@@ -65,7 +69,10 @@ TIER_DEFAULTS: dict[str, dict] = {
     "professional":       {"max_agents": 2000,  "max_end_users": 500,    "max_admin_seats": 25,  "max_orgs": 1},
     "professional_plus":  {"max_agents": 16000, "max_end_users": 4000,   "max_admin_seats": 100, "max_orgs": 5},
     "enterprise":         {"max_agents": -1,    "max_end_users": -1,     "max_admin_seats": -1,  "max_orgs": -1},
+    # Per README §8 / pricing page: Non-profit & Education = Unlimited everything.
     "academic_nonprofit": {"max_agents": -1,    "max_end_users": -1,     "max_admin_seats": -1,  "max_orgs": -1},
+    # canary: community limits (this tier is never legitimately issued)
+    "canary":             {"max_agents": 20,    "max_end_users": 5,      "max_admin_seats": 2,   "max_orgs": 1},
 }
 
 

@@ -218,10 +218,12 @@ def _safe_int(value: object, default: int) -> int:
       - Non-numeric strings ("abc", "null", etc.)
       - Float (truncated to int via int())
       - Negative values other than the documented -1 unlimited sentinel
-        → returned as-is so the caller can decide (enforcer treats -1 as unlimited)
+        → clamp to *default* (LAURA-LICENSE-08: negative seat counts are
+        adversarial — they would bypass enforcer's >= check entirely)
       - Values above _SEAT_CEILING that are not -1 → clamp to *default*
 
     Never raises. Prevents LAURA-V231-002 DoS-on-boot via null seat fields.
+    Prevents LAURA-LICENSE-08 negative-seat bypass.
     """
     if value is None:
         return default
@@ -237,6 +239,17 @@ def _safe_int(value: object, default: int) -> int:
     # Preserve the -1 unlimited sentinel without clamping.
     if result == _UNLIMITED_SENTINEL:
         return result
+
+    # LAURA-LICENSE-08: any other negative value is adversarial (a seat count
+    # of -2 would satisfy enforcer's `current >= max_agents` check with any
+    # positive current count, bypassing the limit entirely). Clamp to default.
+    if result < 0:
+        logger.warning(
+            "License verifier: negative seat field value %d — "
+            "using tier default %d (LAURA-LICENSE-08)",
+            result, default,
+        )
+        return default
 
     # Reject implausibly large values (corrupt / adversarial payload).
     if result > _SEAT_CEILING:
@@ -258,6 +271,17 @@ def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None
         tier = LicenseTier.COMMUNITY
         tier_str = "community"
 
+    # GROUP-5-3: canary sentinel — this tier must never appear in a verifiable
+    # license. If we receive one it means someone has issued a canary token to
+    # probe for patched verifiers. Reject with a specific error so monitoring
+    # can alert on it. Map to COMMUNITY (fail-closed).
+    if tier == LicenseTier.CANARY:
+        logger.critical(
+            "License verifier: CANARY tier token presented — potential verifier-patch "
+            "probe detected (GROUP-5-3); forcing COMMUNITY"
+        )
+        return _community_invalid("canary_token_rejected")
+
     # Coerce string feature values to LicenseFeature enum; unknown strings are silently dropped
     # for forwards-compat (new features added server-side before client ships).
     features_raw = payload.get("features", [])
@@ -275,18 +299,44 @@ def _build_license_state(payload: dict, valid: bool, error: Optional[str] = None
     issued_at = _parse_datetime(payload.get("issued_at")) or datetime(2020, 1, 1, tzinfo=timezone.utc)
     expires_at = _parse_datetime(payload.get("expires_at"))
 
+    # GROUP-1-2: License Service produces {"domains": ["x.com"]} not {"org_domain": "x.com"}.
+    # Read domains[0] first; fall back to legacy org_domain key for older payloads.
+    domains_list = payload.get("domains")
+    if isinstance(domains_list, list) and domains_list:
+        org_domain = str(domains_list[0])
+    else:
+        org_domain = payload.get("org_domain", "*")
+    if not org_domain:
+        org_domain = "*"
+
+    # LAURA-LIMIT-DOMAINS-02: wildcard domain is only valid for Community and
+    # Academic/Nonprofit tiers. Paid tiers (Starter, Professional, Professional Plus,
+    # Enterprise) must have a specific domain binding. A wildcard on a paid tier means
+    # the license was issued without domain binding and could be replayed to any deployment.
+    if (
+        valid
+        and org_domain == "*"
+        and tier not in (LicenseTier.COMMUNITY, LicenseTier.ACADEMIC_NONPROFIT)
+    ):
+        logger.warning(
+            "License verifier: paid tier %r has wildcard org_domain — "
+            "rejecting (LAURA-LIMIT-DOMAINS-02)",
+            tier_str,
+        )
+        return _community_invalid("wildcard_domain_not_permitted_for_paid_tier")
+
     # Resolve limits with backwards-compat fallback to tier defaults.
     # _safe_int guards against null/None/empty/non-numeric values in any field
     # (LAURA-V231-002: null seat fields previously caused TypeError → DoS on boot).
     defaults = TIER_DEFAULTS.get(tier_str, TIER_DEFAULTS["community"])
-    max_agents      = _safe_int(payload.get("max_agents"),                                       defaults["max_agents"])       # line 270
-    max_end_users   = _safe_int(payload.get("max_end_users", payload.get("max_users")),          defaults["max_end_users"])    # line 271
-    max_admin_seats = _safe_int(payload.get("max_admin_seats"),                                  defaults["max_admin_seats"])  # line 272
-    max_orgs        = _safe_int(payload.get("max_orgs"),                                         defaults["max_orgs"])         # line 273
+    max_agents      = _safe_int(payload.get("max_agents"),                                       defaults["max_agents"])
+    max_end_users   = _safe_int(payload.get("max_end_users", payload.get("max_users")),          defaults["max_end_users"])
+    max_admin_seats = _safe_int(payload.get("max_admin_seats"),                                  defaults["max_admin_seats"])
+    max_orgs        = _safe_int(payload.get("max_orgs"),                                         defaults["max_orgs"])
 
     return LicenseState(
         tier=tier,
-        org_domain=payload.get("org_domain", "*"),
+        org_domain=org_domain,
         max_agents=max_agents,
         max_end_users=max_end_users,
         max_admin_seats=max_admin_seats,

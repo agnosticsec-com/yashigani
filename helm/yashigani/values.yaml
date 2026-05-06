@@ -87,6 +87,20 @@ networkPolicies:
 # Set to false if the cluster does not have Kyverno (e.g. during initial
 # bootstrap before Kyverno is installed). Document in risk register.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# LIC-002 SECURITY NOTICE — YASHIGANI_LICENSE_TIER is NOT an operator-settable
+# value and MUST NOT appear anywhere in this values file, in extraEnv blocks,
+# or in any Kubernetes Secret/ConfigMap managed by this chart. Setting it via
+# the environment bypasses the signed-license enforcement path and lets any
+# operator claim any tier without a valid license token.
+#
+# There is intentionally NO extraEnv escape hatch in this chart. If you are
+# adding a new env var to the gateway or backoffice, add it as a first-class
+# chart value with a named field — never via an open-ended extraEnv list.
+#
+# If you see YASHIGANI_LICENSE_TIER in any manifest or values file, treat that
+# as a HIGH-severity finding and remove it before deploying.
+# ---------------------------------------------------------------------------
 admissionPolicies:
   enabled: true
   # Kyverno policy action: Enforce (hard reject) or Audit (log only).

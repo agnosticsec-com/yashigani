@@ -55,7 +55,14 @@
 
 
 x-common-env: &common-env
-  YASHIGANI_ENV: ${YASHIGANI_ENV:-development}
+  # LIC-001: YASHIGANI_ENV must be "production" in deployed stacks. The value
+  # "development" used to be the default here, which silently disabled license
+  # integrity checks (verifier skips hash + counter-key validation when
+  # YASHIGANI_ENV=dev). Default is now "production" so shipped stacks fail-closed.
+  # Set YASHIGANI_ENV=dev ONLY in local developer builds — never in .env.example.
+  # Non-license telemetry label is carried separately as YASHIGANI_ENVIRONMENT_LABEL.
+  YASHIGANI_ENV: ${YASHIGANI_ENV:-production}
+  YASHIGANI_ENVIRONMENT_LABEL: ${YASHIGANI_ENVIRONMENT_LABEL:-production}
   YASHIGANI_KSM_PROVIDER: ${YASHIGANI_KSM_PROVIDER:-docker}
   YASHIGANI_AUDIT_LOG_PATH: /data/audit/audit.log
   YASHIGANI_AUDIT_MAX_FILE_SIZE_MB: ${YASHIGANI_AUDIT_MAX_FILE_SIZE_MB:-100}
@@ -729,7 +736,7 @@ services:
   # ---------------------------------------------------------------------------
   grafana:
     dns_search: ["."]
-    image: docker.io/grafana/grafana:12.4.3@sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b
+    image: docker.io/grafana/grafana:13.0.1@sha256:bc7f5bd02d57b70fe2d9269d4fa5925b9127535d1a5f61df02b16ec7fe5aa379
     restart: unless-stopped
     mem_limit: ${YASHIGANI_GRAFANA_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_GRAFANA_CPU_LIMIT:-0.25}
@@ -898,7 +905,7 @@ services:
   # ---------------------------------------------------------------------------
   loki:
     dns_search: ["."]
-    image: docker.io/grafana/loki:3.6.10@sha256:368efbeb788cd2366a4e597f36dcb89bedf5387283a44db681723df42d2ee667
+    image: docker.io/grafana/loki:3.7.1@sha256:4bdb9598868182cdd143f599c9b54aa74d6cced46710a38af874dc5e840e80c8
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LOKI_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_LOKI_CPU_LIMIT:-0.25}
