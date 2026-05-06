@@ -188,7 +188,7 @@ def _make_payload(
 
 class TestLicenseTier:
     def test_all_expected_tiers_exist(self):
-        expected = {"community", "starter", "professional", "professional_plus", "enterprise", "academic_nonprofit"}
+        expected = {"community", "igniter", "starter", "professional", "professional_plus", "enterprise", "academic_nonprofit"}
         actual = {t.value for t in LicenseTier}
         assert actual == expected
 
@@ -210,24 +210,32 @@ class TestTierDefaults:
         assert d["max_admin_seats"] == 2
         assert d["max_orgs"] == 1
 
+    def test_igniter_limits(self):
+        # Per README §8 / pricing page (Igniter is the entry paid tier).
+        d = TIER_DEFAULTS["igniter"]
+        assert d["max_agents"] == 200
+        assert d["max_end_users"] == 50
+        assert d["max_admin_seats"] == 5
+        assert d["max_orgs"] == 1
+
     def test_starter_limits(self):
         d = TIER_DEFAULTS["starter"]
-        assert d["max_agents"] == 300
+        assert d["max_agents"] == 400
         assert d["max_end_users"] == 100
         assert d["max_admin_seats"] == 10
         assert d["max_orgs"] == 1
 
     def test_professional_limits(self):
         d = TIER_DEFAULTS["professional"]
-        assert d["max_agents"] == 1500
+        assert d["max_agents"] == 2000
         assert d["max_end_users"] == 500
         assert d["max_admin_seats"] == 25
         assert d["max_orgs"] == 1
 
     def test_professional_plus_limits(self):
         d = TIER_DEFAULTS["professional_plus"]
-        assert d["max_agents"] == 15000
-        assert d["max_end_users"] == 5000
+        assert d["max_agents"] == 16000
+        assert d["max_end_users"] == 4000
         assert d["max_admin_seats"] == 100
         assert d["max_orgs"] == 5
 
@@ -238,9 +246,17 @@ class TestTierDefaults:
         assert d["max_admin_seats"] == -1
         assert d["max_orgs"] == -1
 
+    def test_academic_nonprofit_unlimited(self):
+        # Per README §8: Non-profit & Education has Unlimited everything.
+        d = TIER_DEFAULTS["academic_nonprofit"]
+        assert d["max_agents"] == -1
+        assert d["max_end_users"] == -1
+        assert d["max_admin_seats"] == -1
+        assert d["max_orgs"] == -1
+
     def test_tier_limits_are_strictly_increasing(self):
-        """Starter ≤ Professional ≤ Professional Plus for all positive limits."""
-        tiers = ["starter", "professional", "professional_plus"]
+        """Igniter ≤ Starter ≤ Professional ≤ Professional Plus for all positive limits."""
+        tiers = ["igniter", "starter", "professional", "professional_plus"]
         for field in ["max_agents", "max_end_users", "max_admin_seats"]:
             values = [TIER_DEFAULTS[t][field] for t in tiers]
             assert values == sorted(values), \

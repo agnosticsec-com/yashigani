@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# update.sh — Yashigani v2.1.0
+# update.sh — Yashigani v2.23.2
+# last-updated: 2026-05-04T00:00:00+01:00 (feat: verify_health + auto-rollback wiring — retro #59)
 # Updates an existing Yashigani installation to the latest version.
 #
 # Usage:
@@ -8,6 +9,8 @@
 #   ./update.sh --skip-backup            # Skip pre-update backup
 #   ./update.sh --dry-run                # Show what would happen
 #   ./update.sh --rollback               # Rollback to previous version
+#   ./update.sh --health-timeout 180     # Per-service health-check timeout
+#   ./update.sh --no-auto-rollback       # Disable auto-rollback on health failure
 
 set -euo pipefail
 
@@ -42,6 +45,8 @@ TARGET_VERSION=""
 SKIP_BACKUP=false
 DRY_RUN=false
 ROLLBACK=false
+NO_AUTO_ROLLBACK=false
+HEALTH_TIMEOUT=120
 INSTALL_DIR=""
 
 # ---------------------------------------------------------------------------
@@ -55,16 +60,20 @@ USAGE
   update.sh [OPTIONS]
 
 OPTIONS
-  --target VERSION    Update to a specific version (default: latest release)
-  --skip-backup       Skip pre-update backup of config and data
-  --dry-run           Show what would happen without making changes
-  --rollback          Rollback to the previous version (from backup)
-  --help              Show this help and exit
+  --target VERSION       Update to a specific version (default: latest release)
+  --skip-backup          Skip pre-update backup of config and data
+  --dry-run              Show what would happen without making changes
+  --rollback             Rollback to the previous version (from backup)
+  --health-timeout SECS  Per-service health-check timeout in seconds (default: 120)
+  --no-auto-rollback     On health-check failure, do NOT auto-rollback. Caller
+                         must inspect and run \`./update.sh --rollback\` manually.
+  --help                 Show this help and exit
 
 EXAMPLES
   ./update.sh                     # Update to latest
   ./update.sh --target 0.9.2      # Update to v0.9.2
   ./update.sh --rollback          # Rollback to previous version
+  ./update.sh --no-auto-rollback  # Update; skip auto-rollback if health fails
 EOF
   exit 0
 }
@@ -74,10 +83,12 @@ EOF
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --target)          TARGET_VERSION="$2"; shift 2 ;;
-    --skip-backup)     SKIP_BACKUP=true;    shift ;;
-    --dry-run)         DRY_RUN=true;        shift ;;
-    --rollback)        ROLLBACK=true;       shift ;;
+    --target)          TARGET_VERSION="$2";   shift 2 ;;
+    --skip-backup)     SKIP_BACKUP=true;      shift ;;
+    --dry-run)         DRY_RUN=true;          shift ;;
+    --rollback)        ROLLBACK=true;         shift ;;
+    --health-timeout)  HEALTH_TIMEOUT="$2";   shift 2 ;;
+    --no-auto-rollback) NO_AUTO_ROLLBACK=true; shift ;;
     --help|-h)         usage ;;
     *) log_error "Unknown option: $1"; usage ;;
   esac
@@ -87,7 +98,7 @@ done
 # Detect installation directory
 # ---------------------------------------------------------------------------
 detect_install_dir() {
-  log_step "1/7" "Detecting Yashigani installation..."
+  log_step "1/8" "Detecting Yashigani installation..."
 
   # Check if we're inside the repo
   if [[ -f "${SCRIPT_DIR}/docker/docker-compose.yml" ]]; then
@@ -113,7 +124,7 @@ detect_install_dir() {
 # Detect current installed version
 # ---------------------------------------------------------------------------
 detect_current_version() {
-  log_step "2/7" "Checking installed version..."
+  log_step "2/8" "Checking installed version..."
 
   local installed_version=""
 
@@ -139,7 +150,7 @@ detect_current_version() {
 # Check for latest version
 # ---------------------------------------------------------------------------
 check_latest_version() {
-  log_step "3/7" "Checking for updates..."
+  log_step "3/8" "Checking for updates..."
 
   if [[ -n "$TARGET_VERSION" ]]; then
     log_info "Target version specified: v${TARGET_VERSION}"
@@ -185,7 +196,7 @@ check_latest_version() {
 # Backup current installation
 # ---------------------------------------------------------------------------
 backup_current() {
-  log_step "4/7" "Backing up current installation..."
+  log_step "4/8" "Backing up current installation..."
 
   if [[ "$SKIP_BACKUP" == "true" ]]; then
     log_warn "Skipping backup (--skip-backup)"
@@ -253,7 +264,7 @@ backup_current() {
 # Pull new version
 # ---------------------------------------------------------------------------
 pull_update() {
-  log_step "5/7" "Pulling v${TARGET_VERSION}..."
+  log_step "5/8" "Pulling v${TARGET_VERSION}..."
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "[dry-run] Would pull version v${TARGET_VERSION}"
@@ -343,7 +354,7 @@ pull_update() {
 # Pull new container images
 # ---------------------------------------------------------------------------
 pull_images() {
-  log_step "6/7" "Pulling updated container images..."
+  log_step "6/8" "Pulling updated container images..."
 
   local compose_file="${INSTALL_DIR}/docker/docker-compose.yml"
 
@@ -380,7 +391,7 @@ pull_images() {
 # Restart services
 # ---------------------------------------------------------------------------
 restart_services() {
-  log_step "7/7" "Restarting services..."
+  log_step "7/8" "Restarting services..."
 
   local compose_file="${INSTALL_DIR}/docker/docker-compose.yml"
 
@@ -409,6 +420,39 @@ restart_services() {
   fi
 
   log_success "Services restarted on v${TARGET_VERSION}"
+}
+
+# ---------------------------------------------------------------------------
+# Verify health (post-restart)
+# ---------------------------------------------------------------------------
+# retro #59 — runs scripts/health-check.sh after services restart and returns
+# its exit code. main() consumes that code to decide whether to auto-rollback.
+# Returns 0 on healthy, non-zero on unhealthy or missing health-check.sh.
+# ---------------------------------------------------------------------------
+verify_health() {
+  log_step "8/8" "Verifying service health..."
+
+  local hc="${INSTALL_DIR}/scripts/health-check.sh"
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    log_info "[dry-run] Would run: ${hc} --timeout ${HEALTH_TIMEOUT}"
+    return 0
+  fi
+
+  if [[ ! -x "$hc" ]]; then
+    log_warn "Health check script not found or not executable: ${hc}"
+    log_warn "Skipping verification — install MAY be unhealthy and auto-rollback is disabled."
+    return 0
+  fi
+
+  log_info "Running ${hc} --timeout ${HEALTH_TIMEOUT}"
+  if "$hc" --timeout "$HEALTH_TIMEOUT"; then
+    log_success "Health check PASSED — upgrade is healthy."
+    return 0
+  fi
+
+  log_error "Health check FAILED on v${TARGET_VERSION}."
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -532,7 +576,25 @@ main() {
   pull_update
   pull_images
   restart_services
+
+  # retro #59 — wire health check + auto-rollback on failure.
+  if ! verify_health; then
+    if [[ "$NO_AUTO_ROLLBACK" == "true" ]]; then
+      log_warn "--no-auto-rollback set: leaving v${TARGET_VERSION} running for inspection."
+      log_warn "Run \`./update.sh --rollback\` once you are ready to revert."
+      exit 1
+    fi
+    log_warn "Auto-rollback engaged: reverting to v${CURRENT_VERSION}..."
+    do_rollback
+    log_error "Upgrade to v${TARGET_VERSION} aborted; rolled back to v${CURRENT_VERSION}."
+    exit 1
+  fi
+
   print_summary
 }
 
-main "$@"
+# Sourceable guard: tests can `source update.sh` with YSG_UPDATE_NO_AUTORUN=1
+# to exercise functions in isolation without main() running.
+if [[ "${YSG_UPDATE_NO_AUTORUN:-0}" != "1" ]]; then
+  main "$@"
+fi
