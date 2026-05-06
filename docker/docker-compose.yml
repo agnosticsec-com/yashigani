@@ -323,9 +323,23 @@ services:
       # verification. the gateway/backoffice middleware reads this at lifespan startup and rejects
       # requests that do not carry the matching header value.
       CADDY_INTERNAL_HMAC: ${CADDY_INTERNAL_HMAC:?run install.sh to generate caddy_internal_hmac}
+      # v2.23.2 #47 — Backup status + verify: mount host backups dir read-only.
+      # Python reads from this path; install.sh and update.sh write to
+      # ${INSTALL_DIR}/backups on the host. The :ro flag prevents the
+      # backoffice container from modifying backup files.
+      YASHIGANI_BACKUPS_DIR: /data/backups
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
+      # v2.23.2 #47 — Backup directory mount (read-only — backoffice reads, never writes).
+      - ${INSTALL_DIR:-..}/backups:/data/backups:ro
+      # LIC-007 / LIC-012 (v2.24.0 DEFERRED): This mount is writable because
+      # write_docker_secrets() writes admin credentials + license_key here during
+      # bootstrap. After bootstrap, license_key should be chmod 0400. The trivial
+      # fix (chmod in write_docker_secrets() post-write) is Tom Group 5.1.
+      # Schema-split (separate :ro PKI mount + writable bootstrap mount) = LIC-012
+      # for v2.24.0. K8s is already protected: backoffice.yaml initContainer runs
+      # chmod 0400 on all /secrets-rw/* files including license_key.
       - ./secrets:/run/secrets
       # Internal mTLS — manifest mounted read-only.
       - ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro

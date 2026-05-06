@@ -458,6 +458,10 @@ verify_health() {
 # ---------------------------------------------------------------------------
 # Rollback
 # ---------------------------------------------------------------------------
+# TODO(v2.24.0 #47): Wire YASHIGANI_BACKUPS_DIR + POST /admin/backup/verify here.
+# Rollback currently invokes restore.sh directly via shell; the backoffice
+# container is not guaranteed to be running during an upgrade window.
+# Track: https://github.com/agnosticsec-com/yashigani/issues/47
 do_rollback() {
   log_step "1/3" "Finding latest backup..."
 
