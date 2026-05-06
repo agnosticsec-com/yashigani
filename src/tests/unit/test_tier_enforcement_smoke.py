@@ -24,12 +24,12 @@ tier boundary with descriptive error body":
     Pro+ allows up to 5 orgs; Community/Starter/Pro are single-org.
     Asserts max_orgs > 1 only on Pro+ and Enterprise.
 
-NOTE on TIER_DEFAULTS vs README §8 Feature Matrix:
-    The values in src/yashigani/licensing/model.py:TIER_DEFAULTS are the
-    code's source of truth for HTTP 402 enforcement. README §8 documents
-    different headline numbers (Starter 400 / Pro 2,000 / Pro+ 16,000).
-    This test pins the CODE values — drift between code and README is
-    a separate finding tracked outside #42.
+SOURCE OF TRUTH:
+    Website pricing + user-number table (mirrored in README §8) is the
+    canonical contract. TIER_DEFAULTS in src/yashigani/licensing/model.py
+    is aligned with that table — this test asserts both values and
+    boundaries. Any future drift between TIER_DEFAULTS and the website
+    surfaces as a hard fail here.
 """
 from __future__ import annotations
 
@@ -59,15 +59,17 @@ from yashigani.licensing.model import (
 
 
 # ---------------------------------------------------------------------------
-# Canonical tier feature matrix (from README.md §8). Pinned here so the test
-# fails loud if the matrix ever drifts in either direction.
+# Canonical tier feature matrix (from README.md §8 / pricing page). Pinned
+# here so the test fails loud if the matrix ever drifts in either direction.
 # ---------------------------------------------------------------------------
 _TIER_FEATURES: dict[str, set[str]] = {
-    "community":         set(),
-    "starter":           {"oidc"},
-    "professional":      {"oidc", "saml", "scim"},
-    "professional_plus": {"oidc", "saml", "scim", "pii_log", "pii_redact"},
-    "enterprise":        {"oidc", "saml", "scim", "pii_log", "pii_redact"},
+    "community":          set(),
+    "igniter":            {"oidc"},
+    "starter":            {"oidc"},
+    "professional":       {"oidc", "saml", "scim"},
+    "professional_plus":  {"oidc", "saml", "scim", "pii_log", "pii_redact"},
+    "enterprise":         {"oidc", "saml", "scim", "pii_log", "pii_redact"},
+    "academic_nonprofit": {"oidc", "saml", "scim"},
 }
 
 _LIMIT_AXES = ("max_agents", "max_end_users", "max_admin_seats", "max_orgs")
@@ -77,7 +79,15 @@ _LIMIT_FN = {
     "max_admin_seats": check_admin_seat_limit,
     "max_orgs":        check_org_limit,
 }
-_TIER_NAMES_SCOPE = ("community", "starter", "professional", "professional_plus", "enterprise")
+_TIER_NAMES_SCOPE = (
+    "community",
+    "igniter",
+    "starter",
+    "professional",
+    "professional_plus",
+    "enterprise",
+    "academic_nonprofit",
+)
 
 
 def _build_license(tier_name: str) -> LicenseState:
@@ -174,7 +184,9 @@ def test_limit_exceeded_response_body_is_descriptive(tier_name: str):
 # Layer B — Route → HTTP 402 wiring (real handler, mocked deps)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("tier_name", ("community", "starter", "professional", "professional_plus"))
+@pytest.mark.parametrize(
+    "tier_name", ("community", "igniter", "starter", "professional", "professional_plus")
+)
 def test_register_agent_route_returns_402_at_limit(tier_name: str):
     """When the agent registry is at max for the active tier, POST /admin/agents
     returns HTTP 402 with detail.error == 'agent_limit_exceeded'.
@@ -344,11 +356,13 @@ def test_feature_gated_response_body_is_descriptive():
 @pytest.mark.parametrize(
     "tier_name,expected_multi",
     [
-        ("community",         False),  # max_orgs = 1
-        ("starter",           False),  # max_orgs = 1
-        ("professional",      False),  # max_orgs = 1
-        ("professional_plus", True),   # max_orgs = 5
-        ("enterprise",        True),   # max_orgs = -1 (unlimited)
+        ("community",          False),  # max_orgs = 1
+        ("igniter",            False),  # max_orgs = 1
+        ("starter",            False),  # max_orgs = 1
+        ("professional",       False),  # max_orgs = 1
+        ("professional_plus",  True),   # max_orgs = 5
+        ("enterprise",         True),   # max_orgs = -1 (unlimited)
+        ("academic_nonprofit", True),   # max_orgs = -1 (unlimited)
     ],
 )
 def test_multi_org_gate_matches_tier(tier_name: str, expected_multi: bool):
