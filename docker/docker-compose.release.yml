@@ -33,23 +33,23 @@
 #   openpolicyagent/opa:1.15.1                  sha256:c3e940a236811f34a9bdf1b98e1a441db7f1ef81151a0bb4a9706467a11c8cd9
 #   ollama/ollama:0.6.2                         sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721
 #   prom/prometheus:v3.2.1                      sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
-#   grafana/grafana:12.4.3                      sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b
+#   grafana/grafana:12.4.3                      sha256:2e986801428cd689c2358605289c90ab37d2b39e24808874971f54c99bcdc412
 #   pgvector/pgvector:pg16                      sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
 #   edoburu/pgbouncer:v1.23.1-p0                sha256:09454d066b2b2a220c8f95690be542079b89dfde09a6a4d72eb65cdfdb493426
 #   prom/alertmanager:v0.27.0                   sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
 #   grafana/loki:3.0.0                          sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253
 #   grafana/promtail:3.0.0                      sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
-#   otel/opentelemetry-collector-contrib:0.151.0  sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
-#   jaegertracing/jaeger:2.17.0                 sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058
-#   hashicorp/vault:2.0.0                       sha256:59a8a82a11bbb1e95aa563174add4e91d66e70a5aeac612b5d9e9c710369f09c
+#   otel/opentelemetry-collector-contrib:0.151.0  sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d
+#   jaegertracing/jaeger:2.17.0                 sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708
+#   hashicorp/vault:2.0.0                       sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
 #   smallstep/step-ca:0.30.2                    sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
 #   ghcr.io/open-webui/open-webui:v0.9.1        sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978
 #   langflowai/langflow:1.9.0                   sha256:01b48149017d0a211cb4dd0b7454bd4ff68870937b9037c0c2c0928d24868ce1
 #   letta/letta:0.16.7                          sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c
 #   ghcr.io/openclaw/openclaw:2026.3.1          sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
-#   wazuh/wazuh-manager:4.14.5                  sha256:3721f1b3acd5961e877855ae481d92c4fbf6553b50a9009aee93e40fa9162899
-#   wazuh/wazuh-indexer:4.14.5                  sha256:120d95f44c944495425a1f05ae555624f7d82a909c21860c4353fff4197efc83
-#   wazuh/wazuh-dashboard:4.14.5                sha256:037277575cbaac23bb09d17d415b72ea08a7cf094433c512f2889fccec266325
+#   wazuh/wazuh-manager:4.14.5                  sha256:3b2b7aae2daf696071ecc8b32a5d1e65e5c2a625291afc434bd20171a9d41109
+#   wazuh/wazuh-indexer:4.14.5                  sha256:bcba58b3fe756114249b8834bcae8f852d277ffc6b9695d3de5989f5fe94d36c
+#   wazuh/wazuh-dashboard:4.14.5                sha256:75437f4fb347db2d040863801f9eb73b0ca16c8b3fb4d93a07df34b7313b16af
 #   quay.io/keycloak/keycloak:26.0              sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
 #
 # NOTE: yashigani/gateway and yashigani/backoffice are our own images (built
@@ -79,7 +79,7 @@ services:
     image: docker.io/prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
 
   grafana:
-    image: docker.io/grafana/grafana:12.4.3@sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b
+    image: docker.io/grafana/grafana:12.4.3@sha256:2e986801428cd689c2358605289c90ab37d2b39e24808874971f54c99bcdc412
 
   postgres:
     image: docker.io/pgvector/pgvector:pg16@sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
@@ -97,13 +97,13 @@ services:
     image: docker.io/grafana/promtail:3.0.0@sha256:d3de3da9431cfbe74a6a94555050df5257f357e827be8e63f8998d509c37af8b
 
   otel-collector:
-    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
+    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d
 
   jaeger:
-    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058
+    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708
 
   vault:
-    image: docker.io/hashicorp/vault:2.0.0@sha256:59a8a82a11bbb1e95aa563174add4e91d66e70a5aeac612b5d9e9c710369f09c
+    image: docker.io/hashicorp/vault:2.0.0@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
 
   step-ca:
     image: docker.io/smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
@@ -124,13 +124,13 @@ services:
     image: ghcr.io/openclaw/openclaw:2026.3.1@sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
 
   wazuh-manager:
-    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3721f1b3acd5961e877855ae481d92c4fbf6553b50a9009aee93e40fa9162899
+    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3b2b7aae2daf696071ecc8b32a5d1e65e5c2a625291afc434bd20171a9d41109
 
   wazuh-indexer:
-    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:120d95f44c944495425a1f05ae555624f7d82a909c21860c4353fff4197efc83
+    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:bcba58b3fe756114249b8834bcae8f852d277ffc6b9695d3de5989f5fe94d36c
 
   wazuh-dashboard:
-    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:037277575cbaac23bb09d17d415b72ea08a7cf094433c512f2889fccec266325
+    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:75437f4fb347db2d040863801f9eb73b0ca16c8b3fb4d93a07df34b7313b16af
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
