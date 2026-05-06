@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.2 — Helm release digest overlay
-# Last updated: 2026-05-02T23:00:00+01:00
+# Last updated: 2026-05-06T00:00:00+01:00
 #
 # Purpose: pins every upstream image in values.yaml to its sha256 digest,
 # closing ASVS V10.3.1 (H-02 from internal design-drift audit). Apply as a
@@ -19,96 +19,96 @@
 # RETRO-H02-MIRROR (v2.23.2 P0). Until that lands, upstream registries are
 # used with digest pinning.
 #
-# NOTE: As of v2.23.2 image-pin sweep (2026-05-02), digests are now embedded
-# directly in values.yaml tag fields (format: "tag@sha256:..."). The digest:
-# fields in this file serve as human-readable audit evidence only — they are
-# not consumed by Helm templates. Both must be kept in sync.
+# NOTE: As of v2.23.2 multi-arch digest sweep (2026-05-06), ALL digests are
+# multi-arch manifest INDEX digests (not arch-specific layer digests).
+# This closes V232-SMOKE-001 and P-8 (podman-compose-sequential-block-on-crashloop-dep).
+# Digests embedded directly in values.yaml tag fields (format: "tag@sha256:...").
+# The digest: fields in this file serve as human-readable audit evidence only.
 #
-# Digests verified 2026-05-02 via podman pull + inspect on aarch64 macOS.
-# Re-verify with: podman pull <image>:<tag> && podman inspect <image>:<tag> \
-#   --format '{{.Digest}}'
+# Digests verified 2026-05-06 via: docker buildx imagetools inspect <image>:<tag>
+# Re-verify with: docker buildx imagetools inspect <image>:<tag> | grep "^Digest:"
 
 caddy:
   image:
     repository: docker.io/library/caddy
-    tag: "2-alpine@sha256:df9781ddd351c310248024d964065cd8d41b11fb5d238256d55d30925e8b6ae4"
-    digest: "sha256:df9781ddd351c310248024d964065cd8d41b11fb5d238256d55d30925e8b6ae4"
-    # Full pinned ref: docker.io/library/caddy:2-alpine@sha256:df9781ddd351c310248024d964065cd8d41b11fb5d238256d55d30925e8b6ae4
+    tag: "2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d"
+    digest: "sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d"
+    # Full pinned ref: docker.io/library/caddy:2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
 
 policy:
   image:
     repository: docker.io/openpolicyagent/opa
-    tag: "1.15.1@sha256:d90da198626182c2415596cad6f5f16ad45ac9653ea4fe8572e71eab89d5f8ea"
-    digest: "sha256:d90da198626182c2415596cad6f5f16ad45ac9653ea4fe8572e71eab89d5f8ea"
+    tag: "1.15.1@sha256:c3e940a236811f34a9bdf1b98e1a441db7f1ef81151a0bb4a9706467a11c8cd9"
+    digest: "sha256:c3e940a236811f34a9bdf1b98e1a441db7f1ef81151a0bb4a9706467a11c8cd9"
 
 redis:
   image:
     repository: docker.io/library/redis
-    tag: "7-alpine@sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70"
-    digest: "sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70"
+    tag: "7-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee"
+    digest: "sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee"
 
 budgetRedis:
   image:
     repository: docker.io/library/redis
-    tag: "7-alpine@sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70"
-    digest: "sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70"
+    tag: "7-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee"
+    digest: "sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee"
 
 ollama:
   image:
     repository: docker.io/ollama/ollama
-    tag: "0.6.2@sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab"
-    digest: "sha256:f64d787116ad9d3349cd9ae938e5000fa4f9d07a1efb870bf7d4aa228cfafeab"
+    tag: "0.6.2@sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721"
+    digest: "sha256:74a0929e1e082a09e4fdeef8594b8f4537f661366a04080e600c90ea9f712721"
 
 prometheus:
   image:
     repository: docker.io/prom/prometheus
-    tag: "v3.2.1@sha256:641f5faf625e3c667e2fb75b89a8a1dbc59a564f982f725fffb314f9293ab150"
-    digest: "sha256:641f5faf625e3c667e2fb75b89a8a1dbc59a564f982f725fffb314f9293ab150"
+    tag: "v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"
+    digest: "sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62"
 
 grafana:
   image:
     repository: docker.io/grafana/grafana
-    tag: "12.4.3@sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b"
-    digest: "sha256:6b2185720c70337fdc8422944d88c44ca684ba013e34a4aa063257d6f912341b"
+    tag: "12.4.3@sha256:2e986801428cd689c2358605289c90ab37d2b39e24808874971f54c99bcdc412"
+    digest: "sha256:2e986801428cd689c2358605289c90ab37d2b39e24808874971f54c99bcdc412"
 
 postgres:
   image:
     repository: docker.io/pgvector/pgvector
-    tag: "pg16@sha256:902fd1d74ffe6b650d2763fbbcd563f21ac2e57695742924dc04956f094d16da"
-    digest: "sha256:902fd1d74ffe6b650d2763fbbcd563f21ac2e57695742924dc04956f094d16da"
+    tag: "pg16@sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff"
+    digest: "sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff"
 
 pgbouncer:
   image:
     repository: docker.io/edoburu/pgbouncer
-    tag: "v1.23.1-p0@sha256:dba33a500894390283662d596feafad55e8dad83162703f8324e3efb7aa6808f"
-    digest: "sha256:dba33a500894390283662d596feafad55e8dad83162703f8324e3efb7aa6808f"
+    tag: "v1.23.1-p0@sha256:09454d066b2b2a220c8f95690be542079b89dfde09a6a4d72eb65cdfdb493426"
+    digest: "sha256:09454d066b2b2a220c8f95690be542079b89dfde09a6a4d72eb65cdfdb493426"
 
 alertmanager:
   image:
     repository: docker.io/prom/alertmanager
-    tag: "v0.27.0@sha256:2fbdd4c66d91e740fe3fd462d8f52fc3d305a5b403bab3a58feb62be237a84fb"
-    digest: "sha256:2fbdd4c66d91e740fe3fd462d8f52fc3d305a5b403bab3a58feb62be237a84fb"
+    tag: "v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5"
+    digest: "sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5"
 
 loki:
   image:
     repository: docker.io/grafana/loki
-    tag: "3.0.0@sha256:e5f7ab1e3a138dbf769cb73ec08144f83943c556ac6dfc8adae035d3669abb39"
-    digest: "sha256:e5f7ab1e3a138dbf769cb73ec08144f83943c556ac6dfc8adae035d3669abb39"
+    tag: "3.0.0@sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253"
+    digest: "sha256:757b5fadf816a1396f1fea598152947421fa49cb8b2db1ddd2a6e30fae003253"
 
 otelCollector:
   image:
     repository: docker.io/otel/opentelemetry-collector-contrib
-    tag: "0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c"
-    digest: "sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c"
+    tag: "0.151.0@sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d"
+    digest: "sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d"
 
 jaeger:
   image:
     repository: docker.io/jaegertracing/jaeger
-    tag: "2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058"
-    digest: "sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058"
+    tag: "2.17.0@sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708"
+    digest: "sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708"
 
 openWebui:
   image:
     repository: ghcr.io/open-webui/open-webui
-    tag: "v0.9.1@sha256:b4ee86c80412d2b9e78b33b27d4c4737c73141676dfdc1418d2a293f1c089c85"
-    digest: "sha256:b4ee86c80412d2b9e78b33b27d4c4737c73141676dfdc1418d2a293f1c089c85"
+    tag: "v0.9.1@sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978"
+    digest: "sha256:03d2b006989f0fe6559391a0c5d4ccac12688d7813d23cb4de86e5cc0ab22978"

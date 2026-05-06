@@ -87,7 +87,7 @@ services:
   # ---------------------------------------------------------------------------
   caddy:
     dns_search: ["."]
-    image: docker.io/library/caddy:2-alpine@sha256:df9781ddd351c310248024d964065cd8d41b11fb5d238256d55d30925e8b6ae4
+    image: docker.io/library/caddy:2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
     restart: unless-stopped
     mem_limit: ${YASHIGANI_CADDY_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_CADDY_CPU_LIMIT:-0.5}
@@ -403,7 +403,7 @@ services:
   # ---------------------------------------------------------------------------
   open-webui:
     dns_search: ["."]
-    image: ghcr.io/open-webui/open-webui:v0.9.2@sha256:90225d2bb5cb9251ba92ec1efd1df5b0b4589d0c97f9e6fcbeee5507e89ac8ec
+    image: ghcr.io/open-webui/open-webui:v0.9.2@sha256:a7e4796ae894d1e2a0c1824860ade472f35c507608a01c3581377b5c19b0ed49
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENWEBUI_MEM_LIMIT:-2048m}
     cpus: ${YASHIGANI_OPENWEBUI_CPU_LIMIT:-1.0}
@@ -458,7 +458,7 @@ services:
   # ---------------------------------------------------------------------------
   budget-redis:
     dns_search: ["."]
-    image: docker.io/library/redis:7-alpine@sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70
+    image: docker.io/library/redis:7-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee
     # gate V232-SMOKE-018: redis:7-alpine has no USER directive (defaults to root).
     # With cap_drop: [ALL], root has no DAC_OVERRIDE → cannot read TLS keys
     # chowned to 999:999 by `_pki_chown_client_keys`. Pin to UID 999:999 (the
@@ -508,7 +508,7 @@ services:
   # ---------------------------------------------------------------------------
   policy:
     dns_search: ["."]
-    image: docker.io/openpolicyagent/opa:1.16.1@sha256:90c20b986968c214bfaf826078a6442ffd79468cdf449f3aaf5c75070c618f28
+    image: docker.io/openpolicyagent/opa:1.16.1@sha256:c6f9910d5e982df13fa4c65f02cfa7f65f9cfdbef9fbaf80d6547f840294aa02
     restart: unless-stopped
     mem_limit: ${YASHIGANI_POLICY_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_POLICY_CPU_LIMIT:-0.25}
@@ -552,7 +552,7 @@ services:
   # ---------------------------------------------------------------------------
   redis:
     dns_search: ["."]
-    image: docker.io/library/redis:7-alpine@sha256:d6550289be540d3c543ffa836fce6e74c265773c0d833953d0461d347729bb70
+    image: docker.io/library/redis:7-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee
     # gate V232-SMOKE-018 — see budget-redis above for rationale.
     user: "999:999"
     restart: unless-stopped
@@ -602,7 +602,7 @@ services:
   # ---------------------------------------------------------------------------
   ollama:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.23.0@sha256:e13d0ba897b1053879d2de5cbd7814898e498a9d865613d3c506d0d19f713482
+    image: docker.io/ollama/ollama:0.23.0@sha256:5600a652d1081050f398152127c584222546354491f27fe47ccbc6351bc870bd
     # gate V232-SMOKE-018: bbd556e set user: "1000:1000" with HOME=/data
     # (verified working on macOS Podman where vfs initialises the volume
     # owned by the caller UID). On Linux Docker, named volumes are
@@ -646,7 +646,7 @@ services:
   # Model bootstrap — pull classifier model on first start
   ollama-init:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.23.0@sha256:e13d0ba897b1053879d2de5cbd7814898e498a9d865613d3c506d0d19f713482
+    image: docker.io/ollama/ollama:0.23.0@sha256:5600a652d1081050f398152127c584222546354491f27fe47ccbc6351bc870bd
     # gate V232-SMOKE-018 — same rationale as `ollama` service above.
     user: "0:0"
     restart: on-failure:3
@@ -689,7 +689,7 @@ services:
   # ---------------------------------------------------------------------------
   prometheus:
     dns_search: ["."]
-    image: docker.io/prom/prometheus:v3.11.3@sha256:8737f27a6102141f06bd38e10e8908a8fa39a649cd187a2fee7c4b8429a366d6
+    image: docker.io/prom/prometheus:v3.11.3@sha256:e4254400b85610324913f0dc4acf92603d9984e7519414c5a12811aa6146acc3
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMETHEUS_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_PROMETHEUS_CPU_LIMIT:-0.5}
@@ -776,7 +776,7 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     dns_search: ["."]
-    image: docker.io/pgvector/pgvector:pg16@sha256:902fd1d74ffe6b650d2763fbbcd563f21ac2e57695742924dc04956f094d16da
+    image: docker.io/pgvector/pgvector:pg16@sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
     # gate V232-SMOKE-018: pgvector/pgvector has no USER directive (defaults to
     # root). The postgres entrypoint then runs gosu/setpriv to switch from root
     # → postgres user, but `cap_drop: [ALL]` strips CAP_SETUID/SETGID/FOWNER —
@@ -820,7 +820,7 @@ services:
   # PgBouncer — transaction-mode connection pooler
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: docker.io/edoburu/pgbouncer:v1.25.1-p0@sha256:6997cf670ca5278b6afbaab767ffc223d56e280ca22133d1a11f9868d068813d
+    image: docker.io/edoburu/pgbouncer:v1.25.1-p0@sha256:c7bfcaa24de830e29588bb9ad1eb39cebaf07c27149e1974445899b695634bb4
     # gate V232-SMOKE-018: edoburu/pgbouncer has USER pgbouncer (UID 70) but
     # the same cap_drop ALL constraint applies on init scripts. Pin
     # explicitly so the chowned client keys (70:70 by `_pki_chown_client_keys`)
@@ -874,7 +874,7 @@ services:
   # ---------------------------------------------------------------------------
   alertmanager:
     dns_search: ["."]
-    image: docker.io/prom/alertmanager:v0.32.1@sha256:06a1e7960b1a68794ef943744082dc361dd352fd07ed3319ab6de3f929f38ad2
+    image: docker.io/prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
     restart: unless-stopped
     mem_limit: ${YASHIGANI_ALERTMANAGER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_ALERTMANAGER_CPU_LIMIT:-0.25}
@@ -930,7 +930,7 @@ services:
   # ---------------------------------------------------------------------------
   promtail:
     dns_search: ["."]
-    image: docker.io/grafana/promtail:3.6.10@sha256:7f512e94cb519e462338ce991922ef4622951bc5e84820c2c4272f4f0e32adbb
+    image: docker.io/grafana/promtail:3.6.10@sha256:2a0f5e3e160ee5d549c585f6cc4f4e1c566ff783324a424bd75bc16503fc660e
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMTAIL_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PROMTAIL_CPU_LIMIT:-0.25}
@@ -964,7 +964,7 @@ services:
   # ---------------------------------------------------------------------------
   otel-collector:
     dns_search: ["."]
-    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:e45100cae59c272bab24fbc721d9eeaf306379c10849cbeb5902af34e1d54f8c
+    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OTEL_COLLECTOR_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_OTEL_COLLECTOR_CPU_LIMIT:-0.5}
@@ -1005,7 +1005,7 @@ services:
   # ---------------------------------------------------------------------------
   jaeger:
     dns_search: ["."]
-    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:1bd9a7a747d6955975fb2c93df28afab22044cb8202c47207f169cd1b7dd3058
+    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708
     restart: unless-stopped
     mem_limit: ${YASHIGANI_JAEGER_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_JAEGER_CPU_LIMIT:-0.5}
@@ -1034,7 +1034,7 @@ services:
   # ---------------------------------------------------------------------------
   keycloak:
     dns_search: ["."]
-    image: quay.io/keycloak/keycloak:26.6.1@sha256:93d29259c764330686b6b54814724b7c252355e7bd91e8a73b8323dcc8498621
+    image: quay.io/keycloak/keycloak:26.6.1@sha256:26ae26445475f7fac5f90ee138b1bdb64324f5815fb16133ffdbdb122d97c4d8
     restart: unless-stopped
     mem_limit: ${YASHIGANI_KEYCLOAK_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_KEYCLOAK_CPU_LIMIT:-1.0}
@@ -1077,7 +1077,7 @@ services:
   # ---------------------------------------------------------------------------
   vault:
     dns_search: ["."]
-    image: docker.io/hashicorp/vault:2.0.0@sha256:59a8a82a11bbb1e95aa563174add4e91d66e70a5aeac612b5d9e9c710369f09c
+    image: docker.io/hashicorp/vault:2.0.0@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
     restart: unless-stopped
     mem_limit: ${YASHIGANI_VAULT_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_VAULT_CPU_LIMIT:-0.5}
@@ -1121,7 +1121,7 @@ services:
   # Users build custom agent workflows visually via the Langflow UI.
   langflow:
     dns_search: ["."]
-    image: docker.io/langflowai/langflow:1.9.2@sha256:58e06e0d37be1640128d0d38300e80b038c5235c87e80235abd46c56ddb9c875
+    image: docker.io/langflowai/langflow:1.9.2@sha256:45238e614ce42bf93fea36a56316d3ebafdaf70c4df4425aeb2c90b035ec4a14
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LANGFLOW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_LANGFLOW_CPU_LIMIT:-1.0}
@@ -1163,7 +1163,7 @@ services:
   # Exposes REST API on port 8283 with OpenAI-compatible chat endpoint.
   letta:
     dns_search: ["."]
-    image: docker.io/letta/letta:0.16.7@sha256:c13e2a563d28eff3f0106645f0057595741668a4999e0a3934709ef0abef1877
+    image: docker.io/letta/letta:0.16.7@sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LETTA_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_LETTA_CPU_LIMIT:-1.0}
@@ -1211,7 +1211,7 @@ services:
   # Integration: OpenClaw (:18789) → Yashigani Gateway (:8080) → Ollama/LLM
   openclaw:
     dns_search: ["."]
-    image: ghcr.io/openclaw/openclaw:2026.3.1@sha256:f43ad2a0f5c5598f2935c0914cdc4396ca34858503c92e1082fa5fedfc0e1cd6
+    image: ghcr.io/openclaw/openclaw:2026.3.1@sha256:dcf11a3a97a9b0e42dd41fcd4891533e77ff72e7b0380c743177bfbfd6f38b2d
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENCLAW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_OPENCLAW_CPU_LIMIT:-1.0}
@@ -1263,7 +1263,7 @@ services:
   # ---------------------------------------------------------------------------
   wazuh-manager:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3721f1b3acd5961e877855ae481d92c4fbf6553b50a9009aee93e40fa9162899
+    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3b2b7aae2daf696071ecc8b32a5d1e65e5c2a625291afc434bd20171a9d41109
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
@@ -1309,7 +1309,7 @@ services:
 
   wazuh-indexer:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:120d95f44c944495425a1f05ae555624f7d82a909c21860c4353fff4197efc83
+    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:bcba58b3fe756114249b8834bcae8f852d277ffc6b9695d3de5989f5fe94d36c
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
@@ -1334,7 +1334,7 @@ services:
 
   wazuh-dashboard:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:037277575cbaac23bb09d17d415b72ea08a7cf094433c512f2889fccec266325
+    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:75437f4fb347db2d040863801f9eb73b0ca16c8b3fb4d93a07df34b7313b16af
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}
@@ -1377,7 +1377,7 @@ services:
   # ---------------------------------------------------------------------------
   step-ca:
     dns_search: ["."]
-    image: docker.io/smallstep/step-ca:0.30.2@sha256:cd40a75c146503873298645201c675a4fc24c28e1265042073b6834df1cd5b07
+    image: docker.io/smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
     restart: unless-stopped
     mem_limit: ${YASHIGANI_STEP_CA_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_STEP_CA_CPU_LIMIT:-0.25}

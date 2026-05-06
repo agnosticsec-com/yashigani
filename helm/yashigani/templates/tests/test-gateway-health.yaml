@@ -32,7 +32,7 @@ spec:
     - name: test-gateway-health
       # curl image — connects to Caddy:443. Skip TLS verify for self-signed / test.
       # The test validates HTTP 200 from the Caddy→gateway path, not TLS cert identity.
-      image: "curlimages/curl:8.7.1@sha256:19370fb12f2774281640e6419d18f48e4e0df76354d04530302f690f0d5136f2"
+      image: "curlimages/curl:8.7.1@sha256:25d29daeb9b14b89e2fa8cc17c70e4b188bca1466086907c2d9a4b56b59d8e21"
       imagePullPolicy: IfNotPresent
       securityContext:
         allowPrivilegeEscalation: false

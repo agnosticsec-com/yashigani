@@ -156,14 +156,9 @@ jobs:
       # path (the checkout dir). Setting it to $GITHUB_WORKSPACE would trigger
       # the "existing installation" upgrade path and bypass compose build.
       #
-      # DOCKER_DEFAULT_PLATFORM: the Dockerfiles currently pin arm64-specific
-      # digest SHAs (built on an M-chip Mac dev machine). On amd64 GH runners
-      # those digests fail with "exec format error". Setting DOCKER_DEFAULT_PLATFORM
-      # tells BuildKit to pull the amd64 variant of the multi-arch manifest for
-      # the same image tag, bypassing the pinned digest. This is a temporary
-      # workaround; the correct long-term fix is to update digest pins to the
-      # amd64 SHA or to use a multi-arch pin + explicit --platform in Dockerfiles
-      # (tracked as V232-SMOKE-001 in the v2.23.2 backlog).
+      # Digest pinning: all external images are now pinned to multi-arch manifest
+      # INDEX digests (not arch-specific layer digests). Closes V232-SMOKE-001.
+      # No DOCKER_DEFAULT_PLATFORM override or digest-strip workaround needed.
       # -----------------------------------------------------------------------
       # Node.js setup (V232-CSCAN-01i)
       # Open-redirect JS-execution tests (test_v2232_open_redirect_cscan_01d.py)
@@ -178,66 +173,10 @@ jobs:
         with:
           node-version: "22"
 
-      # -----------------------------------------------------------------------
-      # V232-SMOKE-001 (pre-existing): Dockerfiles AND docker-compose.yml pin arm64
-      # digest SHAs (built/generated on an M-chip Mac dev machine). On amd64 GH
-      # runners those layers fail with "exec /bin/sh: exec format error" for both
-      # images built from source (gateway, backoffice) AND pre-pulled images
-      # (redis, postgres, caddy, prometheus, OPA, loki, jaeger, ollama, etc.).
-      # DOCKER_DEFAULT_PLATFORM=linux/amd64 does NOT override an explicit @sha256:
-      # digest — BuildKit/Docker always pulls the pinned layer regardless.
-      # Work-around: strip @sha256:... from both Dockerfile FROM lines and compose
-      # image: fields before install runs. Permanent fix (release engineering): update all
-      # digest pins to amd64 or add explicit --platform directives.
-      # Tracked as V232-SMOKE-001 in the v2.23.2 backlog.
-      - name: "[ci] Strip arm64 digest pins for amd64 runner compatibility"
-        if: matrix.os-label == 'linux'
-        run: |
-          # Strip @sha256:... from Dockerfile FROM lines and docker-compose image: lines
-          # so BuildKit/Docker pulls the tag's native amd64 manifest instead of the
-          # pinned arm64 layer. Only affects the local workspace copy; committed files
-          # are untouched. Covers both images we build (Dockerfiles) and pre-built
-          # images pulled at runtime (compose image: fields — redis, postgres, caddy,
-          # prometheus, OPA, loki, jaeger, ollama, etc.). Without stripping compose
-          # image pins those containers crash immediately with "exec format error".
-          python3 - <<'PYEOF'
-          import re, glob
-
-          DIGEST_RE = re.compile(r'@sha256:[a-f0-9]{64}')
-
-          # Dockerfile FROM lines: FROM <image>@sha256:... [AS stage]
-          for path in glob.glob("docker/Dockerfile*"):
-              with open(path) as f:
-                  content = f.read()
-              patched = re.sub(
-                  r'(^FROM\s+\S+)@sha256:[a-f0-9]{64}',
-                  r'\1',
-                  content,
-                  flags=re.MULTILINE
-              )
-              if patched != content:
-                  with open(path, 'w') as f:
-                      f.write(patched)
-                  print(f"Dockerfile stripped: {path}")
-              else:
-                  print(f"Dockerfile no pins: {path}")
-
-          # Compose image: fields: image: <name>@sha256:...
-          for path in glob.glob("docker/docker-compose*.yml"):
-              with open(path) as f:
-                  content = f.read()
-              patched = re.sub(
-                  r'(image:\s*\S+)@sha256:[a-f0-9]{64}',
-                  r'\1',
-                  content
-              )
-              if patched != content:
-                  with open(path, 'w') as f:
-                      f.write(patched)
-                  print(f"Compose stripped: {path}")
-              else:
-                  print(f"Compose no pins: {path}")
-          PYEOF
+      # V232-SMOKE-001: CLOSED. All external images now use multi-arch manifest INDEX
+      # digests (not arch-specific layer digests). No strip step needed — Docker and
+      # Podman both select the correct per-arch variant from the index at pull time.
+      # Fix applied in: fix/v232-multi-arch-digest-sweep-systemic (P-8 systemic).
 
       - name: Run installer
         env:
@@ -432,11 +371,9 @@ jobs:
         env:
           YSG_RUNTIME: docker
           CI: "true"
-          # See DOCKER_DEFAULT_PLATFORM comment in smoke job: same arm64-pin workaround.
-          # Without this the build fails on arch mismatch rather than our sabotage,
-          # which is still a non-zero exit but we want the test to verify the specific
-          # sabotage path fires, not just any failure.
-          DOCKER_DEFAULT_PLATFORM: linux/amd64
+          # No DOCKER_DEFAULT_PLATFORM needed: all image digests are now multi-arch
+          # index digests (V232-SMOKE-001 closed). Sabotage failure comes from RUN false
+          # in Dockerfile.gateway, not from arch mismatch.
         run: |
           chmod +x install.sh
           # Capture install exit code correctly.
