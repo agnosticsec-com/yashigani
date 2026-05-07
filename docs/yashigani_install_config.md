@@ -1950,11 +1950,22 @@ Only the first 5 hex characters of the hash are transmitted. The full password a
 
 ### 20.3 HIBP Integration in Backoffice Auth
 
-The `password.py` module in the backoffice checks every password change (user-initiated or admin-initiated) against the HIBP breach database using the same k-Anonymity method. A `PasswordBreachedError` exception is raised if the submitted password is found in the breach database, and the change is rejected with a user-facing error: "This password has appeared in a data breach. Please choose a different password."
+The `password.py` module in the backoffice checks every **user-chosen** password change (self-service change, force-change on first login) against the HIBP breach database using the same k-Anonymity method. System-generated temporary passwords (created at account bootstrap or full-reset) are exempt from the HIBP check.
+
+If the submitted password is found in the breach database, the change is rejected with HTTP 422 and a user-facing error: **"This password has appeared in known data breaches; choose another."**
 
 This satisfies **OWASP ASVS V2.1.7**: "Verify that passwords submitted during account registration, login, and password change are checked against a set of breached passwords."
 
-The check is fail-open: if the HIBP API is unreachable, the password change proceeds normally. Availability of the HIBP service never blocks authentication.
+**Failure mode (fail-open):** if the HIBP API is unreachable (network timeout, 5xx, DNS failure), the password change proceeds normally. A `WARNING` log entry is emitted and the `yashigani_hibp_check_api_unavailable_total` Prometheus counter is incremented. Monitor this counter — sustained non-zero values indicate loss of outbound HTTPS access on the `edge` network. The HIBP check is a defense-in-depth layer; it must never block legitimate password changes during an API outage.
+
+**Operator controls:**
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `YASHIGANI_HIBP_CHECK_ENABLED` | `true` | Set to `false` to disable HIBP breach checks entirely. Intended for air-gapped deployments that cannot reach the public HIBP API and do not run a private HIBP mirror. Disabling this control is a risk-accept against ASVS V2.1.7 and should be recorded in your risk register. |
+| `YASHIGANI_HIBP_API_URL` | `https://api.pwnedpasswords.com/range/` | Override the HIBP API base URL. Set this to your own HIBP mirror endpoint (must include a trailing slash). Use this instead of disabling the check entirely for air-gapped deployments. |
+
+**Network requirement:** when `YASHIGANI_HIBP_CHECK_ENABLED=true` (default), the `backoffice` container requires outbound HTTPS access on the `edge` network to `api.pwnedpasswords.com` (port 443). If you use `YASHIGANI_HIBP_API_URL` to point to an internal mirror, the outbound requirement is to your mirror's hostname instead. No other external connectivity is required for the breach check.
 
 ### 20.4 One-Time Credential Summary
 

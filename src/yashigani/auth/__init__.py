@@ -1,6 +1,11 @@
 """Yashigani Auth — local auth, TOTP, session management, SPIFFE gate, step-up."""
-# Last updated: 2026-04-29T17:45:00+01:00
-from yashigani.auth.password import hash_password, verify_password, generate_password
+# Last updated: 2026-05-07T00:00:00+01:00
+from yashigani.auth.password import (
+    hash_password, verify_password, generate_password,
+    PasswordBreachedError, PasswordContextError,
+    check_hibp, validate_password_not_breached,
+    hibp_check_enabled, hibp_api_url,
+)
 from yashigani.auth.totp import (
     generate_provisioning, generate_recovery_code_set,
     verify_totp, verify_recovery_code, codes_remaining,
@@ -14,6 +19,9 @@ from yashigani.auth.caddy_verified import load_caddy_secret, CaddyVerifiedMiddle
 
 __all__ = [
     "hash_password", "verify_password", "generate_password",
+    "PasswordBreachedError", "PasswordContextError",
+    "check_hibp", "validate_password_not_breached",
+    "hibp_check_enabled", "hibp_api_url",
     "generate_provisioning", "generate_recovery_code_set",
     "verify_totp", "verify_recovery_code", "codes_remaining",
     "TotpProvisioning", "RecoveryCodeSet",
