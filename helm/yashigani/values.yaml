@@ -269,6 +269,20 @@ gateway:
 # ---------------------------------------------------------------------------
 backoffice:
   enabled: true
+  # v2.23.2 fix — SSRF guard hostname allowlist (TM-V231-004 / Pentest #95).
+  # _assert_safe_upstream_url() blocks loopback/RFC1918/link-local by default.
+  # agentUpstreamHostnames lists the Kubernetes service hostnames that are permitted
+  # as agent upstream URLs despite resolving to cluster-internal IPs. The rendered
+  # value is joined with commas and injected as YASHIGANI_AGENT_UPSTREAM_HOSTNAMES
+  # on the backoffice container.
+  # Default: the three canonical Yashigani-internal bundle service names.
+  # Extend: add your custom agent service names to this list.
+  # Security: adding a name trusts that K8s service as a legitimate internal mesh
+  # endpoint. Agent registration is still admin-gated (TOTP step-up + audit trail).
+  agentUpstreamHostnames:
+    - langflow
+    - letta
+    - openclaw
   image:
     # Digest pinned per project image-pinning policy — rebuilt at tip c68a6d2
     # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
@@ -621,21 +635,6 @@ caddy:
 # All support goes to the upstream maintainers.
 # ---------------------------------------------------------------------------
 agentBundles:
-
-  # v2.23.2 fix — SSRF guard hostname allowlist (TM-V231-004 / Pentest #95).
-  # The backoffice _assert_safe_upstream_url() blocks loopback/RFC1918/link-local
-  # by default. upstreamHostnames lists the Kubernetes service hostnames that are
-  # permitted as agent upstream URLs despite resolving to cluster-internal IPs.
-  # The rendered value is joined with commas and injected as
-  # YASHIGANI_AGENT_UPSTREAM_HOSTNAMES on the backoffice container.
-  # Default: the three canonical Yashigani-internal bundle service names.
-  # Extend: add your custom agent service names to this list.
-  # Security: adding a name here is trusting that K8s service as a legitimate
-  # internal mesh endpoint. Agent registration is still admin-gated (TOTP + audit).
-  upstreamHostnames:
-    - langflow
-    - letta
-    - openclaw
 
   langgraph:
     enabled: false

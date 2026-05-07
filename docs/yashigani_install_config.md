@@ -1854,8 +1854,8 @@ YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw,my-custom-agent
 
 **Helm** (`values.yaml` override):
 ```yaml
-agentBundles:
-  upstreamHostnames:
+backoffice:
+  agentUpstreamHostnames:
     - langflow
     - letta
     - openclaw
