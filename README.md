@@ -30,6 +30,9 @@
 
 > **Upgrade notice:** v2.23.2 ships a security hardening batch. Existing v2.23.1 deployments should upgrade.
 
+> **Notable behaviour changes in v2.23.2:**
+> - **Rate limiter fails closed** by default in v2.23.2 (was open in v2.23.1). Set `RATE_LIMITER_FAIL_MODE=open` if your deployment requires high-availability behaviour during Redis instability.
+
 ---
 **Single branch:** `main` — all features, all tiers. Open WebUI, Wazuh, agent bundles, and the optional Smallstep step-ca runtime ACME service are all gated behind compose profiles / install flags. **Core-plane mTLS is default-on**: per-service leaf certificates are issued at install time by the in-tree two-tier PKI (`src/yashigani/pki/issuer.py`) — no optional services required.
 ---

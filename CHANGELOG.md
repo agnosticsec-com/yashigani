@@ -48,6 +48,10 @@ Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.
 
 ### Previous batch (2026-05-03)
 
+### Breaking Changes
+
+- **Breaking default behaviour:** `RATE_LIMITER_FAIL_MODE` now defaults to `closed`. On Redis unavailability, the gateway returns HTTP 503 + Retry-After (auto-heal typically under 2 minutes) instead of silently passing traffic. High-availability operators who require pre-2.23.2 fail-open behaviour can opt back in by setting `RATE_LIMITER_FAIL_MODE=open` in the gateway environment. (F-LLM06-001)
+
 ### Security
 
 - **XFF spoofing** — Caddy strips and re-sets `X-Forwarded-For` at the edge; rate limiting and audit logging now bind to the Caddy-observed address, not caller-supplied headers.
