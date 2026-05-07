@@ -1,6 +1,6 @@
 ---
 # Yashigani v2.23.2 — Docker Compose stack
-# Last updated: 2026-05-06T20:00:00+01:00 (P-9 fix: redis healthcheck YAML block scalar → list form; add start_period to redis)
+# Last updated: 2026-05-07T00:00:00+01:00 (fix: YASHIGANI_AGENT_UPSTREAM_HOSTNAMES default for canonical agent bundles)
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -341,6 +341,20 @@ services:
       # ${INSTALL_DIR}/backups on the host. The :ro flag prevents the
       # backoffice container from modifying backup files.
       YASHIGANI_BACKUPS_DIR: /data/backups
+      # v2.23.2 fix — SSRF guard hostname allowlist (TM-V231-004 / Pentest #95).
+      # _assert_safe_upstream_url() blocks loopback/RFC1918/link-local by default.
+      # These three Compose service names are the canonical Yashigani-internal agent
+      # bundle hostnames; they resolve to Docker-bridge IPs on the `data` network.
+      # Adding a hostname here means trusting that host as a legitimate internal mesh
+      # service — the SSRF guard still blocks all other private IPs and all non-HTTP(S)
+      # schemes. Agent registration remains admin-gated (TOTP step-up + audit log).
+      # TM trade-off: TA-3 (insider admin SSRF) / TA-2 (admin compromise) — attacker
+      # who can both compromise an admin account AND point the `langflow`, `letta`, or
+      # `openclaw` hostname to a private IP bypasses the IP-class check. Compensating
+      # controls: TOTP step-up on every registration, OPA-gated invocation, audit trail.
+      # Operators extending with custom agents: append comma-separated names to this value.
+      # Example: YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw,custom-agent
+      YASHIGANI_AGENT_UPSTREAM_HOSTNAMES: "langflow,letta,openclaw"
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
