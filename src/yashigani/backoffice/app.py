@@ -78,6 +78,8 @@ from yashigani.backoffice.routes import (
     sso_router,
     # v2.23.2 — Backup status + verify (#47)
     backup_router,
+    # v2.23.3 — Admin-triggered secret rotation
+    secrets_router,
 )
 
 
@@ -415,6 +417,7 @@ def create_backoffice_app() -> FastAPI:
         ("/admin/alerts",               32 * 1024),
         ("/admin/budget",               16 * 1024),
         ("/admin/backup",               256),          # backup_name only (ASVS 4.3.1)
+        ("/api/v1/admin/secrets",       256),          # secret name only (ASVS 4.3.1)
         ("/auth/login",                 4 * 1024),    # u/p/totp
         ("/auth/password/change",       8 * 1024),
         ("/auth/password/self-reset",   4 * 1024),
@@ -578,6 +581,9 @@ def create_backoffice_app() -> FastAPI:
 
     # v2.23.2 — Backup status + verify (#47)
     app.include_router(backup_router, tags=["backup"])
+
+    # v2.23.3 — Admin-triggered secret rotation
+    app.include_router(secrets_router, tags=["secrets"])
 
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)

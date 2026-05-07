@@ -2525,4 +2525,147 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
+## 28. Operational — Rotating Secrets (v2.23.3)
+
+Yashigani v2.23.3 introduces admin-triggered secret rotation for infrastructure
+credentials without requiring a full nuke-and-rebuild. Rotation is audited,
+fail-closed, and reversible.
+
+### 28.1 Supported secrets
+
+| Secret name | What it protects | Services restarted |
+|---|---|---|
+| `postgres_password` | PostgreSQL `yashigani_app` user password | pgbouncer |
+| `redis_password` | Redis `requirepass` credential | redis |
+| `jwt_signing_key` | Internal JWT signing key (512-bit) | gateway |
+| `hmac_key` | Layer-B Caddy internal HMAC key | caddy, gateway, backoffice |
+| `all` | All four in sequence | all of the above |
+
+**Note:** mTLS leaf certificates (`ca_root.crt`, service client certs) are
+**not** rotatable via this API. Use the step-ca renewal flow
+(`step ca renew`) for certificate rotation — tracked for v2.24.0.
+
+### 28.2 API
+
+**Endpoint:** `POST /api/v1/admin/secrets/rotate`
+
+**Auth:** Admin session + fresh step-up TOTP (ASVS V6.8.4). The TOTP must
+have been verified within the last 5 minutes via `POST /auth/stepup`.
+
+**Request body:**
+```json
+{ "secret": "postgres_password" }
+```
+
+**Response (success):**
+```json
+{
+  "request_id": "uuid",
+  "secret": "postgres_password",
+  "success": true,
+  "rotated_at": "2026-05-07T12:34:56+00:00",
+  "error": null,
+  "reverted": false,
+  "revert_failed": false,
+  "child_results": [],
+  "warning": null
+}
+```
+
+**Response (failure with successful revert):**
+```json
+{
+  "success": false,
+  "error": "Postgres ALTER USER failed",
+  "reverted": true,
+  "revert_failed": false,
+  "warning": "Rotation failed; old secret has been restored."
+}
+```
+
+**Response (CRITICAL: failure with failed revert):**
+```json
+{
+  "success": false,
+  "reverted": true,
+  "revert_failed": true,
+  "warning": "CRITICAL: rotation failed AND secret revert failed. Manual intervention required."
+}
+```
+
+When `revert_failed=true`: the database or Redis may hold the new password
+while the secret file still contains the old one. **Manual intervention is
+required immediately.** See §28.5.
+
+### 28.3 CLI tool
+
+For operators with access to the Docker/Podman socket on the host:
+
+```bash
+# Step-up TOTP first
+curl -X POST https://backoffice.example.com/auth/stepup \
+  -H "Cookie: __Host-yashigani_admin_session=<token>" \
+  -d '{"code": "123456"}'
+
+# Rotate via CLI (wraps the API + restarts affected services)
+bash scripts/rotate-secret.sh postgres_password \
+  --host https://backoffice.example.com \
+  --session-token <admin-session-token> \
+  --totp-code 123456
+
+# Rotate all secrets (includes host-side restarts)
+bash scripts/rotate-secret.sh all \
+  --host https://backoffice.example.com \
+  --session-token <admin-session-token>
+```
+
+The CLI performs the step-up automatically when `--totp-code` is supplied,
+then calls the API, then restarts the affected containers using
+`docker compose restart` (or `podman compose restart`).
+
+### 28.4 Audit events
+
+Every rotation produces immutable audit events in the SHA-384 hash chain:
+
+| Event | When emitted |
+|---|---|
+| `SECRET_ROTATION_REQUESTED` | Immediately on receipt (before rotation begins) |
+| `SECRET_ROTATION_SUCCEEDED` | After all steps complete successfully |
+| `SECRET_ROTATION_FAILED` | If any step fails (includes revert outcome) |
+
+All rotation events have `masking_applied=true` (immutable floor). Secret
+values are **never** stored in audit events or log files.
+
+### 28.5 Failure recovery
+
+**Scenario A — Rotation failed, revert succeeded** (`reverted=true, revert_failed=false`):
+The old secret is still active in the database/Redis and on disk. No action
+required; re-attempt rotation when the root cause is addressed.
+
+**Scenario B — Rotation failed, revert failed** (`revert_failed=true`) — CRITICAL:
+The database/Redis may hold the new password while the secret file holds the
+old one (or vice versa). Services will fail to authenticate on next restart.
+Recovery steps:
+1. Retrieve the current value from the database/Redis directly.
+2. Update the secret file in `docker/secrets/` manually.
+3. Restart affected services: `docker compose restart pgbouncer redis`.
+4. Verify connectivity: `docker compose ps` and `docker compose logs`.
+5. File an incident in the risk register (confidential).
+
+### 28.6 Security considerations
+
+- The HMAC key rotation (`hmac_key`) has a brief window (~1-2 requests) where
+  Caddy and the backend services hold different secrets. Schedule during
+  low-traffic windows.
+- JWT token rotation does not invalidate existing tokens. Existing tokens
+  remain valid until their `exp` claim; new tokens are signed with the new key.
+- Rotation secrets are written atomically (temp file + `rename(2)`). Concurrent
+  readers always see a complete secret.
+- The `YASHIGANI_DB_DSN_DIRECT` environment variable must point directly to
+  PostgreSQL (not pgbouncer) for `postgres_password` rotation. This is already
+  set in the Helm chart; for Compose deployments, set it in `docker/.env` if
+  using an external Postgres.
+
+---
+
 *Yashigani v2.23.2 — Installation and Configuration Guide — 2026-05-03T00:00:00+01:00*
