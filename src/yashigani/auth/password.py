@@ -3,7 +3,7 @@ Yashigani Auth — Argon2id password hashing + HIBP breach check.
 OWASP ASVS V2.4: m=65536, t=3, p=4 minimum parameters.
 OWASP ASVS V2.1.7: Passwords must be checked against breach databases.
 
-Last updated: 2026-05-07T00:00:00+01:00
+Last updated: 2026-05-07T01:00:00+01:00
 """
 from __future__ import annotations
 
@@ -189,7 +189,7 @@ class PasswordBreachedError(ValueError):
         )
 
 
-def check_hibp(password: str) -> Optional[int]:
+def check_hibp(password: str, *, api_key: Optional[str] = None) -> Optional[int]:
     """
     Check a password against the HIBP Passwords API using k-Anonymity.
 
@@ -199,6 +199,16 @@ def check_hibp(password: str) -> Optional[int]:
 
     The password is NEVER transmitted. Only the first 5 characters of its
     SHA-1 hash are sent to the API. All matching is done locally.
+
+    Args:
+        password: Plaintext password to check.
+        api_key: Optional HIBP API key for rate-limit lift or mirror auth.
+            If non-empty, injects ``hibp-api-key: <key>`` header. If None or
+            empty, the request is sent without the header (anonymous — works
+            for the free range endpoint). Resolve this value via
+            ``hibp_config.resolve_hibp_api_key()`` to apply the
+            admin-panel → env-var → anon priority chain.
+            The key is NEVER logged at any level.
 
     Failure mode (fail-open): if the HIBP API is unreachable (network
     timeout, 5xx, DNS failure), this function logs a WARNING, increments
@@ -218,7 +228,7 @@ def check_hibp(password: str) -> Optional[int]:
     except ImportError:
         try:
             import urllib.request
-            return _check_hibp_urllib(password, _api_url)
+            return _check_hibp_urllib(password, _api_url, api_key=api_key)
         except Exception:
             logger.warning(
                 "HIBP check skipped — no HTTP client available (install httpx for production)"
@@ -236,11 +246,16 @@ def check_hibp(password: str) -> Optional[int]:
     prefix = sha1_hash[:5]
     suffix = sha1_hash[5:]
 
+    headers = {"User-Agent": "Yashigani-PasswordCheck/1.0"}
+    if api_key:
+        # api_key deliberately not logged — security invariant
+        headers["hibp-api-key"] = api_key
+
     try:
         response = httpx.get(
             f"{_api_url}{prefix}",
             timeout=_HIBP_TIMEOUT,
-            headers={"User-Agent": "Yashigani-PasswordCheck/1.0"},
+            headers=headers,
         )
         response.raise_for_status()
     except Exception as exc:
@@ -260,8 +275,20 @@ def check_hibp(password: str) -> Optional[int]:
     return None
 
 
-def _check_hibp_urllib(password: str, api_url: str) -> Optional[int]:
-    """Fallback HIBP check using stdlib urllib (no httpx dependency)."""
+def _check_hibp_urllib(
+    password: str,
+    api_url: str,
+    *,
+    api_key: Optional[str] = None,
+) -> Optional[int]:
+    """Fallback HIBP check using stdlib urllib (no httpx dependency).
+
+    Args:
+        password: Plaintext password to check.
+        api_url: HIBP API base URL.
+        api_key: Optional HIBP API key. If non-empty, injects
+            ``hibp-api-key: <key>`` header. Never logged.
+    """
     import urllib.request
     import urllib.error
 
@@ -274,9 +301,14 @@ def _check_hibp_urllib(password: str, api_url: str) -> Optional[int]:
     prefix = sha1_hash[:5]
     suffix = sha1_hash[5:]
 
+    headers = {"User-Agent": "Yashigani-PasswordCheck/1.0"}
+    if api_key:
+        # api_key deliberately not logged — security invariant
+        headers["hibp-api-key"] = api_key
+
     req = urllib.request.Request(
         f"{api_url}{prefix}",
-        headers={"User-Agent": "Yashigani-PasswordCheck/1.0"},
+        headers=headers,
     )
 
     try:

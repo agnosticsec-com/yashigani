@@ -1964,6 +1964,18 @@ This satisfies **OWASP ASVS V2.1.7**: "Verify that passwords submitted during ac
 |---|---|---|
 | `YASHIGANI_HIBP_CHECK_ENABLED` | `true` | Set to `false` to disable HIBP breach checks entirely. Intended for air-gapped deployments that cannot reach the public HIBP API and do not run a private HIBP mirror. Disabling this control is a risk-accept against ASVS V2.1.7 and should be recorded in your risk register. |
 | `YASHIGANI_HIBP_API_URL` | `https://api.pwnedpasswords.com/range/` | Override the HIBP API base URL. Set this to your own HIBP mirror endpoint (must include a trailing slash). Use this instead of disabling the check entirely for air-gapped deployments. |
+| `YASHIGANI_HIBP_API_KEY` | _(none)_ | HIBP API key for commercial-tier rate-limit lift or mirror authentication. Optional — the free k-Anonymity endpoint works without a key. Prefer the admin-panel field (see below) for runtime key rotation without container restart. |
+
+**Admin-panel API key configuration (v2.23.3+):**
+
+Starting from v2.23.3, the HIBP API key can be set and rotated from the admin panel without editing environment variables or restarting containers. Navigate to **Settings → Authentication > HIBP API Key** in the Yashigani admin panel.
+
+**Resolution priority (highest to lowest):**
+1. **Admin-panel key** — set via the admin panel; encrypted at rest; takes effect immediately on the next HIBP call.
+2. **Env var `YASHIGANI_HIBP_API_KEY`** — set in `.env` or container environment; useful for automation.
+3. **None (anonymous)** — the free k-Anonymity endpoint at `api.pwnedpasswords.com/range/` works without any key and is the default for most deployments.
+
+The admin-panel key is stored encrypted at rest using the deployment AES key (`YASHIGANI_DB_AES_KEY`). The full key value is never returned by any API endpoint — only a masked hint (first 3 + last 3 characters) is shown in the panel. Setting and clearing the key require step-up TOTP re-verification (ASVS V6.8.4). Both actions are recorded in the immutable audit log.
 
 **Network requirement:** when `YASHIGANI_HIBP_CHECK_ENABLED=true` (default), the `backoffice` container requires outbound HTTPS access on the `edge` network to `api.pwnedpasswords.com` (port 443). If you use `YASHIGANI_HIBP_API_URL` to point to an internal mirror, the outbound requirement is to your mirror's hostname instead. No other external connectivity is required for the breach check.
 
