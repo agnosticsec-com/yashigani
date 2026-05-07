@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-06T22:30:00Z -->
+<!-- last-updated: 2026-05-07T00:00:00Z -->
 
 # Changelog
 
@@ -35,6 +35,10 @@ Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.
 - **#52** `10864bd` — fix(compose): Podman healthcheck silent-drop (P-9) — rebased replacement for #49
 
 ### Previous batch (2026-05-03)
+
+### Breaking Changes
+
+- **Breaking default behaviour:** `RATE_LIMITER_FAIL_MODE` now defaults to `closed`. On Redis unavailability, the gateway returns HTTP 503 + Retry-After (auto-heal typically under 2 minutes) instead of silently passing traffic. High-availability operators who require pre-2.23.2 fail-open behaviour can opt back in by setting `RATE_LIMITER_FAIL_MODE=open` in the gateway environment. (F-LLM06-001)
 
 ### Security
 
