@@ -577,6 +577,7 @@ The registration response includes a `quick_start` field with copy-paste curl, P
 [ ] Agent inventory created (name, description, path prefix for each)
 [ ] Token storage method decided (secret manager, vault, encrypted file)
 [ ] (since v0.7.0) IP CIDR allowlists defined for agents with known source IPs
+[ ] (v2.23.2+) If using agent bundles: verify YASHIGANI_AGENT_UPSTREAM_HOSTNAMES on backoffice contains the bundle hostnames you intend to register (default: langflow,letta,openclaw); add custom internal agent service names if needed
 [ ] Community: agents ≤ 5, end users ≤ 10, admin seats ≤ 2
 [ ] Starter: agents ≤ 100, end users ≤ 250, admin seats ≤ 25
 [ ] Professional: agents ≤ 500, end users ≤ 1,000, admin seats ≤ 50

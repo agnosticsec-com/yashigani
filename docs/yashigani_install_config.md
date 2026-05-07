@@ -1824,6 +1824,52 @@ The installer auto-registers agent bundles via the backoffice API at install tim
 
 Each bundle is assigned a **restricted RBAC policy** by default — it can only reach LLM provider paths and is not granted access to internal Yashigani management endpoints. The OPA data document is pre-populated with the bundle agent entries immediately after bootstrap. In v2.0, routing decisions for agent bundles are also governed by `policy/v1_routing.rego` and the Optimization Engine's 4-signal routing logic (P1-P9 priority levels).
 
+### 17.5 SSRF Guard and Upstream Hostname Allowlist
+
+#### Why the allowlist exists
+
+Yashigani's backoffice includes an SSRF guard (`_assert_safe_upstream_url()`, TM-V231-004 / Pentest #95 / 2026-04-29) that blocks agent upstream URL registrations pointing at loopback, RFC 1918 private, link-local, or multicast addresses. This prevents an authenticated admin from registering an agent whose upstream URL points to an internal metadata endpoint (e.g., `http://169.254.169.254/`) or internal service (e.g., `gopher://redis:6380/`).
+
+Because the canonical agent bundles (Langflow, Letta, OpenClaw) run on the **internal Docker/Kubernetes network** and resolve to RFC 1918 addresses, they would be rejected by the SSRF guard unless their hostnames are explicitly allowed.
+
+#### Environment variable
+
+```
+YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw
+```
+
+Set on the **backoffice** container environment. Comma-separated, case-insensitive. Hostnames in this list bypass the IP-class check and are permitted to resolve to internal (loopback / RFC 1918 / link-local) addresses.
+
+**Default (v2.23.2+):** `langflow,letta,openclaw` — the three canonical Yashigani-internal agent bundle service names. This is pre-populated in `docker/docker-compose.yml` and the Helm chart (`agentBundles.upstreamHostnames`) and requires no operator action.
+
+#### Extending for custom agents
+
+If you run a custom internal agent (e.g., `my-custom-agent`) that registers with a private-network upstream URL, add its service name to the allowlist:
+
+**Compose** (`docker/.env` or direct override):
+```bash
+# Append to the compose env block or set in docker/.env:
+YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw,my-custom-agent
+```
+
+**Helm** (`values.yaml` override):
+```yaml
+backoffice:
+  agentUpstreamHostnames:
+    - langflow
+    - letta
+    - openclaw
+    - my-custom-agent
+```
+
+#### Security implications
+
+Adding a hostname to this list **trusts that host as a legitimate internal mesh service**. The SSRF guard still enforces:
+- Scheme restriction: only `http` and `https` are allowed (no `file://`, `gopher://`, `dict://`, etc.).
+- All other private IPs not matched by a hostname in the list remain blocked.
+
+Agent registration remains **admin-gated** (TOTP step-up required, full audit log entry created). An attacker who compromises an admin account and also controls DNS resolution for a hostname in this list could bypass the IP-class check — this is documented in the risk register as an accepted residual risk under TA-2 (admin account compromise) / TA-3 (insider admin SSRF), with TOTP step-up and OPA invocation-gate as compensating controls.
+
 ---
 
 ---
@@ -2525,4 +2571,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.23.2 — Installation and Configuration Guide — 2026-05-03T00:00:00+01:00*
+*Yashigani v2.23.2 — Installation and Configuration Guide — 2026-05-07T00:00:00+01:00*

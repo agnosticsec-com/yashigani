@@ -91,6 +91,7 @@ Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.
 
 ### Bug Fixes
 
+- **Agent bundle SSRF guard wiring** — Optional agent bundles (Langflow, Letta, OpenClaw) silently failed to register on canonical install because `YASHIGANI_AGENT_UPSTREAM_HOSTNAMES` was empty and not pre-populated. The default is now `langflow,letta,openclaw` in Compose and Helm; SSRF guard code unchanged. (fix/v232-openclaw-upstream-hostnames-default)
 - **str(exc) information disclosure** — `str(exc)` calls in internal result fields and error responses migrated to `safe_error_envelope` to prevent exception-class name leakage.
 - **Agent-name path injection** — Regex + resolve guard prevents path traversal via crafted agent names.
 - **CI workflow injection** — `env` indirection on `head_branch` + regex guard closes the GitHub Actions `workflow_run` injection vector.
