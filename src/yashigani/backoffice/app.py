@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-05-03T00:00:00+01:00
+Last updated: 2026-05-07T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -275,11 +275,13 @@ async def lifespan(app: FastAPI):
             )
             raise
 
-    # Startup — schedule daily licence expiry check (v0.7.1)
+    # Startup — schedule daily licence expiry check (v0.7.1) +
+    #           grace-period audit emitter (v2.23.3)
     scheduler = None
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from yashigani.licensing.expiry_monitor import check_and_alert_licence_expiry
+        from yashigani.licensing.grace_period import emit_grace_period_audit
 
         scheduler = AsyncIOScheduler()
         # Run once at startup, then every 24 hours
@@ -290,10 +292,19 @@ async def lifespan(app: FastAPI):
             id="licence_expiry_check",
             replace_existing=True,
         )
+        # Grace-period audit — daily (v2.23.3)
+        scheduler.add_job(
+            emit_grace_period_audit,
+            trigger="interval",
+            hours=24,
+            id="licence_grace_period_audit",
+            replace_existing=True,
+        )
         scheduler.start()
         # Fire immediately so the first check happens at startup, not 24h later
         import asyncio
         asyncio.ensure_future(check_and_alert_licence_expiry())
+        asyncio.ensure_future(emit_grace_period_audit())
     except ImportError:
         pass  # apscheduler not installed — expiry alerts disabled
     except Exception as exc:
@@ -410,6 +421,7 @@ def create_backoffice_app() -> FastAPI:
         ("/admin/agents",               16 * 1024),   # agent register metadata
         ("/admin/users",                4 * 1024),    # username + opt email
         ("/admin/license",              4 * 1024),    # confirm flag or small LIC
+        ("/api/v1/license",             256),          # status GET only, no body
         ("/admin/ratelimit",            8 * 1024),
         ("/admin/rbac",                 32 * 1024),
         ("/admin/alerts",               32 * 1024),
@@ -547,6 +559,18 @@ def create_backoffice_app() -> FastAPI:
     app.include_router(audit_sinks_router, tags=["audit-sinks"])
     app.include_router(kms_vault_router, tags=["kms-vault"])
     app.include_router(license_router, prefix="/admin/license", tags=["license"])
+
+    # v2.23.3 — Machine-readable expiry status also available as /api/v1/license/status
+    # so CLI tools and monitoring scripts can query without knowing the /admin/ prefix.
+    # The handler is re-exported from license_router; auth is still required.
+    from yashigani.backoffice.routes.license import get_license_expiry_status
+    app.add_api_route(
+        "/api/v1/license/status",
+        get_license_expiry_status,
+        methods=["GET"],
+        tags=["license"],
+        summary="Machine-readable licence expiry status (v2.23.3)",
+    )
     app.include_router(opa_assistant_router, prefix="/admin/opa-assistant", tags=["opa-assistant"])
     app.include_router(alerts_router, prefix="/admin/alerts", tags=["alerts"])
     app.include_router(agent_bundles_router, prefix="/admin/agent-bundles", tags=["agent-bundles"])
