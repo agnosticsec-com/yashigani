@@ -3,7 +3,7 @@ Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
 
-Last updated: 2026-05-03T00:00:00+00:00
+Last updated: 2026-05-07T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ from yashigani.gateway.proxy import GatewayConfig, create_gateway_app
 from yashigani.gateway.agent_auth import AgentAuthMiddleware
 from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
 from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+from yashigani.gateway._ratelimit_env import resolve_rate_limit_fail_mode
 from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 def _build_app():
     # ── OTEL tracing — initialise before anything else ─────────────────────
@@ -118,14 +118,7 @@ def _build_app():
         )
 
     # Rate limiter — Redis DB 2
-    _rl_fail_mode_raw = os.environ.get("RATE_LIMITER_FAIL_MODE", "open").strip().lower()
-    _rl_fail_mode = _rl_fail_mode_raw if _rl_fail_mode_raw in ("open", "closed") else "open"
-    if _rl_fail_mode_raw not in ("open", "closed"):
-        logger.warning(
-            "RATE_LIMITER_FAIL_MODE=%r is not valid (expected 'open' or 'closed'); "
-            "defaulting to 'open'",
-            _rl_fail_mode_raw,
-        )
+    _rl_fail_mode = resolve_rate_limit_fail_mode()
     logger.info("Rate limiter fail mode: %s", _rl_fail_mode)
     rate_limiter = None
     try:

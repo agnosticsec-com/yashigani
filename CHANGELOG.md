@@ -10,6 +10,18 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ---
 
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
+
+---
+
 ## [Unreleased]
 
 No unreleased changes yet for the next version.
@@ -35,6 +47,10 @@ Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.
 - **#52** `10864bd` — fix(compose): Podman healthcheck silent-drop (P-9) — rebased replacement for #49
 
 ### Previous batch (2026-05-03)
+
+### Breaking Changes
+
+- **Breaking default behaviour:** `RATE_LIMITER_FAIL_MODE` now defaults to `closed`. On Redis unavailability, the gateway returns HTTP 503 + Retry-After (auto-heal typically under 2 minutes) instead of silently passing traffic. High-availability operators who require pre-2.23.2 fail-open behaviour can opt back in by setting `RATE_LIMITER_FAIL_MODE=open` in the gateway environment. (F-LLM06-001)
 
 ### Security
 
