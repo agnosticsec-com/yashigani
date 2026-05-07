@@ -1,6 +1,18 @@
 # Podman rootless overrides — applied automatically by install.sh when RUNTIME=podman
 # Usage: podman compose -f docker/docker-compose.yml -f docker/docker-compose.podman-override.yml up -d
-# Last updated: 2026-04-29T14:30:00+01:00
+# Last updated: 2026-05-06T20:00:00+01:00 (P-9 note: healthcheck strategy documented)
+#
+# P-9 healthcheck strategy (podman-healthcheck-silent-drop):
+#   Podman silently drops image-baked OCI HEALTHCHECK directives when compose
+#   starts a container without an explicit healthcheck: block. Docker Engine
+#   inherits the image HEALTHCHECK as a fallback; Podman does not.
+#   Fix: every Yashigani compose service carries an explicit healthcheck: block
+#   in docker-compose.yml. podman-compose 1.5.0 translates these into
+#   --healthcheck-command (and --healthcheck-interval / --timeout / --retries
+#   / --start-period) at container create time. The base compose healthchecks
+#   are authoritative; this override file does not duplicate them.
+#   Post-compose-up wiring is verified by _podman_verify_healthchecks() in
+#   install.sh (called on the Podman path only). See issue #88.
 #
 # Strategy:
 #   - Services that run as non-root (gateway UID 1001, backoffice UID 1001):
