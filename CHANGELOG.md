@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-06T00:00:00+01:00 -->
+<!-- last-updated: 2026-05-07T00:00:00+01:00 -->
 
 # Changelog
 
@@ -15,9 +15,10 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 > v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
 >
 > - **Existing public users:** this release will remain available; no automatic deprecation.
-> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](<TBD: agnosticsec.com/yashigani/licensing>).
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
 > - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
-> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](<TBD: agnosticsec.com/yashigani/non-profit>).
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
 
 ---
 
