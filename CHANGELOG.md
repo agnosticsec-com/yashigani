@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-06T22:30:00Z -->
+<!-- last-updated: 2026-05-07T00:00:00+01:00 -->
 
 # Changelog
 
@@ -20,7 +20,7 @@ No unreleased changes yet for the next version.
 
 Theme: **Security Hardening + Supply-Chain Controls + ASVS L3 92% + Agentic AI Overreliance Controls**.
 
-> **This is the last publicly distributed release of Yashigani.** v2.23.3 and beyond are private. See [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md) for the full cutover notice.
+> **This is the last publicly distributed release of Yashigani.** v2.23.3 and beyond are private. The public repository transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation. See [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md) for the full cutover notice.
 
 Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md)
 
