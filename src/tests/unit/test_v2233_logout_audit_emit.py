@@ -10,8 +10,9 @@ returning, guarded by ``if state.audit_writer is not None``.
 
 Closes: yashigani-retro#95 (OWASP A09 / CMMC AU.L2-3.3.1)
 
-Last updated: 2026-05-08T00:00:00+01:00
+Last updated: 2026-05-08T12:00:00+01:00
 """
+
 from __future__ import annotations
 
 import ast
@@ -27,6 +28,7 @@ _ROUTES_AUTH = _SRC / "backoffice" / "routes" / "auth.py"
 # ---------------------------------------------------------------------------
 # AST structural tests — no imports of FastAPI app needed
 # ---------------------------------------------------------------------------
+
 
 class TestLogoutAuditEmitAST:
     """Verify the logout() function contains an audit write call."""
@@ -46,20 +48,15 @@ class TestLogoutAuditEmitAST:
         """logout() must call audit_writer.write() with a login event."""
         fn = self._logout_fn()
         fn_src = ast.unparse(fn)
-        assert "audit_writer" in fn_src, (
-            "logout() has no reference to audit_writer — audit emit not added"
-        )
-        assert ".write(" in fn_src, (
-            "logout() has no .write() call — audit event not emitted"
-        )
+        assert "audit_writer" in fn_src, "logout() has no reference to audit_writer — audit emit not added"
+        assert ".write(" in fn_src, "logout() has no .write() call — audit event not emitted"
 
     def test_logout_calls_make_login_event(self):
         """logout() must construct the audit event via _make_login_event."""
         fn = self._logout_fn()
         fn_src = ast.unparse(fn)
         assert "_make_login_event" in fn_src, (
-            "logout() does not call _make_login_event — "
-            "must use the same helper as login/stepup"
+            "logout() does not call _make_login_event — must use the same helper as login/stepup"
         )
 
     def test_logout_passes_logout_outcome(self):
@@ -95,14 +92,13 @@ class TestLogoutAuditEmitAST:
         audit_pos = fn_src.find("_make_login_event")
         assert invalidate_pos != -1, "store.invalidate() call not found in logout()"
         assert audit_pos != -1, "_make_login_event call not found in logout()"
-        assert invalidate_pos < audit_pos, (
-            "audit emit must come AFTER session invalidation in logout()"
-        )
+        assert invalidate_pos < audit_pos, "audit emit must come AFTER session invalidation in logout()"
 
 
 # ---------------------------------------------------------------------------
 # Unit tests — mock backoffice_state to exercise the actual function logic
 # ---------------------------------------------------------------------------
+
 
 class TestLogoutAuditEmitUnit:
     """
@@ -132,18 +128,16 @@ class TestLogoutAuditEmitUnit:
 
         # Patch backoffice_state inside the routes.auth module
         import yashigani.backoffice.routes.auth as _auth_mod
+
         monkeypatch.setattr(_auth_mod, "backoffice_state", mock_state)
 
         import asyncio
+
         session = self._make_mock_session("uuid-for-logout-test")
 
-        asyncio.get_event_loop().run_until_complete(
-            logout(session=session, response=mock_response, store=mock_store)
-        )
+        asyncio.run(logout(session=session, response=mock_response, store=mock_store))
 
-        assert mock_audit.write.call_count == 1, (
-            f"Expected 1 audit write on logout, got {mock_audit.write.call_count}"
-        )
+        assert mock_audit.write.call_count == 1, f"Expected 1 audit write on logout, got {mock_audit.write.call_count}"
 
     def test_audit_event_has_logout_outcome(self, monkeypatch):
         """
@@ -162,21 +156,19 @@ class TestLogoutAuditEmitUnit:
         mock_state.audit_writer = mock_audit
 
         import yashigani.backoffice.routes.auth as _auth_mod
+
         monkeypatch.setattr(_auth_mod, "backoffice_state", mock_state)
 
         import asyncio
+
         session = self._make_mock_session("uuid-test-outcome")
-        asyncio.get_event_loop().run_until_complete(
-            logout(session=session, response=mock_response, store=mock_store)
-        )
+        asyncio.run(logout(session=session, response=mock_response, store=mock_store))
 
         assert len(written_events) == 1, "Expected exactly one audit event"
         evt = written_events[0]
         # The event is an AdminLoginEvent dataclass/schema object
         assert hasattr(evt, "outcome"), "Audit event lacks 'outcome' attribute"
-        assert evt.outcome == "logout", (
-            f"Expected outcome='logout', got {evt.outcome!r}"
-        )
+        assert evt.outcome == "logout", f"Expected outcome='logout', got {evt.outcome!r}"
 
     def test_audit_write_skipped_when_writer_is_none(self, monkeypatch):
         """
@@ -191,14 +183,14 @@ class TestLogoutAuditEmitUnit:
         mock_state.audit_writer = None  # simulate partial init
 
         import yashigani.backoffice.routes.auth as _auth_mod
+
         monkeypatch.setattr(_auth_mod, "backoffice_state", mock_state)
 
         import asyncio
+
         session = self._make_mock_session("uuid-none-writer")
         # Must not raise
-        result = asyncio.get_event_loop().run_until_complete(
-            logout(session=session, response=mock_response, store=mock_store)
-        )
+        result = asyncio.run(logout(session=session, response=mock_response, store=mock_store))
         assert result == {"status": "ok"}
 
     def test_session_invalidated_regardless_of_audit_outcome(self, monkeypatch):
@@ -216,14 +208,14 @@ class TestLogoutAuditEmitUnit:
         mock_state.audit_writer = mock_audit
 
         import yashigani.backoffice.routes.auth as _auth_mod
+
         monkeypatch.setattr(_auth_mod, "backoffice_state", mock_state)
 
         import asyncio
+
         session = self._make_mock_session("uuid-audit-fails")
         with pytest.raises(RuntimeError, match="audit bus down"):
-            asyncio.get_event_loop().run_until_complete(
-                logout(session=session, response=mock_response, store=mock_store)
-            )
+            asyncio.run(logout(session=session, response=mock_response, store=mock_store))
 
         # Invalidate was called before the audit write raised
         mock_store.invalidate.assert_called_once_with("test-token-abc")
@@ -238,11 +230,11 @@ class TestLogoutAuditEmitUnit:
         mock_state.audit_writer = MagicMock()
 
         import yashigani.backoffice.routes.auth as _auth_mod
+
         monkeypatch.setattr(_auth_mod, "backoffice_state", mock_state)
 
         import asyncio
+
         session = self._make_mock_session("uuid-return-shape")
-        result = asyncio.get_event_loop().run_until_complete(
-            logout(session=session, response=mock_response, store=mock_store)
-        )
+        result = asyncio.run(logout(session=session, response=mock_response, store=mock_store))
         assert result == {"status": "ok"}, f"Unexpected return value: {result!r}"
