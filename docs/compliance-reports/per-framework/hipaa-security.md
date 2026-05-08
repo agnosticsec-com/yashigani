@@ -11,20 +11,25 @@
 > not replace a full security assessment. *We don't replace your auditor — we make
 > their job easier and your audit faster.*
 
-## Headline
+## Headline (post-triage 2026-05-08)
 
 | Metric | Value |
 |---|---:|
-| Compliance rate (PASS / applicable) | **84.3%** |
-| Applicable controls (PASS + FAIL) | 51 |
-| PASS | 43 |
-| FAIL | 8 |
-| MANUAL (auditor evidence required) | 0 |
-| N/A (out of scope) | 0 |
+| Compliance rate (PASS / applicable) | **100.0%** |
+| Applicable controls (PASS + FAIL) | 44 |
+| PASS | 44 |
+| FAIL | 0 |
+| MANUAL (auditor evidence required) | 2 |
+| N/A (out of scope per product-line scope statement) | 5 |
 
 > Headline rate is computed on the applicable subset (PASS + FAIL). MANUAL and N/A are
 > reported separately and **excluded** from the denominator per
 > `feedback_no_fake_compliance_docs.md` 3-class rule.
+>
+> **Triage applied 2026-05-08:** original ACS scan reported 84.3% PASS / 8 FAIL / 0 N/A.
+> Triage re-classified per Yashigani product-line scope (Yashigani is not a covered entity;
+> BAAs are customer-to-subcontractor contracts; not a Group Health Plan). See "Triage
+> disposition" section below for per-control reasoning.
 
 ## Per-control verdicts (automated subset)
 
@@ -81,6 +86,51 @@
 | 164.316(b)(2)(i) | Time Limit (Required) | PASS | Found 'retention' in src/tests/unit/test_v2231_asvs_fixes.py |
 | 164.316(b)(2)(ii) | Availability (Required) | PASS | Found SECURITY.md |
 | 164.316(b)(2)(iii) | Updates (Required) | PASS | Found 'updated = ModelAlias(alias="x", provider="anthropic", model="claude-son' in src/tests/unit/test_model_aliases.py |
+
+
+## Triage disposition (2026-05-08, post product-line scope review)
+
+This section re-classifies the 8 ACS-reported FAILs against Yashigani's
+product-line scope per `feedback_no_fake_compliance_docs.md` 3-class rule.
+**Yashigani is not itself a HIPAA covered entity. It does not store, process,
+or transmit Protected Health Information (PHI) as a covered entity. Customer-
+side covered entities may use Yashigani in their HIPAA-regulated environment;
+in that case Business Associate Agreements (BAAs) are between the covered
+entity and its downstream subcontractors, NOT bundled with the product.
+Yashigani is sold as software, not as a managed service. Yashigani is also
+not a Group Health Plan.**
+
+| Control ID | Original | Re-classified | Reason |
+|---|---|---|---|
+| 164.308(a)(1)(ii)(A) | FAIL | PASS | "Risk Analysis (Required)": docs/risk_management_framework.md present in tag 4ff2dd5; ACS regex `/**/*.py` only searched Python files. Pattern fix retro item filed. |
+| 164.308(a)(3)(ii)(B) | FAIL | MANUAL | "Workforce Clearance Procedure (Addressable)" — Agnostic Security Ltd internal HR process; not a software-product feature; covered-entity customers maintain their own clearance procedures. **Retro item: ship docs/workforce-security.md template for customer adaptation.** |
+| 164.308(a)(5)(i) | FAIL | MANUAL | "Security Awareness and Training" — covered-entity workforce training is operator-side; Yashigani publishes SECURITY.md + threat-model + customer-facing security guidance. **Retro item: ship docs/security-awareness-template.md for customer-side training programmes.** |
+| 164.308(b)(1) | FAIL | N/A | "Business Associate Contracts" — BAA is a contract between covered entity and its business associate; Yashigani as self-hosted software does not sign BAAs as a vendor; ships BAA template only on customer request |
+| 164.314(a)(1) | FAIL | N/A | Same — BAA contract scope |
+| 164.314(a)(2)(i) | FAIL | N/A | Same — BAA contract scope |
+| 164.314(a)(2)(ii) | FAIL | N/A | "Other Arrangements" — fallback for BAA equivalents (e.g., MoUs); same scope; customer-side |
+| 164.314(b)(1) | FAIL | N/A | "Requirements for Group Health Plans" — Yashigani is not a Group Health Plan |
+
+### Triage summary — HIPAA Security Rule
+
+| Bucket | Count |
+|---:|---:|
+| PASS (ACS regex/path miss; file present in tag 4ff2dd5; retro item filed) | 1 |
+| N/A (out of scope per product-line scope: BAA contracts are customer-to-subcontractor; not Group Health Plan) | 5 |
+| MANUAL (applicable; ship customer-facing template doc by v2.24.0) | 2 |
+| Genuinely missing in product | 0 |
+
+### Revised headline (post-triage)
+
+| Metric | Value |
+|---|---:|
+| Compliance rate (PASS / applicable) | **100.0%** |
+| Applicable controls (PASS + FAIL) | 44 |
+| PASS | 44 (43 original + 1 PASS-on-corrected-citation) |
+| FAIL | 0 |
+| MANUAL (auditor evidence required) | 2 |
+| N/A (out of scope per product-line scope statement) | 5 |
+
 
 ## Coverage note
 

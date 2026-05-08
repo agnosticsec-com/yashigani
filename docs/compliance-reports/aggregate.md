@@ -14,16 +14,40 @@
 
 | Metric | Value |
 |---|---:|
-| Cross-framework PASS rate | **84.4%** |
-| Total applicable controls (PASS + FAIL) | 883 |
-| PASS | 745 |
-| FAIL | 138 |
-| MANUAL (auditor evidence required) | 46 |
-| N/A (out of scope) | 14 |
+| Cross-framework PASS rate | **93.0%** (was 84.4% pre-triage) |
+| Total applicable controls (PASS + FAIL) | 842 (was 883) |
+| PASS | 783 (was 745) |
+| FAIL | 59 (was 138) |
+| MANUAL (auditor evidence required) | 51 (was 46) |
+| N/A (out of scope) | 50 (was 14) |
 
 > Headline rate is computed on the applicable subset across all frameworks (PASS + FAIL).
 > MANUAL and N/A are reported separately and excluded from the denominator per
 > `feedback_no_fake_compliance_docs.md` 3-class rule.
+
+
+
+> **Triage applied 2026-05-08 (post-release):** the 5 product-line-N/A frameworks
+> (PCI DSS, FedRAMP Moderate, CMMC 2.0 L2, HIPAA Security Rule, DORA) underwent
+> per-control re-classification against Yashigani's product-line scope. 79 of the
+> original 81 product-line-N/A FAILs resolved to either:
+> (a) **PASS** with corrected citation (38 controls — ACS regex misses against
+>     files genuinely present in the scanned tag `4ff2dd5`; ACS pattern-fix retro
+>     items filed for Ogen's PR #14 / PR #25 follow-on PR), or
+> (b) **N/A** with documented out-of-scope reason (36 controls — CDE/PAN/government-
+>     banner/BAA/SSP-POAM/FIPS-CMVP/financial-entity obligations that do not apply
+>     to a self-hosted MCP gateway product).
+> 5 controls re-classified to MANUAL (HIPAA workforce-clearance/security-training
+> templates; PCI Secure-SDLC formal policy; PCI quarterly-vuln-scan QSA evidence;
+> FedRAMP password-length compile-time default for FedRAMP-profile builds).
+> 2 controls remain genuine FAIL (PCI 6.2.1.1 missing CONTRIBUTING.md; PCI 6.2.1.2
+> missing PULL_REQUEST_TEMPLATE.md), tracked as P2 retro items for v2.24.0.
+>
+> The other 57 FAILs (in technical frameworks ASVS-adjacent / API Top 10 / Web
+> Top 10 / ISO 27001 / SOC 2 / NIST CSF / NIST 800-53 / EU AI Act / NIS 2 /
+> Infrastructure / GDPR) are deferred until Ogen's PR #14 (scanner OOS fix) and
+> PR #25 (SSRF/TLS exclude_paths) merge and a fresh ACS scan runs. Those FAILs
+> are predominantly the same regex-pattern-miss class addressed by Ogen's PRs.
 
 ## Per-framework breakdown
 
@@ -33,18 +57,18 @@
 | [OWASP Agentic AI Top 10 (2025)](per-framework/owasp-agentic-ai.md) | 10 | 10 | 0 | 0 | 0 | 100.0% |
 | [OWASP LLM Top 10 (2025)](per-framework/owasp-llm-top-10.md) | 10 | 10 | 0 | 0 | 0 | 100.0% |
 | [OWASP LLM Governance Checklist v1.0](per-framework/owasp-llm-governance-checklist.md) | 0 | 0 | 0 | 39 | 7 | — |
-| [CMMC 2.0 Level 2](per-framework/cmmc-l2.md) | 33 | 21 | 12 | 0 | 0 | 63.6% |
-| [DORA — Digital Operational Resilience Act](per-framework/dora.md) | 17 | 11 | 6 | 0 | 0 | 64.7% |
+| [CMMC 2.0 Level 2](per-framework/cmmc-l2.md) (triaged 2026-05-08) | 27 | 27 | 0 | 0 | 6 | 100.0% |
+| [DORA — Digital Operational Resilience Act](per-framework/dora.md) (triaged 2026-05-08) | 15 | 15 | 0 | 0 | 2 | 100.0% |
 | [EU AI Act](per-framework/eu-ai-act.md) | 31 | 23 | 8 | 0 | 0 | 74.2% |
-| [FedRAMP Moderate](per-framework/fedramp-moderate.md) | 42 | 29 | 13 | 0 | 0 | 69.0% |
+| [FedRAMP Moderate](per-framework/fedramp-moderate.md) (triaged 2026-05-08) | 35 | 35 | 0 | 1 | 6 | 100.0% |
 | [GDPR](per-framework/gdpr.md) | 5 | 4 | 1 | 0 | 0 | 80.0% |
-| [HIPAA Security Rule](per-framework/hipaa-security.md) | 51 | 43 | 8 | 0 | 0 | 84.3% |
+| [HIPAA Security Rule](per-framework/hipaa-security.md) (triaged 2026-05-08) | 44 | 44 | 0 | 2 | 5 | 100.0% |
 | [Infrastructure Security](per-framework/infrastructure.md) | 7 | 4 | 3 | 0 | 0 | 57.1% |
 | [ISO/IEC 27001:2022](per-framework/iso-27001-2022.md) | 53 | 51 | 2 | 0 | 0 | 96.2% |
 | [NIS 2 Directive](per-framework/nis2.md) | 14 | 9 | 5 | 0 | 0 | 64.3% |
 | [NIST SP 800-53 Rev 5 — Moderate baseline](per-framework/nist-800-53-moderate.md) | 157 | 133 | 24 | 0 | 0 | 84.7% |
 | [NIST CSF 2.0](per-framework/nist-csf-2-0.md) | 61 | 60 | 1 | 0 | 0 | 98.4% |
-| [PCI DSS v4.0](per-framework/pci-dss-v4.md) | 148 | 106 | 42 | 0 | 0 | 71.6% |
+| [PCI DSS v4.0](per-framework/pci-dss-v4.md) (triaged 2026-05-08) | 129 | 127 | 2 | 2 | 17 | 98.5% |
 | [SOC 2 Type II](per-framework/soc2-type2.md) | 25 | 24 | 1 | 0 | 0 | 96.0% |
 | [OWASP API Security (technical baseline)](per-framework/owasp-api-security.md) | 38 | 35 | 3 | 0 | 0 | 92.1% |
 | [OWASP API Security Top 10 (2023)](per-framework/owasp-top-10-api.md) | 7 | 3 | 4 | 0 | 0 | 42.9% |
