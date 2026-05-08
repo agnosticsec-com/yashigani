@@ -25,6 +25,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import yashigani.auth.password as _pw_module
+
+
+# ---------------------------------------------------------------------------
+# SSRF policy bypass
+# ---------------------------------------------------------------------------
+# PR #81 added an SSRF policy check to check_hibp() before any outbound request.
+# Tests that use an HTTP override URL or mock httpx.get directly need to bypass
+# the policy check. The autouse fixture below patches the HIBP HttpClient so all
+# tests in this file remain network-free and focused on integration flow.
+# SSRF policy correctness is verified in test_v2233_hibp_route_through_httpclient.py.
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf_policy(monkeypatch):
+    """Patch the HIBP HttpClient policy check to a no-op for all integration tests."""
+    mock_client = MagicMock()
+    mock_client._check_policy = MagicMock(return_value=None)
+    monkeypatch.setattr(_pw_module, "_HIBP_HTTP_CLIENT", mock_client)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
