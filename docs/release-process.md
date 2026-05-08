@@ -1,6 +1,6 @@
 # Yashigani Release Process
 
-**Last updated:** 2026-05-08T00:00:00+01:00
+**Last updated:** 2026-05-08T16:00:00+01:00
 
 This document covers the end-to-end process for cutting a Yashigani release from a clean branch tip to a signed, published GitHub release with full evidence archive. It is the authoritative source for M7 gate-check procedures.
 
@@ -228,26 +228,38 @@ gh pr view <number> --json reviews | jq '.reviews[] | select(.state=="APPROVED")
 
 **Failure mode:** HARD STOP — no merge to main, no release tag, until G16 is PASS.
 
-**Owners by dep type:**
+**Owner mapping — generative by dep type (applies to ALL Agnostic Security repos, current AND future):**
 
-| Dep type | Repo | Owner |
-|---|---|---|
-| Container images (Docker/OCI digests) | yashigani | Captain |
-| Helm chart dependencies (`Chart.yaml`) | yashigani | Captain |
-| GitHub Actions (workflow SHAs) | yashigani | Captain |
-| GitHub Actions (workflow SHAs) | acs | Captain |
-| GitHub Actions (workflow SHAs) | agnosticsec-website | Captain |
-| Python packages (`pyproject.toml`, `requirements*.txt`, lock files) | yashigani | Tom |
-| Python packages | acs | Tom |
-| npm/JS packages (`package.json`, lock files) | agnosticsec-website | Tom (interim — see `project_team_gaps_cto_coo.md`) |
+The owner-by-dep-type mapping is the canonical rule. New repos inherit this mapping by default — no per-repo configuration required. Tiago directive: "for any future projects or products/services" (2026-05-08).
+
+| Dep type | Default owner |
+|---|---|
+| Python packages (`pyproject.toml`, `requirements*.txt`, lock files) | Tom |
+| Container / OCI images (Dockerfile, docker-compose, Helm `image:`) | Captain |
+| Helm chart dependencies (`Chart.yaml`) | Captain |
+| Kubernetes manifest version pins | Captain |
+| GitHub Actions (`.github/workflows/*.yml` `uses:`) | Captain |
+| JS / npm / TypeScript / frontend frameworks | Tom (interim — frontend specialist gap per `project_team_gaps_cto_coo.md`) |
+| Shell / installer / systemd-unit dependencies | Su |
+| Rust packages (`Cargo.toml`) | Tom (interim — Rust specialist gap) |
+| Go modules (`go.mod`) | Tom (interim — Go specialist gap) |
 
 Maxine reviews and signs off in the release evidence directory before Gate 13.
 
+#### Current-state repo coverage (snapshot, not authoritative — rule is the table above)
+
+| Repo | Dep types present |
+|---|---|
+| `agnosticsec-com/yashigani` | Python, Container/Helm, K8s, GitHub Actions, Shell |
+| `agnosticsec-com/acs` | Python, GitHub Actions |
+| `agnosticsec-com/agnosticsec-website` | JS/npm, GitHub Actions |
+| (Future) Any new product / service repo | All applicable types — automatically covered by generative owner mapping |
+
 ### PASS/FAIL semantics
 
-**PASS:** all deps within 2 minor versions of latest stable, OR pinned with documented rationale, AND zero open HIGH/CRITICAL Dependabot alerts in any in-scope repo.
+**PASS:** all deps within 2 minor versions of latest stable, OR pinned with documented rationale, AND zero open HIGH/CRITICAL Dependabot alerts in any Agnostic Security repo (current or future).
 
-**FAIL:** any dep >2 minor behind without rationale, OR any open HIGH/CRITICAL Dependabot alert in any in-scope repo, OR any floating-stub tag in container image pins (see below).
+**FAIL:** any dep >2 minor behind without rationale, OR any open HIGH/CRITICAL Dependabot alert in any Agnostic Security repo (current or future), OR any floating-stub tag in container image pins (see below).
 
 ### Command sequence — container images (Captain)
 
@@ -329,7 +341,7 @@ git diff package-lock.json  # must be clean (no unstaged lock drift)
 ### Command sequence — GitHub Actions (Captain)
 
 ```sh
-# For each repo in scope (yashigani, acs, agnosticsec-website):
+# For each Agnostic Security repo with GitHub Actions present (see current-state snapshot above):
 
 # 1. List all workflow files and their pinned Action SHAs:
 grep -rn 'uses:' .github/workflows/ | grep -v '#'
@@ -420,17 +432,37 @@ The dep-bump sweep (§6b / G16) runs at release time. Between releases, Dependab
 | MEDIUM | ≤ 7 days | bundle fix in next release cycle |
 | LOW | monthly review | absorb in regular bump sweep |
 
-### Owner mapping
+### Owner mapping — generative by dep type
 
-| Repo | Dep type | Owner |
-|---|---|---|
-| yashigani | Python deps | Tom |
-| yashigani | Container / Helm deps | Captain |
-| yashigani | GitHub Actions | Captain |
-| acs | Python deps | Tom |
-| acs | GitHub Actions | Captain |
-| agnosticsec-website | JS/Astro deps | Tom (interim — `project_team_gaps_cto_coo.md`) |
-| agnosticsec-website | GitHub Actions | Captain |
+The owner-by-dep-type mapping is the canonical rule and applies to ALL current AND future Agnostic Security repos by default. Tiago directive: "for any future projects or products/services" (2026-05-08).
+
+| Dep type | Default owner |
+|---|---|
+| Python packages (`pyproject.toml`, `requirements*.txt`, lock files) | Tom |
+| Container / OCI images (Dockerfile, docker-compose, Helm `image:`) | Captain |
+| Helm chart dependencies (`Chart.yaml`) | Captain |
+| Kubernetes manifest version pins | Captain |
+| GitHub Actions (`.github/workflows/*.yml` `uses:`) | Captain |
+| JS / npm / TypeScript / frontend frameworks | Tom (interim — frontend specialist gap per `project_team_gaps_cto_coo.md`) |
+| Shell / installer / systemd-unit dependencies | Su |
+| Rust packages (`Cargo.toml`) | Tom (interim — Rust specialist gap) |
+| Go modules (`go.mod`) | Tom (interim — Go specialist gap) |
+
+#### Current-state repo snapshot (not authoritative — rule is the table above)
+
+| Repo | Dep types present |
+|---|---|
+| `agnosticsec-com/yashigani` | Python, Container/Helm, K8s, GitHub Actions, Shell |
+| `agnosticsec-com/acs` | Python, GitHub Actions |
+| `agnosticsec-com/agnosticsec-website` | JS/npm, GitHub Actions |
+| (Future) Any new product / service repo | All applicable types — automatically covered by generative owner mapping |
+
+#### When a new repo is created
+
+1. Enable Dependabot in `.github/dependabot.yml` for every dep type present in that repo.
+2. Confirm the generative owner mapping above covers all alert surfaces — no per-repo owner override required.
+3. If a new dep type appears that is not in the table above, propose an extension to both this doc and `feedback_dependabot_triage_cadence.md`, and flag to Maxine.
+4. Add the repo to the weekly Maxine triage roster — no further onboarding steps required.
 
 ### Workflow
 
