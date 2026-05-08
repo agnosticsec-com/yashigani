@@ -20,6 +20,7 @@ Covers:
 
 Last updated: 2026-05-08T00:00:00+01:00
 """
+
 from __future__ import annotations
 
 import uuid
@@ -88,6 +89,7 @@ def _lic(expires_offset_days: int | None) -> LicenseState:
 # LicenseExpiryMode enum
 # ---------------------------------------------------------------------------
 
+
 class TestLicenseExpiryModeEnum:
     def test_all_modes_exist(self):
         expected = {"active", "warning", "critical", "expired", "readonly", "blocked"}
@@ -104,6 +106,7 @@ class TestLicenseExpiryModeEnum:
 # ---------------------------------------------------------------------------
 # compute_expiry_mode boundaries
 # ---------------------------------------------------------------------------
+
 
 class TestComputeExpiryMode:
     """Test every boundary of compute_expiry_mode with a fixed 'now'."""
@@ -178,6 +181,7 @@ class TestComputeExpiryMode:
 # LicenseState methods
 # ---------------------------------------------------------------------------
 
+
 class TestLicenseStateExpiryMode:
     def test_active_license(self):
         lic = _lic(60)
@@ -224,6 +228,7 @@ class TestLicenseStateDaysRemaining:
 # ---------------------------------------------------------------------------
 # Banner building
 # ---------------------------------------------------------------------------
+
 
 class TestBuildBanner:
     def test_active_no_banner(self):
@@ -276,6 +281,7 @@ class TestBuildBanner:
 # get_license_banner_context
 # ---------------------------------------------------------------------------
 
+
 class TestGetLicenseBannerContext:
     """
     Tests for get_license_banner_context().
@@ -288,12 +294,14 @@ class TestGetLicenseBannerContext:
     @pytest.fixture(autouse=True)
     def restore_license(self):
         from yashigani.licensing.enforcer import get_license, set_license
+
         original = get_license()
         yield
         set_license(original)
 
     def _ctx(self, lic: LicenseState) -> dict:
         from yashigani.licensing.enforcer import set_license
+
         set_license(lic)
         return get_license_banner_context(now=_NOW)
 
@@ -347,6 +355,7 @@ class TestGetLicenseBannerContext:
         """If get_license() raises inside banner helper, defaults are returned."""
         # Patch enforcer.get_license at the enforcer module level
         import yashigani.licensing.enforcer as enforcer_mod
+
         original_fn = enforcer_mod.get_license
         enforcer_mod.get_license = lambda: (_ for _ in ()).throw(RuntimeError("not ready"))
         try:
@@ -360,6 +369,7 @@ class TestGetLicenseBannerContext:
 # ---------------------------------------------------------------------------
 # is_write_operation
 # ---------------------------------------------------------------------------
+
 
 class TestIsWriteOperation:
     def test_get_is_not_write(self):
@@ -407,9 +417,11 @@ class TestIsWriteOperation:
 # check_gateway_access
 # ---------------------------------------------------------------------------
 
+
 class TestCheckGatewayAccess:
     def _set_lic(self, offset_days: int | None) -> LicenseState:
         from yashigani.licensing.enforcer import set_license, get_license
+
         lic = _lic(offset_days)
         set_license(lic)
         return lic
@@ -417,6 +429,7 @@ class TestCheckGatewayAccess:
     @pytest.fixture(autouse=True)
     def restore_license(self):
         from yashigani.licensing.enforcer import set_license, get_license
+
         original = get_license()
         yield
         set_license(original)
@@ -486,6 +499,7 @@ class TestCheckGatewayAccess:
 # GatewayBlockedError / GatewayReadOnlyError
 # ---------------------------------------------------------------------------
 
+
 class TestGatewayErrors:
     def test_blocked_error_message(self):
         err = GatewayBlockedError()
@@ -506,6 +520,7 @@ class TestGatewayErrors:
 # /api/v1/license/status response shape (no live HTTP — unit check on function)
 # ---------------------------------------------------------------------------
 
+
 class TestLicenseStatusRouteShape:
     """
     Verify get_license_expiry_status() returns the correct shape
@@ -519,6 +534,7 @@ class TestLicenseStatusRouteShape:
     @pytest.fixture(autouse=True)
     def restore_license(self):
         from yashigani.licensing.enforcer import set_license, get_license
+
         original = get_license()
         yield
         set_license(original)
@@ -549,8 +565,10 @@ class TestLicenseStatusRouteShape:
         from yashigani.backoffice.routes.license import get_license_expiry_status
 
         set_license(lic)
+
         async def _call():
             return await get_license_expiry_status(session=MagicMock())
+
         return asyncio.run(_call())
 
     def test_active_response(self):
@@ -599,6 +617,7 @@ class TestLicenseStatusRouteShape:
 # LicenseEnforcementMiddleware — ASGI response tests (W12 regression)
 # ---------------------------------------------------------------------------
 
+
 class TestLicenseEnforcementMiddleware:
     """
     Regression tests for Warning 12: confirm LicenseEnforcementMiddleware
@@ -646,31 +665,30 @@ class TestLicenseEnforcementMiddleware:
 
     def test_blocked_returns_503(self):
         import asyncio
-        status, body = asyncio.get_event_loop().run_until_complete(
-            self._run_middleware(GatewayBlockedError)
-        )
+
+        status, body = asyncio.run(self._run_middleware(GatewayBlockedError))
         assert status == 503
         import json
+
         data = json.loads(body)
         assert data["error"] == "licence_blocked"
         assert "renewal_url" in data
 
     def test_readonly_returns_403(self):
         import asyncio
-        status, body = asyncio.get_event_loop().run_until_complete(
-            self._run_middleware(GatewayReadOnlyError)
-        )
+
+        status, body = asyncio.run(self._run_middleware(GatewayReadOnlyError))
         assert status == 403
         import json
+
         data = json.loads(body)
         assert data["error"] == "licence_readonly"
         assert "renewal_url" in data
 
     def test_active_passes_through(self):
         import asyncio
-        status, body = asyncio.get_event_loop().run_until_complete(
-            self._run_middleware(None)
-        )
+
+        status, body = asyncio.run(self._run_middleware(None))
         assert status == 200
         assert body == b"ok"
 
@@ -691,15 +709,14 @@ class TestLicenseEnforcementMiddleware:
 
         scope = {"type": "websocket", "path": "/ws"}
         middleware = LicenseEnforcementMiddleware(mock_app)
-        asyncio.get_event_loop().run_until_complete(
-            middleware(scope, mock_receive, mock_send)
-        )
+        asyncio.run(middleware(scope, mock_receive, mock_send))
         assert responses == [{"type": "websocket.connect"}]
 
 
 # ---------------------------------------------------------------------------
 # Readonly-safe whitelist exhaustiveness (W13 regression)
 # ---------------------------------------------------------------------------
+
 
 class TestReadonlySafeWhitelist:
     """
