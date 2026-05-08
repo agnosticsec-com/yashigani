@@ -386,17 +386,14 @@ probe_caddy() {
 probe_caddy
 
 # ---------------------------------------------------------------------------
-# CHECK 4 — Backoffice /api/health returns HTTP 200
+# CHECK 4 — Backoffice /healthz returns HTTP 200 (via Caddy)
 # ---------------------------------------------------------------------------
-log_section "4. Backoffice Health (/api/health)"
+# The backoffice only exposes /healthz (unauthenticated) — confirmed in
+# src/yashigani/backoffice/app.py. /api/health redirects to login (302).
+log_section "4. Backoffice Health (/healthz via Caddy)"
 
-# Per the brief: /api/health (admin path). Checking via Caddy to validate the
-# full Caddy→backoffice path (EX-231-10 pattern from existing helm tests).
-# NetworkPolicy blocks direct-to-backoffice from outside, so we use port-forward
-# through Caddy on the already-proved /healthz service port.
-# The backoffice /api/health endpoint is unauthenticated (like /healthz).
 
-BACKOFFICE_CHECK_LABEL="Backoffice /api/health"
+BACKOFFICE_CHECK_LABEL="Backoffice /healthz (via Caddy)"
 BO_LOCAL_PORT=18444
 
 probe_backoffice() {
@@ -408,7 +405,7 @@ probe_backoffice() {
     return 1
   fi
 
-  log_verbose "Starting kubectl port-forward svc/${caddy_svc} ${BO_LOCAL_PORT}:443 for /api/health"
+  log_verbose "Starting kubectl port-forward svc/${caddy_svc} ${BO_LOCAL_PORT}:443 for backoffice /healthz"
   kctl port-forward "svc/${caddy_svc}" "${BO_LOCAL_PORT}:443" &>/dev/null &
   fwd_pid=$!
 
@@ -424,16 +421,15 @@ probe_backoffice() {
   local status
   status=$(curl -sk -o /dev/null -w "%{http_code}" \
     --max-time 10 \
-    "https://localhost:${BO_LOCAL_PORT}/api/health" 2>/dev/null || echo "000")
+    "https://localhost:${BO_LOCAL_PORT}/healthz" 2>/dev/null || echo "000")
 
   kill "$fwd_pid" 2>/dev/null || true
   wait "$fwd_pid" 2>/dev/null || true
 
-  log_verbose "Backoffice /api/health HTTP status: ${status}"
+  log_verbose "Backoffice /healthz HTTP status: ${status}"
 
-  # /api/health returns 200 when healthy; 503 when deps not ready.
-  # 401 means the endpoint exists but is auth-gated — that is a config issue,
-  # not a healthy state. Treat anything other than 200 as FAIL per SOP 4.
+  # /healthz returns 200 when healthy (unauthenticated, app.py).
+  # Per SOP 4: anything other than 200 is FAIL.
   if [[ "$status" == "200" ]]; then
     record_ok "${BACKOFFICE_CHECK_LABEL} (HTTP ${status})"
   else
@@ -646,23 +642,24 @@ if [[ "$MTLS_ENABLED" == "true" ]]; then
     # service on its mTLS port (8443).
     # Pattern B: ca_intermediate.crt as the trust anchor (values.yaml note).
     MTLS_RESULT=$(kctl exec "${CADDY_POD}" -- \
-        sh -c "wget -qO- \
-          --certificate=/run/secrets/caddy_client.crt \
-          --private-key=/run/secrets/caddy_client.key \
-          --ca-certificate=/run/secrets/ca_intermediate.crt \
-          https://yashigani-backoffice:8443/healthz 2>&1" || \
-        echo "MTLS_EXEC_FAILED")
+        sh -c "echo '' | openssl s_client \
+          -cert /run/secrets/caddy_client.crt \
+          -key  /run/secrets/caddy_client.key \
+          -CAfile /run/secrets/ca_intermediate.crt \
+          -connect yashigani-backoffice:8443 \
+          -verify_return_error \
+          -brief 2>&1" || echo "MTLS_EXEC_FAILED")
 
     log_verbose "mTLS probe result: ${MTLS_RESULT}"
 
-    if printf '%s' "$MTLS_RESULT" | grep -qi '"status":"ok"\|ok\|healthy'; then
+    if printf '%s' "$MTLS_RESULT" | grep -qi "CONNECTION ESTABLISHED\|Verification: OK"; then
       record_ok "${MTLS_LABEL}"
-    elif printf '%s' "$MTLS_RESULT" | grep -qi "200\|connected"; then
-      record_ok "${MTLS_LABEL} (connection established)"
     elif [[ "$MTLS_RESULT" == "MTLS_EXEC_FAILED" ]]; then
-      record_fail "$MTLS_LABEL" "kubectl exec failed — caddy pod may not have wget or cert mounts"
+      record_fail "$MTLS_LABEL" "kubectl exec failed — caddy pod may lack openssl or cert mounts"
+    elif printf '%s' "$MTLS_RESULT" | grep -qi "not found\|No such"; then
+      log_warn "mTLS: openssl not in caddy pod; handshake probe skipped (non-blocking)"
     else
-      record_fail "$MTLS_LABEL" "unexpected response: ${MTLS_RESULT}"
+      record_fail "$MTLS_LABEL" "handshake failed: ${MTLS_RESULT}"
     fi
   fi
 else
