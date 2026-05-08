@@ -15,24 +15,28 @@ FORCE=0
 
 for arg in "$@"; do
   case "$arg" in
-    --keep-data) KEEP_DATA=1 ;;
-    --force)     FORCE=1     ;;
-    --help)
+    --keep-data)  KEEP_DATA=1 ;;
+    --force)      FORCE=1     ;;
+    --yes|-y)     FORCE=1     ;;   # alias for --force; documented in --help
+    --help|-h)
       cat <<'EOF'
 Usage: scripts/uninstall.sh [OPTIONS]
 
 Removes Yashigani containers, networks, secrets, and optionally data volumes.
 
 Options:
-  --keep-data   Preserve postgres_data, audit_data, and redis_data volumes
-  --force       Skip confirmation prompts
-  --help        Print this message
+  --keep-data     Preserve postgres_data, audit_data, and redis_data volumes
+  --force         Skip confirmation prompts
+  --yes, -y       Alias for --force; skip all confirmation prompts.
+                  Use in CI / unattended removal. Operator accepts full
+                  responsibility for data loss when --keep-data is not set.
+  --help, -h      Print this message
 
 What is removed:
   - All containers and networks (docker compose down)
   - All yashigani_* Docker volumes (unless --keep-data)
   - docker/secrets/ directory (generated secrets)
-  - .env file (will prompt unless --force)
+  - .env file (will prompt unless --force/--yes)
 
 What is preserved with --keep-data:
   - yashigani_postgres_data

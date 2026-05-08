@@ -5,7 +5,7 @@ LAURA-V232-003 — TOTP bypass on force_totp_provision=True accounts.
 AVA-A006       — TOTP replay in step-up flow (stale window accepted).
 AVA-C006       — Stored XSS via protocol-URI bypass (javascript:/data:/vbscript:).
 
-Last updated: 2026-04-30T04:50:00+01:00
+Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -469,12 +469,14 @@ class TestAvaC006ProtocolUriBypass:
         assert any(e["loc"] == ("name",) for e in errors), errors
 
     def test_register_accepts_legitimate_name(self):
-        """Legitimate agent names must still be accepted (positive path)."""
+        """Legitimate agent slug names must still be accepted (positive path).
+        Note: V232-CSCAN-01a tightened name to slug pattern '^[a-z][a-z0-9_-]{0,63}$'.
+        """
         req = _AgentRegisterRequestC006(
-            name="My Production Agent v2",
+            name="my-production-agent-v2",
             upstream_url=self._VALID_URL,
         )
-        assert req.name == "My Production Agent v2"
+        assert req.name == "my-production-agent-v2"
 
     def test_register_still_rejects_html_tag(self):
         """Existing angle-bracket tag rejection must not regress."""
@@ -508,6 +510,8 @@ class TestAvaC006ProtocolUriBypass:
         assert req.name is None
 
     def test_update_accepts_legitimate_name(self):
-        """Legitimate name on update must still be accepted."""
-        req = _AgentUpdateRequestC006(name="Renamed Agent")
-        assert req.name == "Renamed Agent"
+        """Legitimate slug on update must still be accepted.
+        Note: V232-CSCAN-01a tightened name to slug pattern '^[a-z][a-z0-9_-]{0,63}$'.
+        """
+        req = _AgentUpdateRequestC006(name="renamed-agent")
+        assert req.name == "renamed-agent"

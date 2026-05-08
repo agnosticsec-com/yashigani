@@ -1,6 +1,16 @@
 # Yashigani — Kubernetes Deployment Guide
 
-Version: v2.23.1 | Chart version: 2.23.1 | Last updated: 2026-05-01T00:09:28+01:00
+Version: v2.23.2 | Chart version: 2.23.2 | Last updated: 2026-05-07T00:00:00+01:00
+
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
 
 ---
 
@@ -19,9 +29,61 @@ Optional but recommended:
 - **KEDA** — if `global.keda.enabled: true` (default). Required for event-driven autoscaling.
 - **Prometheus Operator** — if you want ServiceMonitor CRDs; plain Prometheus works without it.
 
+### Docker Desktop Kubernetes — Image Preflight
+
+If you are testing on **Docker Desktop's built-in Kubernetes** (single-node, local development): a Docker Desktop restart, K8s reset, or Docker Engine upgrade evicts all images from the embedded containerd runtime. After any of these events, the gateway/backoffice images that Helm references will not be present locally and pods will hang in `ImagePullBackOff` (since `imagePullPolicy: IfNotPresent` is the chart default and no remote pull is configured for locally-built images).
+
+Run this preflight before `helm install` / `helm upgrade` whenever Docker Desktop K8s has restarted:
+
+```bash
+# Rebuild local images
+docker build -f docker/Dockerfile.gateway -t yashigani/gateway:2.23.2 .
+docker build -f docker/Dockerfile.backoffice -t yashigani/backoffice:2.23.2 .
+
+# Re-pull base images that DD K8s evicted alongside
+docker pull redis:7-alpine
+docker pull postgres:16-alpine
+```
+
+This step is **not required** on managed K8s (EKS/GKE/AKS/k3s/k8s-on-VMs) where the container runtime persists images across cluster restarts.
+
 ---
 
-## Quick Start
+## Quick Install (recommended)
+
+For most operators, the canonical entry point is the K8s install wrapper:
+
+```bash
+bash scripts/k8s-install.sh \
+  --domain yashigani.example.com \
+  --admin-email admin@example.com \
+  --namespace yashigani \
+  --deploy production
+```
+
+The wrapper sets Kubernetes-sensible defaults before delegating to `install.sh`:
+
+| Default applied | Why |
+|---|---|
+| `--mode k8s` | Tells the installer to render Helm rather than docker-compose. |
+| `--non-interactive` | K8s installs typically run in CI/CD with no TTY. |
+| `YSG_RUNTIME=k8s` | Skips runtime-specific local checks (Podman / Docker daemon probes). |
+| `helm install --qps 50 --no-hooks` | Avoids the default `qps=5` client-side rate limiter when applying the chart's many resources. |
+
+Pre-conditions checked before delegating (hard-stop on failure):
+
+1. `kubectl` is in `PATH` and reaches the target cluster.
+2. `helm` is in `PATH`.
+3. Either `--domain` or `YASHIGANI_DOMAIN` env is set.
+4. Namespace is not `default` (accidental-deployment guard).
+
+All flags are forwarded to `install.sh` unchanged. Use `--dry-run` to print the steps without applying.
+
+If you need a fully manual flow (BYO secret management, custom Helm values, multi-cluster federation, etc.) follow the **Manual Quick Start** below instead.
+
+---
+
+## Manual Quick Start
 
 ### 1. Create the namespace and secrets
 
@@ -114,7 +176,7 @@ helm test yashigani -n yashigani --logs
 | `gateway.replicaCount` | `2` | Minimum replicas |
 | `gateway.hpa.maxReplicas` | `10` | HPA ceiling |
 | `gateway.env.upstreamUrl` | `""` | **REQUIRED** — upstream MCP server URL |
-| `gateway.env.opaUrl` | `http://policy:8181` | OPA policy endpoint |
+| `gateway.env.opaUrl` | `https://yashigani-policy:8181` | OPA policy endpoint (mTLS, v2.23.2+) |
 | `gateway.env.ollamaUrl` | `http://ollama:11434` | Ollama inference endpoint |
 | `gateway.existingSecretName` | `yashigani-gateway-secrets` | Secret with `redis_password` |
 

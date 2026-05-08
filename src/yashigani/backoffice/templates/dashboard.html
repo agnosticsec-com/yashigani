@@ -21,6 +21,7 @@
                 <button data-action="showPage" data-param="alerts">Alerts</button>
                 <button data-action="showPage" data-param="audit">Audit Log</button>
                 <button data-action="showPage" data-param="monitoring">Monitoring</button>
+                <button data-action="showPage" data-param="backup">Backup</button>
                 <button data-action="showPage" data-param="settings">Settings</button>
             </div>
         </div>
@@ -449,6 +450,22 @@
                             <tr><td>CI/CD</td><td>Pipeline metrics and deployment tracking</td><td><a href="/admin/grafana/d/cicd" target="_blank">Open</a></td></tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Backup Page -->
+        <div class="page" id="page-backup">
+            <h2>Backup Status</h2>
+            <div class="panel" style="margin-bottom:16px;">
+                <div class="panel-header">Backups</div>
+                <div class="panel-body">
+                    <p style="font-size:0.8rem;color:#64748b;margin-bottom:8px;">Backups created by the installer and update scripts. Verify integrity by re-hashing against the recorded checksum manifest.</p>
+                    <div id="backup-status-container"><span class="loading">Loading...</span></div>
+                    <div id="backup-actions" style="margin-top:12px;">
+                        <button id="btn-verify-latest" data-action="verifyBackup" style="padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem" disabled>Verify latest</button>
+                    </div>
+                    <div id="backup-verify-result" style="margin-top:10px;font-size:0.85rem;display:none;"></div>
                 </div>
             </div>
         </div>

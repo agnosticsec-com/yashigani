@@ -20,7 +20,7 @@ with audit_search.py's filtered /export endpoint. Both routers mount at prefix
 is the canonical user-facing export at /admin/audit/export. This unfiltered
 streaming export is now at /admin/audit/export/raw for operator/compliance dumps.
 
-Last updated: 2026-05-02T09:30:00+01:00
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 from yashigani.audit.writer import validate_siem_url
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 router = APIRouter()
 
@@ -368,9 +369,10 @@ async def test_siem_target(name: str, session: AdminSession):
     try:
         validate_siem_url(target.url)
     except ValueError as exc:
+        payload, _ = safe_error_envelope(exc, public_message="siem url blocked", status=422)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "siem_url_blocked", "message": str(exc)},
+            detail=payload,
         )
 
     req = urllib.request.Request(
@@ -387,14 +389,16 @@ async def test_siem_target(name: str, session: AdminSession):
         with urllib.request.urlopen(req, timeout=10) as resp:
             http_status = resp.status
     except urllib.error.HTTPError as exc:
+        payload, _ = safe_error_envelope(exc, public_message="siem test failed", status=502)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": "siem_test_failed", "http_status": exc.code, "message": str(exc)},
+            detail={**payload, "http_status": exc.code},
         )
     except Exception as exc:
+        payload, _ = safe_error_envelope(exc, public_message="siem test failed", status=502)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": "siem_test_failed", "message": str(exc)},
+            detail=payload,
         )
 
     writer.write(_config_event(

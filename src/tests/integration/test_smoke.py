@@ -20,7 +20,7 @@ class TestGatewayInit:
     def test_gateway_config_defaults(self):
         from yashigani.gateway.proxy import GatewayConfig
         cfg = GatewayConfig(upstream_base_url="http://localhost:9999")
-        assert cfg.opa_url == "http://policy:8181"
+        assert cfg.opa_url == "https://policy:8181"
         assert cfg.request_timeout_seconds == 30.0
         assert cfg.max_request_body_bytes == 4 * 1024 * 1024
 

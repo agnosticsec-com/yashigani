@@ -7,6 +7,8 @@ admin panel without SSH access or re-running the installer.
 Services: openwebui, wazuh, internal-ca, langflow, letta, openclaw.
 
 All operations are API calls that exec podman/docker compose commands.
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
+from yashigani.common.error_envelope import safe_error_envelope
 
 router = APIRouter(prefix="/admin/services", tags=["services"])
 _log = logging.getLogger("yashigani.services")
@@ -134,5 +137,5 @@ async def manage_service(service_id: str, body: ServiceAction, session: AdminSes
     except HTTPException:
         raise
     except Exception as exc:
-        _log.error("Service management failed: %s", exc)
-        raise HTTPException(status_code=500, detail={"error": str(exc)})
+        payload, _ = safe_error_envelope(exc, public_message="service management failed", status=500)
+        raise HTTPException(status_code=500, detail=payload)

@@ -1,0 +1,48 @@
+# ACS-RISK-008 admission test — NON-COMPLIANT pod fixture (root user)
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# This pod deliberately sets runAsUser: 0. It MUST be REJECTED by Kyverno
+# with the yashigani-restrict-root-user and yashigani-require-run-as-non-root
+# ClusterPolicies.
+#
+# Expected result:
+#   Error from server: admission webhook "validate.kyverno.svc" denied the request:
+#   [...] ACS-RISK-008: Pod 'yashigani-test-noncompliant-root' sets runAsUser: 0
+#
+# Usage:
+#   kubectl apply -f tests/admission/fixture-noncompliant-root.yaml
+#   # Must print a policy violation error and exit non-zero.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: yashigani-test-noncompliant-root
+  namespace: yashigani
+  labels:
+    app.kubernetes.io/name: yashigani-test-noncompliant-root
+    app.kubernetes.io/component: admission-test
+  annotations:
+    yashigani.io/test: "acs-risk-008-noncompliant-root"
+spec:
+  restartPolicy: Never
+  # INTENTIONALLY VIOLATING: root user, no seccomp, no capability drop.
+  securityContext:
+    runAsUser: 0
+    runAsNonRoot: false
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: busybox:1.36.1
+      command: ["sh", "-c", "echo 'This should never run'; sleep 5"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: "10m"
+          memory: "16Mi"
+        limits:
+          cpu: "50m"
+          memory: "32Mi"

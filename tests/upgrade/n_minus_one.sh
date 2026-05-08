@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-02T21:15:00+01:00
+# last-updated: 2026-05-03T16:30:00+01:00
 # tests/upgrade/n_minus_one.sh — N-1 upgrade harness for Yashigani
 #
 # Proves that a deployment at OLD_VERSION (default: v2.22.3) upgrades cleanly
@@ -102,6 +102,12 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+# BASE_WORK_DIR is frozen after arg parse (HARNESS_WORK_DIR may be set by
+# --work-dir). It is used by cleanup() to enumerate all dirs created during the
+# run. HARNESS_WORK_DIR itself is mutated in main() after each phase so
+# subsequent phases read from the correct (upgraded/restored) directory.
+BASE_WORK_DIR="$HARNESS_WORK_DIR"
 
 # ---------------------------------------------------------------------------
 # Execution-context guard — must run from developer machine, not from VM
@@ -382,7 +388,23 @@ safe_rm_rf() {
 
 echo "[remote] Tearing down any existing stack at \$WORK ..."
 
-# Nuke running stack if it exists
+# First: global Podman cleanup — remove ALL tom-owned Podman containers and
+# volumes from any previous harness run.  This handles the case where a prior
+# run auto-detected podman even though the harness was invoked with
+# --runtime docker, leaving orphaned Podman containers that subsequent
+# "docker compose down" calls would miss.
+#
+# Safety: we only touch containers/volumes owned by the running user (tom).
+# Podman rootless user-namespace containers are per-user by design.
+if command -v podman >/dev/null 2>&1; then
+    echo "[remote] Cleaning up all Podman containers from previous runs ..."
+    podman stop --all 2>/dev/null || true
+    podman rm --all --force 2>/dev/null || true
+    podman volume rm --all --force 2>/dev/null || true
+    echo "[remote] Podman global cleanup: done"
+fi
+
+# Nuke running Docker stack if it exists
 if [ -d "\$WORK/docker" ]; then
     cd "\$WORK"
     # Stop and remove everything including volumes
@@ -617,61 +639,49 @@ verify_admin_logins() {
     has_mtls=$(vm_run "test -f ${HARNESS_WORK_DIR}/docker/secrets/ca_root.crt && echo 'yes' || echo 'no'" 2>/dev/null || echo "no")
     log "mTLS stack detected: $has_mtls"
 
-    # Detect backoffice container name and exec tool for this stack.
-    local backoffice_cname bo_exec
-    backoffice_cname=$(vm_run "
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker-backoffice-1'; then echo 'docker-backoffice-1'
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker_backoffice_1'; then echo 'docker_backoffice_1'
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-else echo 'docker-backoffice-1'; fi
-" 2>/dev/null || echo "docker-backoffice-1")
-    backoffice_cname=$(printf '%s' "$backoffice_cname" | tr -d ' \n')
-    bo_exec="docker"
-    echo "$backoffice_cname" | grep -q '_' && bo_exec="podman"
-    log "Backoffice container: $backoffice_cname  exec: $bo_exec"
-
-    # Helper: run a Python login check inside the backoffice container.
-    # Writes Python script to /tmp/n1_login_check.py on the VM host,
-    # then pipes it to the container via stdin (avoids heredoc-in-SSH issues).
+    # V232-SMOKE-005 fix: login through Caddy on port 443 (VM host Python),
+    # NOT directly to backoffice:8443.
     #
-    # Arguments: $1=user $2=pass $3=totp_secret
+    # Rationale: v2.23.1 Layer B (CaddyVerifiedMiddleware) requires the
+    # X-Caddy-Verified-Secret header which Caddy injects when proxying.
+    # Connecting directly to backoffice:8443 bypasses Caddy and omits the
+    # header -> backoffice returns 401 regardless of credentials.
+    # Connecting through Caddy (https://localhost:443/auth/login) causes Caddy
+    # to inject the header before forwarding to backoffice -> login succeeds.
+    #
+    # v2.22.x has no Layer B so the Caddy path works there too.
+    # SSL: Caddy uses `tls internal` (self-signed) — skip verification.
+    #
+    # Arguments: $1=user $2=pass $3=totp_secret $4=has_mtls (unused, kept for compat)
     # Returns: HTTP status code (200/401/000)
     _do_login_check() {
         local chk_user="$1"
         local chk_pass="$2"
         local chk_totp="$3"
-        local chk_mtls="$4"   # "yes" or "no"
+        # chk_mtls ($4) retained for signature compatibility but no longer used
 
-        # Write Python to temp file on VM host, then pipe to container.
+        # Write Python to VM host temp file, run on VM host (not in container).
+        # Target https://localhost/auth/login (port 443, through Caddy).
+        # SSL: verify_mode=CERT_NONE because Caddy uses tls internal cert.
         vm_run_script <<WRITE_PY
 cat > /tmp/n1_login_check.py << 'PYEOF'
 import json, ssl, hashlib, sys
 import pyotp
 import urllib.request, urllib.error
-import os
 
-has_mtls = os.path.exists('/run/secrets/ca_root.crt')
-if has_mtls:
-    ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-    ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-    BASE = 'https://localhost:8443'
-else:
-    ctx = None
-    BASE = 'http://localhost:8443'
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
 
 user   = '${chk_user}'
 pw     = '${chk_pass}'
 secret = '${chk_totp}'
 totp   = pyotp.TOTP(secret, digest=hashlib.sha256).now()
 payload = json.dumps({'username': user, 'password': pw, 'totp_code': totp}).encode()
-req = urllib.request.Request(BASE + '/auth/login',
+req = urllib.request.Request('https://localhost/auth/login',
     data=payload, headers={'Content-Type': 'application/json'})
 try:
-    kwargs = {'timeout': 10}
-    if ctx is not None:
-        kwargs['context'] = ctx
-    resp = urllib.request.urlopen(req, **kwargs)
+    resp = urllib.request.urlopen(req, context=ctx, timeout=15)
     print(resp.getcode())
 except urllib.error.HTTPError as e:
     print(e.code)
@@ -680,8 +690,8 @@ except Exception as e:
 PYEOF
 echo "WRITE_DONE"
 WRITE_PY
-        # Now pipe the Python script into the container
-        vm_run "cat /tmp/n1_login_check.py | ${bo_exec} exec -i ${backoffice_cname} python3 2>/dev/null" 2>/dev/null || echo "000"
+        # Run on VM host (not inside container) — Caddy injects X-Caddy-Verified-Secret
+        vm_run "python3 /tmp/n1_login_check.py 2>/dev/null" 2>/dev/null || echo "000"
     }
 
     local a1_http
@@ -739,45 +749,30 @@ generate_test_data() {
         return 0
     fi
 
-    # Detect backoffice container for this stack
-    local bo_cname bo_exec
-    bo_cname=$(vm_run "
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker-backoffice-1'; then echo 'docker-backoffice-1'
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep -q 'docker_backoffice_1'; then echo 'docker_backoffice_1'
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then docker ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-elif podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1; then podman ps --format '{{.Names}}' 2>/dev/null | grep 'backoffice' | head -1
-else echo 'docker-backoffice-1'; fi
-" 2>/dev/null || echo "docker-backoffice-1")
-    bo_cname=$(printf '%s' "$bo_cname" | tr -d ' \n')
-    bo_exec="docker"
-    echo "$bo_cname" | grep -q '_' && bo_exec="podman"
-    log "Test data: backoffice container=$bo_cname exec=$bo_exec"
+    # V232-SMOKE-005 fix: run test data Python on VM host through Caddy port 443.
+    # No container detection needed — we use the Caddy reverse proxy endpoint.
+    log "Test data: using VM host Python via Caddy port 443"
 
-    # Write Python test-data script to VM host, pipe to container
+    # Write Python test-data script to VM host, run on VM host (not in container)
+    # V232-SMOKE-005: must go through Caddy (port 443) so X-Caddy-Verified-Secret
+    # header is injected. SSL: CERT_NONE for tls internal self-signed cert.
     vm_run_script <<WRITE_TDPY
 cat > /tmp/n1_testdata.py << 'PYEOF'
 import json, ssl, hashlib, sys, os
 import pyotp
 import urllib.request, urllib.error
 
-has_mtls = os.path.exists('/run/secrets/ca_root.crt')
-if has_mtls:
-    ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-    ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-    BASE = 'https://localhost:8443'
-else:
-    ctx = None
-    BASE = 'http://localhost:8443'
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+BASE = 'https://localhost'
 
 def req(method, path, body=None, cookies=''):
     data = json.dumps(body).encode() if body else None
     r = urllib.request.Request(BASE + path, data=data,
         headers={'Content-Type': 'application/json', 'Cookie': cookies},
         method=method)
-    kwargs = {'timeout': 10}
-    if ctx is not None:
-        kwargs['context'] = ctx
-    return urllib.request.urlopen(r, **kwargs)
+    return urllib.request.urlopen(r, context=ctx, timeout=15)
 
 user = '${admin1_user}'
 pw   = '${admin1_pass}'
@@ -835,7 +830,8 @@ PYEOF
 echo "TDPY_WRITE_DONE"
 WRITE_TDPY
 
-    vm_run "cat /tmp/n1_testdata.py | ${bo_exec} exec -i ${bo_cname} python3 2>&1" 2>/dev/null | grep -E "LOGIN|AGENT|AUDIT|COMPLETE|ERROR" || true
+    # Run on VM host — Caddy injects X-Caddy-Verified-Secret (V232-SMOKE-005)
+    vm_run "python3 /tmp/n1_testdata.py 2>&1" 2>/dev/null | grep -E "LOGIN|AGENT|AUDIT|COMPLETE|ERROR" || true
 
     # Capture baseline state: alembic version, table row counts
     log "Capturing schema baseline ..."
@@ -887,8 +883,33 @@ mkdir -p "\$BACKUP_DIR"
 chmod 0700 "\$BACKUP_DIR"
 
 echo "[remote] Copying secrets + .env ..."
-cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
-chmod 0700 "\$BACKUP_DIR/secrets"
+# V232-SMOKE-007 fix: secrets created by Podman rootless containers are owned
+# by sub-UIDs (e.g. 494216) with mode 0400/0775 — not readable/chmod-able by
+# the host tom user via plain cp -rp or chmod. Run both cp AND chmod inside
+# 'podman unshare bash -c' so sub-UID 494216 maps to the calling user inside
+# the namespace, making the copy and the permission change succeed.
+#
+# V232-SMOKE-009 fix: after podman unshare cp, the backup secrets dir is owned
+# by the sub-UID (494216 on the host). restore.sh validate_backup() runs as
+# tom (host UID 1006) and cannot traverse a dir owned by sub-UID with mode 0700.
+# Fix: after the copy+chmod-inside-namespace, run 'podman unshare chown 0:0'
+# to remap the backup secrets dir ownership to UID 0 inside the namespace
+# (= tom on the host), then chmod 0700 as host user. Individual secret files
+# stay sub-UID-owned (restore.sh reads them via its own podman unshare logic).
+# Falls back to plain cp for Docker-only environments.
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    # Copy inside the user namespace (sub-UID files are readable as uid 0 there)
+    podman unshare bash -c "cp -rp '\$WORK/docker/secrets' '\$BACKUP_DIR/secrets'"
+    # Remap the entire backup/secrets tree to uid 0 inside the namespace (= host
+    # user tom) so restore.sh validate_backup() and cp -rp from backup can read
+    # the files without podman unshare. _pki_chown_client_keys in restore.sh will
+    # re-own individual keys to container sub-UIDs after restoring.
+    podman unshare chown -R 0:0 "\$BACKUP_DIR/secrets"
+    chmod 0700 "\$BACKUP_DIR/secrets"
+else
+    cp -rp "\$WORK/docker/secrets" "\$BACKUP_DIR/secrets"
+    chmod 0700 "\$BACKUP_DIR/secrets"
+fi
 cp "\$WORK/docker/.env" "\$BACKUP_DIR/.env"
 chmod 0600 "\$BACKUP_DIR/.env"
 
@@ -1012,13 +1033,9 @@ bash install.sh \
     --upgrade 2>&1 | tee /tmp/n1_upgrade_run.log
 
 echo "[remote] install.sh --upgrade exit code: \$?"
-
-# Swap work dir so subsequent phases point at the new dir
-safe_rm_rf "\${OLD_DIR}.old"
-mv "\$OLD_DIR" "\${OLD_DIR}.old"
-mv "\$NEW_DIR" "\$OLD_DIR"
-
-echo "[remote] Work dir swapped: \$OLD_DIR now contains \$NEW_REF"
+# NOTE: no dir swap here. HARNESS_WORK_DIR is updated on the macOS side in
+# main() after run_upgrade() returns (V232-SMOKE-006 fix). The new install
+# lives at NEW_DIR (n1_harness_new); subsequent phases reference it directly.
 REMOTE_SCRIPT
 
     local rc=$?
@@ -1104,36 +1121,15 @@ ${pg_full} psql -U yashigani_app yashigani -t -c \
     gw_http=$(vm_run "curl -sk -o /dev/null -w '%{http_code}' https://localhost:443/healthz 2>/dev/null || echo 000" 2>/dev/null || echo 000)
     log "Gateway /healthz (post-upgrade): $gw_http"
 
-    # Backoffice internal health — check by piping Python to container stdin.
-    # Uses the bo_full variable which is "<exec_tool> <cname>" e.g. "podman exec docker_backoffice_1".
-    # Write Python to host temp file, pipe to container (avoids heredoc-in-SSH issues).
-    local bo_exec_tool bo_cname_pu
-    bo_exec_tool=$(printf '%s' "$bo_full" | awk '{print $1}')
-    bo_cname_pu=$(printf '%s' "$bo_full" | awk '{print $2}')
-    vm_run_script <<WRITE_BOHEALTH
-cat > /tmp/n1_bo_health.py << 'PYEOF'
-import ssl, urllib.request, os
-if os.path.exists('/run/secrets/ca_root.crt'):
-    ctx = ssl.create_default_context(cafile='/run/secrets/ca_root.crt')
-    ctx.load_cert_chain('/run/secrets/backoffice_client.crt', '/run/secrets/backoffice_client.key')
-    url = 'https://localhost:8443/healthz'
-else:
-    ctx = None
-    url = 'http://localhost:8443/healthz'
-try:
-    kwargs = {'timeout': 5}
-    if ctx: kwargs['context'] = ctx
-    r = urllib.request.urlopen(url, **kwargs)
-    print(r.getcode())
-except Exception as e:
-    print('000')
-PYEOF
-WRITE_BOHEALTH
+    # Backoffice reachability — V232-SMOKE-005 fix: check through Caddy on port 443
+    # on VM host (not via container exec to :8443 directly). Caddy proxies /auth/*
+    # to backoffice. A GET to /auth/login returns 405 (method not allowed) which
+    # proves backoffice is alive. Accept any non-000 HTTP response code as healthy.
     local bo_health
-    bo_health=$(vm_run "cat /tmp/n1_bo_health.py | ${bo_exec_tool} exec -i ${bo_cname_pu} python3 2>/dev/null" 2>/dev/null || echo "000")
+    bo_health=$(vm_run "curl -sk -o /dev/null -w '%{http_code}' -X GET https://localhost/auth/login 2>/dev/null || echo 000" 2>/dev/null || echo "000")
     bo_health=$(printf '%s' "$bo_health" | tr -d ' \n' | grep -oE '[0-9]{3}' | head -1 || echo "000")
     [[ -z "$bo_health" ]] && bo_health="000"
-    log "Backoffice /healthz (post-upgrade): $bo_health"
+    log "Backoffice /auth/login (via Caddy, post-upgrade): $bo_health"
 
     # Log summary
     log "Post-upgrade subsystems:"
@@ -1166,18 +1162,92 @@ WORK="${HARNESS_WORK_DIR}"
 BACKUP="${backup_path}"
 RUNTIME="${RUNTIME}"
 
+# V232-SMOKE-008 fix: restore.sh preflight checks that docker/data, docker/certs,
+# and docker/logs exist and are owned by the container UID (1001 in container =
+# subuid_start+1000 on the Podman rootless host). The harness must fulfil this
+# operator-side prerequisite before calling restore.sh.
+echo "[remote] Pre-creating bind-mount dirs for restore preflight ..."
+mkdir -p "\$WORK/docker/data" "\$WORK/docker/certs" "\$WORK/docker/logs"
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    podman unshare chown 1001:1001 "\$WORK/docker/data" "\$WORK/docker/certs" "\$WORK/docker/logs"
+else
+    chown 1001:1001 "\$WORK/docker/data" "\$WORK/docker/certs" "\$WORK/docker/logs" 2>/dev/null || true
+fi
+
 echo "[remote] Running restore.sh against backup: \$BACKUP"
 cd "\$WORK"
 YSG_RUNTIME=\$RUNTIME bash restore.sh "\$BACKUP" 2>&1 | tee /tmp/n1_restore_run.log
 
-echo "[remote] restore.sh exit code: \$?"
-echo "[remote] Waiting for stack to restart after restore ..."
 REMOTE_SCRIPT
 
     local rc=$?
     if [[ $rc -ne 0 ]]; then
         verdict "N-1 upgrade restore" "FAIL" "restore"
         return 1
+    fi
+
+    # V232-SMOKE-015 fix: move compose restart to a SEPARATE vm_run_script call.
+    #
+    # Root cause: running restore.sh via a pipe ("bash restore.sh | tee logfile")
+    # inside a "set -euo pipefail" heredoc caused the heredoc to terminate at the
+    # pipe boundary (exit 0) before any subsequent commands (echo, compose stop, up)
+    # could execute. The mechanism is reproducible across Runs 21 and 22 but the
+    # exact bash/pipe interaction is not yet fully understood (exit 0 despite set -e
+    # potentially firing). Moving the restart to a SEPARATE ssh invocation (after
+    # the restore heredoc returns) guarantees it always runs when restore exits 0.
+    #
+    # V232-SMOKE-013 context: restore.sh does NOT restart the stack itself.
+    # V232-SMOKE-014 context: "compose up -d" alone is a no-op for running containers.
+    # Fix: "compose stop" then "compose up -d" forces a full container restart,
+    # re-reading the restored bind-mounted secrets and re-connecting to the
+    # restored postgres DB. "stop" (not "down") preserves named data volumes.
+    log "Restarting stack post-restore (stop then up) ..."
+    # V232-SMOKE-016 fix: "compose up -d" fails after "compose stop" because the
+    # pre-existing docker_edge network (created by v2.22.3) has label
+    # com.docker.compose.network="" (empty) while compose expects "edge".
+    # compose up -d refuses to proceed with the label mismatch.
+    #
+    # Root cause: "compose stop" stops containers but leaves networks in place.
+    # On the next "compose up -d", compose tries to reconcile the network's
+    # labels against the compose.yml definition and fails when they differ.
+    #
+    # Fix: after "compose stop", restart containers directly via "podman start"
+    # instead of "compose up -d". This bypasses compose's network reconciliation
+    # entirely. Containers restart with the same bind-mount spec they were
+    # created with, re-reading the restored bind-mounted secrets from disk at
+    # their startup init path. "podman start" does NOT support network recreation
+    # but we don't need it — the network already exists and containers are
+    # pre-configured to use it.
+    vm_run_script <<RESTART_SCRIPT
+set -euo pipefail
+WORK="${HARNESS_WORK_DIR}"
+RUNTIME="${RUNTIME}"
+COMPOSE_CMD="${REMOTE_COMPOSE}"
+cd "\$WORK"
+echo "[remote] Stopping stack for clean restart after restore ..."
+YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml stop 2>&1 | tail -5
+echo "[remote] Stack stopped. Restarting containers directly (bypassing compose network reconciliation) ..."
+# Restart all exited containers. Retains the original compose bind-mount spec
+# (secrets, data volumes) so restored bind-mounted secrets are read at init.
+# "|| true" because some containers may remain running (e.g. caddy healthz
+# serving in passthrough mode) — we just want them all started.
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    EXITED_IDS=\$(podman ps -aq --filter status=exited 2>/dev/null || true)
+    if [[ -n "\$EXITED_IDS" ]]; then
+        # shellcheck disable=SC2086
+        podman start \$EXITED_IDS 2>&1 | tail -5
+    else
+        echo "[remote] No exited containers found — stack may still be running (compose stop did not stop all?)"
+    fi
+else
+    docker start \$(docker ps -aq --filter status=exited 2>/dev/null) 2>&1 | tail -5 || true
+fi
+echo "[remote] Stack restarted after restore"
+RESTART_SCRIPT
+
+    local restart_rc=$?
+    if [[ $restart_rc -ne 0 ]]; then
+        log "WARNING: post-restore stack restart exited $restart_rc — continuing to health check"
     fi
 
     # Wait for stack to come back
@@ -1242,7 +1312,20 @@ safe_rm_rf "\$NEW_DIR"
 git clone --depth 1 --branch "\$NEW_REF" "\$REPO" "\$NEW_DIR"
 
 echo "[remote] Migrating secrets from restored state ..."
-cp -rp "\$OLD_DIR/docker/secrets" "\$NEW_DIR/docker/secrets"
+# V232-SMOKE-007 fix (re-upgrade): after restore.sh runs _pki_chown_client_keys,
+# secrets in OLD_DIR are re-owned by container sub-UIDs. Use podman unshare for
+# the copy so sub-UID ownership does not cause EACCES. Same pattern as run_backup.
+# V232-SMOKE-009b fix (re-upgrade): after copying, remap ALL files to host user
+# (uid 0 inside the namespace = tom on host) so install.sh --upgrade can run
+# _backup_existing_data (cp -rp on the secrets dir) without EACCES under set -e.
+# install.sh's _pki_chown_client_keys in compose_up will re-own keys to
+# container sub-UIDs after the stack comes back up.
+if [[ "\$RUNTIME" == "podman" ]] && command -v podman >/dev/null 2>&1; then
+    podman unshare bash -c "cp -rp '\$OLD_DIR/docker/secrets' '\$NEW_DIR/docker/secrets'"
+    podman unshare chown -R 0:0 "\$NEW_DIR/docker/secrets"
+else
+    cp -rp "\$OLD_DIR/docker/secrets" "\$NEW_DIR/docker/secrets"
+fi
 cp "\$OLD_DIR/docker/.env" "\$NEW_DIR/docker/.env"
 
 echo "[remote] Running install.sh --upgrade (re-upgrade) ..."
@@ -1260,12 +1343,10 @@ bash install.sh \
     --upgrade 2>&1 | tee /tmp/n1_reupgrade_run.log
 
 echo "[remote] Re-upgrade install.sh exit code: \$?"
-
-# Swap work dir again
-safe_rm_rf "\${OLD_DIR}.reup"
-mv "\$OLD_DIR" "\${OLD_DIR}.reup"
-mv "\$NEW_DIR" "\$OLD_DIR"
-
+# NOTE: no dir swap here. HARNESS_WORK_DIR is updated on the macOS side in
+# main() after run_reupgrade() returns (V232-SMOKE-006 fix). The re-upgraded
+# install lives at NEW_DIR (n1_harness_new_reup); subsequent phases reference
+# it directly via the updated HARNESS_WORK_DIR.
 echo "[remote] Re-upgrade complete"
 REMOTE_SCRIPT
 
@@ -1305,25 +1386,56 @@ REMOTE_SCRIPT
 # ---------------------------------------------------------------------------
 cleanup() {
     if [[ "$SKIP_CLEANUP" == "true" ]]; then
-        log "SKIP_CLEANUP=true — leaving $HARNESS_WORK_DIR on VM"
+        log "SKIP_CLEANUP=true — leaving harness dirs on VM"
         return
     fi
 
     log_phase "11 — Cleanup"
+    # V232-SMOKE-006: HARNESS_WORK_DIR is updated during the run (→ _new → _new_reup).
+    # Use BASE_WORK_DIR (the original base, e.g. n1_harness) to enumerate ALL dirs
+    # that may have been created across the full harness run.
     vm_run_script <<REMOTE_SCRIPT
 set -euo pipefail
+BASE="${BASE_WORK_DIR}"
 WORK="${HARNESS_WORK_DIR}"
 RUNTIME="${RUNTIME}"
 COMPOSE_CMD="${REMOTE_COMPOSE}"
 
-# Tear down final stack
+# safe_rm_rf: handles directories with Podman rootless sub-UID-owned files
+# (e.g. docker/secrets/ after _pki_chown_client_keys in install.sh).
+# Falls back to plain rm -rf when podman unshare is not available (Docker-only VM).
+safe_rm_rf() {
+    local dir="\$1"
+    [ -d "\$dir" ] || return 0
+    if command -v podman >/dev/null 2>&1 && podman unshare echo "probe" >/dev/null 2>&1; then
+        podman unshare rm -rf "\$dir"
+    else
+        rm -rf "\$dir"
+    fi
+}
+
+# Tear down final running stack (whichever dir is currently active)
 if [ -d "\$WORK/docker" ]; then
     cd "\$WORK"
     YSG_RUNTIME=\$RUNTIME \$COMPOSE_CMD -f docker/docker-compose.yml down -v --remove-orphans 2>&1 || true
 fi
 
-# Remove all harness dirs
-rm -rf "\$WORK" "\${WORK}_old" "\${WORK}_new" "\${WORK}_reup" 2>/dev/null || true
+# Remove all harness dirs that may have been created during the run.
+# Enumerate from BASE_WORK_DIR to cover: base, _new, _new_reup, and any .old
+# swap artefacts, regardless of how HARNESS_WORK_DIR was updated mid-run.
+for d in "\$BASE" "\${BASE}_new" "\${BASE}_new_reup" \
+          "\${BASE}.old" "\${BASE}_new.reup" "\${BASE}_reup"; do
+    safe_rm_rf "\$d" 2>/dev/null || true
+done
+
+# Verify gone
+for d in "\$BASE" "\${BASE}_new" "\${BASE}_new_reup" \
+          "\${BASE}.old" "\${BASE}_new.reup" "\${BASE}_reup"; do
+    if [ -d "\$d" ]; then
+        echo "[remote] WARNING: \$d still present after cleanup"
+    fi
+done
+
 echo "[remote] Cleanup complete"
 REMOTE_SCRIPT
 }
@@ -1436,6 +1548,17 @@ main() {
     # result plus the schema delta check in verify_post_upgrade.
     run_upgrade || { emit_final_verdict "FAIL"; exit 1; }
 
+    # V232-SMOKE-006 fix: the upgraded install runs in ${HARNESS_WORK_DIR}_new.
+    # The remote dir swap inside run_upgrade's heredoc (mv _new → base) exits
+    # before the mv because install.sh | tee causes the pipeline exit code to
+    # be consumed by set -e, so HARNESS_WORK_DIR on the macOS side never updates
+    # via the remote mv. Update it here explicitly so that all subsequent phases
+    # (backup, restore, re-upgrade, cleanup) use the upgraded dir containing
+    # restore.sh and the v2.23.1 mTLS secrets.
+    local old_work_dir="$HARNESS_WORK_DIR"
+    HARNESS_WORK_DIR="${HARNESS_WORK_DIR}_new"
+    log "Work dir updated: $old_work_dir → $HARNESS_WORK_DIR (post-upgrade)"
+
     # Phase 5: wait for upgraded stack
     wait_for_new_stack || { emit_final_verdict "FAIL"; exit 1; }
 
@@ -1466,6 +1589,12 @@ main() {
 
     # Phase 9: re-upgrade (forward path again after restore)
     run_reupgrade || { emit_final_verdict "FAIL"; exit 1; }
+
+    # V232-SMOKE-006 fix (re-upgrade): same as post-upgrade swap above.
+    # The re-upgraded install lives in ${HARNESS_WORK_DIR}_reup.
+    local post_reup_dir="${HARNESS_WORK_DIR}_reup"
+    HARNESS_WORK_DIR="$post_reup_dir"
+    log "Work dir updated: → $HARNESS_WORK_DIR (post-reupgrade)"
 
     # Phase 9b: wait for re-upgraded stack + verify logins
     wait_for_new_stack || { emit_final_verdict "FAIL"; exit 1; }

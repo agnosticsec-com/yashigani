@@ -1,7 +1,7 @@
 """
 Yashigani Backoffice — Sensitivity pattern management routes.
 
-# Last updated: 2026-05-02T09:00:00+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 
 CRUD for detection patterns used by the sensitivity classifier pipeline.
   GET     /admin/sensitivity/patterns    — List all patterns
@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession, StepUpAdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +140,12 @@ async def test_classify(body: TestClassifyRequest, session: AdminSession):
             "classification": result.classification,
         }
     except Exception as exc:
-        logger.warning("Test classify failed: %s", exc)
+        # V232-CSCAN-01e: log full exception server-side; safe envelope to client.
+        envelope, _ = safe_error_envelope(exc, public_message="sensitivity classifier unavailable")
         return {
             "is_injection": False,
             "confidence": 0.0,
             "action": "error",
-            "error": str(exc),
+            "error": envelope["error"],
+            "request_id": envelope["request_id"],
         }

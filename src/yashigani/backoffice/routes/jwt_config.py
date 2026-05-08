@@ -5,6 +5,8 @@ GET  /admin/jwt/config              — list JWT configs
 PUT  /admin/jwt/config              — create or update config
 DELETE /admin/jwt/config/{tenant_id} — delete config
 POST /admin/jwt/config/test         — test a token
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from yashigani.backoffice.middleware import require_admin_session, require_stepup_admin_session
+from yashigani.common.error_envelope import safe_error_envelope
 
 logger = logging.getLogger(__name__)
 jwt_config_router = APIRouter(tags=["jwt-config"])
@@ -87,7 +90,8 @@ async def set_jwt_config(body: JWTConfigRequest, session=Depends(require_stepup_
                 body.audience, body.fail_closed, body.scope,
             )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        payload, _ = safe_error_envelope(exc, public_message="jwt config update failed", status=500)
+        raise HTTPException(status_code=500, detail=payload)
     return {"status": "updated", "tenant_id": body.tenant_id, "scope": body.scope}
 
 
@@ -100,7 +104,8 @@ async def delete_jwt_config(tenant_id: str, session=Depends(require_stepup_admin
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM jwt_config WHERE tenant_id = $1", uuid.UUID(tenant_id))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        payload, _ = safe_error_envelope(exc, public_message="jwt config delete failed", status=500)
+        raise HTTPException(status_code=500, detail=payload)
     return {"status": "deleted", "tenant_id": tenant_id}
 
 

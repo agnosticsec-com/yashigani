@@ -21,6 +21,7 @@ import logging
 
 import httpx
 
+from yashigani.pki.client import internal_httpx_sync_client
 from yashigani.rbac.store import RBACStore
 
 logger = logging.getLogger(__name__)
@@ -88,9 +89,8 @@ def push_rbac_data(
     }
 
     url = opa_url.rstrip("/") + _OPA_DATA_PATH
-    # v2.23.1 NOTE: OPA remains on plaintext HTTP; mTLS for OPA moves to
-    # v2.23.2 (task #54) together with the gateway's hot-path httpx calls.
-    with httpx.Client(timeout=10.0) as client:
+    # v2.23.2: OPA serves mTLS; use internal_httpx_sync_client (EX-231-01).
+    with internal_httpx_sync_client(timeout=10.0) as client:
         response = client.put(
             url,
             json=payload,

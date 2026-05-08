@@ -32,7 +32,7 @@ spec:
       # /run/secrets mount collision — see redis.yaml note.
       automountServiceAccountToken: false
       securityContext:
-        # Captain #58c #3bt evidence (2026-04-29): postgres:16-alpine runs as
+        # Internal K8s integration evidence: postgres:16-alpine runs as
         # UID/GID 70 (Alpine convention). The previous fsGroup: 999 was
         # carried over from when the image was the Debian-based postgres
         # (UID/GID 999). With Alpine, mounted Secret volumes (default mode
@@ -45,6 +45,13 @@ spec:
         # fsGroup: 70 chowns Secret + PVC volumes to GID 70 (postgres),
         # giving the postgres user read access via group membership without
         # broadening permissions beyond the pod.
+        # ACS-RISK-008: runAsNonRoot enforced at K8s level. postgres:16-alpine
+        # drops to UID/GID 70 (postgres) after init. readOnlyRootFilesystem is
+        # NOT set — postgres writes PGDATA (PVC), /var/run/postgresql (socket),
+        # /tmp. Full ROFS would break initdb. Documented exception.
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
         fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
@@ -54,6 +61,11 @@ spec:
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
+            # ACS-RISK-008: drop ALL capabilities. postgres:16-alpine does not
+            # use setuid/setgid or raw sockets — only POSIX file I/O and TCP.
+            # readOnlyRootFilesystem is NOT set (PGDATA + socket writes needed).
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: postgres
               containerPort: 5432
@@ -86,7 +98,7 @@ spec:
           # `local all all trust` so the probe just checks the process is
           # accepting connections).
           #
-          # Captain #58c #3bs evidence (2026-04-28): without a startupProbe,
+          # Internal K8s integration evidence: without a startupProbe,
           # the liveness probe kicks in 70s after pod start. initdb + the
           # init scripts in /docker-entrypoint-initdb.d (including
           # 05-enable-ssl.sh which copies certs into PGDATA + appends ssl=on

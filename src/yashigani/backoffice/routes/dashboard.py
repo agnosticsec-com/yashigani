@@ -3,6 +3,8 @@ Yashigani Backoffice — Dashboard routes.
 GET /dashboard/health     — aggregate system health across all subsystems
 GET /dashboard/resources  — resource pressure index and TTL tier from cgroup v2
 GET /dashboard/alerts     — recent active admin alerts (in-memory ring buffer)
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 router = APIRouter()
 
@@ -66,7 +69,8 @@ async def system_health(session: AdminSession):
             if not healthy:
                 overall = _degrade(overall, "degraded")
         except Exception as exc:
-            components["kms"] = {"status": "critical", "error": str(exc)}
+            payload, _ = safe_error_envelope(exc, public_message="kms health check failed", status=500)
+            components["kms"] = {"status": "critical", "error": payload["error"], "request_id": payload["request_id"]}
             overall = _degrade(overall, "critical")
     else:
         components["kms"] = {"status": "community", "note": "KMS not required for Community tier"}
@@ -106,7 +110,8 @@ async def system_health(session: AdminSession):
             state.session_store._redis.ping()  # type: ignore[attr-defined]
             components["session_store"] = {"status": "ok", "backend": "redis"}
         except Exception as exc:
-            components["session_store"] = {"status": "critical", "error": str(exc)}
+            payload, _ = safe_error_envelope(exc, public_message="session store unreachable", status=500)
+            components["session_store"] = {"status": "critical", "error": payload["error"], "request_id": payload["request_id"]}
             overall = _degrade(overall, "critical")
     else:
         components["session_store"] = {"status": "not_configured"}
@@ -122,7 +127,8 @@ async def system_health(session: AdminSession):
                 "ttl_tier": metrics.ttl_tier,
             }
         except Exception as exc:
-            components["resource_monitor"] = {"status": "degraded", "error": str(exc)}
+            payload, _ = safe_error_envelope(exc, public_message="resource monitor unavailable", status=500)
+            components["resource_monitor"] = {"status": "degraded", "error": payload["error"], "request_id": payload["request_id"]}
             overall = _degrade(overall, "degraded")
     else:
         components["resource_monitor"] = {"status": "not_configured"}
@@ -142,7 +148,8 @@ async def system_health(session: AdminSession):
                 ),
             }
         except Exception as exc:
-            components["audit"] = {"status": "degraded", "error": str(exc)}
+            payload, _ = safe_error_envelope(exc, public_message="audit writer unavailable", status=500)
+            components["audit"] = {"status": "degraded", "error": payload["error"], "request_id": payload["request_id"]}
             overall = _degrade(overall, "degraded")
     else:
         components["audit"] = {"status": "not_configured"}
@@ -188,9 +195,10 @@ async def resource_pressure(session: AdminSession):
     try:
         metrics = state.resource_monitor.get_metrics()
     except Exception as exc:
+        payload, _ = safe_error_envelope(exc, public_message="metrics unavailable", status=500)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "metrics_unavailable", "message": str(exc)},
+            detail=payload,
         )
 
     return {

@@ -6,8 +6,10 @@ W3C traceparent propagated inbound and outbound.
 X-Trace-Id response header set from the active span's trace ID.
 
 env:
-  OTEL_EXPORTER_OTLP_ENDPOINT — default: http://otel-collector:4317
-  YASHIGANI_ENV               — sets deployment.environment resource attribute
+  OTEL_EXPORTER_OTLP_ENDPOINT       — default: http://otel-collector:4317
+  YASHIGANI_ENVIRONMENT_LABEL       — sets deployment.environment resource attribute
+                                      (LIC-001: YASHIGANI_ENV is reserved for license
+                                      enforcement only; use this var for telemetry labels)
 """
 from __future__ import annotations
 
@@ -44,7 +46,11 @@ def setup_tracer(service_name: str = "yashigani-gateway") -> None:
         resource = Resource.create({
             "service.name": service_name,
             "service.version": yashigani.__version__,
-            "deployment.environment": os.getenv("YASHIGANI_ENV", "production"),
+            # LIC-001: Use YASHIGANI_ENVIRONMENT_LABEL for telemetry labels.
+            # YASHIGANI_ENV is reserved for license enforcement (verifier.py)
+            # and is hardcoded to "production" in deployed images — it must not
+            # be used as a telemetry label because its value is non-configurable.
+            "deployment.environment": os.getenv("YASHIGANI_ENVIRONMENT_LABEL", "production"),
         })
         provider = TracerProvider(resource=resource)
         otel_insecure = os.getenv("OTEL_EXPORTER_INSECURE", "false").lower() in ("true", "1", "yes")

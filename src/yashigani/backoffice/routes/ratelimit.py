@@ -14,7 +14,7 @@ Path note (2026-05-02): Fixed three decorator paths. The router is mounted at pr
 /admin/ratelimit/admin/ratelimit/endpoints (unreachable). Changed to relative
 paths: /endpoints and /endpoints/{endpoint_hash}.
 
-Last updated: 2026-05-02T00:00:00+01:00
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession, require_admin_session
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 router = APIRouter()
 
@@ -163,9 +164,10 @@ async def reset_bucket(bucket_key: str, session: AdminSession):
     try:
         state.rate_limiter._redis.delete(bucket_key)
     except Exception as exc:
+        payload, _ = safe_error_envelope(exc, public_message="rate-limit lookup failed", status=500)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "redis_error", "message": str(exc)},
+            detail=payload,
         )
 
     assert state.audit_writer is not None  # set unconditionally at startup

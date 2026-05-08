@@ -8,7 +8,7 @@ the preceding event's canonical JSON, forming a tamper-evident hash chain.
 The first event of each calendar day anchors with SHA-384 of the date string
 "YYYY-MM-DD".  The chain can be verified offline with scripts/audit_verify.py.
 
-Last updated: 2026-04-28T00:00:00+01:00
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -310,7 +310,7 @@ class AuditLogWriter:
                 self._send_to_target(raw_json, target)
                 return
             except Exception as exc:
-                last_error = str(exc)
+                last_error = type(exc).__name__
                 last_status = getattr(exc, "status_code", None)
                 if attempt < len(_RETRY_DELAYS) - 1:
                     time.sleep(delay)

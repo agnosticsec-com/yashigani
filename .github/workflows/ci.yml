@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T06:58:47+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 name: CI
 
 on:
@@ -23,10 +23,10 @@ jobs:
         python-version: ["3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -80,7 +80,7 @@ jobs:
           PYTHON_VERSION: ${{ matrix.python-version }}
 
       - name: Upload unit-test artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: unit-tests-py${{ matrix.python-version }}-${{ github.sha }}
@@ -116,16 +116,82 @@ jobs:
           fi
           echo "Version consistent: $PY_VER"
 
+  lint-sudo-pattern:
+    runs-on: ubuntu-latest
+    # Fast grep-based gate — no Python install needed. Fails immediately if any
+    # file outside the documented exclusion list introduces a forbidden sudo
+    # pattern. See scripts/lint_sudo_pattern.sh for the two detected classes.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check for forbidden sudo patterns
+        run: bash scripts/lint_sudo_pattern.sh .
+
+  lint-tmp-paths:
+    runs-on: ubuntu-latest
+    # V232-P23: fail if any host-side installer, restore, or script introduces
+    # /tmp/ file paths (project policy — all work must stay under the
+    # install dir, never /tmp). Excludes legitimate container-internal paths
+    # (Dockerfile RUN layers, Helm tmpfs mounts, SSH heredoc VM-side paths).
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check for host-filesystem /tmp/ paths
+        run: bash scripts/lint_tmp_paths.sh .
+
+  lint-safe-error-envelope:
+    runs-on: ubuntu-latest
+    # V232-CSCAN-01e: fail if any route or gateway file inlines str(exc) directly
+    # into an HTTP response body. Use safe_error_envelope() instead.
+    # Pattern matches: {"error": str(exc)} or similar inline exception-to-response.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Check for str(exc) in HTTP responses (V232-CSCAN-01e/01j)
+        run: |
+          # V232-CSCAN-01e/01g/01j: guard all migrated files.
+          # Fail if str(exc) or f-string {exc} is re-introduced in any of them.
+          MIGRATED_FILES=(
+            src/yashigani/backoffice/routes/cache.py
+            src/yashigani/backoffice/routes/inspection_backend.py
+            src/yashigani/backoffice/routes/kms.py
+            src/yashigani/backoffice/routes/sensitivity.py
+            src/yashigani/gateway/openai_router.py
+            src/yashigani/backoffice/routes/services.py
+            src/yashigani/backoffice/routes/dashboard.py
+            src/yashigani/backoffice/routes/kms_vault.py
+            src/yashigani/backoffice/routes/jwt_config.py
+            src/yashigani/backoffice/routes/webauthn.py
+            src/yashigani/backoffice/routes/audit.py
+            src/yashigani/backoffice/routes/ratelimit.py
+            src/yashigani/backoffice/routes/inspection.py
+            src/yashigani/backoffice/routes/opa_assistant.py
+            src/yashigani/backoffice/routes/rbac.py
+          )
+          # Pattern covers all known inline str(exc) / f-string {exc} forms.
+          HITS=$(grep -En \
+            '"error"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*str\(exc\)|"message"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}|"detail"[[:space:]]*:[[:space:]]*str\(exc\)|"detail"[[:space:]]*:[[:space:]]*f"[^"]*\{exc\}' \
+            "${MIGRATED_FILES[@]}" \
+            || true)
+          if [ -n "$HITS" ]; then
+            echo "ERROR: str(exc) or f-string {exc} found in HTTP response body in a migrated file."
+            echo "Use safe_error_envelope() from yashigani.common.error_envelope instead."
+            echo ""
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK: no inline str(exc) in migrated error-envelope files."
+
   mypy:
     runs-on: ubuntu-latest
     # Run on Python 3.12 only — type stubs are stable; 3.13 parity is not
     # required for a type-check gate (would just duplicate findings).
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -177,7 +243,7 @@ jobs:
           PYEOF
 
       - name: Upload mypy artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: mypy-${{ github.sha }}
@@ -193,3 +259,67 @@ jobs:
         run: |
           echo "mypy reported type errors — see mypy-output.txt artifact"
           exit 1
+
+  helm-template-parity:
+    # Fast contract test — no Helm/tiller required, pure Python regex over raw
+    # template text. Catches the 1a6db9f class of regression (env vars silently
+    # dropped from one service template during re-templating).
+    # 7 parametrised green-tip specs + 3 in-process mutation guards.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install "pytest>=8"
+
+      - name: Run Helm env-parity contract tests
+        run: python3 -m pytest tests/contracts/test_helm_env_parity.py -v --tb=short
+
+  contracts:
+    runs-on: ubuntu-latest
+    # Integration-contract gate: verifies that shared artefacts that must be
+    # identical across runtimes (docker/ vs helm/) have not drifted. Fails fast
+    # — no matrix, no Python version permutations needed for a file-hash check.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: service_identities.yaml SHA parity
+        # Fails if docker/ canonical and helm/files/ derived copy have diverged.
+        # Fix: edit docker/service_identities.yaml, run `make sync-service-identities`,
+        # commit both files. See docs/development/service_identities.md.
+        run: python3 -m pytest tests/contracts/test_service_identities_sha.py -v
+
+      - name: make check-service-identities (shell gate)
+        # Independent shell-level check using shasum — catches any pytest
+        # collection failure masking a real drift.
+        run: make check-service-identities
+
+      - name: Caddyfile family contract tests
+        # Anti-rot gate (V232-D06+P11): catches drift re-emerging after the 73
+        # reverse_proxy block audit.  Asserts inject-caddy-verified coverage on
+        # all mTLS proxies, TLS 1.3 minimum, GCM-only ciphers, client_auth
+        # placement, and cross-file count consistency.  Includes mutation guards
+        # that verify the test itself fails on a tampered fixture (SOP 4).
+        # caddy adapt steps are skipped here (no caddy binary in ubuntu-latest);
+        # they run locally when CADDY_BIN is set or caddy is on PATH.
+        run: python3 -m pytest tests/contracts/test_caddyfile_family.py -v --tb=short
+
+      - name: Partition maintenance helm parity
+        # Asserts the embedded partition_maintenance.py in configmaps.yaml is
+        # byte-identical to scripts/partition_maintenance.py for all SQL-bearing
+        # lines and security-critical functions (CWE-89 / YSG-RISK-001 controls).
+        # Internal re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001 follow-up #3.
+        run: python3 tools/check_partition_helm_parity.py

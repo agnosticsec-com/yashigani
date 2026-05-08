@@ -1,6 +1,8 @@
 """
 OPA Policy Assistant — RBAC document schema validator.
 Validates generated documents before presenting them to admin for review.
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -63,7 +65,7 @@ def validate_rbac_document(doc: object) -> tuple[bool, Optional[str]]:
     except ImportError:
         pass  # Fall through to manual check
     except Exception as exc:
-        return False, str(exc)
+        return False, type(exc).__name__
 
     # ── Manual structural check (fallback) ───────────────────────────────────
     if not isinstance(doc, dict):

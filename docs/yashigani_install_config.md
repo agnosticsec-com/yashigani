@@ -1,8 +1,18 @@
 # Yashigani — Installation and Configuration Guide
 
-**Version:** 2.23.1
-**Last updated:** 2026-04-25T21:43:38+01:00
+**Version:** 2.23.2
+**Last updated:** 2026-05-07T01:00:00+01:00
 **Applies to:** Docker Compose and Kubernetes (Helm) deployments
+
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
 
 ---
 
@@ -103,6 +113,31 @@ Before starting, confirm the following network conditions are met:
 - **Internal Docker networking** is isolated by default via a four-network topology (EX-231-10, v2.23.1): `edge` (Caddy + public ports 80/443), `caddy_internal` (Caddy + gateway + backoffice — the only network where :8443/:8080 are reachable), `data` (gateway + backoffice outbound + postgres/pgbouncer/redis/OPA/ollama), and `obs` (prometheus/grafana/loki/alertmanager/otel-collector/jaeger). Caddy is the SOLE ingress to backoffice and gateway — no other service has a route to `caddy_internal`. Ollama and OpenClaw additionally join `edge` for outbound internet access. In Kubernetes, K8s NetworkPolicy enforces the same posture at the kernel level.
 
 > **Warning:** Do not expose Redis (6379), budget-redis (6380), Postgres (5432), or Prometheus (9090) ports to the host in production. These services are intentionally not bound to host interfaces in the default `docker-compose.yml`.
+
+---
+
+### 1.4 Privileges and Security Posture
+
+Yashigani is designed for sysadmin operators. The privilege model is layered to keep host privileges minimal while keeping the install practical.
+
+**During pre-flight (before install runs):**
+- The pre-flight check (`scripts/preflight_check.sh`) may require `sudo` on your host to install missing prerequisites (Docker, Podman, container CLI symlinks, AppArmor profiles). This is operator-side and only runs when you explicitly accept the prompts.
+- Pre-flight never modifies anything without asking first.
+
+**During install body (`install.sh`):**
+- The installer body runs as your unprivileged user.
+- No `sudo` calls inside `install.sh` — every privileged operation has been pushed out to pre-flight or to the runtime container engine (Podman rootless or Docker).
+- A CI lint guards against any future regression that would re-introduce `sudo` to the installer body.
+
+**At runtime (containers):**
+- All Yashigani-owned services (gateway, backoffice) run as non-root with read-only root filesystem, dropped capabilities, seccomp default, and AppArmor / SELinux profiles.
+- All third-party services (Caddy, Postgres, Ollama, Grafana, Loki, Prometheus, Alertmanager, OPA, Jaeger, Vault) run as non-root with hardened security context. The Ollama container in particular runs as UID 1000 with `HOME=/data` and `OLLAMA_MODELS=/data/models` pointing at its persistent volume.
+- One image (`edoburu/pgbouncer`) requires writable rootfs because the upstream entrypoint generates `/etc/pgbouncer/userlist.txt` at startup. The container still runs with `allowPrivilegeEscalation: false` and all Linux capabilities dropped, and is reachable only on the internal `data` network. This will be replaced in a future release once an upstream non-root variant is available.
+
+**For regulated environments (PCI, HIPAA, SOC 2, FedRAMP):**
+- All workloads enforce non-root via Kubernetes admission policies (Kyverno) — any pod that drifts is rejected at the admission webhook.
+- The Ollama persistent volume is sized for both model weights AND per-user inference data (default 100 GiB; increase via `ollama.persistence.size` for heavy multi-user document workloads).
+- For a fully root-free runtime, replace `edoburu/pgbouncer` with a managed connection pooler that ships non-root upstream — Yashigani's gateway and backoffice support direct PostgreSQL connections when PgBouncer is removed from the topology.
 
 ---
 
@@ -303,7 +338,7 @@ cd yashigani
 
 ```bash
 git tag --list | grep "v2."
-git checkout v2.23.1
+git checkout v2.23.2
 ```
 
 **Step 3.** Verify file integrity (if the project provides checksums):
@@ -651,6 +686,34 @@ YASHIGANI_LICENSE_FILE=/absolute/path/to/license.ysg
 
 ---
 
+## 5a. Operator Helper Scripts
+
+These scripts ship in `scripts/` for operators who want a tighter loop than the full installer. They're optional — `install.sh` does not call them — but they're the canonical answers to two recurring operator questions.
+
+### 5a.1 `scripts/wait-for-bootstrap.sh` — find first-run credentials when running compose by hand
+
+If you ran `docker compose up -d` directly (skipping `install.sh`), the backoffice prints its first-run admin credentials to its container log under a `FIRST-RUN CREDENTIALS` marker. This script polls the log and extracts them:
+
+```bash
+bash scripts/wait-for-bootstrap.sh [compose-file] [timeout-seconds]
+# Defaults: docker/docker-compose.yml, 300
+```
+
+You don't need this if you used `install.sh` — the installer writes `secrets_dir/admin1_password` (and `admin2_password`) directly **before** compose starts and prints them at the end of the run per the credentials-echo policy.
+
+### 5a.2 `scripts/import-kms-secrets.sh` — bulk-import cloud KMS API keys post-install
+
+Once the stack is up, this script prompts for cloud-provider API keys at the terminal, writes them to a mode-`0600` tempfile, imports them via the backoffice's `/admin/kms/secrets/import` API, then `shred -u`s the tempfile:
+
+```bash
+bash scripts/import-kms-secrets.sh [--backoffice-url URL]
+# Defaults: BACKOFFICE_URL=https://localhost:8443
+```
+
+Equivalent to the backoffice UI **KMS → Secrets → Import** flow, but CLI-only and shell-history-safe. Useful for scripted/headless onboarding.
+
+---
+
 ## 6. KMS Configuration
 
 Yashigani stores all sensitive credentials (API keys, passwords, tokens) through its Key Management Service (KMS) abstraction layer. The provider is set via `YASHIGANI_KSM_PROVIDER`.
@@ -970,6 +1033,26 @@ SCIM allows your IdP to automatically provision and deprovision users and groups
 
 > **Note:** SCIM provisioning does not override manually created local accounts. If a user exists in both SCIM and local accounts, SCIM takes precedence for attribute updates.
 
+### 8.4 Keycloak Test IdP Profile — Security Warning
+
+The repository ships a `test-idp` Compose profile for developer SSO integration testing against a local Keycloak instance. **This profile is NOT for production use.**
+
+> **WARNING (EX-231-05 / ASVS V2.1.1, V14.1.1):** The `test-idp` profile starts Keycloak in `start-dev` mode with default credentials (`KEYCLOAK_ADMIN=admin` / `KEYCLOAK_ADMIN_PASSWORD=admin`). These credentials are readable from `docker/.env.test-idp`. They are intentionally left as defaults because this profile is exclusively for local developer testing and is never activated by the installer. Do NOT expose port 9000 externally. Do NOT use this profile on a shared or internet-facing host.
+
+**Activating the test IdP (developers only):**
+
+```bash
+docker compose --profile test-idp --env-file docker/.env.test-idp up -d keycloak
+```
+
+**Verifying the test-idp profile is NOT active in production:**
+
+```bash
+docker compose ps keycloak 2>&1 | grep -q "Up" && echo "WARNING: keycloak running" || echo "OK: keycloak not running"
+```
+
+The installer (`install.sh`) never activates the `test-idp` profile. Standard production installs have no Keycloak container.
+
 ---
 
 ## 9. SIEM Integration
@@ -1273,6 +1356,25 @@ Update via Admin → Rate Limiting → Adaptive Thresholds. Changes take effect 
 
 > **Tip:** After any rate limit change, verify it is in effect by watching the Redis key for your agent: `docker compose exec redis redis-cli keys "rl:*"`. Changes take effect within 60 seconds.
 
+### 12.5 Fail Mode
+
+The rate limiter defaults to **fail-closed**: if Redis is temporarily unreachable the request is rejected with `HTTP 503 Service Unavailable` and a `Retry-After: 5` header, and the response body includes a human-readable message explaining the condition.
+
+For deployments where continued availability during transient Redis outages takes precedence over rate enforcement, set **fail-open mode**. When open, Redis errors allow the request through and log a warning.
+
+```
+RATE_LIMITER_FAIL_MODE=open   # default: closed
+```
+
+Set this environment variable for the `gateway` service in `docker-compose.override.yml` (or the equivalent Helm values key `gateway.env.RATE_LIMITER_FAIL_MODE`).
+
+| Value | Behaviour on Redis error |
+|-------|--------------------------|
+| `closed` (default) | Request rejected with `HTTP 503` + `Retry-After: 5`; human-readable recovery message in body |
+| `open` | Request allowed; warning logged |
+
+> **When to use `open`:** Deployments where continued availability during transient Redis outages takes precedence over strict rate enforcement, and where rate controls are enforced by a secondary mechanism (network policy, upstream WAF). Note that `open` mode means an uncontrolled burst is possible during Redis outages — plan accordingly.
+
 ---
 
 ## 13. Kubernetes Deployment
@@ -1388,6 +1490,96 @@ Run through this checklist before exposing Yashigani to production traffic.
 - [ ] Jaeger trace UI loads at `https://your-domain/admin/jaeger`
 - [ ] Alertmanager receivers are configured (not just the default null receiver)
 - [ ] A test alert has been sent to verify each notification channel
+- [ ] Loki ingest mTLS verified: `docker compose logs promtail | grep -i 'connected\|push\|sending'` shows successful HTTPS pushes to Loki
+- [ ] Loki query mTLS verified: Grafana Explore → Loki datasource shows live logs (if Grafana returns an error about TLS, check that `grafana_client.crt/key` are present in `docker/secrets/`)
+- [ ] Plain HTTP to Loki rejected: `curl http://localhost:3100/loki/api/v1/push` from inside the `obs` network returns a TLS error (connection closed by server)
+
+#### Loki mTLS (retro #84, v2.23.2)
+
+Loki now requires mutual TLS on port 3100 for both ingest (Promtail → Loki) and query (Grafana → Loki) paths. The internal PKI bootstrap (run by `install.sh` at first install) issues leaf certificates for `loki`, `promtail`, `grafana`, and `otel-collector` — all signed by the internal intermediate CA.
+
+**Verification — ingest path (Promtail → Loki):**
+
+```bash
+# Inside a running stack:
+docker compose logs promtail | grep -i 'sent\|push\|error'
+# Expected: lines containing "successfully sent batch" or "Sending batch"
+# No lines containing "TLS handshake" errors
+
+# Manual mTLS push test (from the Docker host, using certs in docker/secrets/):
+curl --cert docker/secrets/promtail_client.crt \
+     --key  docker/secrets/promtail_client.key \
+     --cacert docker/secrets/ca_intermediate.crt \
+     -X POST https://loki:3100/loki/api/v1/push \
+     -H 'Content-Type: application/json' \
+     -d '{"streams":[{"stream":{"service":"test"},"values":[["'"$(date +%s%N)"'","mTLS smoke test"]]}]}'
+# Expected: HTTP 204 No Content
+```
+
+**Verification — plain HTTP rejected:**
+
+```bash
+# Plain HTTP must be refused (connection reset / TLS error):
+curl http://loki:3100/loki/api/v1/push 2>&1 | grep -i 'EOF\|reset\|tls\|refused'
+# Expected: non-200 + connection error (not a 200 or 204)
+```
+
+**Verification — Grafana → Loki query path:**
+Open Grafana → Explore → select the "Loki" datasource → run `{service="backoffice"}`. Live logs should appear. If the datasource shows a red error, check:
+1. `docker/secrets/grafana_client.crt` and `grafana_client.key` exist and are readable by the Grafana container (UID 472 on official Grafana images).
+2. The Grafana container was restarted after the cert files were created (`docker compose restart grafana`).
+
+**Trust model:**
+All Loki clients (Promtail, Grafana, otel-collector) present leaf certs issued by the Yashigani internal intermediate CA (`ca_intermediate.crt`). Loki's `RequireAndVerifyClientCert` policy rejects any connection without a valid client cert. The intermediate CA is Pattern B per the PKI trust pattern — the root CA is never exposed to workloads.
+
+#### Observability mTLS (v2.23.2 retro #83)
+
+All internal observability plane connections now use mutual TLS (Pattern B — intermediate CA as trust anchor, never root):
+
+| Connection | Protocol | Port | Notes |
+|---|---|---|---|
+| Browser → Caddy → Grafana | HTTPS + mTLS | 443 → 3443 | Caddy forward_auth gate + internal mTLS to Grafana |
+| Grafana → Prometheus datasource | mTLS | 9090 | Grafana presents `grafana_client.crt`; Prometheus requires it |
+| Grafana → Loki datasource | mTLS | 3100 | Enabled alongside PR #84 (Loki mTLS) |
+| Prometheus scrape (self) | mTLS | 9090 | `prometheus_client.crt` used as both server and client |
+| Prometheus → Caddy internal listeners | mTLS | 8444/8445 | Unchanged from v2.23.1 — Caddy SPIFFE gate |
+| Grafana → Jaeger UI | HTTP | 16686 | Internal obs network only; TLS deferred to v2.24 (RETRO-84) |
+
+**Key files:** All certs live in `docker/secrets/` and are issued at install time by `install.sh bootstrap_internal_pki`. No manual cert management is required.
+
+**Verification** (run after `docker compose up`):
+
+```bash
+# 1. Confirm Grafana rejects plain HTTP
+curl http://grafana:3000/api/health  # → connection refused (no plain HTTP listener)
+
+# 2. Confirm mTLS handshake works (from a machine with the client cert)
+curl --cert docker/secrets/grafana_client.crt \
+     --key  docker/secrets/grafana_client.key \
+     --cacert docker/secrets/ca_intermediate.crt \
+     https://grafana:3443/api/health
+# → {"commit":"...","database":"ok","version":"..."}
+
+# 3. Confirm Prometheus rejects requests without client cert
+curl --cacert docker/secrets/ca_intermediate.crt \
+     https://prometheus:9090/-/healthy
+# → TLS error: certificate required
+
+# 4. Confirm Grafana → Prometheus datasource via admin API
+curl -u admin:<grafana_password> \
+     https://<your-domain>/admin/grafana/api/datasources
+# → datasource "Prometheus" with type "prometheus" present
+```
+
+> **WARNING — Jaeger In-Memory Storage (EX-231-06 / ASVS V7.3.1):** The default Jaeger deployment (`jaeger` service in `docker-compose.yml`) uses in-memory storage. **All distributed traces are lost when the Jaeger container restarts.** This is acceptable for development and non-regulated environments. For production deployments where trace retention is required (audit trail, incident investigation, compliance), replace the default Jaeger all-in-one container with a persistent backend before go-live:
+>
+> **Option 1 — Elasticsearch (recommended):** Set `SPAN_STORAGE_TYPE=elasticsearch` and configure `ES_SERVER_URLS` in your `docker-compose.override.yml`. See [Jaeger Elasticsearch storage docs](https://www.jaegertracing.io/docs/latest/deployment/#elasticsearch).
+>
+> **Option 2 — Cassandra:** Set `SPAN_STORAGE_TYPE=cassandra` and configure `CASSANDRA_SERVERS`. Requires a Cassandra cluster.
+>
+> **Option 3 — Hosted tracing:** Replace Jaeger with a hosted OTLP-compatible service (e.g. Grafana Tempo, Honeycomb) by updating `OTEL_EXPORTER_OTLP_ENDPOINT` in your `.env` and removing the `jaeger` service from your compose override.
+>
+> Until persistent storage is configured, trace data is development-only. Do not reference Jaeger traces in audit responses or compliance evidence if your deployment uses in-memory Jaeger.
 
 ### Data and Backup
 
@@ -1581,7 +1773,7 @@ For backup recovery, use `restore.sh` to restore from a previous backup.
 
 ```bash
 git fetch origin
-git checkout v2.23.1   # replace with target version
+git checkout v2.23.2   # replace with target version
 ```
 
 **Step 2.** Pull updated images:
@@ -1711,6 +1903,52 @@ The installer auto-registers agent bundles via the backoffice API at install tim
 - **Helm:** Kubernetes Secret `yashigani-{name}-token` (must be pre-created before install)
 
 Each bundle is assigned a **restricted RBAC policy** by default — it can only reach LLM provider paths and is not granted access to internal Yashigani management endpoints. The OPA data document is pre-populated with the bundle agent entries immediately after bootstrap. In v2.0, routing decisions for agent bundles are also governed by `policy/v1_routing.rego` and the Optimization Engine's 4-signal routing logic (P1-P9 priority levels).
+
+### 17.5 SSRF Guard and Upstream Hostname Allowlist
+
+#### Why the allowlist exists
+
+Yashigani's backoffice includes an SSRF guard (`_assert_safe_upstream_url()`, TM-V231-004 / Pentest #95 / 2026-04-29) that blocks agent upstream URL registrations pointing at loopback, RFC 1918 private, link-local, or multicast addresses. This prevents an authenticated admin from registering an agent whose upstream URL points to an internal metadata endpoint (e.g., `http://169.254.169.254/`) or internal service (e.g., `gopher://redis:6380/`).
+
+Because the canonical agent bundles (Langflow, Letta, OpenClaw) run on the **internal Docker/Kubernetes network** and resolve to RFC 1918 addresses, they would be rejected by the SSRF guard unless their hostnames are explicitly allowed.
+
+#### Environment variable
+
+```
+YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw
+```
+
+Set on the **backoffice** container environment. Comma-separated, case-insensitive. Hostnames in this list bypass the IP-class check and are permitted to resolve to internal (loopback / RFC 1918 / link-local) addresses.
+
+**Default (v2.23.2+):** `langflow,letta,openclaw` — the three canonical Yashigani-internal agent bundle service names. This is pre-populated in `docker/docker-compose.yml` and the Helm chart (`agentBundles.upstreamHostnames`) and requires no operator action.
+
+#### Extending for custom agents
+
+If you run a custom internal agent (e.g., `my-custom-agent`) that registers with a private-network upstream URL, add its service name to the allowlist:
+
+**Compose** (`docker/.env` or direct override):
+```bash
+# Append to the compose env block or set in docker/.env:
+YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw,my-custom-agent
+```
+
+**Helm** (`values.yaml` override):
+```yaml
+backoffice:
+  agentUpstreamHostnames:
+    - langflow
+    - letta
+    - openclaw
+    - my-custom-agent
+```
+
+#### Security implications
+
+Adding a hostname to this list **trusts that host as a legitimate internal mesh service**. The SSRF guard still enforces:
+- Scheme restriction: only `http` and `https` are allowed (no `file://`, `gopher://`, `dict://`, etc.).
+- All other private IPs not matched by a hostname in the list remain blocked.
+
+Agent registration remains **admin-gated** (TOTP step-up required, full audit log entry created). An attacker who compromises an admin account and also controls DNS resolution for a hostname in this list could bypass the IP-class check — this is documented in the risk register as an accepted residual risk under TA-2 (admin account compromise) / TA-3 (insider admin SSRF), with TOTP step-up and OPA invocation-gate as compensating controls.
 
 ---
 
@@ -2306,7 +2544,7 @@ Images are signed with cosign using keyless signing (Sigstore Fulcio CA + Rekor 
 cosign verify \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2
 ```
 
 **Verify backoffice image:**
@@ -2315,13 +2553,13 @@ cosign verify \
 cosign verify \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.2
 ```
 
 A successful verification prints:
 
 ```
-Verification for ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 --
+Verification for ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - Existence of the claims in the transparency log was verified offline
@@ -2337,7 +2575,7 @@ cosign verify-attestation \
   --type cyclonedx \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 \
   | jq '.[0].payload | @base64d | fromjson'
 ```
 
@@ -2348,7 +2586,7 @@ cosign verify-attestation \
   --type cyclonedx \
   --certificate-identity-regexp='https://github.com/agnosticsec-com/.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 \
   | jq '.[0].payload | @base64d | fromjson | .predicate.components[] | {name,version,purl}'
 ```
 
@@ -2357,14 +2595,14 @@ cosign verify-attestation \
 The SBOM and CryptoBoM are also attached directly to each GitHub release:
 
 ```bash
-# Download SBOM for v2.23.1
-gh release download v2.23.1 \
+# Download SBOM for v2.23.2
+gh release download v2.23.2 \
   --repo agnosticsec-com/yashigani \
   --pattern 'sbom-yashigani-*.cdx.json' \
   --dir ./dist
 
-# Download CryptoBoM for v2.23.1
-gh release download v2.23.1 \
+# Download CryptoBoM for v2.23.2
+gh release download v2.23.2 \
   --repo agnosticsec-com/yashigani \
   --pattern 'cryptobom-yashigani-*.json' \
   --dir ./dist
@@ -2386,7 +2624,7 @@ The CryptoBoM (`cryptobom-yashigani-<version>.json`) lists every cryptographic a
 To query which algorithms are not post-quantum resistant:
 
 ```bash
-cat dist/cryptobom-yashigani-2.23.1.json \
+cat dist/cryptobom-yashigani-2.23.2.json \
   | jq '.algorithms[] | select(.pq_status == "not_resistant") | {id, name, usage}'
 ```
 
@@ -2400,11 +2638,11 @@ cosign generate-key-pair
 
 # Sign with local key
 COSIGN_PASSWORD=<passphrase> bash scripts/sign_image.sh \
-  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1 \
-  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.1
+  ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2 \
+  ghcr.io/agnosticsec-com/yashigani-backoffice:2.23.2
 
 # Verify with public key
-cosign verify --key cosign.pub ghcr.io/agnosticsec-com/yashigani-gateway:2.23.1
+cosign verify --key cosign.pub ghcr.io/agnosticsec-com/yashigani-gateway:2.23.2
 ```
 
 The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVATE_KEY` is set or `cosign.key` is present it uses local-key mode; otherwise it falls back to keyless.
@@ -2413,4 +2651,4 @@ The `sign_image.sh` script detects signing mode automatically: if `COSIGN_PRIVAT
 
 ---
 
-*Yashigani v2.23.1 — Installation and Configuration Guide — 2026-04-25T21:43:38+01:00*
+*Yashigani v2.23.2 — Installation and Configuration Guide — 2026-05-07T00:00:00+01:00*

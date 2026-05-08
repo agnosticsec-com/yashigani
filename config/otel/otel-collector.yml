@@ -1,4 +1,7 @@
-# Last updated: 2026-04-27T21:59:11+01:00
+# Last updated: 2026-05-05T20:00:00+01:00
+# v2.23.2 (phase-3 image bump): otel-collector 0.100.0 → 0.151.0.
+# Breaking change v0.104+: 'logging' exporter removed; replaced by 'debug'.
+# Pipeline updated: traces now export to [otlp/jaeger, debug] instead of [otlp/jaeger, logging].
 # M-01 fix: OTLP receivers upgraded to mTLS (Pattern B).
 # Trust anchor: ca_intermediate.crt (never ca_root.crt — Pattern B rule).
 # Server cert: otel-collector_client.crt / otel-collector_client.key
@@ -65,10 +68,17 @@ processors:
 
 exporters:
   otlp/jaeger:
+    # EX-231-09 fix (v2.23.2): switched from insecure: true to mTLS.
+    # otel-collector presents its own leaf cert to Jaeger; Jaeger verifies
+    # against ca_intermediate.crt (Pattern B). TLS 1.2 minimum.
     endpoint: jaeger:4317
     tls:
-      insecure: true
-  logging:
+      cert_file: /run/secrets/otel-collector_client.crt
+      key_file: /run/secrets/otel-collector_client.key
+      ca_file: /run/secrets/ca_intermediate.crt
+  # v0.104+ breaking change: 'logging' exporter removed; use 'debug' exporter.
+  # Functionally equivalent at verbosity=basic (structured logs to stdout).
+  debug:
     verbosity: basic
   # Loki log exporter — ships OTLP log records from gateway and backoffice.
   # Uses the collector-contrib loki exporter (included in otel/opentelemetry-collector-contrib).
@@ -77,11 +87,19 @@ exporters:
   # `labels.resource` / `labels.attributes` config syntax. Label projection
   # now happens via the `loki.resource.labels` / `loki.attribute.labels`
   # attribute hints set by the resource/loki_labels processor below.
+  #
+  # retro #84 (v2.23.2): endpoint switched to https; otel-collector presents
+  # its own leaf cert (otel-collector_client.crt/key) to Loki for mutual auth.
+  # Trust anchor: ca_intermediate.crt (Pattern B).
   loki:
-    endpoint: http://loki:3100/loki/api/v1/push
+    endpoint: https://loki:3100/loki/api/v1/push
     default_labels_enabled:
       exporter: false
       job: true
+    tls:
+      cert_file: /run/secrets/otel-collector_client.crt
+      key_file:  /run/secrets/otel-collector_client.key
+      ca_file:   /run/secrets/ca_intermediate.crt
 
 extensions:
   health_check:
@@ -93,7 +111,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch, tail_sampling]
-      exporters: [otlp/jaeger, logging]
+      exporters: [otlp/jaeger, debug]
     # Logs pipeline: receives OTLP log records from gateway/backoffice,
     # ships them to Loki. Promtail's docker_sd_configs approach is
     # incompatible with macOS Podman (no /var/lib/docker/containers on host).

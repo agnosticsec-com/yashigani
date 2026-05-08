@@ -24,6 +24,10 @@ spec:
     spec:
       serviceAccountName: {{ include "yashigani.serviceAccountName" . }}
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -31,7 +35,10 @@ spec:
           image: "{{ .Values.ollama.image.repository }}:{{ .Values.ollama.image.tag }}"
           imagePullPolicy: {{ .Values.ollama.image.pullPolicy }}
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           ports:
@@ -41,6 +48,10 @@ spec:
           env:
             - name: OLLAMA_HOST
               value: {{ .Values.ollama.env.ollamaHost | quote }}
+            - name: HOME
+              value: {{ .Values.ollama.env.home | default "/data" | quote }}
+            - name: OLLAMA_MODELS
+              value: {{ .Values.ollama.env.ollamaModels | default "/data/models" | quote }}
           readinessProbe:
             tcpSocket:
               port: 11434
@@ -59,7 +70,7 @@ spec:
             {{- toYaml .Values.ollama.resources | nindent 12 }}
           volumeMounts:
             - name: data
-              mountPath: /root/.ollama
+              mountPath: /data
   {{- if .Values.ollama.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:

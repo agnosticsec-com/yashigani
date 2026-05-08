@@ -190,7 +190,7 @@ spec:
               cd /secrets
               echo "[applier] Files present after issuer bootstrap:"
               ls -l
-              # Safety guard (Su pre-push review 2026-04-22): under POSIX sh an
+              # Safety guard (internal pre-push review): under POSIX sh an
               # unmatched glob expands literally, so `for f in *.crt *.key` with
               # no files would emit zero --from-file= args and we'd overwrite a
               # good Secret with an empty one. Fail fast if issuer produced no
@@ -275,7 +275,7 @@ spec:
               # verify. With ca_root.crt+ca_intermediate.crt bundled in the
               # CAfile, OpenSSL verifies correctly. Python ssl consumers work
               # with ca_root.crt alone (chain building from presented cert).
-              # Captain R4 K8s gate finding 2026-04-30.
+              # Internal K8s gate finding.
               cat /tmp/leaves/ca_root.crt /tmp/leaves/ca_intermediate.crt > /tmp/leaves/ca_bundle.crt
               echo "[applier] ca_bundle.crt (root+intermediate) created for libssl consumers."
 

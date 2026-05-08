@@ -1,6 +1,6 @@
 ---
-# Yashigani v2.23.1 — Docker Compose stack
-# Last updated: 2026-04-29T16:04:58+01:00
+# Yashigani v2.23.2 — Docker Compose stack
+# Last updated: 2026-05-07T12:05:00+01:00 (retro #83: Grafana mTLS ingress + Prometheus TLS server + datasource mTLS; image-bump: caddy 2.11.2/redis 7.4.9/ollama 0.23.1/pgvector 0.8.2)
 #
 # Services: caddy (TLS edge), gateway, backoffice, policy (OPA),
 #           redis, ollama, prometheus, grafana
@@ -55,7 +55,14 @@
 
 
 x-common-env: &common-env
-  YASHIGANI_ENV: ${YASHIGANI_ENV:-development}
+  # LIC-001: YASHIGANI_ENV must be "production" in deployed stacks. The value
+  # "development" used to be the default here, which silently disabled license
+  # integrity checks (verifier skips hash + counter-key validation when
+  # YASHIGANI_ENV=dev). Default is now "production" so shipped stacks fail-closed.
+  # Set YASHIGANI_ENV=dev ONLY in local developer builds — never in .env.example.
+  # Non-license telemetry label is carried separately as YASHIGANI_ENVIRONMENT_LABEL.
+  YASHIGANI_ENV: ${YASHIGANI_ENV:-production}
+  YASHIGANI_ENVIRONMENT_LABEL: ${YASHIGANI_ENVIRONMENT_LABEL:-production}
   YASHIGANI_KSM_PROVIDER: ${YASHIGANI_KSM_PROVIDER:-docker}
   YASHIGANI_AUDIT_LOG_PATH: /data/audit/audit.log
   YASHIGANI_AUDIT_MAX_FILE_SIZE_MB: ${YASHIGANI_AUDIT_MAX_FILE_SIZE_MB:-100}
@@ -80,7 +87,7 @@ services:
   # ---------------------------------------------------------------------------
   caddy:
     dns_search: ["."]
-    image: docker.io/library/caddy:2-alpine
+    image: docker.io/library/caddy:2.11.2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
     restart: unless-stopped
     mem_limit: ${YASHIGANI_CADDY_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_CADDY_CPU_LIMIT:-0.5}
@@ -119,6 +126,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (caddy.yaml:49-51).
+    # NET_BIND_SERVICE required: Caddy binds privileged ports 80 and 443.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
     # v2.23.1: Caddy is the FIRST container to start — no depends_on.
     # It tolerates 502s on upstreams until gateway/backoffice come up;
     # external traffic still reaches it immediately for health checks.
@@ -154,8 +165,8 @@ services:
       <<: *common-env
       YASHIGANI_SERVICE_NAME: gateway
       YASHIGANI_UPSTREAM_URL: ${UPSTREAM_MCP_URL:?set UPSTREAM_MCP_URL}
-      # OPA stays on HTTP in v2.23.1 — mTLS for OPA lands in v2.23.2 (task #54).
-      YASHIGANI_OPA_URL: http://policy:8181
+      # v2.23.2: OPA serves mTLS; gateway uses internal_httpx_client (EX-231-01).
+      YASHIGANI_OPA_URL: https://policy:8181
       OLLAMA_BASE_URL: http://ollama:11434  # Ollama has no TLS; internal bridge-only + bearer token (honest gap, tracked in manifest as mtls_capable: false)
       REDIS_HOST: redis
       REDIS_PORT: "6380"                     # TLS-only port
@@ -206,19 +217,32 @@ services:
     security_opt:
       - no-new-privileges:true
       # Seccomp default (Pentest finding #2 — enabled by default in v2.23.1).
-      # Profile ships at docker/seccomp/yashigani.json. Override with
-      # YASHIGANI_SECCOMP_PROFILE=unconfined if a host kernel rejects it.
+      # Path fix (#31/#4): install.sh sets YASHIGANI_SECCOMP_PROFILE to an
+      # absolute path (${WORK_DIR}/docker/seccomp/yashigani.json) so both Docker
+      # Compose and native Podman-compose (podman-compose 1.x / podman compose)
+      # resolve the profile without path-doubling. The ./seccomp/... fallback is
+      # correct for manual `docker compose up` from inside docker/ — Docker
+      # Compose v2 resolves ./ relative to the compose file directory.
+      # Override: set YASHIGANI_SECCOMP_PROFILE=unconfined if a host kernel
+      # rejects the profile (non-standard kernels, nested virtualisation).
       - seccomp=${YASHIGANI_SECCOMP_PROFILE:-./seccomp/yashigani.json}
       # AppArmor default (Linux hosts with apparmor loaded).
       # Load once per host: sudo apparmor_parser -r docker/apparmor/yashigani-gateway
       # Override with YASHIGANI_APPARMOR_PROFILE=unconfined on hosts without
       # AppArmor (macOS, rootless Podman without profile loaded).
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (gateway.yaml:55-56).
+    # No cap_add: gateway binds port 8080 (non-privileged).
+    cap_drop: [ALL]
     depends_on:
       redis:
         condition: service_healthy
       policy:
-        condition: service_healthy
+        # OPA healthcheck disabled in compose (scratch image, podman-compose
+        # CMD translation incompatibility — V232-SMOKE-003). Using service_started
+        # instead; gateway fails-closed per-request if OPA unreachable.
+        # K8s uses httpGet probe on port 8282 (policy.yaml readinessProbe).
+        condition: service_started
       ollama:
         condition: service_healthy
       pgbouncer:
@@ -257,8 +281,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6380"             # TLS-only
       REDIS_USE_TLS: "true"
-      # OPA stays on HTTP in v2.23.1 — mTLS for OPA lands in v2.23.2 (task #54).
-      YASHIGANI_OPA_URL: http://policy:8181
+      # v2.23.2: OPA serves mTLS; backoffice uses internal_httpx_client (EX-231-01).
+      YASHIGANI_OPA_URL: https://policy:8181
       YASHIGANI_ADMIN_USERNAME: ${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}
       YASHIGANI_ADMIN_MIN_TOTAL: "2"
       YASHIGANI_ADMIN_MIN_ACTIVE: "2"
@@ -312,9 +336,37 @@ services:
       # verification. the gateway/backoffice middleware reads this at lifespan startup and rejects
       # requests that do not carry the matching header value.
       CADDY_INTERNAL_HMAC: ${CADDY_INTERNAL_HMAC:?run install.sh to generate caddy_internal_hmac}
+      # v2.23.2 #47 — Backup status + verify: mount host backups dir read-only.
+      # Python reads from this path; install.sh and update.sh write to
+      # ${INSTALL_DIR}/backups on the host. The :ro flag prevents the
+      # backoffice container from modifying backup files.
+      YASHIGANI_BACKUPS_DIR: /data/backups
+      # v2.23.2 fix — SSRF guard hostname allowlist (TM-V231-004 / Pentest #95).
+      # _assert_safe_upstream_url() blocks loopback/RFC1918/link-local by default.
+      # These three Compose service names are the canonical Yashigani-internal agent
+      # bundle hostnames; they resolve to Docker-bridge IPs on the `data` network.
+      # Adding a hostname here means trusting that host as a legitimate internal mesh
+      # service — the SSRF guard still blocks all other private IPs and all non-HTTP(S)
+      # schemes. Agent registration remains admin-gated (TOTP step-up + audit log).
+      # TM trade-off: TA-3 (insider admin SSRF) / TA-2 (admin compromise) — attacker
+      # who can both compromise an admin account AND point the `langflow`, `letta`, or
+      # `openclaw` hostname to a private IP bypasses the IP-class check. Compensating
+      # controls: TOTP step-up on every registration, OPA-gated invocation, audit trail.
+      # Operators extending with custom agents: append comma-separated names to this value.
+      # Example: YASHIGANI_AGENT_UPSTREAM_HOSTNAMES=langflow,letta,openclaw,custom-agent
+      YASHIGANI_AGENT_UPSTREAM_HOSTNAMES: "langflow,letta,openclaw"
     volumes:
       - audit_data:/data/audit
       - bootstrap_data:/data/bootstrap
+      # v2.23.2 #47 — Backup directory mount (read-only — backoffice reads, never writes).
+      - ${INSTALL_DIR:-..}/backups:/data/backups:ro
+      # LIC-007 / LIC-012 (v2.24.0 DEFERRED): This mount is writable because
+      # write_docker_secrets() writes admin credentials + license_key here during
+      # bootstrap. After bootstrap, license_key should be chmod 0400. The trivial
+      # fix (chmod in write_docker_secrets() post-write) is Tom Group 5.1.
+      # Schema-split (separate :ro PKI mount + writable bootstrap mount) = LIC-012
+      # for v2.24.0. K8s is already protected: backoffice.yaml initContainer runs
+      # chmod 0400 on all /secrets-rw/* files including license_key.
       - ./secrets:/run/secrets
       # Internal mTLS — manifest mounted read-only.
       - ./service_identities.yaml:/etc/yashigani/service_identities.yaml:ro
@@ -325,11 +377,14 @@ services:
     security_opt:
       - no-new-privileges:true
       # Seccomp + AppArmor default (Pentest finding #2 — enabled in v2.23.1).
-      # See gateway service above for override env var documentation.
+      # See gateway service above for path resolution and override documentation.
       - seccomp=${YASHIGANI_SECCOMP_PROFILE:-./seccomp/yashigani.json}
       # Backoffice shares the gateway AppArmor profile (same Python/FastAPI
       # surface). A dedicated yashigani-backoffice profile may ship later.
       - apparmor=${YASHIGANI_APPARMOR_PROFILE:-yashigani-gateway}
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (backoffice.yaml:104-105).
+    # No cap_add: backoffice binds port 8443 (non-privileged).
+    cap_drop: [ALL]
     healthcheck:
       # mTLS — Pattern A for Python ssl: trust anchor is the public ca_root.crt
       # (Py 3.12/OpenSSL 3.0 strict-chain rejects intermediate-only — gate #58a).
@@ -354,10 +409,15 @@ services:
   # Open WebUI — User-facing chat interface (v1.0)
   # Internal network only. No external port. All LLM calls route through gateway.
   # Auth: trusts X-Forwarded-User from Caddy (SSO) or API key passthrough.
+  #
+  # DEPRECATED (v2.23.2): Open WebUI integration is sunsetting. Yashigani's own
+  # built-in UI ships in v2.24.0. This service is opt-in (docker compose
+  # --profile openwebui) and will be removed in v2.24.0. Administrators should
+  # plan migration before upgrading. No image bump will be applied.
   # ---------------------------------------------------------------------------
   open-webui:
     dns_search: ["."]
-    image: ghcr.io/open-webui/open-webui:v0.9.1
+    image: ghcr.io/open-webui/open-webui:v0.9.2@sha256:a7e4796ae894d1e2a0c1824860ade472f35c507608a01c3581377b5c19b0ed49
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENWEBUI_MEM_LIMIT:-2048m}
     cpus: ${YASHIGANI_OPENWEBUI_CPU_LIMIT:-1.0}
@@ -392,6 +452,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (open-webui.yaml:90,110).
+    # No cap_add: open-webui binds port 8080 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: open-webui calls gateway via http://gateway:8080/v1 — this is
     # the one approved direct-to-gateway path (user-facing LLM calls, not admin
     # control plane). open-webui is itself behind Caddy (:443/open-webui/*) so
@@ -409,7 +472,12 @@ services:
   # ---------------------------------------------------------------------------
   budget-redis:
     dns_search: ["."]
-    image: docker.io/library/redis:7-alpine
+    image: docker.io/library/redis:7.4.9-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee
+    # gate V232-SMOKE-018: redis:7-alpine has no USER directive (defaults to root).
+    # With cap_drop: [ALL], root has no DAC_OVERRIDE → cannot read TLS keys
+    # chowned to 999:999 by `_pki_chown_client_keys`. Pin to UID 999:999 (the
+    # redis user image expects) so the chowned material is readable as owner.
+    user: "999:999"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_BUDGET_REDIS_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_BUDGET_REDIS_CPU_LIMIT:-0.25}
@@ -442,6 +510,9 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (budget-redis.yaml:49).
+    # No cap_add: redis binds port 6380 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: budget-redis is a data-plane dep of gateway/backoffice only.
     networks:
       - data
@@ -451,32 +522,41 @@ services:
   # ---------------------------------------------------------------------------
   policy:
     dns_search: ["."]
-    image: docker.io/openpolicyagent/opa:1.15.1
+    image: docker.io/openpolicyagent/opa:1.16.1@sha256:c6f9910d5e982df13fa4c65f02cfa7f65f9cfdbef9fbaf80d6547f840294aa02
     restart: unless-stopped
     mem_limit: ${YASHIGANI_POLICY_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_POLICY_CPU_LIMIT:-0.25}
-    # v2.23.1 NOTE: OPA retains plaintext HTTP on the internal bridge network
-    # pending the mTLS migration of the gateway's ~6 direct httpx client
-    # call sites to OPA (proxy.py, agent_router.py, openai_router.py).
-    # Moved to task #54 (v2.23.2) alongside observability mTLS. OPA handles
-    # policy decisions, not user credentials or session secrets — the
-    # internal bridge network + service identity manifest remain the
-    # defence-in-depth for this single service.
+    # v2.23.2: OPA now serves mTLS on port 8181 using its own leaf cert
+    # (policy_client.crt / policy_client.key signed by the internal CA).
+    # All Python callers updated to use internal_httpx_client (EX-231-01 closed).
     command:
       - "run"
       - "--server"
       - "--addr=0.0.0.0:8181"
       - "--diagnostic-addr=0.0.0.0:8282"
       - "--log-level=error"
+      - "--tls-cert-file=/run/secrets/policy_client.crt"
+      - "--tls-private-key-file=/run/secrets/policy_client.key"
+      - "--tls-ca-cert-file=/run/secrets/ca_root.crt"
       - "/policies"
     volumes:
       - ../policy:/policies:ro
       - ../policy/data:/policies/data:ro
+      - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD", "/opa", "eval", "true"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      # OPA image is scratch-based: only /opa binary, no shell, no curl, no wget.
+      # podman-compose 1.0.6 translates CMD form to /bin/sh -c which fails on
+      # scratch images (V232-SMOKE-003). There is no exec-form healthcheck that
+      # works on both Docker Engine and podman-compose without shell.
+      # Mitigation: disable compose healthcheck. OPA liveness is verified at the
+      # K8s layer via httpGet probe against port 8282 (policy.yaml readinessProbe).
+      # In compose, gateway uses condition: service_started (not service_healthy)
+      # and fails-closed per request if OPA is unreachable (deny by default).
+      # Healthcheck is re-enabled in K8s only.
+      disable: true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (policy.yaml:36).
+    # No cap_add: OPA binds ports 8181/8282 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: OPA is a data-plane dep only. Never needs to reach caddy_internal.
     networks:
       - data
@@ -486,7 +566,9 @@ services:
   # ---------------------------------------------------------------------------
   redis:
     dns_search: ["."]
-    image: docker.io/library/redis:7-alpine
+    image: docker.io/library/redis:7.4.9-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee
+    # gate V232-SMOKE-018 — see budget-redis above for rationale.
+    user: "999:999"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_REDIS_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_REDIS_CPU_LIMIT:-0.25}
@@ -513,15 +595,18 @@ services:
     healthcheck:
       # redis-cli over TLS with our client cert.
       # trust anchor: ca_root.crt — libssl strict-mode (error:0A000086 with intermediate)
-      test: >
-        sh -c 'redis-cli --tls --cert /run/secrets/redis_client.crt
-        --key /run/secrets/redis_client.key --cacert /run/secrets/ca_root.crt
-        -p 6380 -a "$$(cat /run/secrets/redis_password)" ping'
+      # P-9 fix: list form (not YAML block scalar) to avoid trailing-newline in
+      # CMD-SHELL string when parsed by podman-compose 1.5.0.
+      test: ["CMD-SHELL", "redis-cli --tls --cert /run/secrets/redis_client.crt --key /run/secrets/redis_client.key --cacert /run/secrets/ca_root.crt -p 6380 -a \"$$(cat /run/secrets/redis_password)\" ping 2>/dev/null | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 10s
     # No depends_on — redis_password is written by the installer to docker/secrets/
     # before compose starts. Removed backoffice dependency to break cycle.
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (redis.yaml:51).
+    # No cap_add: redis binds port 6380 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: redis is a data-plane dep only.
     networks:
       - data
@@ -531,14 +616,23 @@ services:
   # ---------------------------------------------------------------------------
   ollama:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.6.2
+    image: docker.io/ollama/ollama:0.23.1@sha256:6077dbbd6508dce8973f8b91c30d8026b1279ab0483e15f0dfad469dba676c2f
+    # gate V232-SMOKE-018: bbd556e set user: "1000:1000" with HOME=/data
+    # (verified working on macOS Podman where vfs initialises the volume
+    # owned by the caller UID). On Linux Docker, named volumes are
+    # root-owned at creation time; UID 1000 cannot mkdir /data/.ollama.
+    # Reverting to root inside the container — cap_drop: [ALL] below
+    # remains the security boundary (no DAC_OVERRIDE / SETUID / etc).
+    user: "0:0"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OLLAMA_MEM_LIMIT:-4096m}
     cpus: ${YASHIGANI_OLLAMA_CPU_LIMIT:-2.0}
     volumes:
-      - ollama_data:/root/.ollama
+      - ollama_data:/data
     environment:
       OLLAMA_HOST: "0.0.0.0"
+      HOME: "/data"
+      OLLAMA_MODELS: "/data/models"
     healthcheck:
       # ollama image has no curl/wget — use bash /dev/tcp to check port
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/11434' 2>/dev/null"]
@@ -546,6 +640,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (ollama.yaml:42).
+    # No cap_add: ollama binds port 11434 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: ollama is a data-plane dep. Joins `data` for gateway/backoffice
     # calls and `edge` for model pulls from registry.ollama.ai (needs internet).
     networks:
@@ -563,7 +660,9 @@ services:
   # Model bootstrap — pull classifier model on first start
   ollama-init:
     dns_search: ["."]
-    image: docker.io/ollama/ollama:0.6.2
+    image: docker.io/ollama/ollama:0.23.1@sha256:6077dbbd6508dce8973f8b91c30d8026b1279ab0483e15f0dfad469dba676c2f
+    # gate V232-SMOKE-018 — same rationale as `ollama` service above.
+    user: "0:0"
     restart: on-failure:3
     mem_limit: ${YASHIGANI_OLLAMA_INIT_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_OLLAMA_INIT_CPU_LIMIT:-0.25}
@@ -590,6 +689,9 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (init job).
+    # No cap_add: no privileged-port binding.
+    cap_drop: [ALL]
     # EX-231-10: ollama-init needs data (ollama DNS) + edge (model pull).
     networks:
       - data
@@ -601,7 +703,7 @@ services:
   # ---------------------------------------------------------------------------
   prometheus:
     dns_search: ["."]
-    image: docker.io/prom/prometheus:v3.2.1
+    image: docker.io/prom/prometheus:v3.11.3@sha256:e4254400b85610324913f0dc4acf92603d9984e7519414c5a12811aa6146acc3
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMETHEUS_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_PROMETHEUS_CPU_LIMIT:-0.5}
@@ -611,7 +713,10 @@ services:
       - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}"
       - "--web.enable-remote-write-receiver"
       - "--web.listen-address=0.0.0.0:9090"
-    # Laura bonus finding (EX-231-10 closure): Prometheus runs as uid 65534
+      # retro #83: enable TLS on Prometheus port 9090 (Pattern B mTLS).
+      # Grafana datasource calls now use https://prometheus:9090 with mutual TLS.
+      - "--web.config.file=/etc/prometheus/web-config.yml"
+    # Internal security finding (EX-231-10 closure): Prometheus runs as uid 65534
     # (nobody) but needs to read prometheus_client.{crt,key} from /run/secrets.
     # Fix: add GID 1001 (yashigani app group) so Prometheus can read the
     # 0640/group-1001 key file without making it world-readable.
@@ -627,12 +732,21 @@ services:
       # :8444 (gateway) + :8445 (backoffice) listeners for SPIFFE-URI-gated
       # scrapes of /internal/metrics. Split-listener design replaced the prior
       # Host-header matcher (Prom v3 forbids setting Host via http_headers).
+      # retro #83: web-config.yml enables TLS + mTLS on port 9090 so Grafana
+      # → Prometheus datasource calls use mutual TLS (Pattern B).
+      - ../config/prometheus-web-config.yml:/etc/prometheus/web-config.yml:ro
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      # retro #83: Prometheus now serves HTTPS. Use --no-check-certificate so
+      # the self-signed internal CA is trusted without mounting the CA into wget.
+      # wget inside the prom/prometheus image supports --no-check-certificate.
+      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "https://localhost:9090/-/healthy"]
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (prometheus.yaml:116).
+    # No cap_add: prometheus binds port 9090 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: prometheus scrapes gateway/backoffice VIA Caddy (:8444/:8445).
     # Must be on `obs` (same network as Caddy). Does NOT join `data`.
     # Caddy also joins `obs`, so Prometheus can resolve `caddy` by name here.
@@ -645,7 +759,7 @@ services:
   # ---------------------------------------------------------------------------
   grafana:
     dns_search: ["."]
-    image: docker.io/grafana/grafana:11.5.2
+    image: docker.io/grafana/grafana:13.0.1@sha256:0f86bada30d65ef9d0183b90c1e2682ac92d53d95da8bed322b984ea78a4a73a
     restart: unless-stopped
     mem_limit: ${YASHIGANI_GRAFANA_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_GRAFANA_CPU_LIMIT:-0.25}
@@ -657,13 +771,26 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
       GF_SERVER_ROOT_URL: "https://${YASHIGANI_TLS_DOMAIN}/admin/grafana"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # retro #83: Grafana ingress mTLS.
+      # Grafana serves HTTPS on port 3443. Caddy proxies /admin/grafana/* over
+      # mTLS using import internal-mtls (caddy_client.crt → ca_intermediate verify).
+      # TA-3 (network observer): without server TLS on Grafana, HTTPS only
+      # existed from the browser → Caddy; the Caddy → Grafana leg was plaintext
+      # HTTP on the obs bridge network. Any process on that bridge could read
+      # dashboard session traffic. mTLS closes both eavesdrop and MITM.
+      GF_SERVER_PROTOCOL: "https"
+      GF_SERVER_HTTP_PORT: "3443"
+      GF_SERVER_CERT_FILE: "/run/secrets/grafana_client.crt"
+      GF_SERVER_CERT_KEY: "/run/secrets/grafana_client.key"
     volumes:
       - grafana_data:/var/lib/grafana
       - ../config/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../config/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      # retro #83: Grafana now serves HTTPS on 3443. wget --no-check-certificate
+      # skips CA verification for localhost-only healthcheck (no SPIFFE needed).
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:3443/api/health | grep -q ok"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -673,6 +800,9 @@ services:
         condition: service_healthy
       backoffice:
         condition: service_healthy
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (grafana.yaml:41).
+    # No cap_add: grafana binds port 3000 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: grafana is obs-plane only.
     networks:
       - obs
@@ -682,7 +812,14 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     dns_search: ["."]
-    image: docker.io/pgvector/pgvector:pg16
+    image: docker.io/pgvector/pgvector:0.8.2-pg16@sha256:7d400e340efb42f4d8c9c12c6427adb253f726881a9985d2a471bf0eed824dff
+    # gate V232-SMOKE-018: pgvector/pgvector has no USER directive (defaults to
+    # root). The postgres entrypoint then runs gosu/setpriv to switch from root
+    # → postgres user, but `cap_drop: [ALL]` strips CAP_SETUID/SETGID/FOWNER —
+    # the privilege drop fails with "operation not permitted". Pin to UID
+    # 999:999 (the postgres user the entrypoint would have switched to) so the
+    # entrypoint runs as the right uid from PID 1, no setuid dance needed.
+    user: "999:999"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_POSTGRES_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_POSTGRES_CPU_LIMIT:-1.0}
@@ -708,6 +845,9 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (postgres.yaml:67).
+    # No cap_add: postgres binds port 5432 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: postgres is data-plane only.
     networks:
       - data
@@ -716,7 +856,12 @@ services:
   # PgBouncer — transaction-mode connection pooler
   # ---------------------------------------------------------------------------
   pgbouncer:
-    image: docker.io/edoburu/pgbouncer:v1.23.1-p0
+    image: docker.io/edoburu/pgbouncer:v1.25.1-p0@sha256:c7bfcaa24de830e29588bb9ad1eb39cebaf07c27149e1974445899b695634bb4
+    # gate V232-SMOKE-018: edoburu/pgbouncer has USER pgbouncer (UID 70) but
+    # the same cap_drop ALL constraint applies on init scripts. Pin
+    # explicitly so the chowned client keys (70:70 by `_pki_chown_client_keys`)
+    # are readable as owner without relying on image defaults.
+    user: "70:70"
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PGBOUNCER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PGBOUNCER_CPU_LIMIT:-0.25}
@@ -753,6 +898,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (pgbouncer.yaml:50).
+    # No cap_add: pgbouncer binds port 5432 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: pgbouncer is data-plane only.
     networks:
       - data
@@ -762,7 +910,7 @@ services:
   # ---------------------------------------------------------------------------
   alertmanager:
     dns_search: ["."]
-    image: docker.io/prom/alertmanager:v0.27.0
+    image: docker.io/prom/alertmanager:v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286
     restart: unless-stopped
     mem_limit: ${YASHIGANI_ALERTMANAGER_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_ALERTMANAGER_CPU_LIMIT:-0.25}
@@ -781,6 +929,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (alertmanager.yaml:38).
+    # No cap_add: alertmanager binds port 9093 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: alertmanager is obs-plane only (receives from prometheus).
     networks:
       - obs
@@ -788,9 +939,13 @@ services:
   # ---------------------------------------------------------------------------
   # Loki — log aggregation backend
   # ---------------------------------------------------------------------------
+  # retro #84 (v2.23.2): mTLS enabled on port 3100.
+  # Server cert: loki_client.crt/key (issued by install.sh PKI bootstrap).
+  # Trust anchor: ca_intermediate.crt (Pattern B).
+  # Clients: Promtail, Grafana, otel-collector — all must present leaf certs.
   loki:
     dns_search: ["."]
-    image: docker.io/grafana/loki:3.0.0
+    image: docker.io/grafana/loki:3.7.1@sha256:73e905b51a7f917f7a1075e4be68759df30226e03dcb3cd2213b989cc0dc8eb4
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LOKI_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_LOKI_CPU_LIMIT:-0.25}
@@ -798,11 +953,26 @@ services:
     volumes:
       - ../config/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki_data:/loki
+      # PKI certs: loki server cert + CA intermediate for client-cert auth.
+      # loki is mtls_capable:true in service_identities.yaml so the bootstrap
+      # issues loki_client.crt/key. /run/secrets is read-only (RO bind-mount).
+      - ./secrets:/run/secrets:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
+      # retro #84: Loki now listens on HTTPS with RequireAndVerifyClientCert.
+      # The probe is intra-container (localhost → self). BusyBox wget does NOT
+      # support --certificate / --private-key for TLS client certs. Using
+      # --no-check-certificate here is deliberate and safe: the probe verifies
+      # only that the Loki PROCESS is responding on :3100. mTLS enforcement for
+      # external clients (Promtail, Grafana, otel-collector) is tested separately
+      # at connect time — those clients send a full TLS client cert; Loki rejects
+      # connections without one. TA-1..4 cannot intercept a localhost probe.
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:3100/ready | grep -q ready"]
       interval: 15s
       timeout: 5s
       retries: 5
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (loki.yaml:39).
+    # No cap_add: loki binds port 3100 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: loki is obs-plane only.
     networks:
       - obs
@@ -810,9 +980,14 @@ services:
   # ---------------------------------------------------------------------------
   # Promtail — ships Docker container logs to Loki
   # ---------------------------------------------------------------------------
+  # retro #84 (v2.23.2): Promtail presents its leaf cert to Loki (mTLS client).
+  # promtail_client.crt/key issued by install.sh PKI bootstrap.
+  # Trust anchor for verifying Loki's server cert: ca_intermediate.crt (Pattern B).
+  # Promtail itself does not terminate TLS (mtls_capable: true in manifest means
+  # it gets a client cert, NOT that it runs a TLS server). Port 9080 remains HTTP.
   promtail:
     dns_search: ["."]
-    image: docker.io/grafana/promtail:3.0.0
+    image: docker.io/grafana/promtail:3.6.10@sha256:2a0f5e3e160ee5d549c585f6cc4f4e1c566ff783324a424bd75bc16503fc660e
     restart: unless-stopped
     mem_limit: ${YASHIGANI_PROMTAIL_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_PROMTAIL_CPU_LIMIT:-0.25}
@@ -821,13 +996,20 @@ services:
       - ../config/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # PKI certs: promtail client cert for mTLS push to Loki.
+      - ./secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9080' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
     depends_on:
-      - loki
+      loki:
+        condition: service_healthy
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart for promtail.
+    # No cap_add: promtail binds port 9080 (non-privileged). Docker socket access
+    # is via bind mount (read-only), not a capability.
+    cap_drop: [ALL]
     # EX-231-10: promtail ships logs to loki, obs-plane only.
     networks:
       - obs
@@ -842,7 +1024,7 @@ services:
   # ---------------------------------------------------------------------------
   otel-collector:
     dns_search: ["."]
-    image: docker.io/otel/opentelemetry-collector-contrib:0.100.0
+    image: docker.io/otel/opentelemetry-collector-contrib:0.151.0@sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OTEL_COLLECTOR_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_OTEL_COLLECTOR_CPU_LIMIT:-0.5}
@@ -859,6 +1041,9 @@ services:
       retries: 3
     depends_on:
       - jaeger
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (otel-collector.yaml:56).
+    # No cap_add: otel-collector binds ports 4317/4318 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: otel-collector receives traces from gateway/backoffice (OTLP
     # push, not pull). gateway/backoffice are on `data`. otel-collector needs
     # to be reachable from `data` to receive OTLP pushes.
@@ -868,22 +1053,35 @@ services:
       - obs
 
   # ---------------------------------------------------------------------------
-  # Jaeger — distributed trace UI
+  # Jaeger — distributed trace UI (v2.17.0)
+  # Migrated from v1 (all-in-one image, env-var config) to v2 (jaeger image, YAML config).
+  # v2 is built on OpenTelemetry Collector; config in config/jaeger/jaeger.yml.
+  #
+  # EX-231-09 fix (v2.23.2): OTLP gRPC collector port uses mTLS (Pattern B).
+  # TLS config moved from v1 env vars to jaeger.yml receivers.otlp.protocols.grpc.tls.
+  # Jaeger presents jaeger_client.crt; otel-collector must present a valid leaf
+  # signed by ca_intermediate.crt.
+  # UI port (16686) and admin port (13133) remain HTTP on obs-internal network.
   # ---------------------------------------------------------------------------
   jaeger:
     dns_search: ["."]
-    image: docker.io/jaegertracing/all-in-one:1.57
+    image: docker.io/jaegertracing/jaeger:2.17.0@sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708
     restart: unless-stopped
     mem_limit: ${YASHIGANI_JAEGER_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_JAEGER_CPU_LIMIT:-0.5}
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-      SPAN_STORAGE_TYPE: memory   # dev/demo only — production must use persistent storage (e.g. Elasticsearch or Cassandra)
+    command: ["--config=/etc/jaeger/jaeger.yml"]
+    volumes:
+      - ./secrets:/run/secrets:ro
+      - ../config/jaeger/jaeger.yml:/etc/jaeger/jaeger.yml:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:14269/"]
+      # v2: healthcheckv2 extension listens on :13133 (replaces v1 admin port :14269)
+      test: ["CMD-SHELL", "wget -qO- http://localhost:13133/ || curl -sf http://localhost:13133/"]
       interval: 15s
       timeout: 5s
       retries: 3
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (jaeger.yaml:48).
+    # No cap_add: jaeger binds ports 13133/16686/4317 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: jaeger is obs-plane only.
     networks:
       - obs
@@ -896,7 +1094,7 @@ services:
   # ---------------------------------------------------------------------------
   keycloak:
     dns_search: ["."]
-    image: quay.io/keycloak/keycloak:26.0
+    image: quay.io/keycloak/keycloak:26.6.1@sha256:26ae26445475f7fac5f90ee138b1bdb64324f5815fb16133ffdbdb122d97c4d8
     restart: unless-stopped
     mem_limit: ${YASHIGANI_KEYCLOAK_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_KEYCLOAK_CPU_LIMIT:-1.0}
@@ -923,6 +1121,9 @@ services:
       start_period: 60s
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (test-idp profile).
+    # No cap_add: keycloak binds port 9000 (non-privileged; dev-mode).
+    cap_drop: [ALL]
     # EX-231-10: keycloak is the upstream IdP for backoffice SSO redirect.
     # Backoffice reaches it on `data`; keycloak itself doesn't need caddy_internal.
     networks:
@@ -936,10 +1137,13 @@ services:
   # ---------------------------------------------------------------------------
   vault:
     dns_search: ["."]
-    image: docker.io/hashicorp/vault:1.16
+    image: docker.io/hashicorp/vault:2.0.0@sha256:e40c741ed95bb271425e3e6ca6c222d620cf8682f6f7a1b1e7c9d49d0aba484b
     restart: unless-stopped
     mem_limit: ${YASHIGANI_VAULT_MEM_LIMIT:-512m}
     cpus: ${YASHIGANI_VAULT_CPU_LIMIT:-0.5}
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (vault profile).
+    # IPC_LOCK required: Vault uses mlock(2) to prevent secrets swapping to disk.
+    cap_drop: [ALL]
     cap_add:
       - IPC_LOCK
     environment:
@@ -977,7 +1181,7 @@ services:
   # Users build custom agent workflows visually via the Langflow UI.
   langflow:
     dns_search: ["."]
-    image: docker.io/langflowai/langflow:1.9.0
+    image: docker.io/langflowai/langflow:1.9.2@sha256:45238e614ce42bf93fea36a56316d3ebafdaf70c4df4425aeb2c90b035ec4a14
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LANGFLOW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_LANGFLOW_CPU_LIMIT:-1.0}
@@ -1003,6 +1207,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (agent-bundles.yaml:53).
+    # No cap_add: langflow binds port 7860 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: langflow calls gateway via http://gateway:8080/v1 (same as
     # open-webui). Joins `data` for gateway DNS. Does NOT join caddy_internal.
     networks:
@@ -1016,7 +1223,7 @@ services:
   # Exposes REST API on port 8283 with OpenAI-compatible chat endpoint.
   letta:
     dns_search: ["."]
-    image: docker.io/letta/letta:0.16.7
+    image: docker.io/letta/letta:0.16.7@sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c
     restart: unless-stopped
     mem_limit: ${YASHIGANI_LETTA_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_LETTA_CPU_LIMIT:-1.0}
@@ -1043,6 +1250,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: align cap_drop with Helm (agent-bundles.yaml:53).
+    # No cap_add: letta binds port 8283 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: letta calls gateway + postgres, both on `data`.
     networks:
       - data
@@ -1061,7 +1271,7 @@ services:
   # Integration: OpenClaw (:18789) → Yashigani Gateway (:8080) → Ollama/LLM
   openclaw:
     dns_search: ["."]
-    image: ghcr.io/openclaw/openclaw:2026.3.1
+    image: ghcr.io/openclaw/openclaw:2026.5.6@sha256:2ca86d6296fe2ae7111dac14843551340a4c5099e01566253b62c4d3e0a337fc
     restart: unless-stopped
     mem_limit: ${YASHIGANI_OPENCLAW_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_OPENCLAW_CPU_LIMIT:-1.0}
@@ -1071,7 +1281,7 @@ services:
       # Messaging channel webhooks reach OpenClaw via the host loopback (or a
       # local nginx/Caddy reverse proxy) — not directly from the public internet.
       # Gateway-to-OpenClaw traffic stays on the internal Docker bridge (no ports:
-      # entry needed for that path). CWE-668 — Tiago decision 2026-04-28, option A.
+      # entry needed for that path). CWE-668 — design decision: option A.
       - "127.0.0.1:18789:18789"
     environment:
       OPENCLAW_CONFIG_PATH: /etc/openclaw/openclaw.json
@@ -1096,6 +1306,9 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (openclaw profile).
+    # No cap_add: openclaw binds port 18789 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: openclaw calls gateway (data) + needs internet for webhooks (edge).
     networks:
       - data
@@ -1110,7 +1323,7 @@ services:
   # ---------------------------------------------------------------------------
   wazuh-manager:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-manager:4.9.2
+    image: docker.io/wazuh/wazuh-manager:4.14.5@sha256:3b2b7aae2daf696071ecc8b32a5d1e65e5c2a625291afc434bd20171a9d41109
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_MANAGER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_MANAGER_CPU_LIMIT:-1.0}
@@ -1142,6 +1355,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (wazuh profile).
+    # No cap_add: wazuh-manager uses standard ports (55000/1514/1515).
+    cap_drop: [ALL]
     # EX-231-10: wazuh receives audit events from backoffice/gateway sinks.
     # Both gateway/backoffice are on `data`, so wazuh-manager joins `data`.
     # Also joins `obs` for indexer (wazuh-indexer is on obs).
@@ -1153,7 +1369,7 @@ services:
 
   wazuh-indexer:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-indexer:4.9.2
+    image: docker.io/wazuh/wazuh-indexer:4.14.5@sha256:bcba58b3fe756114249b8834bcae8f852d277ffc6b9695d3de5989f5fe94d36c
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_INDEXER_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_INDEXER_CPU_LIMIT:-1.0}
@@ -1167,6 +1383,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (wazuh profile).
+    # No cap_add: wazuh-indexer binds port 9200 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: wazuh-indexer is obs-plane (receives from wazuh-manager).
     networks:
       - obs
@@ -1175,7 +1394,7 @@ services:
 
   wazuh-dashboard:
     dns_search: ["."]
-    image: docker.io/wazuh/wazuh-dashboard:4.9.2
+    image: docker.io/wazuh/wazuh-dashboard:4.14.5@sha256:75437f4fb347db2d040863801f9eb73b0ca16c8b3fb4d93a07df34b7313b16af
     restart: unless-stopped
     mem_limit: ${YASHIGANI_WAZUH_DASHBOARD_MEM_LIMIT:-1024m}
     cpus: ${YASHIGANI_WAZUH_DASHBOARD_CPU_LIMIT:-1.0}
@@ -1201,6 +1420,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (wazuh profile).
+    # No cap_add: wazuh-dashboard binds port 5601 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: wazuh-dashboard is obs-plane (queries indexer + manager).
     networks:
       - obs
@@ -1215,7 +1437,7 @@ services:
   # ---------------------------------------------------------------------------
   step-ca:
     dns_search: ["."]
-    image: docker.io/smallstep/step-ca:0.30.2
+    image: docker.io/smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270
     restart: unless-stopped
     mem_limit: ${YASHIGANI_STEP_CA_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_STEP_CA_CPU_LIMIT:-0.25}
@@ -1232,6 +1454,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart (internal-ca profile).
+    # No cap_add: step-ca binds port 9000 (non-privileged).
+    cap_drop: [ALL]
     # EX-231-10: step-ca issues certs for internal services; data-plane dep.
     networks:
       - data
@@ -1327,7 +1552,7 @@ volumes:
 # ---------------------------------------------------------------------------
 # Networks — Caddy-centric isolation (EX-231-10 fix, 2026-04-29)
 # ---------------------------------------------------------------------------
-# Four networks enforce the Tiago directive: Caddy is the SOLE ingress to
+# Four networks enforce the security directive: Caddy is the SOLE ingress to
 # backoffice and gateway. No other service may reach :8443 or :8080 directly.
 #
 # Network topology:

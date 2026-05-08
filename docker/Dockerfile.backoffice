@@ -4,8 +4,8 @@
 # v0.5.0: adds asyncpg, alembic, PyJWT, OTEL, python-json-logger, Vault optional.
 
 # ── Stage 1: wheel builder ───────────────────────────────────────────────────
-# Base image: python:3.12-slim (tag-pinned, no digest — digests rotate upstream)
-FROM python:3.12-slim AS builder
+# Base image: python:3.12.13-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3
+FROM python:3.12.13-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS builder
 
 WORKDIR /build
 
@@ -19,8 +19,8 @@ RUN python -m build --wheel --outdir /dist
 
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
-# Base image: python:3.12-slim (tag-pinned, no digest — digests rotate upstream)
-FROM python:3.12-slim AS runtime
+# Base image: python:3.12.13-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3
+FROM python:3.12.13-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS runtime
 
 RUN groupadd --gid 1001 yashigani \
  && useradd --uid 1001 --gid 1001 --no-create-home --shell /bin/false yashigani
@@ -34,10 +34,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install the wheel — pulls all pyproject.toml install_requires automatically.
+# pip is removed after installation: it is not needed at runtime and its presence
+# would expose the image to CVE-2026-3219 (improper archive handling) if pip were
+# ever invoked against attacker-controlled input. It is not — all pip invocations
+# are build-time only — but removing the tool eliminates the attack surface class.
 COPY --from=builder /dist/*.whl /tmp/
 RUN pip install --no-cache-dir --upgrade "pip==26.0.1" && \
     pip install --no-cache-dir "/tmp/$(ls /tmp/*.whl | xargs -n1 basename)" && \
-    rm /tmp/*.whl
+    rm /tmp/*.whl && \
+    pip uninstall -y pip
 
 # Admin UI templates + static assets — copy into installed package
 COPY src/yashigani/backoffice/templates/ /usr/local/lib/python3.12/site-packages/yashigani/backoffice/templates/
@@ -67,6 +72,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    # LIC-003 / LAURA-LICENSE-06: disable Python user-site to prevent
+    # sitecustomize.py monkey-patch attacks via ~/.local/lib/pythonX.Y/site-packages/.
+    PYTHONNOUSERSITE=1 \
     YASHIGANI_SERVICE_NAME=backoffice
 
 # Internal mTLS (v2.23.1) — mutual TLS terminated by uvicorn.

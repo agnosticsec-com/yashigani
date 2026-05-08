@@ -3,7 +3,7 @@ Yashigani Backoffice — FastAPI admin portal.
 Isolated on port 8443. Local auth only (username + password + TOTP).
 No data-plane access. TLS required.
 
-Last updated: 2026-05-02T19:17:04+01:00
+Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -76,6 +76,8 @@ from yashigani.backoffice.routes import (
     models_router,
     sensitivity_router,
     sso_router,
+    # v2.23.2 — Backup status + verify (#47)
+    backup_router,
 )
 
 
@@ -153,7 +155,6 @@ async def lifespan(app: FastAPI):
     # "this event loop is already running" and disables Postgres features.
     import logging as _logging
     import os
-    from urllib.parse import quote
     _log = _logging.getLogger("yashigani.backoffice.lifespan")
 
     # Layer B: load the per-install caddy_internal_hmac secret.
@@ -212,11 +213,16 @@ async def lifespan(app: FastAPI):
             backoffice_state.auth_service = auth_service
 
             import asyncio as _asyncio
-            import psycopg2 as _psycopg2
+            from yashigani.db.postgres import connect_with_retry_sync as _connect_retry
             direct_dsn = os.environ.get("YASHIGANI_DB_DSN_DIRECT") or db_dsn
 
             def _acquire_lock_sync():
-                conn = _psycopg2.connect(direct_dsn)
+                # RETRO-R4-2: use connect_with_retry_sync (connect_timeout=15s,
+                # up to 5 attempts with backoff) instead of bare psycopg2.connect()
+                # which hangs indefinitely when postgres is mid-restart.
+                # F-NEW-02 finding: pg_advisory_lock blocked the entire lifespan
+                # for 60+ s when postgres restarted during K8s rolling update.
+                conn = _connect_retry(direct_dsn, max_attempts=5, backoff_s=3.0)
                 conn.autocommit = True
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_advisory_lock(%s)", (_BOOTSTRAP_ADVISORY_LOCK_KEY,))
@@ -242,26 +248,13 @@ async def lifespan(app: FastAPI):
             backoffice_state.inference_logger = inference_logger
 
             # Anomaly detector Redis client (DB 2), mirrors _bootstrap URL logic.
-            redis_host = os.getenv("REDIS_HOST", "redis")
-            redis_port = os.getenv("REDIS_PORT", "6380")
-            redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
-            secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
-            redis_pwd_file = os.path.join(secrets_dir, "redis_password")
-            redis_password = (
-                open(redis_pwd_file).read().strip()
-                if os.path.exists(redis_pwd_file)
-                else os.getenv("REDIS_PASSWORD", "")
+            from yashigani.gateway._redis_url import build_redis_url
+            anomaly_redis_url = build_redis_url(
+                2,
+                use_tls=os.getenv("REDIS_USE_TLS", "true").lower() == "true",
+                secrets_dir=os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets"),
+                client_cert_name="backoffice_client",
             )
-            _q = quote(redis_password, safe="")
-            if redis_use_tls:
-                anomaly_redis_url = (
-                    f"rediss://:{_q}@{redis_host}:{redis_port}/2"
-                    f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
-                    f"&ssl_certfile={secrets_dir}/backoffice_client.crt"
-                    f"&ssl_keyfile={secrets_dir}/backoffice_client.key"
-                )
-            else:
-                anomaly_redis_url = f"redis://:{_q}@{redis_host}:{redis_port}/2"
 
             import redis as _redis
             anomaly_client = _redis.from_url(anomaly_redis_url, decode_responses=False)
@@ -421,6 +414,7 @@ def create_backoffice_app() -> FastAPI:
         ("/admin/rbac",                 32 * 1024),
         ("/admin/alerts",               32 * 1024),
         ("/admin/budget",               16 * 1024),
+        ("/admin/backup",               256),          # backup_name only (ASVS 4.3.1)
         ("/auth/login",                 4 * 1024),    # u/p/totp
         ("/auth/password/change",       8 * 1024),
         ("/auth/password/self-reset",   4 * 1024),
@@ -581,6 +575,9 @@ def create_backoffice_app() -> FastAPI:
     # Service management — enable/disable optional compose profiles from admin panel
     from yashigani.backoffice.routes.services import router as services_router
     app.include_router(services_router, tags=["services"])
+
+    # v2.23.2 — Backup status + verify (#47)
+    app.include_router(backup_router, tags=["backup"])
 
     # v0.9.0 — Phase 6: WebAuthn/Passkeys
     # webauthn_router carries its own full path segments (no prefix stripping needed)

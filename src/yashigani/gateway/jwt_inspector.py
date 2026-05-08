@@ -15,6 +15,8 @@ Three streams (YASHIGANI_DEPLOYMENT_STREAM):
   opensource  — skip per-tenant lookup, use platform only
   corporate   — per-tenant first, platform fallback
   saas        — per-tenant mandatory
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -71,7 +73,7 @@ class JWTInspector:
             return await self._inspect(token, tenant_id)
         except Exception as exc:
             logger.error("JWTInspector unexpected error: %s", exc)
-            return JWTInspectionResult(valid=False, error=str(exc))
+            return JWTInspectionResult(valid=False, error=type(exc).__name__)
 
     async def _inspect(self, token: str, tenant_id: str) -> JWTInspectionResult:
         try:
@@ -121,7 +123,7 @@ class JWTInspector:
                 _inc_counter("expired")
                 return JWTInspectionResult(valid=False, error="token_expired")
             _inc_counter("invalid")
-            return JWTInspectionResult(valid=False, error=str(exc))
+            return JWTInspectionResult(valid=False, error=type(exc).__name__)
 
     async def _resolve_config(self, tenant_id: str) -> Optional[JWTConfig]:
         if self._deployment_stream != "opensource" and tenant_id != PLATFORM_TENANT_ID:

@@ -1,0 +1,50 @@
+# ACS-RISK-008 — Container hardening: require seccomp RuntimeDefault or Localhost
+# Last updated: 2026-05-02T00:00:00+01:00
+#
+# Rejects pods where seccompProfile is missing at both pod AND container level.
+# The default in Kubernetes (< 1.27 without PSA) is Unconfined — i.e. no syscall
+# filtering at all. RuntimeDefault applies the container runtime's built-in
+# seccomp profile which blocks ~40 dangerous syscalls.
+#
+# Both pod-level and container-level seccomp are accepted; either is sufficient.
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: yashigani-require-seccomp-profile
+  annotations:
+    policies.kyverno.io/title: "Require seccomp RuntimeDefault or Localhost"
+    policies.kyverno.io/category: "Pod Security"
+    policies.kyverno.io/severity: "medium"
+    policies.kyverno.io/subject: "Pod"
+    policies.kyverno.io/description: >-
+      Pods in the yashigani namespace must specify seccompProfile.type of
+      RuntimeDefault or Localhost at the pod level (or per-container).
+      Implements ACS-RISK-008.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-seccomp-profile
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - yashigani
+      validate:
+        message: >-
+          ACS-RISK-008: Pod '{{ request.object.metadata.name }}' must set
+          seccompProfile.type to RuntimeDefault or Localhost at the pod level
+          (spec.securityContext.seccompProfile). Unconfined seccomp is not
+          permitted in the yashigani namespace.
+        deny:
+          conditions:
+            all:
+              # Pod-level seccomp type is Unconfined or missing
+              - key: "{{ request.object.spec.securityContext.seccompProfile.type || 'Unconfined' }}"
+                operator: AnyIn
+                value:
+                  - Unconfined
+                  - ""

@@ -25,6 +25,8 @@ import httpx
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
+from yashigani.pki.client import internal_httpx_client
+
 logger = logging.getLogger(__name__)
 
 _HOP_BY_HOP = frozenset({
@@ -100,7 +102,7 @@ async def route_agent_call(request: Request, path: str, state: dict) -> Response
     caller_groups = caller_agent.get("groups", [])
 
     # ── OPA enforcement (fail-closed) ─────────────────────────────────────────
-    opa_url = config.opa_url if config is not None else "http://policy:8181"
+    opa_url = config.opa_url if config is not None else "https://policy:8181"
     opa_input = {
         "principal": {
             "type": "agent",
@@ -241,7 +243,7 @@ async def _opa_agent_check(opa_url: str, opa_input: dict) -> tuple[bool, str]:
     Fail-closed: any OPA error returns (False, "opa_unreachable").
     """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 opa_url.rstrip("/") + _OPA_AGENT_ALLOWED_PATH,
                 json={"input": opa_input},

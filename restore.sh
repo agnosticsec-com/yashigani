@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Last updated: 2026-05-02T23:10:00+01:00 (fix RESTORE-4: BSD sed -i portability — use sed -i "" for macOS)
+# Last updated: 2026-05-07T09:00:00+01:00 (fix: validate_backup BACKUP_DIR→backup_dir variable mismatch — signed backups failed validation without --force)
+# Last updated: 2026-05-03T12:45:00+01:00 (V232-SMOKE-010: exclude .gitkeep from empty-file check; V232-SMOKE-011: podman unshare chown -R before cp restore; V232-SMOKE-012: secrets dir 0751→0755)
 
 # Tight umask so any files/dirs created during restore inherit 0600/0700.
 # Overrides the host default (often 022) which would leave intermediate
@@ -305,8 +306,10 @@ validate_backup() {
   fi
 
   # Hard fail: empty secret files indicate corruption.
+  # Exclude .gitkeep (an intentionally-empty git placeholder present in the
+  # committed docker/secrets/ directory and preserved in every backup by cp -rp).
   local empty_count
-  empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty 2>/dev/null | wc -l | tr -d ' ')
+  empty_count=$(find "${backup_dir}/secrets" -maxdepth 1 -type f -empty ! -name '.gitkeep' 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$empty_count" -gt 0 ]]; then
     log_error "${empty_count} secret file(s) are empty — backup is corrupt"
     errors=$((errors + 1))
@@ -331,6 +334,82 @@ validate_backup() {
     fi
   else
     log_warn "No postgres_dump.sql in backup — DB will start empty post-restore"
+  fi
+
+  # RETRO-R4-3: verify backup manifest signature if present.
+  # install.sh signs the manifest with the CA intermediate private key.
+  # We verify using the public key extracted from ca_intermediate.crt.
+  #
+  # If both MANIFEST.sha256 and MANIFEST.sha256.sig are present, the
+  # signature MUST be valid — a bad signature is a hard FAIL (evidence of
+  # tampering). If the manifest is absent, emit a warning (unsigned backup
+  # from a pre-RETRO-R4-3 install or --force recovery scenario).
+  local _manifest="${backup_dir}/MANIFEST.sha256"
+  local _sig="${backup_dir}/MANIFEST.sha256.sig"
+  local _ca_cert="${backup_dir}/secrets/ca_intermediate.crt"
+
+  if [[ -f "$_manifest" && -f "$_sig" ]]; then
+    if [[ ! -f "$_ca_cert" ]]; then
+      log_error "RETRO-R4-3: MANIFEST.sha256.sig present but ca_intermediate.crt missing from backup/secrets/ — cannot verify"
+      errors=$((errors + 1))
+    else
+      # Extract public key from the intermediate cert, then verify.
+      # openssl dgst -verify reads a raw public key PEM file (not a cert).
+      local _pubkey_file
+      # V232-NEG04: never use /tmp — place temp pubkey alongside backup dir
+      _pubkey_file=$(mktemp "${backup_dir}/.ysg-pubkey-XXXXXXXX.pem" 2>/dev/null \
+        || mktemp "${HOME}/.ysg-pubkey-XXXXXXXX.pem")
+      trap 'rm -f "$_pubkey_file"' RETURN
+      if ! openssl x509 -in "$_ca_cert" -noout -pubkey > "$_pubkey_file" 2>/dev/null; then
+        log_error "RETRO-R4-3: Failed to extract public key from ca_intermediate.crt"
+        errors=$((errors + 1))
+      elif ! openssl dgst -sha256 -verify "$_pubkey_file" -signature "$_sig" "$_manifest" >/dev/null 2>&1; then
+        log_error "RETRO-R4-3: Backup signature verification FAILED — backup may be tampered"
+        log_error "  Manifest: ${_manifest}"
+        log_error "  Signature: ${_sig}"
+        log_error "  Cert: ${_ca_cert}"
+        errors=$((errors + 1))
+      else
+        log_success "Backup manifest signature verified (RETRO-R4-3)"
+        # Also verify manifest content hashes match current files on disk.
+        # This catches partial writes / truncations even without sig tampering.
+        local _hash_errors=0
+        while IFS= read -r _line; do
+          local _hash _relpath
+          _hash="${_line%% *}"
+          _relpath="${_line##* }"
+          local _fpath="${backup_dir}/${_relpath}"
+          if [[ ! -f "$_fpath" ]]; then
+            log_error "RETRO-R4-3: Manifest references missing file: ${_relpath}"
+            _hash_errors=$((_hash_errors + 1))
+          else
+            local _actual_hash
+            _actual_hash=$(sha256sum "$_fpath" | awk '{print $1}')
+            if [[ "$_actual_hash" != "$_hash" ]]; then
+              log_error "RETRO-R4-3: Manifest hash mismatch for ${_relpath} (expected ${_hash}, got ${_actual_hash})"
+              _hash_errors=$((_hash_errors + 1))
+            fi
+          fi
+        done < "$_manifest"
+        if [[ "$_hash_errors" -gt 0 ]]; then
+          log_error "RETRO-R4-3: ${_hash_errors} file(s) do not match manifest — backup is corrupt"
+          errors=$((errors + _hash_errors))
+        else
+          log_success "Backup manifest content hashes verified (${_hash_errors} mismatches)"
+        fi
+      fi
+      rm -f "$_pubkey_file" 2>/dev/null || true
+      trap - RETURN
+    fi
+  elif [[ -f "$_sig" && ! -f "$_manifest" ]]; then
+    log_error "RETRO-R4-3: MANIFEST.sha256.sig present but MANIFEST.sha256 missing — backup is corrupt"
+    errors=$((errors + 1))
+  else
+    log_warn "RETRO-R4-3: Backup has no manifest signature (pre-RETRO-R4-3 backup or unsigned)"
+    log_warn "  Integrity cannot be cryptographically verified. Use --force to proceed."
+    log_warn "  New backups created by install.sh >= RETRO-R4-3 include a signed manifest."
+    # Not a hard error — operator may be restoring a legacy backup.
+    # --force callers are already warned by the outer validate_backup caller.
   fi
 
   if [[ "$errors" -gt 0 ]]; then
@@ -411,6 +490,12 @@ restore_backup() {
           log_warn "podman unshare chown on secrets dir failed — chmod 751 may fail; pre-run: sudo chown $(id -un):$(id -gn) '${WORK_DIR}/docker/secrets'"
         fi
         # Also reset any existing files so cp -rp can overwrite them.
+        # RESTORE-4 (V232-SMOKE-011): existing files are sub-UID-owned; plain
+        # chmod u+w leaves them sub-UID-owned so tom cannot overwrite them.
+        # Remap ownership to uid 0 (= tom on the host) inside the user namespace
+        # so cp -rp from the backup can create/overwrite files in the live dir.
+        # _pki_chown_client_keys re-applies container sub-UID ownership after copy.
+        podman unshare chown -R 0:0 "${WORK_DIR}/docker/secrets" 2>/dev/null || true
         find "${WORK_DIR}/docker/secrets" -maxdepth 1 -type f \
           -exec podman unshare chmod u+w {} \; 2>/dev/null || true
       else
@@ -420,13 +505,16 @@ restore_backup() {
       fi
     fi
 
-    # RC-6 (v2.23.1): secrets directory must be world-traversable (0751) so
+    # RC-6 (v2.23.1): secrets directory must be world-readable (0755) so
     # container processes running as non-root UIDs (pgbouncer=70, redis=999,
-    # etc.) can access individual files within it. restore.sh runs with
-    # umask 077, which would create the directory as 0700 — override explicitly.
-    # The outer home directory (/home/max) provides the primary access control;
-    # making the inner secrets/ directory traversable is intentional and safe.
-    chmod 751 "${WORK_DIR}/docker/secrets"
+    # OPA=1000, etc.) can both traverse AND read-list the directory.
+    # OPA requires read on the dir to inotify-watch TLS certs for hot-reload;
+    # 0751 (world-traverse-only) prevented the inotify watcher → OPA unhealthy.
+    # restore.sh runs with umask 077, which would create the dir as 0700 — set
+    # explicitly to 0755. The outer home directory provides the primary access
+    # control; making the inner secrets/ directory readable is intentional and safe.
+    # V232-SMOKE-012 fix: changed 0751 → 0755.
+    chmod 755 "${WORK_DIR}/docker/secrets"
     # Ensure any pre-existing read-only files in the destination are writable
     # before we overwrite them. On macOS (BSD cp), cp -rp fails to overwrite
     # a 0400 file even when you own it — unlike GNU cp which can force-overwrite
@@ -672,17 +760,23 @@ _pki_chown_client_keys() {
 # ---------------------------------------------------------------------------
 # BUG-4 (v2.23.1): Refresh PGDATA-cached CA + server cert after PKI restore
 # ---------------------------------------------------------------------------
-# Postgres caches the CA root + server leaf inside PGDATA at first initdb
-# (docker/postgres/05-enable-ssl.sh installs ca_root.crt -> ${PGDATA}/root.crt,
-# postgres_client.crt -> server.crt, postgres_client.key -> server.key). On a
-# fresh install the CA in PGDATA and the CA in /run/secrets/ca_root.crt are
-# the same. After a restore, /run/secrets/ now carries the BACKUPs CA but
-# PGDATA still has the in-place install CA -- every mTLS handshake against
+# Postgres caches the CA trust bundle + server leaf inside PGDATA at first initdb.
+# install.sh (05-enable-ssl.sh upgrade path) writes:
+#   cat ca_root.crt ca_intermediate.crt > ${PGDATA}/root.crt   (trust bundle)
+#   postgres_client.crt -> server.crt
+#   postgres_client.key -> server.key
+# On a fresh install the bundle in PGDATA and the CAs in /run/secrets/ are
+# the same. After a restore, /run/secrets/ now carries the BACKUP's CAs but
+# PGDATA still has the in-place install bundle -- every mTLS handshake against
 # pgbouncer fails because pgbouncer presents a leaf signed by the restored CA
 # while PGDATA root.crt only trusts the in-place CA.
 #
-# Fix: copy the restored CA + restored postgres leaf from /run/secrets into
-# PGDATA, then pg_ctl reload (no restart needed -- TLS material is reloadable).
+# RETRO-R4-1: root.crt is a concatenated bundle (root + intermediate). The
+# previous restore wrote only ca_root.crt, leaving a partial chain that
+# postgres rejected for verify-ca peer-cert validation.
+#
+# Fix: cat both certs (matching install.sh exactly), install postgres leaf,
+# pg_ctl reload (no restart needed -- TLS material is hot-reloadable).
 #
 # Pattern-sweep result: ONLY postgres caches CA-in-volume. redis, pgbouncer,
 # gateway, backoffice, caddy, grafana all read /run/secrets/ca_root.crt or
@@ -697,20 +791,32 @@ _refresh_pgdata_ca() {
 
   if [[ -z "$pg_target" ]]; then
     log_warn "Postgres not running -- PGDATA CA refresh deferred."
-    log_warn "  After bringing postgres up, manually install"
-    log_warn "  /run/secrets/ca_root.crt into \${PGDATA}/root.crt and the"
-    log_warn "  postgres_client.{crt,key} into \${PGDATA}/server.{crt,key},"
-    log_warn "  then pg_ctl reload."
+    log_warn "  After bringing postgres up, exec into the postgres container and run:"
+    log_warn "    cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > \${PGDATA}/root.crt"
+    log_warn "    chown postgres:postgres \${PGDATA}/root.crt && chmod 0640 \${PGDATA}/root.crt"
+    log_warn "    install -m0644 -o postgres -g postgres /run/secrets/postgres_client.crt \${PGDATA}/server.crt"
+    log_warn "    install -m0600 -o postgres -g postgres /run/secrets/postgres_client.key \${PGDATA}/server.key"
+    log_warn "    pg_ctl -D \${PGDATA} reload"
     return 0
   fi
 
   log_info "Refreshing PGDATA-cached CA + server cert in ${pg_target}..."
 
+  # RETRO-R4-1: install.sh writes root.crt as a CONCATENATED bundle:
+  #   cat ca_root.crt ca_intermediate.crt > ${PGDATA}/root.crt
+  # restore.sh previously wrote only ca_root.crt, leaving postgres with a
+  # trust store missing the intermediate. pgbouncer presents leaves signed
+  # by the intermediate; postgres's ssl_ca_file rejects them because the
+  # chain is incomplete. Fix: match install.sh exactly — cat both PEMs.
   if ! pg_exec "$pg_target" sh -c '
     set -e
     PGDATA="${PGDATA:-/var/lib/postgresql/data/pgdata}"
     : "${PGDATA:?PGDATA env var unset in postgres container}"
-    install -m 0644 -o postgres -g postgres /run/secrets/ca_root.crt         "${PGDATA}/root.crt"
+    # Trust bundle: root + intermediate concatenated (must match install.sh line that
+    # does: cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > ${PGDATA}/root.crt)
+    cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > "${PGDATA}/root.crt"
+    chown postgres:postgres "${PGDATA}/root.crt"
+    chmod 0640 "${PGDATA}/root.crt"
     install -m 0644 -o postgres -g postgres /run/secrets/postgres_client.crt "${PGDATA}/server.crt"
     install -m 0600 -o postgres -g postgres /run/secrets/postgres_client.key "${PGDATA}/server.key"
     # pg_ctl cannot run as root. Use gosu if available (official postgres image),
@@ -724,10 +830,12 @@ _refresh_pgdata_ca() {
     fi
   '; then
     log_error "PGDATA CA refresh failed. mTLS between pgbouncer and postgres may be broken."
-    log_error "  Manual recovery: exec into postgres, copy"
-    log_error "  /run/secrets/{ca_root.crt,postgres_client.crt,postgres_client.key} into"
-    log_error "  \${PGDATA}/{root.crt,server.crt,server.key} (chown postgres:postgres),"
-    log_error "  then run: pg_ctl -D \${PGDATA} reload"
+    log_error "  Manual recovery: exec into postgres, run:"
+    log_error "    cat /run/secrets/ca_root.crt /run/secrets/ca_intermediate.crt > \${PGDATA}/root.crt"
+    log_error "    chown postgres:postgres \${PGDATA}/root.crt && chmod 0640 \${PGDATA}/root.crt"
+    log_error "    install -m0644 -o postgres -g postgres /run/secrets/postgres_client.crt \${PGDATA}/server.crt"
+    log_error "    install -m0600 -o postgres -g postgres /run/secrets/postgres_client.key \${PGDATA}/server.key"
+    log_error "    pg_ctl -D \${PGDATA} reload"
     return 1
   fi
 

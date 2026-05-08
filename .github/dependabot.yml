@@ -15,7 +15,9 @@ updates:
       - "n0n0iz"
     target-branch: "main"
 
-  # GitHub Actions
+  # GitHub Actions — SHA-pinned with version comments (OWASP CI/CD C-7 / LAURA-2026-04-29-004)
+  # Dependabot understands `uses: action@<sha> # vX.Y.Z` and will open PRs updating
+  # both the SHA and the comment when a new release is tagged.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -25,8 +27,13 @@ updates:
     labels:
       - "ci"
       - "dependencies"
+      - "security"
     reviewers:
       - "n0n0iz"
+    target-branch: "2.23.x"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
 
   # Docker base images
   - package-ecosystem: "docker"

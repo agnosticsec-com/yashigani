@@ -7,7 +7,7 @@ push the updated data document to OPA via opa_push.push_rbac_data().
 OPA push failures are logged and audited but do NOT fail the mutation —
 the store is always considered authoritative.
 
-Last updated: 2026-05-02T09:00:00+01:00
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ def _push(store, admin_account: str) -> None:
             pass
     except Exception as exc:
         outcome = "failure"
-        error = str(exc)
+        error = type(exc).__name__
         logger.error("RBAC OPA push failed: %s", exc)
         try:
             from yashigani.metrics.registry import rbac_policy_push_total

@@ -8,6 +8,8 @@ GET  /admin/settings/webauthn/credentials   — list user's registered credentia
 DELETE /admin/settings/webauthn/credentials/{id} — delete a credential
 
 OWASP ASVS V2.8: sign_count replay protection enforced per credential.
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +113,12 @@ async def register_complete(
             session.account_id,
             "WEBAUTHN_CREDENTIAL_REGISTERED",
             outcome="failure",
-            detail=str(exc),
+            detail=type(exc).__name__,
         )
+        payload, _ = safe_error_envelope(exc, public_message="webauthn registration failed", status=400)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "webauthn_registration_failed", "message": str(exc)},
+            detail=payload,
         )
     except Exception as exc:
         logger.error("WebAuthn registration error: %s", exc)
@@ -193,11 +197,12 @@ async def authenticate_complete(
             session.account_id,
             "WEBAUTHN_CREDENTIAL_USED",
             outcome="failure",
-            detail=str(exc),
+            detail=type(exc).__name__,
         )
+        payload, _ = safe_error_envelope(exc, public_message="webauthn authentication failed", status=401)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": "webauthn_authentication_failed", "message": str(exc)},
+            detail=payload,
         )
     except Exception as exc:
         logger.error("WebAuthn authentication error: %s", exc)

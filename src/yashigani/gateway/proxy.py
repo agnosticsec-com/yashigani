@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
+import math
 import os
 import time
 import uuid
@@ -33,6 +35,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from yashigani.auth.spiffe import require_spiffe_id
+from yashigani.pki.client import internal_httpx_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,7 @@ def _content_hash(content: str) -> str:
 @dataclass
 class GatewayConfig:
     upstream_base_url: str              # Target MCP server URL
-    opa_url: str = "http://policy:8181"
+    opa_url: str = "https://policy:8181"
     opa_policy_path: str = "/v1/data/yashigani/allow"
     request_timeout_seconds: float = 30.0
     max_request_body_bytes: int = 4 * 1024 * 1024  # 4 MB
@@ -350,6 +353,27 @@ async def _proxy_request_body(
                 session_id=session_id_rl,
                 rate_limiter=rate_limiter,
             )
+            # Redis-unavailable in fail-closed mode → 503 Service Unavailable.
+            # All other rate-limit violations (token bucket exhausted) → 429.
+            if rl_result.dimension == "redis_unavailable":
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "SERVICE_TEMPORARILY_UNAVAILABLE",
+                        "message": (
+                            f"The system is recovering. Please retry in "
+                            f"{retry_sec} seconds. If the problem persists, "
+                            "contact your administrator."
+                        ),
+                        "detail": "Rate limiter backend unavailable; request rejected (fail-closed mode).",
+                        "request_id": request_id,
+                        "retry_after_seconds": retry_sec,
+                    },
+                    headers={
+                        "X-Yashigani-Request-Id": request_id,
+                        "Retry-After": str(retry_sec),
+                    },
+                )
             return JSONResponse(
                 status_code=429,
                 content={
@@ -571,6 +595,8 @@ async def _proxy_request_body(
     # Inspect the upstream response for indirect prompt injection before
     # returning it to the agent. Raw body is never stored; only a hash.
     response_verdict: Optional[str] = None
+    # F-T10-001: 1.0 = clean pass (no inspection or skipped); overwritten below.
+    proxy_inspection_confidence: float = 1.0
     resp_pipeline = state.get("response_inspection_pipeline")
     if resp_pipeline is not None:
         resp_body_text = _decode_body_safe(upstream_response.content)
@@ -585,6 +611,10 @@ async def _proxy_request_body(
             )
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict
+                # F-T10-001: capture inspection confidence for operator UI.
+                # isfinite guard + clamp — see openai_router.py comment for rationale.
+                _raw_conf = float(resp_result.confidence)
+                proxy_inspection_confidence = max(0.0, min(1.0, _raw_conf)) if math.isfinite(_raw_conf) else 0.0
             if resp_result.verdict == "BLOCKED":
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 _audit_request(
@@ -704,6 +734,15 @@ async def _proxy_request_body(
     if response_verdict is not None:
         response.headers["X-Yashigani-Response-Verdict"] = response_verdict
 
+    # 5e-T10. F-T10-001: Generated-content disclaimer + inspection confidence.
+    # X-Yashigani-Generated-Content is always true for proxy responses — the
+    # upstream (MCP server, LLM, tool) produces content that downstream consumers
+    # should not treat as ground truth without verification.
+    response.headers["X-Yashigani-Generated-Content"] = "true"
+    response.headers["X-Yashigani-Response-Inspection-Confidence"] = (
+        f"{proxy_inspection_confidence:.4f}"
+    )
+
     # 5f. PII detection header (v2.2)
     _pii_any = pii_detected_on_request or pii_detected_on_response
     response.headers["X-Yashigani-PII-Detected"] = "true" if _pii_any else "false"
@@ -746,7 +785,7 @@ async def _opa_check(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 cfg.opa_url + cfg.opa_policy_path,
                 json={"input": input_doc},
@@ -839,11 +878,100 @@ def _decode_body_safe(body: bytes) -> Optional[str]:
         return None
 
 
+def _parse_trusted_proxy_cidrs() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """
+    Parse TRUSTED_PROXY_CIDRS from the environment.
+
+    Format: comma-separated CIDR strings, e.g.
+        TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+
+    Defaults to loopback only (127.0.0.1/32 and ::1/128).  This is the
+    safe fail-closed default: without explicit configuration, only
+    connections where the immediate peer is localhost are trusted to
+    carry a reliable XFF chain.  Deployments behind a load-balancer or
+    Caddy reverse proxy MUST set TRUSTED_PROXY_CIDRS to include the
+    proxy's address range so that the real client IP is extracted
+    correctly from XFF.
+    """
+    raw = os.environ.get("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128")
+    cidrs: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            cidrs.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            logger.warning(
+                "proxy: TRUSTED_PROXY_CIDRS contains invalid CIDR %r — ignoring", token
+            )
+    if not cidrs:
+        # If the entire env var is malformed, fail closed to loopback only
+        logger.error(
+            "proxy: TRUSTED_PROXY_CIDRS produced no valid CIDRs after parsing; "
+            "falling back to loopback-only trust boundary"
+        )
+        cidrs = [
+            ipaddress.ip_network("127.0.0.1/32"),
+            ipaddress.ip_network("::1/128"),
+        ]
+    return cidrs
+
+
+# Module-level cache — parsed once at import time so hot paths pay no cost.
+# Re-read via _parse_trusted_proxy_cidrs() in tests that need to inject values.
+_TRUSTED_PROXY_CIDRS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = (
+    _parse_trusted_proxy_cidrs()
+)
+
+
 def _get_client_ip(request: Request) -> str:
+    """
+    Resolve the real client IP using a trusted-proxy-boundary walk.
+
+    CWE-345 mitigation (V232-NEG03 / LAURA-2026-04-29-006):
+    The old implementation trusted the FIRST (leftmost) IP in the
+    X-Forwarded-For chain, which an attacker can prepend at will:
+
+        XFF: <spoofed>,<real-client>,<proxy>
+
+    The correct algorithm walks the chain RIGHT-TO-LEFT, skipping IPs
+    that belong to trusted proxy CIDRs (TRUSTED_PROXY_CIDRS env var).
+    The first IP that is NOT in a trusted CIDR is the real client.  If
+    the entire chain is trusted (e.g. all internal hops) the leftmost
+    remaining entry is used.  If the chain is empty, the TCP peer
+    address is used — which is always authoritative for the immediate
+    hop.
+    """
     forwarded_for = request.headers.get("x-forwarded-for", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    peer_addr = request.client.host if request.client else "unknown"
+
+    if not forwarded_for:
+        return peer_addr
+
+    # Split and strip whitespace from each entry
+    hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
+    if not hops:
+        return peer_addr
+
+    trusted_cidrs = _TRUSTED_PROXY_CIDRS
+
+    # Walk right-to-left; stop at first non-trusted IP
+    for hop in reversed(hops):
+        try:
+            addr = ipaddress.ip_address(hop)
+        except ValueError:
+            # Malformed entry — treat as untrusted (fail closed)
+            logger.debug(
+                "proxy: _get_client_ip: malformed XFF hop %r — treating as real client", hop
+            )
+            return hop
+        if not any(addr in cidr for cidr in trusted_cidrs):
+            return hop
+
+    # Every entry in the chain was a trusted proxy — the leftmost is as
+    # close to the real client as we can get from this chain.
+    return hops[0]
 
 
 def _error_response(request_id: str, status_code: int, error_code: str) -> JSONResponse:

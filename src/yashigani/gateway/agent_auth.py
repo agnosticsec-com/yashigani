@@ -24,10 +24,15 @@ logger = logging.getLogger(__name__)
 
 
 def _get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """
+    Delegate to the canonical trusted-proxy-boundary resolver in proxy.py.
+
+    CWE-345 mitigation (V232-NEG03 / LAURA-2026-04-29-006): the old
+    local copy trusted the first (leftmost) XFF hop, which is attacker-
+    controlled.  Importing from proxy ensures a single implementation.
+    """
+    from yashigani.gateway.proxy import _get_client_ip as _canonical_get_client_ip
+    return _canonical_get_client_ip(request)
 
 
 def _ip_in_cidrs(ip_str: str, cidrs: list[str]) -> bool:

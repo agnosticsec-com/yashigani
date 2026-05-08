@@ -6,6 +6,22 @@ and other OpenAI-compatible clients can use. All requests go through the
 full Yashigani pipeline: identity resolution, sensitivity scan, complexity
 scoring, budget enforcement, OE routing, PII filtering, and audit.
 
+v2.23.2 (F-T10-001): Overreliance UX controls.
+  Every LLM response now carries:
+  - ``X-Yashigani-Generated-Content: true`` — informs operator UIs that the
+    response body is AI-generated content, enabling badge/disclaimer rendering.
+  - ``X-Yashigani-Response-Inspection-Confidence`` — float [0.0–1.0]; the
+    response-inspection pipeline confidence score.  "1.0" when inspection is
+    disabled or skipped (clean-pass default).  Operator UIs render a low-
+    confidence badge when this value is below the configured threshold.
+  - ``X-Yashigani-Low-Confidence-Stepup: required`` — emitted when the
+    response-inspection confidence falls below YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD
+    (default 0.50) **and** the sensitivity level is CONFIDENTIAL or RESTRICTED.
+    The operator UI intercept is expected to surface a "verify before acting"
+    prompt.  This closes OWASP Agentic AI T10 (Overreliance) gap F-T10-001.
+
+  ASVS mapping: V13.2.6 (LLM output handling); OWASP Agentic AI T10 Overreliance.
+
 v1.0: Buffered responses only (Decision 13). Full response collected
 before delivery to enable response inspection and token counting.
 
@@ -34,11 +50,12 @@ Streaming limitations
   response-path inspection. This adds ~2-3s latency but ensures PII
   cannot leak through streamed responses.
 """
-# Last updated: 2026-04-23T11:36:14+01:00
+# Last updated: 2026-05-03T00:00:00+01:00
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -47,6 +64,8 @@ from typing import Optional
 from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
+from yashigani.pki.client import internal_httpx_client
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +152,23 @@ class OpenAIRouterState:
         self.pii_detector = None          # PiiDetector | None
         self.pii_cloud_bypass: bool = False  # True = skip PII for cloud-routed requests
         # OPA policy enforcement
-        self.opa_url: str = "http://policy:8181"
+        self.opa_url: str = "https://policy:8181"
         # Content relay detection (agent-to-agent laundering)
         self.content_relay_detector = None
+        # F-T10-001: low-confidence step-up threshold.  When response-inspection
+        # confidence falls below this value AND sensitivity >= CONFIDENTIAL,
+        # X-Yashigani-Low-Confidence-Stepup: required is added to the response.
+        # Guard: empty or non-numeric env var must not crash module load.
+        _thresh_raw = os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
+        try:
+            self.low_confidence_stepup_threshold: float = float(_thresh_raw)
+        except ValueError:
+            logger.warning(
+                "YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD is not a valid float "
+                "(got %r); using default 0.50",
+                _thresh_raw,
+            )
+            self.low_confidence_stepup_threshold = 0.50
 
 
 _state = OpenAIRouterState()
@@ -157,7 +190,7 @@ def configure(
     ddos_protector=None,  # v2.2 — DDoSProtector | None
     pii_detector=None,    # v2.2 — PiiDetector | None
     pii_cloud_bypass: bool = False,  # v2.2 — True = skip PII for cloud-routed requests
-    opa_url: str = "http://policy:8181",
+    opa_url: str = "https://policy:8181",
     content_relay_detector=None,
 ) -> None:
     """Configure the OpenAI router with dependencies. Called once at startup."""
@@ -178,6 +211,18 @@ def configure(
     _state.pii_cloud_bypass = pii_cloud_bypass
     _state.opa_url = opa_url
     _state.content_relay_detector = content_relay_detector
+    # F-T10-001: low-confidence step-up threshold (env-configurable).
+    # Guard: empty or non-numeric env var must not crash configure().
+    _thresh_raw = os.getenv("YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD", "0.50")
+    try:
+        _state.low_confidence_stepup_threshold = float(_thresh_raw)
+    except ValueError:
+        logger.warning(
+            "YASHIGANI_LOW_CONFIDENCE_STEPUP_THRESHOLD is not a valid float "
+            "(got %r); using default 0.50",
+            _thresh_raw,
+        )
+        _state.low_confidence_stepup_threshold = 0.50
 
     # v2.2 — streaming config from environment
     _state.streaming_enabled = (
@@ -250,10 +295,10 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # ── 0. DDoS protection — per-IP connection counting (v2.2) ───────────
     if _state.ddos_protector is not None:
-        _client_ip = (
-            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        # CWE-345 fix (V232-NEG03 / LAURA-2026-04-29-006): use the
+        # trusted-proxy-boundary resolver instead of trusting XFF[0].
+        from yashigani.gateway.proxy import _get_client_ip as _resolve_ip
+        _client_ip = _resolve_ip(request)
         _state.ddos_protector.record(_client_ip, "/v1/chat/completions")
         if not _state.ddos_protector.check(_client_ip, "/v1/chat/completions"):
             logger.warning(
@@ -619,6 +664,12 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     # Budget headers intentionally omitted — see module docstring.
                     # PII header reflects request-path scan only (response is streamed).
                     "X-Yashigani-PII-Detected": "true" if pii_detected_on_request else "false",
+                    # F-T10-001: generated-content disclaimer always present.
+                    # Confidence defaults to 1.0 on streaming (response body not
+                    # yet available when headers are committed); StreamingInspector
+                    # flags anomalies in-band via SSE event field, not via header.
+                    "X-Yashigani-Generated-Content": "true",
+                    "X-Yashigani-Response-Inspection-Confidence": "1.0000",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",  # disable Nginx/Caddy buffering
                 },
@@ -641,12 +692,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     backend_body = agent_resp
                     route_reason = f"agent:{selected_model[1:]}:letta"
                 except Exception as exc:
-                    logger.error("Letta agent %s failed: %s", selected_model, exc)
+                    # V232-CSCAN-01e: log full exception server-side; safe message to caller.
+                    logger.exception("Letta agent %s failed", selected_model)
                     return JSONResponse(
                         status_code=502,
                         content={
                             "error": {
-                                "message": f"Agent {selected_model} (Letta) failed: {exc}",
+                                "message": f"Agent {selected_model} (Letta) unreachable",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",
@@ -667,12 +719,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                     backend_body = agent_resp
                     route_reason = f"agent:{selected_model[1:]}:langflow"
                 except Exception as exc:
-                    logger.error("Langflow agent %s failed: %s", selected_model, exc)
+                    # V232-CSCAN-01e: log full exception server-side; safe message to caller.
+                    logger.exception("Langflow agent %s failed", selected_model)
                     return JSONResponse(
                         status_code=502,
                         content={
                             "error": {
-                                "message": f"Agent {selected_model} (Langflow) failed: {exc}",
+                                "message": f"Agent {selected_model} (Langflow) unreachable",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",
@@ -695,13 +748,25 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
                 # Read agent auth token from env var or secrets file
                 import os
+                from pathlib import Path as _Path
                 agent_headers: dict[str, str] = {"Content-Type": "application/json"}
                 # Check env var first (e.g., OPENCLAW_GATEWAY_TOKEN), then secrets file
                 env_token = os.getenv(f"{agent_name_lower.upper()}_GATEWAY_TOKEN", "")
                 if not env_token:
-                    token_path = f"/run/secrets/{agent_name_lower}_token"
-                    if os.path.exists(token_path):
-                        env_token = open(token_path).read().strip()
+                    # V232-CSCAN-01a: resolve-and-confine before touching the filesystem.
+                    # agent_name_lower comes from the registry (admin-registered) and is
+                    # constrained by AgentRegisterRequest.name pattern='^[a-z][a-z0-9_-]{0,63}$',
+                    # but we guard here too as defence-in-depth against pre-existing registry
+                    # entries that predate the pattern constraint (CWE-22).
+                    _secrets_root = _Path("/run/secrets").resolve()
+                    _token_path = (_secrets_root / f"{agent_name_lower}_token").resolve()
+                    if not _token_path.is_relative_to(_secrets_root):
+                        logger.warning(
+                            "V232-CSCAN-01a: agent %r produced an out-of-bounds token path %r — skipping",
+                            agent_name_lower, str(_token_path),
+                        )
+                    elif _token_path.exists():
+                        env_token = _token_path.read_text().strip()
                 if env_token:
                     agent_headers["Authorization"] = f"Bearer {env_token}"
 
@@ -713,12 +778,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                             headers=agent_headers,
                         )
                 except Exception as exc:
-                    logger.error("Agent %s unreachable: %s", selected_model, exc)
+                    # V232-CSCAN-01e: log full exception server-side; safe message to caller.
+                    logger.exception("Agent %s unreachable", selected_model)
                     return JSONResponse(
                         status_code=502,
                         content={
                             "error": {
-                                "message": f"Agent {selected_model} unreachable: {exc}",
+                                "message": f"Agent {selected_model} unreachable",
                                 "type": "agent_error",
                                 "agent": selected_model,
                                 "code": "agent_unreachable",
@@ -793,6 +859,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # *said*, not the JSON envelope wrapping it. Using "text/plain" ensures
     # the exempt_content_types list cannot inadvertently skip this check.
     response_verdict = "clean"
+    # F-T10-001: default to 1.0 (no inspection = clean pass, full confidence).
+    # When inspection runs this is overwritten with the actual pipeline score.
+    response_inspection_confidence: float = 1.0
     if _state.response_inspection_pipeline is not None and assistant_content:
         try:
             # session_id and agent_id are best-effort from identity; fall back
@@ -809,6 +878,14 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             )
             if not resp_result.skipped:
                 response_verdict = resp_result.verdict.lower()
+                # F-T10-001: capture inspection confidence for operator UI badge.
+                # Clamp to [0.0, 1.0] with explicit isfinite guard.  Python's
+                # min/max do not propagate NaN reliably (max(0.0, min(1.0, NaN))
+                # returns 1.0, not 0.0), so we must check isfinite first.
+                # A broken classifier returning NaN/Inf is treated as 0.0
+                # (minimum confidence), ensuring step-up fires conservatively.
+                _raw_conf = float(resp_result.confidence)
+                response_inspection_confidence = max(0.0, min(1.0, _raw_conf)) if math.isfinite(_raw_conf) else 0.0
 
             if resp_result.verdict == "BLOCKED":
                 logger.warning(
@@ -961,7 +1038,22 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         "X-Yashigani-Elapsed-Ms": str(elapsed_ms),
         "X-Yashigani-Response-Verdict": response_verdict,
         "X-Yashigani-PII-Detected": "true" if _pii_detected_any else "false",
+        # F-T10-001: Overreliance UX controls — present on every LLM response.
+        # Operator UIs use these to render generated-content badges and
+        # low-confidence warnings (OWASP Agentic AI T10).
+        "X-Yashigani-Generated-Content": "true",
+        "X-Yashigani-Response-Inspection-Confidence": f"{response_inspection_confidence:.4f}",
     }
+    # F-T10-001: low-confidence step-up signal.
+    # Emitted when inspection confidence is below threshold AND the prompt
+    # sensitivity is CONFIDENTIAL or RESTRICTED — the combination that most
+    # warrants human verification before acting on the response.
+    _high_sensitivity = sensitivity_level in ("CONFIDENTIAL", "RESTRICTED")
+    if (
+        response_inspection_confidence < _state.low_confidence_stepup_threshold
+        and _high_sensitivity
+    ):
+        headers["X-Yashigani-Low-Confidence-Stepup"] = "required"
     if budget_total > 0:
         headers["X-Yashigani-Budget-Used"] = str(budget_used)
         headers["X-Yashigani-Budget-Total"] = str(budget_total)
@@ -1178,8 +1270,7 @@ async def _opa_v1_check(
     }
 
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 _state.opa_url.rstrip("/") + "/v1/data/yashigani/v1/decision",
                 json={"input": opa_input},
@@ -1232,8 +1323,7 @@ async def _opa_response_check(
     }
 
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with internal_httpx_client(timeout=5.0) as client:
             resp = await client.post(
                 _state.opa_url.rstrip("/") + "/v1/data/yashigani/v1/response_decision",
                 json={"input": opa_input},

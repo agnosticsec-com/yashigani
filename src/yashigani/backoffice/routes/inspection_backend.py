@@ -16,6 +16,8 @@ Security constraints:
   - API keys are NEVER accepted in request bodies — they come from KMS only.
   - Azure endpoint must use https:// (HTTP 422 otherwise).
   - All config changes write an INSPECTION_BACKEND_CHANGED audit event.
+
+# Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession
 from yashigani.backoffice.state import backoffice_state
+from yashigani.common.error_envelope import safe_error_envelope
 from yashigani.inspection.backend_base import ClassifierBackend, BackendUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -101,7 +104,11 @@ def _get_config_store():
 
 
 def _is_production() -> bool:
-    return os.getenv("YASHIGANI_ENV", "development").lower() == "production"
+    # LIC-001: YASHIGANI_ENV is reserved for license enforcement and is
+    # hardcoded to "production" in deployed images — it cannot serve as a
+    # deployment-mode label here. YASHIGANI_ENVIRONMENT_LABEL carries the
+    # operator-configurable environment name; check that instead.
+    return os.getenv("YASHIGANI_ENVIRONMENT_LABEL", "production").lower() == "production"
 
 
 def _validate_backend_name(name: str) -> None:
@@ -365,15 +372,18 @@ async def test_backend(
             "test_content": _TEST_CONTENT,
         }
     except BackendUnavailableError as exc:
+        # V232-CSCAN-01e: log full exception; safe message to client.
+        envelope, _ = safe_error_envelope(exc, public_message="inspection backend unavailable")
         return {
             "backend": backend_name,
-            "error": str(exc),
+            "error": envelope["error"],
+            "request_id": envelope["request_id"],
             "available": False,
             "test_content": _TEST_CONTENT,
         }
     except Exception as exc:
-        logger.error("test_backend: unexpected error for %s: %s", backend_name, exc)
+        envelope, _ = safe_error_envelope(exc, public_message="inspection backend test failed", status=502)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"error": f"test_failed: {exc}"},
+            detail={"error": envelope["error"], "request_id": envelope["request_id"]},
         )

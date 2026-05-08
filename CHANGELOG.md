@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-04-28T19:45:00+00:00 -->
+<!-- last-updated: 2026-05-07T00:00:00+01:00 -->
 
 # Changelog
 
@@ -10,9 +10,99 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ---
 
-## [Unreleased] — v2.23.1 (in development)
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
 
-Active branch: `v2.23.1-mtls`. Theme: **Core-Plane mTLS + Two-Tier PKI + Release Hardening**.
+---
+
+## [Unreleased]
+
+No unreleased changes yet for the next version.
+
+---
+
+## [v2.23.2] — 2026-05-06 **[LAST PUBLIC RELEASE]**
+
+Theme: **Security Hardening + Supply-Chain Controls + ASVS L3 92% + Agentic AI Overreliance Controls**.
+
+> **This is the last publicly distributed release of Yashigani.** v2.23.3 and beyond are private. The public repository transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation. See [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md) for the full cutover notice.
+
+Full release narrative: [`docs/release-notes/v2.23.2.md`](docs/release-notes/v2.23.2.md)
+
+### Today's batch (2026-05-06)
+
+- **#44** `72a93fa` — feat(security): OWASP Agentic AI T10 overreliance UX controls (F-T10-001) — three `X-Yashigani-*` response headers on every LLM/agent response; `math.isfinite` NaN/Inf clamp; env-var fallback on threshold; 16 regression tests
+- **#43** `43ef0fa` — fix(images): pin all external images to multi-arch manifest INDEX digests — closes Podman parity P-8 (aarch64 exec-format crash) and smoke-gate V232-SMOKE-001
+- **#47** `2b65b0a` — fix(install): non-interactive bind-mount mkdir — `install.sh` pre-creates bind-mount dirs; no sudo in installer body
+- **#46** `8aacdae` — feat(uninstall): `--yes` / `-y` flag for unattended removal
+- **#50** `39f6fee` — chore(release): Gate 6a specialist-per-language review codified in pre-flight checklist
+- **#45** `057faa4` — chore(helm): grafana 12.4.3 → 13.0.1 + close `helm/charts/grafana/values.yaml` "latest" pinning gap
+- **#52** `10864bd` — fix(compose): Podman healthcheck silent-drop (P-9) — rebased replacement for #49
+
+### Previous batch (2026-05-03)
+
+### Breaking Changes
+
+- **Breaking default behaviour:** `RATE_LIMITER_FAIL_MODE` now defaults to `closed`. On Redis unavailability, the gateway returns HTTP 503 + Retry-After (auto-heal typically under 2 minutes) instead of silently passing traffic. High-availability operators who require pre-2.23.2 fail-open behaviour can opt back in by setting `RATE_LIMITER_FAIL_MODE=open` in the gateway environment. (F-LLM06-001)
+
+### Security
+
+- **XFF spoofing** — Caddy strips and re-sets `X-Forwarded-For` at the edge; rate limiting and audit logging now bind to the Caddy-observed address, not caller-supplied headers.
+- **Rate limiter fail-closed default** — `RATE_LIMITER_FAIL_MODE` now defaults to `closed`; Redis errors produce `HTTP 503` + `Retry-After: 5` rather than silent allow-through. Fail-open opt-in is documented for operators who need it. Customer-facing recovery message included.
+- **Login throttle `Retry-After` header** — RFC 6585-compliant `Retry-After` on 429/401 throttle responses; closes the locked-out operator information gap deferred from v2.23.1.
+- **OPA and Jaeger mTLS** — Both services now require mutual TLS in Docker Compose and Kubernetes Helm deployments; plaintext access from the data plane is no longer possible.
+- **Kyverno admission policies** — Kubernetes deployments enforce non-root UID, read-only root filesystem, no privilege escalation, and dropped capabilities at the admission level; policy violations block pod scheduling.
+- **Ollama UID 1000** — Ollama inference service migrated from root to UID 1000, closing the last root-in-container exception.
+- **All 73 Caddy `reverse_proxy` blocks gated** — `X-Caddy-Verified-Secret` injected on every `reverse_proxy` block across all Caddyfile variants and the Kubernetes ConfigMap. Asserted by contract test in CI.
+- **Backslash open-redirect patch** — `next=` parameter in the admin login flow now rejects backslash-encoded path bypass variants. Regression test suite covers the known bypass patterns.
+- **Safe error envelopes** — All backoffice and gateway error responses go through `safe_error_envelope`; exception class names and stack details are stripped from customer-visible responses.
+- **GPG release tag signing** — Signing infrastructure complete: CI workflow (`tag-sign.yml`), one-time key ceremony procedure, and public key (`docs/release-signing-key.asc`) all landed. `git tag -v v2.23.2` verifies the signature.
+- **SSRF on alert webhook** — Host allowlist enforced on webhook SSRF guard in addition to the v2.23.1 SSRF batch.
+
+### Supply Chain
+
+- **GitHub Actions SHA pinning** — All workflow steps pinned to digest, not mutable tag.
+- **`pip` removed from runtime images** — Eliminates pip CVE surface in production containers; package installs are build-time only.
+- **SBOM service-identity SHA gate** — SBOM generation now includes a content-hash assertion on `service_identities.yaml`.
+- **Trivy CI digest annotation** — Every Trivy scan annotates the job summary with the exact image digest scanned, creating an auditable linkage between scan result and image content.
+- **CI `/tmp` path lint gate** — A CI check rejects any code path that writes to host `/tmp`; `RUNNER_TEMP` and working-directory temporaries are used throughout.
+
+### Infrastructure / Ops
+
+- **Install + N-1 upgrade smoke matrix** — CI validates fresh install and v2.23.1 → v2.23.2 upgrade across macOS Podman, macOS Docker, Linux Podman, and Linux Docker. Harness performs real install → backup → upgrade → restore → admin login verification.
+- **Caddyfile contract test** — New test suite (`tests/contracts/test_caddyfile_family.py`) asserts `inject-caddy-verified` count, TLS 1.3 presence, cipher suite correctness, and `client_auth` placement on every CI run.
+- **Host `/tmp` eliminated** — `install.sh`, `restore.sh`, and all CI scripts rewritten to use working-directory and `RUNNER_TEMP` paths.
+- **Compose bind-mount auto-create** — `install.sh` now pre-creates bind-mount directories before starting the stack; eliminates a class of startup race on Docker rootful installs.
+- **K8s Helm: `kubeconfig` to `RUNNER_TEMP`** — CI `deploy.yml` writes the kubeconfig to `RUNNER_TEMP` rather than `$HOME/.kube`, preventing credential leakage between concurrent runs.
+- **`skip-pull` guard** — Installer detects when images are already present and skips the pull phase safely; prevents stale-image confusion on re-install.
+
+### Compliance
+
+- **OWASP ASVS v5 L3: 92% (166/180)** — Zero release-blocking FAILs. All six v2.23.1 FAILs remain closed. Per-chapter rates available at `docs/yashigani_owasp.md`.
+- **OWASP API Security Top 10**: 9/10 PASS, 1/10 PARTIAL — no failures.
+- **OWASP Agentic AI + LLM Top 10**: 22/25 PASS, 2/25 PARTIAL, 1/25 N/A (out-of-architecture) — no failures.
+
+### Bug Fixes
+
+- **Agent bundle SSRF guard wiring** — Optional agent bundles (Langflow, Letta, OpenClaw) silently failed to register on canonical install because `YASHIGANI_AGENT_UPSTREAM_HOSTNAMES` was empty and not pre-populated. The default is now `langflow,letta,openclaw` in Compose and Helm; SSRF guard code unchanged. (fix/v232-openclaw-upstream-hostnames-default)
+- **str(exc) information disclosure** — `str(exc)` calls in internal result fields and error responses migrated to `safe_error_envelope` to prevent exception-class name leakage.
+- **Agent-name path injection** — Regex + resolve guard prevents path traversal via crafted agent names.
+- **CI workflow injection** — `env` indirection on `head_branch` + regex guard closes the GitHub Actions `workflow_run` injection vector.
+- **Upgrade harness post-restore restart** — Network reconciliation bypass on post-restore restart prevents Compose from re-creating networks that already exist.
+- **Postgres SSL injection** — Installer uses `podman cp` for postgres SSL cert injection when the bind-mount directory predates the certs, avoiding a startup ordering race.
+
+---
+
+## [v2.23.1] — 2026-05-02
+
+Theme: **Core-Plane mTLS + Two-Tier PKI + Release Hardening**.
 
 ### Added
 - Core-plane mTLS default-on across gateway, backoffice, postgres, pgbouncer, redis, opa
@@ -43,7 +133,7 @@ Active branch: `v2.23.1-mtls`. Theme: **Core-Plane mTLS + Two-Tier PKI + Release
 ### Security
 - PCI-compliant password expiry profile (≤90 days) selectable via `YASHIGANI_PASSWORD_MAX_AGE_DAYS=pci`
 - Auth-throttle admin self-visibility — authenticated admins see own + all throttled/blocked IPs at `/admin → Security → Blocked IPs` (backed by `/auth/blocked-ips`). Unauthenticated locked-out operator path (RFC 6585 `Retry-After` on login) deferred to v2.23.2.
-- **YSG-RISK-001 (CWE-89, HIGH)** — replaced SQL f-string interpolation in `scripts/partition_maintenance.py` with safe identifier quoting + parameter binding. ACS v3 dogfood scan finding `acs-v3-sql-string-concat-exec`. Closing commit `75536a5`.
+- **YSG-RISK-001 (CWE-89, HIGH)** — replaced SQL f-string interpolation in `scripts/partition_maintenance.py` with safe identifier quoting (`_quote_ident()`, allowlist `[a-zA-Z_][a-zA-Z0-9_]*`). Date literals in the `PARTITION OF … FOR VALUES FROM … TO …` DDL clause are formatted via `date.isoformat()` (deterministic `YYYY-MM-DD`); asyncpg / PostgreSQL do not accept bind parameters in DDL parser positions. The date values are derived from Python `date` arithmetic, never from user input. ACS v3 dogfood scan finding `acs-v3-sql-string-concat-exec`. Closing commits `75536a5` (identifier quoting) + `af114f7` (DDL date-literal exception; internal re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001 PASS).
 - **YSG-RISK-002 (CWE-89, MEDIUM)** — replaced `op.execute(f"DROP TABLE IF EXISTS {name}")` in Alembic migration `0003_prepartition_audit_2026_2027.py` with `op.drop_table()` native API. Closing commit `9d867be`.
 - **YSG-RISK-003 (CWE-601, MEDIUM)** — OIDC discovery validator now rejects `authorization_endpoint`, `token_endpoint`, and `jwks_uri` whose scheme is not `https` or whose host does not match the registered `discovery_url` host. Closes the post-admin-compromise open-redirect class (TA-3 insider). Closing commit `c5839e4`.
 - **YSG-RISK-004 (CWE-400, MEDIUM)** — Docker Compose `mem_limit` and `cpus` now set on every service across `docker-compose.yml` (21 services) + `docker-compose.wazuh.yml` (3 services). Defaults documented in `docker/.env.example`; env-overridable via `YASHIGANI_<SERVICE>_MEM_LIMIT` / `YASHIGANI_<SERVICE>_CPU_LIMIT`. Closing commit `0143fb4`.
@@ -55,7 +145,7 @@ Active branch: `v2.23.1-mtls`. Theme: **Core-Plane mTLS + Two-Tier PKI + Release
   - **7-C** `audit/writer.py:285` + `backoffice/routes/audit.py:326` — Pydantic v2 `field_validator` on `SiemTargetRequest.url` enforces `https` scheme and rejects RFC 1918 / loopback / link-local / multicast hosts at register-time AND test-fire-time. `YASHIGANI_TEST_MODE=1` skips DNS resolution but keeps the HTTPS requirement. Commit `1209055`.
 
 ### Deferred (accepted-risk, carried to v2.23.2 P1)
-- **YSG-RISK-008 (CWE-732/CWE-250, LOW-MEDIUM batch)** — container-hardening absent-key gaps (no `read_only: true` in compose, no `readOnlyRootFilesystem: true` in Helm `securityContext`, no `security_opt: ["no-new-privileges:true"]`). Tiago accepted the deferral on 2026-04-28 with the rationale that adding YAML keys without OPA/Conftest/Kyverno admission control would be half-measure hardening; v2.23.2 P1 will ship both YAML keys AND admission policies together as proper end-to-end enforcement.
+- **YSG-RISK-008 (CWE-732/CWE-250, LOW-MEDIUM batch)** — container-hardening absent-key gaps (no `read_only: true` in compose, no `readOnlyRootFilesystem: true` in Helm `securityContext`, no `security_opt: ["no-new-privileges:true"]`). Deferred (logged in risk register) with the rationale that adding YAML keys without OPA/Conftest/Kyverno admission control would be half-measure hardening; v2.23.2 ships both YAML keys AND admission policies together as proper end-to-end enforcement.
 
 ---
 

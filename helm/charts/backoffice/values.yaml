@@ -27,7 +27,7 @@ pdb:
 env:
   redisHost: "redis"
   redisPort: "6379"
-  opaUrl: "http://policy:8181"
+  opaUrl: "https://yashigani-policy:8181"
   adminMinTotal: "2"
   adminMinActive: "2"
   adminSoftTarget: "3"

@@ -1,4 +1,5 @@
 {
+  "_comment": "Yashigani gateway seccomp profile — strict subset of yashigani.json. defaultAction ERRNO means every syscall not listed is blocked. Does NOT include perf_event_open, process_vm_readv, or process_vm_writev (LIC-004). This profile was referenced by the Helm sub-chart (helm/charts/gateway/templates/deployment.yaml) as a Localhost profile, but that sub-chart is superseded by helm/yashigani/templates/gateway.yaml which uses RuntimeDefault (LIC-005). This file is retained for operators running the sub-chart standalone. It will be promoted to the v2.24.0 custom Localhost profile path once node-side install tooling is in place.",
   "defaultAction": "SCMP_ACT_ERRNO",
   "defaultErrnoRet": 1,
   "archMap": [

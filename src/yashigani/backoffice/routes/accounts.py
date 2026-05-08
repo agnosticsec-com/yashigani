@@ -175,9 +175,29 @@ async def disable_admin(username: str, session: StepUpAdminSession):
 
 @router.post("/{username}/enable")
 async def enable_admin(username: str, session: AdminSession):
+    """
+    Re-enable a disabled admin account.
+
+    Iris MISSING-04 / GROUP-2-6: enforce admin seat limit before re-enabling.
+    """
     state = backoffice_state
     assert state.auth_service is not None  # set unconditionally at startup
     assert state.audit_writer is not None  # set unconditionally at startup
+
+    # Check admin seat limit before re-enable.
+    from yashigani.licensing.enforcer import (
+        check_admin_seat_limit,
+        LicenseLimitExceeded,
+        license_limit_exceeded_response,
+    )
+    try:
+        check_admin_seat_limit(await state.auth_service.total_admin_count())
+    except LicenseLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=license_limit_exceeded_response(exc),
+        )
+
     if not await state.auth_service.enable(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail={"error": "account_not_found"})
@@ -216,6 +236,8 @@ def _suspend_identity_registry_for_account(account_id: str) -> None:
     """Suspend all identity-registry entries owned by account_id.
 
     LF-DISABLE-PARTIAL (2026-04-27): mirrors users.py equivalent.
+    SEC-240-7: now uses suspend_owned_by() — O(1) index lookup instead of
+    full registry scan.
     Fail-soft on registry unavailability.
     """
     registry = backoffice_state.identity_registry
@@ -227,12 +249,7 @@ def _suspend_identity_registry_for_account(account_id: str) -> None:
         )
         return
     try:
-        all_ids = registry.list_all()
-        suspended = 0
-        for identity in all_ids:
-            if identity.get("org_id") == account_id:
-                registry.suspend(identity["identity_id"])
-                suspended += 1
+        suspended = registry.suspend_owned_by(account_id)
         import logging as _log
         _log.getLogger(__name__).info(
             "LF-DISABLE-PARTIAL: suspended %d identity-registry entries for account %s",

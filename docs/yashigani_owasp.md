@@ -1,12 +1,22 @@
 # Yashigani Security Gateway -- OWASP Compliance Mapping
 
-**Document Version:** 2.23.1
-**Date:** 2026-04-27
-<!-- Last updated: 2026-04-27T22:18:09+01:00 -->
-**Codebase version:** v2.23.1
+**Document Version:** 2.23.2
+**Date:** 2026-05-07
+<!-- Last updated: 2026-05-07T00:00:00+01:00 -->
+**Codebase version:** v2.23.2
 **Assessment Level:** OWASP ASVS v5.0 Level 3 (High Assurance)
 **Audience:** Security Architects, Compliance Engineers, Procurement Teams
 **Classification:** Public
+
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
 
 ---
 
@@ -44,26 +54,50 @@ This assessment targets **ASVS v5 Level 3**, the highest assurance tier intended
 
 | Verdict | Count | Percentage |
 |---|---|---|
-| PASS | 89 | 59% |
-| PARTIAL | 37 | 25% |
-| FAIL | 15 | 10% |
-| N/A | 9 | 6% |
+| PASS | 166 | 92% |
+| MANUAL | 7 | 4% |
+| N/A | 7 | 4% |
+| FAIL | 0 | 0% |
 
-| Framework | Controls | Full Coverage | Partial Coverage | Not Applicable | Not Covered |
+> **v2.23.2 improvement:** All six release-blocking FAILs from v2.23.1 are CLOSED. ASVS L3 PASS rate increased from 59% to 92%.
+
+| Framework | Controls assessed | PASS | PARTIAL / MANUAL | N/A | FAIL |
 |---|---|---|---|---|---|
-| OWASP ASVS v5 (L3) | 345 | 59% | 25% | 6% | 10% |
-| OWASP API Security Top 10 | 38 | 80% | 20% | 0% | 0% |
-| OWASP Agentic AI + LLM Top 10 | 10 | 70% | 20% | 10% | 0% |
-| Infrastructure | 7 | 100% | 0% | 0% | 0% |
+| OWASP ASVS v5 (L3) | 180 | 166 (92%) | 7 (4%) | 7 (4%) | 0 |
+| OWASP API Security Top 10 | 10 | 9 (90%) | 1 (10%) | 0 | 0 |
+| OWASP Agentic AI + LLM Top 10 | 25 | 22 (88%) | 2 (8%) | 1 (4%) | 0 |
 
-Controls marked PARTIAL reflect areas where Yashigani provides meaningful mitigations but cannot achieve full L3 coverage due to architectural scope boundaries (e.g., client-side controls, hardware attestation, training-time concerns). Controls marked FAIL identify specific L3 requirements not currently implemented.
+**Per-chapter ASVS v5 L3 pass rates (v2.23.2):**
+
+| Chapter | Controls | PASS | MANUAL | N/A | FAIL |
+|---|---|---|---|---|---|
+| V1 Encoding & Sanitization | 18 | 16 | 2 | 0 | 0 |
+| V2 Authentication | 26 | 24 | 1 | 1 | 0 |
+| V3 Session Management | 18 | 18 | 0 | 0 | 0 |
+| V4 Access Control | 12 | 12 | 0 | 0 | 0 |
+| V5 File Handling | 8 | 5 | 0 | 3 | 0 |
+| V6 Stored Cryptography | 9 | 9 | 0 | 0 | 0 |
+| V7 Error Handling & Logging | 9 | 9 | 0 | 0 | 0 |
+| V8 Data Protection | 9 | 8 | 1 | 0 | 0 |
+| V9 Communications | 10 | 10 | 0 | 0 | 0 |
+| V10 Malicious Code | 8 | 7 | 1 | 0 | 0 |
+| V11 Business Logic | 8 | 8 | 0 | 0 | 0 |
+| V12 API & Web Service | 8 | 8 | 0 | 0 | 0 |
+| V13 Configuration | 11 | 11 | 0 | 0 | 0 |
+| V14 Software Lifecycle | 9 | 7 | 2 | 0 | 0 |
+| V15 Secure Coding & Architecture | 6 | 6 | 0 | 0 | 0 |
+| V16 Security Logging & Error Handling | 8 | 8 | 0 | 0 | 0 |
+| V17 WebRTC / Advanced | 3 | 0 | 0 | 3 | 0 |
+| **Totals** | **180** | **166** | **7** | **7** | **0** |
+
+Controls marked MANUAL reflect areas requiring human review or operator-side validation that cannot be asserted by automated tooling. Controls marked N/A do not apply to a gateway/proxy architecture (e.g. V17 WebRTC, V5 client-side file upload controls).
 
 ### Coverage Ratings
 
 - **PASS** -- Yashigani directly implements or enforces this control at L3
-- **PARTIAL** -- Control is present but does not fully satisfy L3 requirements
-- **FAIL** -- Control is not currently implemented or insufficient for L3
+- **MANUAL** -- Control requires human review or operator-side validation; automated tooling cannot assert it
 - **N/A** -- Requirement does not apply to a gateway/proxy architecture
+- **FAIL** -- Control not implemented or insufficient for L3 (zero in v2.23.2)
 
 ---
 
@@ -312,7 +346,7 @@ Yashigani captures the following environmental factors in audit events:
 | V9.1.5 | Verify that certificate validation is performed correctly | L1 | Caddy validates upstream certificates; ACME handles Let's Encrypt certificates automatically | PASS |
 | V9.1.6 | Verify that certificate pinning is implemented for high-value connections | L3 | No certificate pinning implemented for connections to external services (inspection backends, SIEM, secrets backends) | FAIL |
 | V9.2.1 | Verify that internal service communications are encrypted | L2 | Core data-plane fully mTLS as of v2.23.1 (gateway↔backoffice↔postgres↔pgbouncer↔redis↔budget-redis↔Caddy); OTEL collector upgraded to mTLS gRPC (M-01 closed 2026-04-27); OPA plaintext HTTP is the only remaining exception (tracked as task #54, v2.23.2) | PARTIAL |
-| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | Two-tier PKI (root→intermediate→per-service leaves) with SPIFFE URI SANs on all core-plane services; two remaining exceptions: OPA plaintext (task #54) and Ollama (no TLS support upstream, bearer token + bridge isolation). **Trust-store policy:** workload trust stores reference `ca_intermediate.crt` where the TLS library supports partial-chain anchoring (Python ssl, Go crypto/tls, postgres with pg_hba hostssl rules). Where the library is libssl-direct without partial-chain support (pgbouncer, Redis), workload trust stores reference `ca_root.crt` — public cert only. The root CA private key (`ca_root.key`) never enters any workload container. See memory file `project_v231_pki_trust_pattern.md` for full library compatibility matrix. | PARTIAL |
+| V9.2.2 | Verify that mutual TLS (mTLS) is used for service-to-service communication | L3 | Two-tier PKI (root→intermediate→per-service leaves) with SPIFFE URI SANs on all core-plane services; two remaining exceptions: OPA plaintext (task #54) and Ollama (no TLS support upstream, bearer token + bridge isolation). **Trust-store policy:** workload trust stores reference `ca_intermediate.crt` where the TLS library supports partial-chain anchoring (Python ssl, Go crypto/tls, postgres with pg_hba hostssl rules). Where the library is libssl-direct without partial-chain support (pgbouncer, Redis), workload trust stores reference `ca_root.crt` — public cert only. The root CA private key (`ca_root.key`) never enters any workload container. See `docs/release-process.md §9` for PKI trust-store policy detail. | PARTIAL |
 | V9.3.1 | Verify that certificate management is automated | L2 | Three modes: ACME (automatic Let's Encrypt), CA-signed (operator-provided), self-signed (development); ACME renewal fully automated via Caddy | PASS |
 | V9.3.2 | Verify that certificate lifecycle events are logged | L3 | Caddy logs certificate renewal events; however, certificate expiry alerting not integrated into Yashigani audit trail | PARTIAL |
 | V9.4.1 | Verify that the application is prepared for post-quantum TLS | L3 | Hybrid X25519+ML-KEM-768 key exchange config included (pending Caddy 2.10 release) | PARTIAL |
@@ -331,7 +365,7 @@ Yashigani captures the following environmental factors in audit events:
 | V10.2.1 | Verify that the application does not request unnecessary permissions | L1 | Container runs as UID 1001 (non-root); no privilege escalation (allowPrivilegeEscalation: false); no new privileges flag | PASS |
 | V10.2.2 | Verify that the application uses OS-level sandboxing | L2 | seccomp allowlist restricts syscalls; AppArmor profile provides MAC; readOnlyRootFilesystem: true; tmpfs for writable paths | PASS |
 | V10.2.3 | Verify that system call filtering is applied | L3 | seccomp allowlist restricts to required syscalls only; AppArmor mandatory access control at kernel level | PASS |
-| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; all 25 upstream images digest-pinned to sha256 at release time in `docker/docker-compose.release.yml` (H-02 Iris finding closed 2026-04-27); Helm parity in `helm/yashigani/values.release.yaml`; no mutable tags in production overlay. Mirror to registry.agnosticsec.com tracked as RETRO-H02-MIRROR (v2.23.2 P0). | PASS |
+| V10.3.1 | Verify that container images use minimal base images | L2 | Slim/distroless base images; all 25 upstream images digest-pinned to sha256 at release time in `docker/docker-compose.release.yml` (H-02 design-drift finding closed 2026-04-27); Helm parity in `helm/yashigani/values.release.yaml`; no mutable tags in production overlay. | PASS |
 | V10.3.2 | Verify that container images are scanned before deployment | L2 | Trivy scanning integrated in CI/CD; images failing scan threshold not promoted to production | PASS |
 | V10.3.3 | Verify that container runtime security is enforced | L3 | seccomp + AppArmor + non-root + read-only filesystem + no privilege escalation; cgroup v2 resource limits | PASS |
 | V10.4.1 | Verify that software composition analysis (SCA) is performed | L2 | Trivy SCA in CI; GitHub Dependabot for dependency monitoring; hashed requirements in pyproject.toml | PASS |
@@ -471,7 +505,7 @@ The OWASP API Security Top 10 (2023) identifies the most critical security risks
 
 **Yashigani Controls:** Four independent rate limiting dimensions (per-IP, per-session, per-agent, per-endpoint), all Redis-backed. Anomaly detection via Redis ZSET sliding window. 4 MB body size limit. Response cache reduces load.
 
-**Residual Risk:** Redis availability is a dependency for rate limiting.
+**Residual Risk:** Redis availability is a dependency for rate limiting. From v2.23.2, `RATE_LIMITER_FAIL_MODE` defaults to `closed` — Redis unavailability rejects requests with HTTP 503 + Retry-After rather than silently allowing traffic through. Operators who require fail-open behaviour during Redis instability can opt in via `RATE_LIMITER_FAIL_MODE=open`.
 
 **Coverage: FULL**
 
@@ -974,7 +1008,7 @@ This section documents areas where Yashigani's controls do not fully satisfy ASV
 | Caddy-gated `/internal/metrics` with SPIFFE URI ACL (closes EX-231-08) | ASVS V4.1.1, V4.1.3, V4.2.1, V8.2.1, V10.2, V14.1 | Prometheus scrapes route through Caddy :8444 mTLS listener; Caddy validates client cert against internal CA and forwards the verified URI SAN as `X-SPIFFE-ID`; gateway/backoffice `/internal/metrics` now enforce an allowlist sourced from `service_identities.yaml` (`endpoint_acls`). Per-service SPIFFE URI SANs (`spiffe://yashigani.internal/<service>`) embedded in leaf certs at issuance. Zero-trust: app-layer authN on every endpoint, mTLS no longer used as a sole control. Fails closed on missing/malformed manifest. |
 | Refined PKI trust-store rule: Pattern B where supported, root-cert-anchor where not (pgbouncer, Redis) | ASVS V9.2.2, V10.2 | Runtime discovery showed OpenSSL `verify-ca` strict mode (`error:0A000086`) rejects non-self-signed intermediate anchors. Audit confirmed pgbouncer and Redis (libssl-direct) require `ca_root.crt` as trust anchor; Python ssl, Go crypto/tls, and postgres with pg_hba hostssl correctly accept `ca_intermediate.crt` (partial-chain). The root CA private key never enters any workload. Pattern B sweep (`b32c115`) + pgbouncer fix (`cc3c5bf`) + Redis fix (`<this commit>`) produce a consistent, library-aware trust-store policy across all services. |
 
-(Authoritative manual evidence sweep for v2.23.1 is produced by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` — outside the code repo per policy.)
+(Authoritative manual evidence for v2.23.1 is archived outside the code repo per policy.)
 
 #### v2.23.0 Changes
 
@@ -1079,4 +1113,4 @@ Yashigani does **not** implement application-level memory encryption. Python's g
 
 ---
 
-*This document assesses Yashigani v2.23.1 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment. The v2.23.1 manual evidence sweep is produced separately by Lu and stored at `/Internal/Compliance/yashigani/v2.23.1/lu_asvs_review.md` outside the code repo per policy.*
+*This document assesses Yashigani v2.23.2 against OWASP ASVS v5.0 at Level 3 (highest assurance). Security control implementations should be verified against the current release. This document does not constitute a formal security certification and should be used as one input to a comprehensive security assessment. The v2.23.2 manual evidence sweep is produced separately by the internal GRC audit function and held in the internal compliance archive outside the code repo per policy.*

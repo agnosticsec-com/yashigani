@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-02T01:15:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-07T09:00:00+01:00 — fix(helm): G9 blocker: rename grafana-provisioning ConfigMap keys (forward-slash → underscore) so K8s API accepts them */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -44,7 +44,7 @@ data:
     # M-01 fix (2026-04-27): OTLP receivers upgraded to mTLS.
     # Trust anchor: ca_bundle.crt (root+intermediate). Go x509 (OTEL Collector)
     # verifies client certs (leaf+intermediate chain bundles) against the CA pool.
-    # Captain R4 K8s gate 2026-04-30: using ca_bundle.crt for consistency with
+    # Internal K8s gate finding: using ca_bundle.crt for consistency with
     # all other Go/libssl consumers (pgbouncer, Caddy).
     {{- if .Values.mtls.enabled }}
     # mTLS enabled: receivers require client cert auth.
@@ -77,11 +77,29 @@ data:
         send_batch_size: 1024
     exporters:
       otlp/jaeger:
+        # EX-231-09 fix (v2.23.2): switched from insecure: true to mTLS.
+        # otel-collector presents its leaf cert; Jaeger verifies against
+        # ca_bundle.crt (root+intermediate, K8s Go x509 pattern).
         endpoint: "yashigani-jaeger:4317"
+        {{- if .Values.mtls.enabled }}
+        tls:
+          cert_file: /run/secrets/otel-collector_client.crt
+          key_file: /run/secrets/otel-collector_client.key
+          ca_file: /run/secrets/ca_bundle.crt
+        {{- else }}
         tls:
           insecure: true
+        {{- end }}
       loki:
-        endpoint: "http://yashigani-loki:3100/loki/api/v1/push"
+        # retro #84: endpoint switched to https; otel-collector presents its
+        # own leaf cert to Loki. Trust anchor: ca_intermediate.crt (Pattern B).
+        endpoint: "https://yashigani-loki:3100/loki/api/v1/push"
+        {{- if .Values.mtls.enabled }}
+        tls:
+          cert_file: /run/secrets/otel-collector_client.crt
+          key_file:  /run/secrets/otel-collector_client.key
+          ca_file:   /run/secrets/ca_intermediate.crt
+        {{- end }}
     extensions:
       health_check:
         endpoint: "0.0.0.0:13133"
@@ -96,6 +114,83 @@ data:
           receivers: [otlp]
           processors: [memory_limiter, batch]
           exporters: [loki]
+{{- end }}
+
+{{- if .Values.jaeger.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-jaeger-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  jaeger.yml: |
+    # Jaeger v2 all-in-one configuration (K8s deployment).
+    # Migrated from v1 env-var config to v2 YAML config (OpenTelemetry Collector format).
+    # EX-231-09: OTLP gRPC collector port mTLS-enabled (Pattern B — Go x509).
+    # CA: ca_bundle.crt (root+intermediate — K8s Go x509 convention).
+    service:
+      extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [jaeger_storage_exporter]
+      telemetry:
+        resource:
+          service.name: jaeger
+        metrics:
+          level: basic
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+        logs:
+          level: info
+
+    extensions:
+      healthcheckv2:
+        use_v2: true
+        http:
+          endpoint: 0.0.0.0:13133
+
+      jaeger_query:
+        storage:
+          traces: in_memory_storage
+
+      jaeger_storage:
+        backends:
+          in_memory_storage:
+            memory:
+              max_traces: 100000
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+            {{- if .Values.mtls.enabled }}
+            tls:
+              cert_file: /run/secrets/jaeger_client.crt
+              key_file: /run/secrets/jaeger_client.key
+              # Pattern B: ca_bundle.crt (root+intermediate) for Go x509 K8s consumers.
+              client_ca_file: /run/secrets/ca_bundle.crt
+            {{- end }}
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+
+    exporters:
+      jaeger_storage_exporter:
+        trace_storage: in_memory_storage
 {{- end }}
 
 {{- if .Values.alertmanager.enabled }}
@@ -132,9 +227,27 @@ metadata:
     {{- include "yashigani.labels" . | nindent 4 }}
 data:
   loki.yml: |
+    # retro #84 (v2.23.2): mTLS enabled for Loki ingest + query paths.
+    # Server cert: /run/secrets/loki_client.crt/key (PKI Secret).
+    # Trust anchor: /run/secrets/ca_intermediate.crt (Pattern B).
     auth_enabled: false
     server:
       http_listen_port: 3100
+      grpc_listen_port: 9096
+      {{- if .Values.mtls.enabled }}
+      # retro #84: mTLS — Loki presents its leaf cert; clients must present
+      # a cert signed by the internal intermediate CA (Pattern B).
+      http_tls_config:
+        cert_file: /run/secrets/loki_client.crt
+        key_file:  /run/secrets/loki_client.key
+        client_ca_file: /run/secrets/ca_intermediate.crt
+        client_auth_type: RequireAndVerifyClientCert
+      grpc_tls_config:
+        cert_file: /run/secrets/loki_client.crt
+        key_file:  /run/secrets/loki_client.key
+        client_ca_file: /run/secrets/ca_intermediate.crt
+        client_auth_type: RequireAndVerifyClientCert
+      {{- end }}
     common:
       path_prefix: /loki
       storage:
@@ -198,7 +311,7 @@ data:
     # Internal mTLS snippet — used by every reverse_proxy that targets a
     # service terminating mTLS (gateway:8080, backoffice:8443). Caddy
     # presents caddy_client.{crt,key} and verifies the upstream against
-    # ca_bundle.crt (root+intermediate). Captain R4 K8s gate 2026-04-30:
+    # ca_bundle.crt (root+intermediate). Internal K8s gate finding:
     # Caddy Go TLS also fails to verify chain-bundle upstreams with only
     # ca_intermediate.crt as the trust anchor — x509: certificate signed by
     # unknown authority. ca_bundle.crt (root+intermediate) resolves this.
@@ -254,7 +367,7 @@ data:
     }
     # Bind on :443 (any Host) so port-forward / NodePort / IP-based tests
     # work regardless of how the cluster operator routes the public domain.
-    # Captain #58c #3by (2026-04-29): use explicit PKI cert (caddy_client.crt/key)
+    # Internal K8s integration finding: use explicit PKI cert (caddy_client.crt/key)
     # instead of `tls internal`. Caddy's internal CA issued a cert bound to
     # 'localhost', causing HTTP 421 Misdirected Request for IP-based connections
     # (e.g. port-forward to 127.0.0.1). caddy_client.crt has IP Address:127.0.0.1
@@ -265,11 +378,11 @@ data:
       # not inside `handle`). `verify_if_given` accepts non-mTLS browser
       # connections AND extracts SPIFFE URI from a presented client cert when
       # one is given. Per-path SPIFFE forwarding stays in `handle` blocks.
-      # Captain #58c #3br evidence (2026-04-28).
-      # #3by: explicit cert (not `tls internal`) — Caddy internal auto-cert
+      # Internal K8s integration evidence.
+      # Explicit cert (not `tls internal`) — Caddy internal auto-cert
       # binds to 'localhost' only; our PKI cert has IP Address:127.0.0.1 SAN.
       tls /run/secrets/caddy_client.crt /run/secrets/caddy_client.key {
-        # TLS 1.3 minimum + GCM-only ciphers. maintainer directive 2026-04-30.
+        # TLS 1.3 minimum + GCM-only ciphers. Project security baseline.
         # Closes QA finding. Consistent with docker/Caddyfile.acme.
         protocols tls1.3
         ciphers TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256
@@ -396,7 +509,11 @@ data:
           }
         }
 
+        # inject-caddy-verified: open-webui does not validate the header but
+        # we inject it uniformly across all reverse_proxy blocks. Auth is
+        # enforced by the forward_auth block above. Closes LU-231-10-A.
         reverse_proxy open-webui:8080 {
+          import inject-caddy-verified
           header_up X-Forwarded-Proto https
           header_up X-Real-IP {remote_host}
           header_up X-Forwarded-User {http.request.header.X-Forwarded-User}
@@ -519,7 +636,7 @@ data:
         DATABASE_URL=postgresql://user:pass@host/db python scripts/partition_maintenance.py
         python scripts/partition_maintenance.py --months-ahead 6
 
-    Last updated: 2026-05-01T16:50:00+01:00
+    Last updated: 2026-05-01T23:47:00+01:00
     mTLS fix: extract sslrootcert/sslcert/sslkey from DSN, build ssl.SSLContext
     for asyncpg (asyncpg does not parse libpq ssl params from DSN query string).
     """
@@ -629,6 +746,15 @@ data:
 
                 for table in _PARTITIONED_TABLES:
                     name = _partition_name(table, year, month)
+                    # Safe identifier quoting — _quote_ident rejects any name
+                    # that doesn't match [a-zA-Z_][a-zA-Z0-9_]* before the
+                    # statement is composed (CWE-89, YSG-RISK-001 #3ar).
+                    # Date literals are formatted directly as ISO-8601 strings
+                    # (YYYY-MM-DD). asyncpg bind parameters ($1/$2) are NOT
+                    # supported in DDL statements like CREATE TABLE — the server
+                    # reports "expects 0 arguments" and fails. The date values
+                    # come from Python date arithmetic (not user input) so
+                    # direct string interpolation is safe here.
                     q_name = _quote_ident(name)
                     q_table = _quote_ident(table)
                     await conn.execute(
@@ -677,3 +803,126 @@ data:
 
     if __name__ == "__main__":
         main()
+
+{{- if and .Values.prometheus.enabled .Values.mtls.enabled }}
+{{/*
+── Prometheus TLS web-config ConfigMap ────────────────────────────────────────
+  retro #83: enables HTTPS on Prometheus port 9090 (Pattern B mTLS).
+  Grafana datasource calls and Prometheus self-scrape use mutual TLS.
+  Mounted at /etc/prometheus/web-config.yml via subPath in prometheus.yaml.
+*/}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-prometheus-web-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-prometheus-web-config
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  web-config.yml: |
+    # retro #83: Prometheus TLS web config — Pattern B (intermediate as trust anchor).
+    # TA-1/TA-2: mTLS on port 9090 prevents impersonation and eavesdropping.
+    tls_server_config:
+      cert_file: /run/secrets/prometheus_client.crt
+      key_file:  /run/secrets/prometheus_client.key
+      client_ca_file: /run/secrets/ca_intermediate.crt
+      client_auth_type: RequireAndVerifyClientCert
+      min_version: TLS13
+{{- end }}
+
+{{- if and .Values.grafana.enabled .Values.mtls.enabled }}
+{{/*
+── Grafana provisioning ConfigMap ─────────────────────────────────────────────
+  retro #83: datasource provisioning YAMLs with mTLS config.
+  Mounted at /etc/grafana/provisioning in the Grafana StatefulSet.
+  $__file{} references resolved at runtime from /run/secrets (pki-certs volume).
+  Trust anchor: ca_intermediate.crt (Pattern B — never ca_root.crt).
+*/}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yashigani-grafana-provisioning
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-grafana-provisioning
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+data:
+  datasources_prometheus.yml: |
+    # retro #83: Grafana → Prometheus datasource over mTLS (Pattern B).
+    # TA-1/TA-2: mTLS prevents impersonation and eavesdropping on obs network.
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: https://{{ include "yashigani.fullname" . }}-prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: "15s"
+          tlsAuth: true
+          tlsAuthWithCACert: true
+          tlsSkipVerify: false
+        secureJsonData:
+          tlsCACert: $__file{/run/secrets/ca_intermediate.crt}
+          tlsClientCert: $__file{/run/secrets/grafana_client.crt}
+          tlsClientKey: $__file{/run/secrets/grafana_client.key}
+  datasources_loki.yml: |
+    # retro #83: Grafana → Loki datasource over mTLS (Pattern B).
+    # NOTE: Loki TLS termination enabled by parallel PR #84.
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: https://{{ include "yashigani.fullname" . }}-loki:3100
+        isDefault: false
+        version: 1
+        editable: false
+        jsonData:
+          maxLines: 1000
+          tlsAuth: true
+          tlsAuthWithCACert: true
+          tlsSkipVerify: false
+          derivedFields:
+            - datasourceUid: jaeger
+              matcherRegex: '"trace_id":"(\w+)"'
+              name: TraceID
+              url: "$${__value.raw}"
+        secureJsonData:
+          tlsCACert: $__file{/run/secrets/ca_intermediate.crt}
+          tlsClientCert: $__file{/run/secrets/grafana_client.crt}
+          tlsClientKey: $__file{/run/secrets/grafana_client.key}
+  datasources_jaeger.yml: |
+    # retro #83: Jaeger query/UI port (16686) remains HTTP on obs-internal.
+    # EX-231-09 closed otel-collector → Jaeger gRPC (4317) mTLS separately.
+    # Jaeger UI TLS deferred to v2.24 (RETRO-84).
+    apiVersion: 1
+    datasources:
+      - name: Jaeger
+        type: jaeger
+        uid: jaeger
+        access: proxy
+        url: http://{{ include "yashigani.fullname" . }}-jaeger:16686
+        isDefault: false
+        version: 1
+        editable: false
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+            filterByTraceID: true
+            filterBySpanID: false
+            customQuery: false
+            query: '{service="${__tags.service}"}'
+          tracesToMetrics:
+            datasourceUid: prometheus
+            tags: [{key: "service.name", value: "service"}]
+            queries:
+              - name: "Request Rate"
+                query: "rate(yashigani_gateway_requests_total[$__rate_interval])"
+{{- end }}

@@ -3,7 +3,7 @@ Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
 
-Last updated: 2026-04-29T17:45:00+01:00
+Last updated: 2026-05-07T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ from yashigani.gateway.proxy import GatewayConfig, create_gateway_app
 from yashigani.gateway.agent_auth import AgentAuthMiddleware
 from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
 from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
+from yashigani.gateway._ratelimit_env import resolve_rate_limit_fail_mode
 from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 def _build_app():
     # ── OTEL tracing — initialise before anything else ─────────────────────
@@ -92,63 +92,42 @@ def _build_app():
 
     # Gateway config
     upstream_url = os.environ["YASHIGANI_UPSTREAM_URL"]
-    opa_url = os.getenv("YASHIGANI_OPA_URL", "http://policy:8181")
+    opa_url = os.getenv("YASHIGANI_OPA_URL", "https://policy:8181")
 
     cfg = GatewayConfig(
         upstream_base_url=upstream_url,
         opa_url=opa_url,
     )
 
-    # Redis base URL — derived from env vars set by docker-compose.
+    # Redis URL helper — all DB-specific URLs are built by build_redis_url().
     # v2.23.1: TLS-only (rediss://) with client cert authentication. Redis
     # rejects plaintext connections (port 0 in redis.conf).
-    redis_host = os.getenv("REDIS_HOST", "redis")
-    redis_port = os.getenv("REDIS_PORT", "6380")
-    redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
-    redis_password = ""
+    # See gateway/_redis_url.py for cert-path and DB-ordering rationale.
+    from yashigani.gateway._redis_url import build_redis_url
     secrets_dir = os.getenv("YASHIGANI_SECRETS_DIR", "/run/secrets")
-    redis_pwd_file = os.path.join(secrets_dir, "redis_password")
-    try:
-        with open(redis_pwd_file) as f:
-            redis_password = f.read().strip()
-    except OSError:
-        redis_password = os.getenv("REDIS_PASSWORD", "")
+    redis_use_tls = os.getenv("REDIS_USE_TLS", "true").lower() == "true"
 
-    from urllib.parse import quote
-    if redis_use_tls:
-        # redis-py reads ssl_* params from the URL query string when scheme
-        # is rediss://. Client cert is gateway_client.{crt,key}; trust anchor
-        # is ca_root.crt — redis-py goes through Python ssl which on
-        # Python 3.12 / OpenSSL 3.0 / Ubuntu 24.04 does not auto-set
-        # X509_V_FLAG_PARTIAL_CHAIN, so the intermediate-only anchor fails
-        # (gate #58a evidence, 2026-04-28). Public ca_root.crt is in the
-        # workload trust store; the private ca_root.key never leaves the host.
-        # IMPORTANT: redis_base must NOT include the query string — each
-        # call site appends `/{db}` which must precede the `?`. Keep the
-        # query portion separate and format as f"{redis_base}/{db}{redis_query}".
-        _ca = f"{secrets_dir}/ca_root.crt"
-        _crt = f"{secrets_dir}/gateway_client.crt"
-        _key = f"{secrets_dir}/gateway_client.key"
-        redis_base = (
-            f"rediss://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
+    def _gw_redis_url(db: int, host: str | None = None, port: str | None = None) -> str:
+        return build_redis_url(
+            db,
+            host=host,
+            port=port,
+            use_tls=redis_use_tls,
+            secrets_dir=secrets_dir,
+            client_cert_name="gateway_client",
         )
-        redis_query = (
-            f"?ssl_cert_reqs=required&ssl_ca_certs={_ca}"
-            f"&ssl_certfile={_crt}&ssl_keyfile={_key}"
-        )
-    else:
-        redis_base = f"redis://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
-        redis_query = ""
 
     # Rate limiter — Redis DB 2
+    _rl_fail_mode = resolve_rate_limit_fail_mode()
+    logger.info("Rate limiter fail mode: %s", _rl_fail_mode)
     rate_limiter = None
     try:
         import redis as _redis
-        redis_client_rl = _redis.from_url(f"{redis_base}/2{redis_query}", decode_responses=False)
+        redis_client_rl = _redis.from_url(_gw_redis_url(2), decode_responses=False)
         redis_client_rl.ping()
         rate_limiter = RateLimiter(
             redis_client=redis_client_rl,
-            config=RateLimitConfig(),
+            config=RateLimitConfig(fail_mode=_rl_fail_mode),
             resource_monitor=resource_monitor,
         )
     except Exception as exc:
@@ -159,7 +138,7 @@ def _build_app():
     try:
         import redis as _redis
         from yashigani.gateway.endpoint_ratelimit import EndpointRateLimiter
-        redis_client_ep = _redis.from_url(f"{redis_base}/2{redis_query}", decode_responses=False)
+        redis_client_ep = _redis.from_url(_gw_redis_url(2), decode_responses=False)
         redis_client_ep.ping()
         endpoint_rate_limiter = EndpointRateLimiter(redis_client=redis_client_ep)
         logger.info("Endpoint rate limiter ready")
@@ -171,7 +150,7 @@ def _build_app():
     try:
         import redis as _redis
         from yashigani.gateway.response_cache import ResponseCache
-        redis_client_cache = _redis.from_url(f"{redis_base}/4{redis_query}", decode_responses=False)
+        redis_client_cache = _redis.from_url(_gw_redis_url(4), decode_responses=False)
         redis_client_cache.ping()
         response_cache = ResponseCache(redis_client=redis_client_cache)
         logger.info("Response cache ready (Redis DB 4)")
@@ -184,7 +163,7 @@ def _build_app():
     redis_client_rbac = None
     try:
         import redis as _redis
-        redis_client_rbac = _redis.from_url(f"{redis_base}/3{redis_query}", decode_responses=False)
+        redis_client_rbac = _redis.from_url(_gw_redis_url(3), decode_responses=False)
         redis_client_rbac.ping()
         rbac_store = RBACStore(redis_client=redis_client_rbac)
         logger.info("Gateway RBAC store ready: %d group(s)", len(rbac_store.list_groups()))
@@ -203,7 +182,7 @@ def _build_app():
     try:
         import redis as _redis
         from yashigani.gateway.jwt_inspector import JWTInspector
-        redis_client_jwt = _redis.from_url(f"{redis_base}/1{redis_query}", decode_responses=False)
+        redis_client_jwt = _redis.from_url(_gw_redis_url(1), decode_responses=False)
         redis_client_jwt.ping()
         jwt_inspector = JWTInspector(redis_client=redis_client_jwt)
         logger.info(
@@ -249,7 +228,7 @@ def _build_app():
             inference_logger = InferencePayloadLogger()
 
             import redis as _redis
-            redis_client_anomaly = _redis.from_url(f"{redis_base}/2{redis_query}", decode_responses=False)
+            redis_client_anomaly = _redis.from_url(_gw_redis_url(2), decode_responses=False)
             redis_client_anomaly.ping()
             anomaly_detector = AnomalyDetector(redis_client=redis_client_anomaly)
             from yashigani.inference.content_relay import ContentRelayDetector
@@ -309,15 +288,7 @@ def _build_app():
         import redis as _redis
         budget_redis_host = os.getenv("BUDGET_REDIS_HOST", "budget-redis")
         budget_redis_port = os.getenv("BUDGET_REDIS_PORT", "6380")
-        if redis_use_tls:
-            budget_url = (
-                f"rediss://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0"
-                f"?ssl_cert_reqs=required&ssl_ca_certs={secrets_dir}/ca_root.crt"
-                f"&ssl_certfile={secrets_dir}/gateway_client.crt"
-                f"&ssl_keyfile={secrets_dir}/gateway_client.key"
-            )
-        else:
-            budget_url = f"redis://:{quote(redis_password, safe='')}@{budget_redis_host}:{budget_redis_port}/0"
+        budget_url = _gw_redis_url(0, host=budget_redis_host, port=budget_redis_port)
         budget_redis_client = _redis.from_url(
             budget_url,
             decode_responses=False,
@@ -462,9 +433,20 @@ def _build_app():
 
         container_backend = create_backend()
 
+        # LIC-002 / GROUP-5-1: read tier from the verified LicenseState rather
+        # than the YASHIGANI_LICENSE_TIER env var. An attacker who can set env
+        # vars could elevate the pool manager to Enterprise tier without a valid
+        # license. The env var is now removed; tier comes exclusively from the
+        # cryptographically-verified license loaded at startup.
+        try:
+            from yashigani.licensing.enforcer import get_license as _get_license
+            _verified_tier = _get_license().tier.value
+        except Exception:
+            _verified_tier = "community"
+
         pool_manager = PoolManager(
             backend=container_backend,
-            tier=os.getenv("YASHIGANI_LICENSE_TIER", "community"),
+            tier=_verified_tier,
         )
         pool_health = PoolHealthMonitor(pool_manager)
         pool_health.start()

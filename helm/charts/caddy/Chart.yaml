@@ -1,6 +1,27 @@
 apiVersion: v2
 name: caddy
-description: Yashigani Caddy TLS edge proxy (optional in K8s)
+description: |
+  DEPRECATED (v2.23.2): This standalone Caddy sub-chart is no longer maintained.
+  Caddy configuration for Kubernetes is now fully rendered by the parent
+  helm/yashigani chart (helm/yashigani/templates/configmaps.yaml +
+  helm/yashigani/templates/caddy.yaml). The parent chart Caddyfile includes
+  mTLS transport, Layer-B inject-caddy-verified on all routes, SPIFFE URI
+  gating, TLS 1.3 + GCM-only ciphers, and full security headers.
+
+  This sub-chart lacks: mTLS transport, inject-caddy-verified on any route,
+  SPIFFE URI forwarding, security headers, and TLS policy enforcement. Using
+  it would produce a security-incomplete deployment.
+
+  Additionally, both this sub-chart and the parent chart emit a ConfigMap named
+  yashigani-caddy-config — installing both in the same namespace causes a
+  conflict. The parent chart's version is authoritative.
+
+  DO NOT use this sub-chart. It will be removed in v2.24.0.
 type: application
-version: 0.4.0
+version: 0.4.1
 appVersion: "0.4.0"
+deprecated: true
+annotations:
+  artifacthub.io/changes: |
+    - kind: deprecated
+      description: "Superseded by helm/yashigani chart Caddy config; removed in v2.24.0"

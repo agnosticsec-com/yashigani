@@ -17,7 +17,7 @@ Routes:
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-05-02T09:00:00+01:00
+Last updated: 2026-05-03T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -210,7 +210,15 @@ def _assert_safe_upstream_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 class AgentRegisterRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+        description=(
+            "Agent slug: lowercase letter, then lowercase alphanumeric, underscore, or hyphen. "
+            "Max 64 chars. No path traversal chars permitted (V232-CSCAN-01a / CWE-22)."
+        ),
+    )
     upstream_url: str = Field(min_length=1, max_length=512)
     protocol: str = Field(default="openai", description="Agent protocol: openai, letta, or langflow")
     groups: list[str] = Field(default_factory=list)
@@ -239,7 +247,16 @@ class AgentRegisterRequest(BaseModel):
 
 
 class AgentUpdateRequest(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    name: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+        description=(
+            "Agent slug: lowercase letter, then lowercase alphanumeric, underscore, or hyphen. "
+            "Max 64 chars. No path traversal chars permitted (V232-CSCAN-01a / CWE-22)."
+        ),
+    )
     upstream_url: Optional[str] = Field(default=None, min_length=1, max_length=512)
     groups: Optional[list[str]] = None
     allowed_caller_groups: Optional[list[str]] = None
@@ -493,29 +510,27 @@ async def register_agent(
     registry = _get_registry()
     audit = backoffice_state.audit_writer
 
-    # Enforce license tier agent limit. Mirror users.py pattern exactly —
-    # the cap is surfaced as HTTP 402 with an explicit error code so the
-    # admin UI and CLI can branch on it. Without this guard, the registry
-    # rejection surfaces as a generic HTTP 500, violating the API contract
-    # (QA Wave 2 Issue A).
-    from yashigani.licensing.enforcer import check_agent_limit, LicenseLimitExceeded
+    # GROUP-4-1 / LAURA-LIMIT-AGENTS-01: agent limit is enforced atomically
+    # inside registry.register() via a Lua script (SCARD → check → HSET+SADD).
+    # The previous non-atomic pre-check (check_agent_limit(registry.count()))
+    # had a TOCTOU race and is removed here. LicenseLimitExceeded is raised by
+    # the Lua path on breach and caught below.
+    from yashigani.licensing.enforcer import LicenseLimitExceeded
     try:
-        check_agent_limit(registry.count())
+        agent_id, plaintext_token = registry.register(
+            name=body.name,
+            upstream_url=body.upstream_url,
+            groups=body.groups,
+            allowed_caller_groups=body.allowed_caller_groups,
+            allowed_paths=body.allowed_paths,
+            allowed_cidrs=body.allowed_cidrs,
+            protocol=body.protocol,
+        )
     except LicenseLimitExceeded as exc:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={"error": "agent_limit_exceeded", "limit": exc.max_val, "current": exc.current},
         )
-
-    agent_id, plaintext_token = registry.register(
-        name=body.name,
-        upstream_url=body.upstream_url,
-        groups=body.groups,
-        allowed_caller_groups=body.allowed_caller_groups,
-        allowed_paths=body.allowed_paths,
-        allowed_cidrs=body.allowed_cidrs,
-        protocol=body.protocol,
-    )
 
     agent = registry.get(agent_id)
     if agent is None:

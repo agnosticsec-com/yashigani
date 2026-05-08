@@ -1,39 +1,49 @@
 """
 License anti-tampering — integrity constants.
 
-This module holds two values that are PLACEHOLDERS in source control and are
+This module holds constants that are PLACEHOLDERS in source control and are
 replaced at Docker build time by the build pipeline:
 
   VERIFIER_HASH
-      SHA-256 hex digest of src/yashigani/licensing/verifier.py, computed
-      immediately after the file is written during the Docker image build.
-      Used by verifier.py to detect post-build tampering of its own source.
+      SHA-256 hex digest of src/yashigani/licensing/verifier.py
+
+  ENFORCER_HASH
+      SHA-256 hex digest of src/yashigani/licensing/enforcer.py
+
+  LOADER_HASH
+      SHA-256 hex digest of src/yashigani/licensing/loader.py
+
+  INTEGRITY_HASH
+      SHA-256 hex digest of this file (src/yashigani/licensing/_integrity.py)
+
+  AGENTS_REGISTRY_HASH
+      SHA-256 hex digest of src/yashigani/agents/registry.py
+
+  IDENTITY_REGISTRY_HASH
+      SHA-256 hex digest of src/yashigani/identity/registry.py
 
   COUNTER_PUBLIC_KEY_PEM
-      ECDSA P-256 public key (PEM) for the counter-signing keypair.  The
+      ECDSA P-256 public key (PEM) for the counter-signing keypair. The
       matching private key is held exclusively by the Yashigani signing
       infrastructure and never leaves it.
 
 Placeholder sentinel
 --------------------
-When either constant still contains _PLACEHOLDER_INTEGRITY the verifier
-treats that check as disabled (fail-open) so that development and CI builds
-work without real keys.
+When any constant still contains _PLACEHOLDER_INTEGRITY the verifier
+treats that check as disabled (fail-open) in dev; fail-closed in prod.
 
 Build pipeline contract
 -----------------------
 The build script must:
-  1. Compute SHA-256(verifier.py) AFTER all edits are finalised.
+  1. Compute SHA-256(file) AFTER all edits are finalised.
   2. Replace the placeholder strings in this file with the real values.
   3. Rebuild / reinstall the package so the updated constants are imported.
-  4. Compute SHA-256(verifier.py) a second time to confirm the file has not
-     changed since step 1, then re-embed if needed (idempotent).
 
 Do NOT embed the real counter private key here or anywhere in the image.
 """
 from __future__ import annotations
 
-# Sentinel value.  Both placeholder constants must contain this string.
+# Sentinel value. All placeholder constants must contain this string.
 _PLACEHOLDER_INTEGRITY = "PLACEHOLDER_YASHIGANI_INTEGRITY"
 
 # ---------------------------------------------------------------------------
@@ -41,6 +51,36 @@ _PLACEHOLDER_INTEGRITY = "PLACEHOLDER_YASHIGANI_INTEGRITY"
 # Replace with: sha256sum src/yashigani/licensing/verifier.py | cut -d' ' -f1
 # ---------------------------------------------------------------------------
 VERIFIER_HASH: str = _PLACEHOLDER_INTEGRITY + "_VERIFIER_HASH"
+
+# ---------------------------------------------------------------------------
+# ENFORCER_HASH
+# Replace with: sha256sum src/yashigani/licensing/enforcer.py | cut -d' ' -f1
+# ---------------------------------------------------------------------------
+ENFORCER_HASH: str = _PLACEHOLDER_INTEGRITY + "_ENFORCER_HASH"
+
+# ---------------------------------------------------------------------------
+# LOADER_HASH
+# Replace with: sha256sum src/yashigani/licensing/loader.py | cut -d' ' -f1
+# ---------------------------------------------------------------------------
+LOADER_HASH: str = _PLACEHOLDER_INTEGRITY + "_LOADER_HASH"
+
+# ---------------------------------------------------------------------------
+# INTEGRITY_HASH (self-referential — computed over this file before replacement)
+# Replace with: sha256sum src/yashigani/licensing/_integrity.py | cut -d' ' -f1
+# ---------------------------------------------------------------------------
+INTEGRITY_HASH: str = _PLACEHOLDER_INTEGRITY + "_INTEGRITY_HASH"
+
+# ---------------------------------------------------------------------------
+# AGENTS_REGISTRY_HASH
+# Replace with: sha256sum src/yashigani/agents/registry.py | cut -d' ' -f1
+# ---------------------------------------------------------------------------
+AGENTS_REGISTRY_HASH: str = _PLACEHOLDER_INTEGRITY + "_AGENTS_REGISTRY_HASH"
+
+# ---------------------------------------------------------------------------
+# IDENTITY_REGISTRY_HASH
+# Replace with: sha256sum src/yashigani/identity/registry.py | cut -d' ' -f1
+# ---------------------------------------------------------------------------
+IDENTITY_REGISTRY_HASH: str = _PLACEHOLDER_INTEGRITY + "_IDENTITY_REGISTRY_HASH"
 
 # ---------------------------------------------------------------------------
 # COUNTER_PUBLIC_KEY_PEM
@@ -59,3 +99,19 @@ def is_verifier_hash_placeholder() -> bool:
 def is_counter_key_placeholder() -> bool:
     """Return True when COUNTER_PUBLIC_KEY_PEM has not been set at build time."""
     return _PLACEHOLDER_INTEGRITY in COUNTER_PUBLIC_KEY_PEM
+
+
+def is_any_hash_placeholder() -> bool:
+    """Return True when ANY of the six file hashes is still a placeholder.
+
+    Used by _check_self_integrity() to detect incomplete build pipeline runs
+    in non-dev environments (GROUP-3-1 v2.23.2).
+    """
+    return (
+        _PLACEHOLDER_INTEGRITY in VERIFIER_HASH
+        or _PLACEHOLDER_INTEGRITY in ENFORCER_HASH
+        or _PLACEHOLDER_INTEGRITY in LOADER_HASH
+        or _PLACEHOLDER_INTEGRITY in INTEGRITY_HASH
+        or _PLACEHOLDER_INTEGRITY in AGENTS_REGISTRY_HASH
+        or _PLACEHOLDER_INTEGRITY in IDENTITY_REGISTRY_HASH
+    )

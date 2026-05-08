@@ -174,9 +174,8 @@ spec:
           # helm install --wait sat polling Available=0 until the 15m timeout
           # elapsed and then surfaced "client rate limiter Wait returned an
           # error: context deadline exceeded" — a misleading symptom whose
-          # real cause is the readiness loop never converging. See:
-          # /Users/max/Documents/Claude/Internal/Compliance/yashigani/v2.23.1/
-          #   restore-test-evidence/k8s/restore_20260426T195713Z_run.log
+          # real cause is the readiness loop never converging. Evidence held
+          # in the internal compliance archive.
           startupProbe:
             httpGet:
               path: /health

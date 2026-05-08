@@ -16,9 +16,10 @@ Covers:
   - domain-bound license with matching YASHIGANI_TLS_DOMAIN → accepted (#102)
   - domain-bound license with mismatched YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
   - domain-bound license with unset YASHIGANI_TLS_DOMAIN → COMMUNITY (#102)
-  - wildcard org_domain ("*") → no domain check (#102)
+  - wildcard org_domain ("*") on paid tier → rejected (LAURA-LIMIT-DOMAINS-02, falls back to COMMUNITY)
+  - wildcard org_domain ("*") on community/academic_nonprofit → accepted (#102)
 
-Last updated: 2026-05-01T00:37:01+01:00
+Last updated: 2026-05-06T12:30:00+01:00
 """
 from __future__ import annotations
 
@@ -637,27 +638,53 @@ class TestDomainBinding:
         result = load_license()
         assert result.tier == LicenseTier.COMMUNITY
 
-    def test_wildcard_org_domain_skips_domain_check(self, tmp_path, monkeypatch):
+    def test_wildcard_org_domain_rejected_for_paid_tier(self, tmp_path, monkeypatch):
         """
-        A license with org_domain="*" is accepted regardless of
-        YASHIGANI_TLS_DOMAIN (wildcard = not domain-bound).
+        LAURA-LIMIT-DOMAINS-02: a paid-tier license (e.g. professional) with
+        org_domain="*" is rejected and falls back to COMMUNITY.  Wildcard means
+        the license was issued without domain binding and could be replayed to
+        any deployment — this is not permitted for paid tiers.
         """
         primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
 
-        payload = _make_payload()
+        payload = _make_payload()  # tier="professional"
         payload["org_domain"] = "*"
         lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
         lic_path = self._write_license_file(tmp_path, lic_str)
 
         monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
-        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)  # unset — must still work
+        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)
+
+        from yashigani.licensing.loader import load_license
+        from yashigani.licensing.model import LicenseTier
+
+        result = load_license()
+        # Loader falls back to COMMUNITY_LICENSE (valid=True) on rejection;
+        # the key assertion is that professional was NOT granted.
+        assert result.tier == LicenseTier.COMMUNITY
+        assert result.valid is True  # COMMUNITY_LICENSE is always valid
+
+    def test_wildcard_org_domain_accepted_for_community_tier(self, tmp_path, monkeypatch):
+        """
+        Wildcard org_domain is still valid for the community tier (#102).
+        Community licenses are not domain-bound and "*" is the expected value.
+        """
+        primary_priv_pem, primary_pub_pem, counter_priv_pem = self._setup_verifier(monkeypatch)
+
+        payload = _make_payload(tier="community")
+        payload["org_domain"] = "*"
+        lic_str = _build_v4_license(payload, primary_priv_pem, primary_pub_pem, counter_priv_pem)
+        lic_path = self._write_license_file(tmp_path, lic_str)
+
+        monkeypatch.setenv("YASHIGANI_LICENSE_FILE", lic_path)
+        monkeypatch.delenv("YASHIGANI_TLS_DOMAIN", raising=False)
 
         from yashigani.licensing.loader import load_license
         from yashigani.licensing.model import LicenseTier
 
         result = load_license()
         assert result.valid is True
-        assert result.tier == LicenseTier.PROFESSIONAL
+        assert result.tier == LicenseTier.COMMUNITY
 
 
 # ---------------------------------------------------------------------------

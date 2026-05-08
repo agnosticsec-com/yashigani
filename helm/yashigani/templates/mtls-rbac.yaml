@@ -10,7 +10,7 @@
   the applier never needs the unrestricted `create` verb on secrets —
   it only performs update/patch against the single named resource.
 
-  Captain pre-push review (2026-04-23): tightened from initial version
+  Internal pre-push review tightened this from an initial version
   that granted unrestricted `create` on all secrets in the namespace.
 */ -}}
 ---

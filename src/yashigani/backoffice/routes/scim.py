@@ -31,8 +31,12 @@ from yashigani.backoffice.routes.rbac import _push
 from yashigani.rbac.model import RBACGroup, ResourcePattern
 from yashigani.licensing.enforcer import (
     require_feature,
+    check_end_user_limit,
+    count_canonical_end_users,
     LicenseFeatureGated,
+    LicenseLimitExceeded,
     license_feature_gated_response,
+    license_limit_exceeded_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -208,6 +212,21 @@ async def scim_provision_user(
     email = body.userName
 
     existing_groups = store.get_user_groups(email)
+
+    # LAURA-LICENSE-03 / GROUP-2-5: enforce end-user seat limit for new SCIM
+    # provisions. A user with no existing groups is being provisioned for the
+    # first time — check the limit before creating. Existing members are an
+    # idempotent no-op and bypass this check.
+    if not existing_groups:
+        try:
+            check_end_user_limit(count_canonical_end_users())
+        except LicenseLimitExceeded as exc:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=402,
+                content=license_limit_exceeded_response(exc),
+            )
+
     return _user_resource(email, existing_groups)
 
 

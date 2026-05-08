@@ -121,7 +121,7 @@ spec:
                 - |
                   set -euo pipefail
                   cd /secrets
-                  # Safety guard (Su pre-push review 2026-04-22): same
+                  # Safety guard (internal pre-push review): same
                   # empty-glob protection as the bootstrap Job — refuse to
                   # apply a stub Secret if the rotator produced nothing.
                   crt_count=$(ls -1 *.crt 2>/dev/null | wc -l)

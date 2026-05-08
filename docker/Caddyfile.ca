@@ -1,5 +1,5 @@
 # Yashigani — Caddy TLS edge (CA-signed certificate mode)
-# Last updated: 2026-04-30T05:00:00+01:00
+# Last updated: 2026-05-07T01:00:00+01:00 (retro #83: Grafana mTLS — proxy to grafana:3443)
 # Use this for enterprise / on-prem deployments with an internal CA.
 #
 # Before starting:
@@ -31,7 +31,7 @@
 (internal-mtls) {
     transport http {
         tls
-        tls_trusted_ca_certs /run/secrets/ca_intermediate.crt
+        tls_trust_pool file /run/secrets/ca_intermediate.crt
         tls_client_auth /run/secrets/caddy_client.crt /run/secrets/caddy_client.key
         # Force HTTP/1.1: Caddy v2.11.x drops headers set via
         # reverse_proxy.headers.request.set on HTTP/2 upstream connections.
@@ -93,7 +93,7 @@
 
     # ── Security headers ────────────────────────────────────────────────────
     # Browser security features expected by Yashigani:
-    # - HSTS: Strict-Transport-Security enforced (preload-ready)
+    # - HSTS: Strict-Transport-Security enforced (preload, 2-year max-age)
     # - CSP: Content-Security-Policy with strict directives
     # - X-Content-Type-Options: nosniff (prevents MIME sniffing)
     # - X-Frame-Options: DENY (prevents clickjacking)
@@ -103,7 +103,7 @@
     # server-side controls (OPA, session validation, CSRF via SameSite)
     # provide equivalent protection without client-side enforcement.
     header {
-        Strict-Transport-Security  "max-age=31536000; includeSubDomains"
+        Strict-Transport-Security  "max-age=63072000; includeSubDomains; preload"
         X-Content-Type-Options     "nosniff"
         X-Frame-Options            "DENY"
         Referrer-Policy            "no-referrer"
@@ -216,6 +216,9 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Grafana — admin-authenticated access via /admin/grafana/* ──────────
+    # retro #83: Grafana now serves HTTPS on port 3443 with mTLS (Pattern B).
+    # Caddy presents caddy_client.crt to Grafana; Grafana verifies via
+    # ca_intermediate.crt. The forward_auth check still applies (admin only).
     handle_path /admin/grafana/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
@@ -226,7 +229,8 @@ Hiring: https://agnosticsec.com/careers
                 redir * /admin/login?next=/admin/grafana/ 302
             }
         }
-        reverse_proxy grafana:3000 {
+        reverse_proxy https://grafana:3443 {
+            import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -250,6 +254,7 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Prometheus — admin-authenticated access via /admin/prometheus/* ───
+    # retro #83: Prometheus now serves HTTPS on port 9090 (Pattern B mTLS).
     handle_path /admin/prometheus/* {
         forward_auth https://backoffice:8443 {
         import internal-mtls
@@ -260,7 +265,8 @@ Hiring: https://agnosticsec.com/careers
                 redir * /admin/login 302
             }
         }
-        reverse_proxy prometheus:9090 {
+        reverse_proxy https://prometheus:9090 {
+            import internal-mtls
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }
@@ -287,11 +293,17 @@ Hiring: https://agnosticsec.com/careers
     }
 
     # ── Prometheus federation — admin-authenticated ─────────────────────────
+    # retro #83: Prometheus now serves HTTPS on 9090. Use internal-mtls.
     handle /metrics-federate* {
         basic_auth {
             {env.PROMETHEUS_BASICAUTH_USER} {env.PROMETHEUS_BASICAUTH_HASH}
         }
-        reverse_proxy prometheus:9090
+        # inject-caddy-verified: prometheus does not validate the header but
+        # we inject it uniformly across all reverse_proxy blocks. Closes LU-231-10-A.
+        reverse_proxy https://prometheus:9090 {
+            import internal-mtls
+            import inject-caddy-verified
+        }
     }
 
     # ── Open WebUI — catch-all (served at root for SvelteKit compatibility) ──
@@ -312,7 +324,15 @@ Hiring: https://agnosticsec.com/careers
             }
         }
 
+        # inject-caddy-verified: open-webui does not validate the header but
+
+        # we inject it uniformly across all reverse_proxy blocks. Auth is
+
+        # enforced by the forward_auth block above. Closes LU-231-10-A.
+
         reverse_proxy open-webui:8080 {
+
+            import inject-caddy-verified
             header_up X-Forwarded-Proto https
             header_up X-Real-IP {remote_host}
         }

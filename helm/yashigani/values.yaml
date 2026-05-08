@@ -1,8 +1,6 @@
-# Yashigani v2.23.1 — Umbrella Chart Top-Level Values
+# Yashigani v2.23.2 — Umbrella Chart Top-Level Values
 # All sub-chart values are namespaced under their service name.
-# Last updated: 2026-05-02T12:00:00+01:00
-# 2026-05-02: edited for OWUI integrator-framing per Petra paralegal audit;
-# cross-ref /Internal/IP/shared/owui_licence_correspondence_2026-05-02.md
+# Last updated: 2026-05-07 (chore: convert floating-tag stubs to specific verified-existing versions)
 
 global:
   imageRegistry: "ghcr.io"
@@ -40,8 +38,8 @@ global:
 # A CronJob rotates leaf certs weekly (default Sun 02:00). Pods pick up
 # the new cert on the next roll/restart — no in-place reload in v2.23.1.
 #
-# OPA (policy) stays on plaintext HTTP; mtls_capable:false in the manifest.
-# Observability-plane mTLS lands in v2.23.2 (task #54).
+# OPA (policy) now serves mTLS; mtls_capable:true in the manifest (v2.23.2).
+# All callers updated to use internal_httpx_client (EX-231-01 closed).
 #
 # UPGRADE NOTE — plaintext → mTLS on an existing PVC:
 # The postgres init script (05-enable-ssl.sh) only runs on a fresh initdb.
@@ -67,10 +65,47 @@ global:
 # (e.g. plain kind without Calico/Cilium, or specific managed K8s tiers).
 # In that case you accept that the Caddy-centric isolation control is
 # network-layer absent; application-layer mTLS + SPIFFE gate remain active.
-# Document any disablement in the risk register with Tiago's sign-off.
+# Document any disablement in the risk register with maintainer sign-off.
 # ---------------------------------------------------------------------------
 networkPolicies:
   enabled: true
+
+# ---------------------------------------------------------------------------
+# Admission Control (ACS-RISK-008 — v2.23.2 P1)
+# ---------------------------------------------------------------------------
+# When enabled, the chart renders Kyverno ClusterPolicy resources that REJECT
+# pods missing the ACS-RISK-008 container hardening baseline:
+#   - runAsNonRoot: true (pod or container level)
+#   - allowPrivilegeEscalation: false (every container)
+#   - seccompProfile.type: RuntimeDefault (pod level)
+#   - capabilities.drop: [ALL] (every container)
+#   - No runAsUser: 0 (except documented exceptions)
+#
+# PREREQUISITE: Kyverno must be installed cluster-wide BEFORE applying the
+# release. See helm/yashigani/policies/admission/README.md for install steps.
+#
+# Set to false if the cluster does not have Kyverno (e.g. during initial
+# bootstrap before Kyverno is installed). Document in risk register.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# LIC-002 SECURITY NOTICE — YASHIGANI_LICENSE_TIER is NOT an operator-settable
+# value and MUST NOT appear anywhere in this values file, in extraEnv blocks,
+# or in any Kubernetes Secret/ConfigMap managed by this chart. Setting it via
+# the environment bypasses the signed-license enforcement path and lets any
+# operator claim any tier without a valid license token.
+#
+# There is intentionally NO extraEnv escape hatch in this chart. If you are
+# adding a new env var to the gateway or backoffice, add it as a first-class
+# chart value with a named field — never via an open-ended extraEnv list.
+#
+# If you see YASHIGANI_LICENSE_TIER in any manifest or values file, treat that
+# as a HIGH-severity finding and remove it before deploying.
+# ---------------------------------------------------------------------------
+admissionPolicies:
+  enabled: true
+  # Kyverno policy action: Enforce (hard reject) or Audit (log only).
+  # Must be Enforce in production. Audit only during rollout evaluation.
+  validationFailureAction: Enforce
 
 mtls:
   # Hard-off switch. When false the chart renders the pre-v2.23.1 plaintext
@@ -85,7 +120,7 @@ mtls:
   # to your internal mirror if air-gapped.
   kubectlImage:
     repository: "alpine/k8s"
-    tag: "1.29.4"
+    tag: "1.29.15@sha256:82171c2a1b3412fc0450ff347f11451294f917122c7f49a63d77f3499a068f11"
     pullPolicy: IfNotPresent
 
   # Two-tier PKI lifetime policy. Must sit inside the bounds declared in
@@ -112,7 +147,7 @@ mtls:
   #   * ca_root.crt + ca_intermediate.crt (public certs — workloads use intermediate only, Pattern B)
   #   * caddy_internal_hmac (EX-231-10 Layer B) — per-install shared secret
   #     injected by Caddy as X-Caddy-Verified-Secret on every upstream proxy.
-  #     backoffice and gateway verify it via Tom's middleware. The bootstrap Job
+  #     backoffice and gateway verify it via the gateway/backoffice middleware. The bootstrap Job
   #     generates it fresh on install; on upgrade it reuses the existing value
   #     from the Secret (idempotent) so a live stack isn't disrupted mid-apply.
   # It deliberately does NOT contain the CA private keys — those live in
@@ -145,7 +180,7 @@ mtls:
 # Mirrors install.sh _gen_admin_credentials in compose: produces admin1 and
 # admin2 usernames, passwords, and TOTP secrets, and stores them in a Secret
 # that the backoffice mounts into /run/secrets. This is the K8s parity for
-# feedback_admin_bootstrap_both_admins.md — every install must yield TWO
+# the project's two-admin bootstrap policy — every install must yield TWO
 # admin accounts with TOTP pre-provisioned, never a single-admin install.
 #
 # Disable ONLY if you intend to seed admins out-of-band by pre-creating
@@ -166,7 +201,7 @@ adminBootstrap:
   # it avoids another image pull.
   image:
     # Resolves to global.imageRegistry/global.imageOwner/<repo>:<tag>.
-    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # Digest pinned per project image-pinning policy — rebuilt at tip c68a6d2
     # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-gateway
     tag: "2.23.1@sha256:e3dfc6b4a38f44ccbf6ec965d32140ab621bc15cd360c2953c9a2545962a630a"
@@ -185,7 +220,7 @@ adminBootstrap:
 gateway:
   enabled: true
   image:
-    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # Digest pinned per project image-pinning policy — rebuilt at tip c68a6d2
     # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-gateway
     tag: "2.23.1@sha256:e3dfc6b4a38f44ccbf6ec965d32140ab621bc15cd360c2953c9a2545962a630a"
@@ -215,7 +250,7 @@ gateway:
     minAvailable: 1
   env:
     upstreamUrl: ""
-    opaUrl: "http://yashigani-policy:8181"
+    opaUrl: "https://yashigani-policy:8181"
     ollamaUrl: "http://yashigani-ollama:11434"
     redisHost: "yashigani-redis"
     redisPort: "6379"
@@ -234,8 +269,22 @@ gateway:
 # ---------------------------------------------------------------------------
 backoffice:
   enabled: true
+  # v2.23.2 fix — SSRF guard hostname allowlist (TM-V231-004 / Pentest #95).
+  # _assert_safe_upstream_url() blocks loopback/RFC1918/link-local by default.
+  # agentUpstreamHostnames lists the Kubernetes service hostnames that are permitted
+  # as agent upstream URLs despite resolving to cluster-internal IPs. The rendered
+  # value is joined with commas and injected as YASHIGANI_AGENT_UPSTREAM_HOSTNAMES
+  # on the backoffice container.
+  # Default: the three canonical Yashigani-internal bundle service names.
+  # Extend: add your custom agent service names to this list.
+  # Security: adding a name trusts that K8s service as a legitimate internal mesh
+  # endpoint. Agent registration is still admin-gated (TOTP step-up + audit trail).
+  agentUpstreamHostnames:
+    - langflow
+    - letta
+    - openclaw
   image:
-    # Digest pinned per feedback_image_pinning.md — rebuilt at tip c68a6d2
+    # Digest pinned per project image-pinning policy — rebuilt at tip c68a6d2
     # (2026-05-01T09:45+01:00) rc.2: LAURA-V232-002/003, AVA-A006/C006 + licensing canonical.
     repository: yashigani-backoffice
     tag: "2.23.1@sha256:542680c17071e15e8f9453fd7e676d9f15e67655e45143f6be2f62b5f131e153"
@@ -262,6 +311,11 @@ backoffice:
   pdb:
     enabled: true
     minAvailable: 1
+  # v2.23.2 #47 — Backup status + verify.
+  # Set to the absolute host path of the backups directory (created by install.sh).
+  # Empty string = skip the mount (endpoints return empty state gracefully).
+  # Example: /opt/yashigani/backups
+  backupsHostPath: ""
 
 # ---------------------------------------------------------------------------
 # Policy — Open Policy Agent
@@ -270,7 +324,7 @@ policy:
   enabled: true
   image:
     repository: openpolicyagent/opa
-    tag: "1.15.1"
+    tag: "1.16.1@sha256:c6f9910d5e982df13fa4c65f02cfa7f65f9cfdbef9fbaf80d6547f840294aa02"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -300,7 +354,7 @@ redis:
   enabled: true
   image:
     repository: redis
-    tag: "7-alpine"
+    tag: "7.4.9-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -330,7 +384,7 @@ ollama:
   enabled: true
   image:
     repository: ollama/ollama
-    tag: "0.6.2"
+    tag: "0.23.1@sha256:6077dbbd6508dce8973f8b91c30d8026b1279ab0483e15f0dfad469dba676c2f"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -348,7 +402,10 @@ ollama:
     type: ClusterIP
   persistence:
     enabled: true
-    size: 20Gi
+    # Sized for: model storage (3-30 GB depending on model) +
+    # per-user inference data (documents, files, embeddings caches).
+    # Increase further for multi-user heavy-document workloads.
+    size: 100Gi
     storageClass: ""
   hpa:
     enabled: true
@@ -357,6 +414,11 @@ ollama:
   model: "qwen2.5:3b"
   env:
     ollamaHost: "0.0.0.0"
+    # HOME=/data routes ollama's key + state (~/.ollama) to the persistent
+    # volume mount, allowing the container to run as UID 1000 (non-root).
+    # Verified 2026-05-03 — no root required.
+    home: "/data"
+    ollamaModels: "/data/models"
 
 # ---------------------------------------------------------------------------
 # Prometheus — metrics collection
@@ -365,7 +427,7 @@ prometheus:
   enabled: true
   image:
     repository: prom/prometheus
-    tag: "v3.2.1"
+    tag: "v3.11.3@sha256:e4254400b85610324913f0dc4acf92603d9984e7519414c5a12811aa6146acc3"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -392,7 +454,7 @@ grafana:
   enabled: true
   image:
     repository: grafana/grafana
-    tag: "11.5.2"
+    tag: "13.0.1@sha256:0f86bada30d65ef9d0183b90c1e2682ac92d53d95da8bed322b984ea78a4a73a"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -404,7 +466,10 @@ grafana:
       cpu: "250m"
       memory: "512Mi"
   service:
-    port: 3000
+    # retro #83: Grafana serves HTTPS on 3443 when mtls.enabled=true.
+    # Port value here is the Service port; targetPort is set in grafana.yaml
+    # based on mtls.enabled (3443 when true, 3000 when false).
+    port: 3443
     type: ClusterIP
   existingSecretName: ""
   adminUser: "grafana-admin"
@@ -420,7 +485,7 @@ alertmanager:
   enabled: true
   image:
     repository: prom/alertmanager
-    tag: "v0.27.0"
+    tag: "v0.32.1@sha256:51a825c2a40acc3e338fdd00d622e01ec090f72be2b3ea46be0839cd47a4d286"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -446,7 +511,7 @@ loki:
   enabled: true
   image:
     repository: grafana/loki
-    tag: "3.0.0"
+    tag: "3.7.1@sha256:73e905b51a7f917f7a1075e4be68759df30226e03dcb3cd2213b989cc0dc8eb4"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -466,13 +531,14 @@ loki:
     storageClass: ""
 
 # ---------------------------------------------------------------------------
-# Jaeger — distributed tracing UI (v0.5.0)
+# Jaeger — distributed tracing UI (v2.17.0)
+# Migrated from v1 (all-in-one image) to v2 (jaeger image, YAML config).
 # ---------------------------------------------------------------------------
 jaeger:
   enabled: true
   image:
-    repository: jaegertracing/all-in-one
-    tag: "1.57"
+    repository: jaegertracing/jaeger
+    tag: "2.17.0@sha256:6266573208d665ce5c17483bce0a75d0806480d92c84766d288d0aee885ce708"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -494,7 +560,7 @@ otelCollector:
   enabled: true
   image:
     repository: otel/opentelemetry-collector-contrib
-    tag: "0.100.0"
+    tag: "0.151.0@sha256:d57bfe8eee2378f31cb1193239fbcac521d54a5a071fca2bfc106916a32b892d"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -529,7 +595,7 @@ caddy:
   enabled: true
   image:
     repository: caddy
-    tag: "2-alpine"
+    tag: "2.11.2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -576,7 +642,10 @@ agentBundles:
   langgraph:
     enabled: false
     image:
-      # Digest pinned per Yashigani release — do not override manually
+      # ANOMALY 2026-05-02: langchain/langgraph-api is not publicly available on
+      # Docker Hub — pull fails. Agent bundle disabled by default. Pinning deferred
+      # until a stable public tag is confirmed. Do not enable without verifying the
+      # registry source and obtaining a digest. Tracked in v2.23.2 backlog.
       repository: langchain/langgraph-api
       tag: "latest"
       pullPolicy: IfNotPresent
@@ -605,8 +674,10 @@ agentBundles:
     # License: TBD — verify at openclaw.ai before production use.
     enabled: false
     image:
-      repository: openclaw/openclaw
-      tag: "latest"
+      # Pinned to 2026.5.6 to match docker-compose.yml. INDEX digest verified
+      # 2026-05-07 via crane digest — multi-arch (linux/amd64 + linux/arm64).
+      repository: ghcr.io/openclaw/openclaw
+      tag: "2026.5.6@sha256:2ca86d6296fe2ae7111dac14843551340a4c5099e01566253b62c4d3e0a337fc"
       pullPolicy: IfNotPresent
     replicaCount: 1
     env:
@@ -638,12 +709,19 @@ agentBundles:
 # https://github.com/open-webui/open-webui/blob/main/LICENSE before enabling.
 # Yashigani orchestrates deployment via Helm; it does not redistribute Open
 # WebUI binaries. Internal only — all inference routes through the gateway.
+#
+# DEPRECATED (v2.23.2): Open WebUI integration is sunsetting. Yashigani's own
+# built-in UI ships in v2.24.0. Set enabled: false (the default) unless you
+# are running a v2.23.x install that previously opted in.
+# LU-7023360-001: default corrected from true → false.
 # ---------------------------------------------------------------------------
 openWebui:
-  enabled: true
+  enabled: false
   image:
+    # Pinned to v0.9.1 to match docker-compose.yml (was floating :main — fixed
+    # in v2.23.2 image-pin sweep 2026-05-02).
     repository: ghcr.io/open-webui/open-webui
-    tag: "main"
+    tag: "v0.9.2@sha256:a7e4796ae894d1e2a0c1824860ade472f35c507608a01c3581377b5c19b0ed49"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # Retro #3ar — open-webui OOMKilled (exit 137) with 512Mi limit on K8s.
@@ -692,7 +770,7 @@ budgetRedis:
   enabled: true
   image:
     repository: redis
-    tag: "7-alpine"
+    tag: "7.4.9-alpine@sha256:286bd4264adb303147270bb2d735352497e950f7b73b2ca42364d63d7daf61ee"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -719,7 +797,7 @@ postgres:
   enabled: true
   image:
     repository: postgres
-    tag: "16-alpine"
+    tag: "16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.
@@ -746,7 +824,7 @@ pgbouncer:
   enabled: true
   image:
     repository: edoburu/pgbouncer
-    tag: "v1.23.1-p0"
+    tag: "v1.25.1-p0@sha256:c7bfcaa24de830e29588bb9ad1eb39cebaf07c27149e1974445899b695634bb4"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # YSG-RISK-005 #3av: requests = 50% of limit.

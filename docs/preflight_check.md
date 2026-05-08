@@ -1,8 +1,18 @@
 # Yashigani Pre-Installation Checklist
 
-**Version:** v2.23.1
-**Last updated:** 2026-04-23
+**Version:** v2.23.2
+**Last updated:** 2026-05-07
 **Purpose:** Everything you must gather, configure, or verify *before* running `install.sh` or `docker compose up`. The automated installer handles software installation and secret generation — but it cannot know your infrastructure topology, DNS records, upstream server addresses, or credentials for external services. Collect all items marked **Required** before you start.
+
+> **Last public release — v2.23.2**
+>
+> v2.23.2 is the final public release of Yashigani. Future development moves to a private tier.
+>
+> - **Existing public users:** this release will remain available; no automatic deprecation.
+> - **Continued updates (v2.23.3+):** require a paid licence — see [agnosticsec.com/yashigani/licensing](https://agnosticsec.com/yashigani/licensing).
+> - **Free tier (Community):** continues with v2.23.2; security patches delivered under the published support window.
+> - **Non-profit and education:** access remains free forever — see [agnosticsec.com/yashigani/non-profit](https://agnosticsec.com/yashigani/non-profit).
+> - **Public repository:** transitions to a private programme **by end of Q2 2026 (2026-06-30)**, subject to Petra IP review milestone confirmation.
 
 ---
 
@@ -567,6 +577,7 @@ The registration response includes a `quick_start` field with copy-paste curl, P
 [ ] Agent inventory created (name, description, path prefix for each)
 [ ] Token storage method decided (secret manager, vault, encrypted file)
 [ ] (since v0.7.0) IP CIDR allowlists defined for agents with known source IPs
+[ ] (v2.23.2+) If using agent bundles: verify YASHIGANI_AGENT_UPSTREAM_HOSTNAMES on backoffice contains the bundle hostnames you intend to register (default: langflow,letta,openclaw); add custom internal agent service names if needed
 [ ] Community: agents ≤ 5, end users ≤ 10, admin seats ≤ 2
 [ ] Starter: agents ≤ 100, end users ≤ 250, admin seats ≤ 25
 [ ] Professional: agents ≤ 500, end users ≤ 1,000, admin seats ≤ 50

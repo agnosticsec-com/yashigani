@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-02T02:32:22+01:00 */ -}}
+{{- /* Last updated: 2026-05-07T00:00:00+01:00 — fix: YASHIGANI_AGENT_UPSTREAM_HOSTNAMES wired from agentBundles.upstreamHostnames */ -}}
 {{- if .Values.backoffice.enabled }}
 ---
 apiVersion: apps/v1
@@ -108,12 +108,23 @@ spec:
               containerPort: 8443
               protocol: TCP
           env:
+            # LIC-001: YASHIGANI_ENV is hardcoded to "production" to prevent
+            # operators from disabling license integrity checks via --set.
+            # Non-license uses of the environment label (telemetry, OTel
+            # resource attributes) use YASHIGANI_ENVIRONMENT_LABEL instead,
+            # which still reads from global.environment.
             - name: YASHIGANI_ENV
+              value: "production"
+            - name: YASHIGANI_ENVIRONMENT_LABEL
               value: {{ .Values.global.environment | quote }}
             - name: YASHIGANI_KSM_PROVIDER
               value: "docker"
             - name: YASHIGANI_SERVICE_NAME
               value: "backoffice"
+            # v2.23.2 #47 — Backup status + verify mount path.
+            # Always set; Python falls back gracefully if the dir is empty/absent.
+            - name: YASHIGANI_BACKUPS_DIR
+              value: "/data/backups"
             {{- if .Values.adminBootstrap.enabled }}
             # Retro #3ap — pull the generated admin1 username out of the
             # adminBootstrap Secret. _bootstrap_admin_accounts in app.py uses
@@ -147,7 +158,7 @@ spec:
               # ca_bundle.crt (root+intermediate) for libpq/psycopg2 consumers.
               # asyncpg also uses this DSN but asyncpg goes through Python ssl
               # which can build the chain with root alone. Using ca_bundle.crt
-              # is safe for both consumers. Captain R4 K8s gate 2026-04-30:
+              # is safe for both consumers. Internal K8s gate finding:
               # libpq (psycopg2) fails with ca_root.crt alone when pgbouncer
               # serves a chain-bundle cert (openssl error 20 "unable to get
               # local issuer certificate").
@@ -163,13 +174,13 @@ spec:
               # key independently, no exclusion. Connecting direct to
               # postgres-the-process puts both replicas' lock connections on
               # the same backend, where pg_advisory_lock actually serialises.
-              # Captain #58c #3bw + #3bx evidence (2026-04-29).
+              # Evidence captured during internal K8s integration testing.
               # ca_bundle.crt: postgres also serves chain-bundle cert; libpq
-              # requires bundle CA to verify (Captain R4 finding 2026-04-30).
+              # requires bundle CA to verify (internal integration finding).
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani?sslmode=verify-ca&sslrootcert=/run/secrets/ca_bundle.crt&sslcert=/run/secrets/backoffice_client.crt&sslkey=/run/secrets/backoffice_client.key"
             {{- end }}
             - name: YASHIGANI_OPA_URL
-              value: "http://yashigani-policy:8181"
+              value: "https://yashigani-policy:8181"
             - name: YASHIGANI_SECRETS_DIR
               value: "/run/secrets"
             - name: YASHIGANI_DEPLOYMENT_STREAM
@@ -189,6 +200,13 @@ spec:
             {{- end }}
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
+            {{- if .Values.backoffice.agentUpstreamHostnames }}
+            # v2.23.2 fix — SSRF guard hostname allowlist (TM-V231-004 / Pentest #95).
+            # Permits canonical agent bundle service names to register with private
+            # upstream URLs. Mirrors Compose YASHIGANI_AGENT_UPSTREAM_HOSTNAMES.
+            - name: YASHIGANI_AGENT_UPSTREAM_HOSTNAMES
+              value: {{ .Values.backoffice.agentUpstreamHostnames | join "," | quote }}
+            {{- end }}
             - name: OWUI_API_URL
               value: "http://open-webui:8080"
             - name: REDIS_PASSWORD
@@ -197,7 +215,7 @@ spec:
                   name: {{ .Values.redis.existingSecretName | default "yashigani-redis-secrets" }}
                   key: redis_password
             {{- if .Values.mtls.enabled }}
-            # EX-231-10 Layer B: Tom's middleware reads CADDY_INTERNAL_HMAC at
+            # EX-231-10 Layer B: backoffice middleware reads CADDY_INTERNAL_HMAC at
             # lifespan startup and rejects requests without a matching
             # X-Caddy-Verified-Secret header → 401. Secret is in pki-certs.
             - name: CADDY_INTERNAL_HMAC
@@ -274,6 +292,12 @@ spec:
               mountPath: /etc/yashigani
               readOnly: true
             {{- end }}
+            {{- if .Values.backoffice.backupsHostPath }}
+            # v2.23.2 #47 — Backup status + verify: mount host backups dir read-only.
+            - name: backups
+              mountPath: /data/backups
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -307,6 +331,14 @@ spec:
         - name: secrets
           emptyDir:
             sizeLimit: 10Mi
+        {{- end }}
+        {{- if .Values.backoffice.backupsHostPath }}
+        # v2.23.2 #47 — Backup directory hostPath volume (read-only).
+        # Set backoffice.backupsHostPath in values.yaml to the absolute host path.
+        - name: backups
+          hostPath:
+            path: {{ .Values.backoffice.backupsHostPath | quote }}
+            type: DirectoryOrCreate
         {{- end }}
 ---
 apiVersion: v1

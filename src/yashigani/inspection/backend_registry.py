@@ -6,6 +6,8 @@ All backends are tried in order; if all fail, the registry returns a
 fail-closed result (PROMPT_INJECTION_ONLY, confidence=1.0).
 
 Thread-safe: swap() uses a lock so live config changes are atomic.
+
+Last updated: 2026-05-03
 """
 from __future__ import annotations
 
@@ -186,7 +188,7 @@ class BackendRegistry:
             self._audit.write(InspectionBackendUnreachableEvent(
                 backend_name=backend_name,
                 error_type=type(exc).__name__,
-                error_message=str(exc)[:500],
+                error_message=type(exc).__name__,
                 request_id=request_id,
             ))
         except Exception as e:

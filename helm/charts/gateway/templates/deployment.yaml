@@ -25,9 +25,15 @@ spec:
         runAsNonRoot: true
         runAsUser: 1001
         fsGroup: 1001
+        # LIC-005: aligned to RuntimeDefault for v2.23.2. The previous
+        # Localhost/yashigani-gateway.json reference required nodes to have the
+        # profile pre-installed, which is not guaranteed in managed K8s clusters.
+        # The umbrella chart (helm/yashigani/templates/gateway.yaml) already used
+        # RuntimeDefault — this sub-chart was the only divergent consumer.
+        # v2.24.0 follow-on: promote docker/seccomp/yashigani-gateway.json as a
+        # DaemonSet-installed custom Localhost profile with node-side tooling.
         seccompProfile:
-          type: Localhost
-          localhostProfile: yashigani-gateway.json
+          type: RuntimeDefault
       {{- if .Values.global.topologySpread.enabled }}
       topologySpreadConstraints:
         - maxSkew: {{ .Values.global.topologySpread.maxSkew }}
