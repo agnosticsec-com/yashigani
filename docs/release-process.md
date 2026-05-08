@@ -1,6 +1,6 @@
 # Yashigani Release Process
 
-**Last updated:** 2026-05-06T00:00:00+01:00
+**Last updated:** 2026-05-08T00:00:00+01:00
 
 This document covers the end-to-end process for cutting a Yashigani release from a clean branch tip to a signed, published GitHub release with full evidence archive. It is the authoritative source for M7 gate-check procedures.
 
@@ -45,6 +45,33 @@ Triggers on push/PR to same branches; scheduled runs add extended rule-packs.
 | `pip-audit` | push/PR/schedule | `pip-audit-report` |
 
 Artifact retention: **90 days**.
+
+### 2.3 Install Smoke (`install-smoke.yml`)
+
+Triggers on push/PR to `v2.23.3`, `2.23.x`.
+
+| Job | What it does | Gate status |
+|-----|--------------|-------------|
+| `smoke / linux / docker` | Runs `install.sh --deploy demo --runtime docker` on ubuntu-latest; polls `/healthz` for 200 | **REQUIRED** — blocks merge on failure |
+| `smoke / linux / podman` | Same as above with rootful Podman | **REQUIRED** — blocks merge on failure |
+| `smoke / macos / docker` | Attempts Colima setup + install on macos-latest | **INFORMATIONAL** — `continue-on-error: true`; never blocks |
+| `smoke / macos / podman` | Attempts Podman machine setup + install on macos-latest | **INFORMATIONAL** — `continue-on-error: true`; never blocks |
+| `mutation` | Sabotages `Dockerfile.gateway` and confirms installer exits non-zero | **REQUIRED** — blocks merge on failure |
+| `smoke-gate (Linux + mutation only)` | Fan-in: passes when all REQUIRED cells + mutation pass | **REQUIRED** — enforced at M7 pre-flight |
+
+**macOS smoke interpretation during pre-flight:**
+
+macOS smoke cells (`smoke / macos / docker`, `smoke / macos / podman`) will show as red/failed in the GitHub Actions UI on every run against GH hosted runners. This is expected and is NOT a Yashigani defect. Root cause: GH hosted `macos-latest` runners (Sonoma/Sequoia arm64) do not support Apple Virtualization Framework (VZ) or nested virtualisation, which Colima and Podman machine require to start their VM-backed daemons. Failures occur non-deterministically at `colima start` / `podman machine start`.
+
+During M7 pre-flight, interpret macOS smoke as follows:
+
+- `smoke-gate (Linux + mutation only)` GREEN + macOS cells RED = **gate passes.** GitHub Actions matrix semantics: `needs.smoke.result` is `"success"` when all cells with `continue-on-error: false` pass, regardless of cells with `continue-on-error: true`.
+- `smoke-gate (Linux + mutation only)` RED = **real gate failure.** A Linux cell or the mutation test failed. Investigate before proceeding with the release.
+- macOS cells GREEN = unexpected positive signal (VZ happened to be available on the runner). Do not rely on it; note in the release retro if it occurs.
+
+This formalises the v2.23.2 ad-hoc Tiago risk-accept on macOS smoke. No per-release risk-accept is needed from v2.23.3 onward. The structural fix is in `install-smoke.yml` (`continue-on-error: ${{ !matrix.gates }}` on macOS cells) and in this document.
+
+Artifact retention: **14 days** (install logs per cell, artifact name `install-log-<os>-<runtime>-<sha>`).
 
 ---
 
