@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-07T00:00:00+01:00 -->
+<!-- last-updated: 2026-05-08T00:00:00+01:00 -->
 
 # Changelog
 
@@ -24,7 +24,9 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ## [Unreleased]
 
-No unreleased changes yet for the next version.
+### Security (v2.23.3)
+
+- **fix/hibp-route-through-httpclient** — `auth/password.py check_hibp()` now routes through `HttpClient._check_policy()` with `allowlist=["api.pwnedpasswords.com"]` and `allow_http=False` before issuing the outbound HIBP request. The URL is hardcoded (no immediate SSRF risk), but defence-in-depth ensures any future change to `_HIBP_API_URL` is automatically caught by the centralised gate. Fail-open preserved: `BlockedByPolicy` → `return None`. The `_check_hibp_urllib` fallback is only invoked after the policy gate passes (yashigani-retro#95 / OWASP A10 / API7 SSRF).
 
 ---
 
