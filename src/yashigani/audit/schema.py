@@ -2,7 +2,7 @@
 Yashigani Audit — Event schema definitions.
 All audit events extend AuditEvent. Fields are immutable after creation.
 
-Last updated: 2026-05-08T00:00:00+01:00
+Last updated: 2026-05-09T00:00:00+01:00
 """
 
 from __future__ import annotations
@@ -127,6 +127,8 @@ class EventType(str, Enum):
     INACTIVE_ACCOUNT_DISABLED = "INACTIVE_ACCOUNT_DISABLED"
     # v2.23.3 — CMMC L2 IA.L2-3.5.8 password reuse history
     PASSWORD_REUSE_REJECTED = "PASSWORD_REUSE_REJECTED"
+    # v2.23.3 — OWASP API7 DNS-rebinding defence (issue #91)
+    SSRF_PINNED_RESOLVER_USED = "SSRF_PINNED_RESOLVER_USED"
 
 
 # ---------------------------------------------------------------------------

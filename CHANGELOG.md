@@ -12,6 +12,16 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ## [Unreleased]
 
+### Added (v2.23.3)
+
+- **feat/v233-issue-91-ssrf-pinned-resolver** — DNS-rebinding defence for outbound HTTP
+  (`yashigani.net.pinned_resolver`). Resolves the target hostname once at context entry,
+  verifies the IP against the SSRF allowlist/blocklist, and patches `socket.getaddrinfo`
+  for the transport so subsequent DNS changes cannot redirect the connection. Closes
+  OWASP API7 SSRF DNS-rebinding gap (issue #91). New exports: `pinned_resolver` via
+  `yashigani.net`. New audit event type `SSRF_PINNED_RESOLVER_USED` (DEBUG). New security
+  doc `docs/security/ssrf.md`. 18 new tests in `src/tests/security/test_dns_rebinding.py`.
+
 ### Security (v2.23.3)
 
 - **feat/v233-backup-encryption** — `scripts/backup.sh` (new) produces age-encrypted `<timestamp>.tar.gz.age` backups via AES-256-GCM (age X25519). `restore.sh` extended with `--encrypted <identity.age> <archive>` path; legacy unencrypted archives accepted with deprecation warning. `age=1.2.1-1+b5` added to both Dockerfiles. Helm chart adds `backup-cronjob.yaml` CronJob + `backup-script` ConfigMap + values for `backup.recipientKeyConfigMap` / `backup.identitySecret`. `scripts/preflight.sh` Gate G19: age binary + recipient key validation. `docs/operations/backup.md` new Encryption section with key generation, rotation runbook, and K8s setup. Closes MP.L2-3.8.9 (CMMC L2 product gap) / CWE-312.

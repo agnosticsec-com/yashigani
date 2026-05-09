@@ -18,6 +18,12 @@ should use. It enforces:
   * Optional mTLS client-cert loading (integrates with task #29)
   * Logged audit event on blocked attempts
 
+v2.23.3 — DNS-rebinding defence (OWASP API7, issue #91):
+  :func:`pinned_resolver` is an async context manager that resolves the
+  target hostname once, pins the resulting IP, and monkey-patches
+  ``socket.getaddrinfo`` for the underlying transport so that subsequent
+  DNS changes cannot redirect the connection to a different (internal) host.
+
 Usage:
 
     from yashigani.net import HttpClient, BlockedByPolicy
@@ -27,10 +33,16 @@ Usage:
     except BlockedByPolicy as exc:
         logger.warning("Outbound blocked: %s", exc)
 
+    from yashigani.net import pinned_resolver
+    async with pinned_resolver("api.pwnedpasswords.com",
+                               allowlist=["api.pwnedpasswords.com"]) as session:
+        r = await session.get("https://api.pwnedpasswords.com/range/ABCDE")
+
 Migration of the existing 17 call sites happens as task #32b (tracked
 separately) — this module lands first so callers can opt in incrementally.
 """
 
 from .http_client import HttpClient, BlockedByPolicy
+from .pinned_resolver import pinned_resolver
 
-__all__ = ["HttpClient", "BlockedByPolicy"]
+__all__ = ["HttpClient", "BlockedByPolicy", "pinned_resolver"]
