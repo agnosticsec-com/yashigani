@@ -979,18 +979,16 @@ services:
       # issues loki_client.crt/key. /run/secrets is read-only (RO bind-mount).
       - ./secrets:/run/secrets:ro
     healthcheck:
-      # v2.23.3 RETRO-V233-001: Loki 3.7.1 image is distroless — no shell (/bin/sh)
-      # and no wget. CMD-SHELL fails with "executable file not found in $PATH".
-      # Additionally, Loki uses RequireAndVerifyClientCert so even if wget were
-      # present, an mTLS client cert would be required. Fix: nc -z TCP probe.
-      # nc is present in the loki distroless image (via BusyBox). TCP connect
-      # on :3100 succeeds without TLS handshake; port-open is sufficient signal
-      # that Loki is running. External mTLS enforcement is validated at promtail
-      # connect time (promtail presents loki_client.crt/key).
-      test: ["CMD", "nc", "-z", "localhost", "3100"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+      # v2.23.3 RETRO-V233-001 (extended): Loki 3.7.1 is fully distroless — the
+      # image contains only the /bin/loki binary. No shell, no wget, and no nc.
+      # nc -z was tried first but "executable file not found" — nc is absent.
+      # The only probing option without adding a tool is disabling the healthcheck.
+      # promtail depends_on changed to service_started (see below) so the compose
+      # dependency chain is not blocked. Loki startup is reliable; promtail retries
+      # on connection failure at the application level.
+      # K8s Helm: tcpSocket probe works because kubelet performs the TCP check
+      # natively (no in-container binary needed) — see loki.yaml.
+      disable: true
     # V232-CSCAN-01k-RES-01: align cap_drop with Helm (loki.yaml:39).
     # No cap_add: loki binds port 3100 (non-privileged).
     cap_drop: [ALL]
@@ -1026,7 +1024,12 @@ services:
       retries: 3
     depends_on:
       loki:
-        condition: service_healthy
+        # service_started (not service_healthy): loki 3.7.1 is fully distroless
+        # (only /bin/loki binary), so no in-container probe is possible and loki's
+        # healthcheck is disabled. service_started is safe: loki binds :3100 before
+        # accepting connections; promtail retries at the application level on any
+        # connection failure. — RETRO-V233-001 (extended)
+        condition: service_started
     # V232-CSCAN-01k-RES-01: defence-in-depth — no Helm counterpart for promtail.
     # No cap_add: promtail binds port 9080 (non-privileged). Docker socket access
     # is via bind mount (read-only), not a capability.
