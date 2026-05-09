@@ -67,7 +67,7 @@
 #   - sudo rights for 'su' user
 #
 # Version: v2.23.3
-# Last-Updated: 2026-05-09T14:35:00+01:00
+# Last-Updated: 2026-05-09T15:10:00+01:00
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -584,21 +584,33 @@ PROBE_OUTPUT=""
 # Capture probe output regardless of exit code — success/failure is determined
 # by whether the output contains "Admin1 login HTTP: 200" (SOP 4 grep contract).
 # shellcheck disable=SC2030
-# For Podman rootless, admin credential files are chowned to UID 1001 (subuid-mapped)
-# by _pki_chown_client_keys/gate-#ROOTLESS-11 so the backoffice container can read them.
-# After chown, the host user (su) cannot `cat` them directly — they're 0600 owned by
-# the subuid-mapped UID. Use `podman unshare cat` to read within the user namespace.
-# Docker installs leave files owned by the installer user — plain `cat` works there.
+# Admin credential files (admin1/2_username, admin1/2_password, admin1/2_totp_secret)
+# are chowned to UID 1001 by _pki_chown_client_keys (gate #ROOTLESS-11) so containers
+# can read them. The probe script runs as su (UID 1004) and cannot `cat` mode-0600 files
+# owned by UID 1001. Use runtime-appropriate cat prefix:
+#   Podman rootless: `podman unshare cat` — maps through user-namespace to subuid-mapped UID
+#   Docker: `docker run --rm` — daemon is root inside container, can read any file.
+#     The --secrets-dir is passed as /s (the container mount point) and --cat-prefix embeds
+#     the `docker run -v host_path:/s:ro` command so each read_secret call mounts the dir
+#     and cats the file. alpine:3 digest: amd64+arm64 manifest list (2026-04-29).
 PROBE_CAT_PREFIX="cat"
+PROBE_SECRETS_DIR="${VM_SECRETS_DIR}"
+_ALPINE_IMG="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
 if [[ "${RUNTIME}" == "podman" ]]; then
   PROBE_CAT_PREFIX="podman unshare cat"
+elif [[ "${RUNTIME}" == "docker" ]]; then
+  # Use ephemeral docker container to read UID-1001-owned secret files.
+  # Pass --secrets-dir /s (mount point) so the probe appends /s/admin1_username etc.
+  # The cat-prefix mounts the actual secrets dir read-only.
+  PROBE_CAT_PREFIX="docker run --rm -v ${VM_SECRETS_DIR}:/s:ro ${_ALPINE_IMG} cat"
+  PROBE_SECRETS_DIR="/s"
 fi
 
 { PROBE_OUTPUT="$(
     _vm_ssh "
       HISTFILE=/dev/null bash '/home/${VM_USER}/release_gate_probe_${TIMESTAMP}.sh' \
         --base-url 'https://${INSTALL_DOMAIN}:${HTTPS_PORT}' \
-        --secrets-dir '${VM_SECRETS_DIR}' \
+        --secrets-dir '${PROBE_SECRETS_DIR}' \
         --cat-prefix '${PROBE_CAT_PREFIX}' 2>&1
     " 2>&1
   )"; } || true
