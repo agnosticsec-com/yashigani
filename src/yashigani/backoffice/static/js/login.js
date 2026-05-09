@@ -1,4 +1,4 @@
-// Last updated: 2026-05-03
+// Last updated: 2026-05-09
 document.addEventListener('DOMContentLoaded', function() {
     var savedPassword = '';
 
@@ -23,18 +23,23 @@ document.addEventListener('DOMContentLoaded', function() {
      * ASVS V5.1.5, OWASP A01:2021, CWE-601.
      */
     function safeNext(rawNext) {
-        if (!rawNext) return '/';
+        // Return null (not '/') when there is no next param so that the caller's
+        // `safeNext(next) || '/admin/'` fallback evaluates correctly.
+        // BUG-LOGIN-REDIRECT-01: the previous `return '/'` was truthy, causing
+        // `safeNext(null) || '/admin/'` to always yield '/' instead of '/admin/'.
+        // Fix: 2026-05-09 (v2.23.3).
+        if (!rawNext) return null;
         // Layer 1: reject anything that doesn't start with a single forward-slash
         // followed by a non-slash, non-backslash char.
-        if (!/^\/[^/\\]/.test(rawNext)) return '/';
+        if (!/^\/[^/\\]/.test(rawNext)) return null;
         // Layer 2: parse against current origin; reject if origin or protocol differs.
         try {
             var parsed = new URL(rawNext, window.location.origin);
-            if (parsed.origin !== window.location.origin) return '/';
-            if (parsed.protocol !== window.location.protocol) return '/';
+            if (parsed.origin !== window.location.origin) return null;
+            if (parsed.protocol !== window.location.protocol) return null;
             return parsed.pathname + parsed.search + parsed.hash;
         } catch (e) {
-            return '/';
+            return null;
         }
     }
 
