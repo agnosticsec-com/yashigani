@@ -12,6 +12,15 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ## [Unreleased]
 
+### Added (v2.23.3)
+
+- **feat/v233-pki-bundle** — PKI admin UI (`/api/v1/admin/pki/*`) and BYO-CA driver (`YASHIGANI_PKI_CA_MODE=byo`). Closes #51 + #53.
+  - Admin endpoints: `GET /chain/{service}` (cert detail + SHA-256 fingerprint), `POST /rotate/{service}` (step-up TOTP, ASVS V6.8.4), `GET /bundle/{service}` (PEM download, private key never included / CWE-200), `GET /status` (all-services overview).
+  - BYO-CA driver: EC P-256 CSR generation → HTTPS signing endpoint (step-ca / Vault PKI) → chain validation → atomic key install. Auth modes: `token`, `mtls`, `none`. Fail-closed: `DriverError` on any failure — no silent fallback to internal issuer.
+  - Service name regex `[a-z][a-z0-9_\-]{0,63}$` — path traversal prevention. Body limit 256 bytes (ASVS 4.3.1). Audit events: `PKI_CERT_ROTATED`, `PKI_CERT_ROTATION_FAILED`.
+  - 23 new unit tests (PKI-D-01…12, PKI-R-01…11). 10 Playwright e2e tests (PW-PKI-01…10).
+  - Driver abstraction: `yashigani.pki.drivers.{base,internal_ca,byo_ca}` + `yashigani.pki.driver_factory`.
+
 ### Security (v2.23.3)
 
 - **feat/v233-backup-encryption** — `scripts/backup.sh` (new) produces age-encrypted `<timestamp>.tar.gz.age` backups via AES-256-GCM (age X25519). `restore.sh` extended with `--encrypted <identity.age> <archive>` path; legacy unencrypted archives accepted with deprecation warning. `age=1.2.1-1+b5` added to both Dockerfiles. Helm chart adds `backup-cronjob.yaml` CronJob + `backup-script` ConfigMap + values for `backup.recipientKeyConfigMap` / `backup.identitySecret`. `scripts/preflight.sh` Gate G19: age binary + recipient key validation. `docs/operations/backup.md` new Encryption section with key generation, rotation runbook, and K8s setup. Closes MP.L2-3.8.9 (CMMC L2 product gap) / CWE-312.
