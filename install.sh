@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# last-updated: 2026-05-09T14:40:00+01:00 (fix: Docker non-root PKI — _pki_run_issuer uses ephemeral container chown; compose_up tolerates already-chowned secrets_dir)
+# last-updated: 2026-05-09T15:00:00+01:00 (fix: Docker non-root — compose_up data/audit mkdir uses ephemeral container when data_dir owned by UID 1001)
 # last-updated: 2026-05-09T00:00:00+01:00 (feat: air-gap mode + customer-built offline bundle #58)
 # last-updated: 2026-05-08T12:00:00+01:00 (fix/k8s-postgres-exec-privilege-flow: _backup_existing_data — add K8s pg_dump path via kubectl exec; pod runs as UID 70, no root needed)
 # last-updated: 2026-05-07T12:05:00+01:00 (retro #83: add grafana:472 to _pki_chown_client_keys; retro #84: loki:10001+promtail:0 added)
@@ -2940,7 +2940,22 @@ compose_up() {
       mkdir -p "${data_dir}/audit"
     fi
   else
-    mkdir -p "${data_dir}/audit"
+    # Docker / rootful Podman: if data_dir is already owned by UID 1001 (chowned
+    # by the bind-mount auto-create step or by a pre-install helper like the test
+    # harness), plain mkdir will fail for a non-root installer (EPERM). Use an
+    # ephemeral docker container (daemon = root) to create the subdir in that case.
+    # Falls back to plain mkdir if docker is not available or if the call fails.
+    if ! mkdir -p "${data_dir}/audit" 2>/dev/null; then
+      local _alpine_mkdir="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+      if ! docker run --rm \
+             --volume "${data_dir}:/d:rw" \
+             "$_alpine_mkdir" \
+             mkdir -p /d/audit 2>/dev/null; then
+        log_error "Cannot create ${data_dir}/audit — run: sudo mkdir -p \"${data_dir}/audit\""
+        exit 1
+      fi
+      log_info "Created ${data_dir}/audit via ephemeral docker container (non-root Docker path)"
+    fi
   fi
   # v2.23.2 #47 — Backup directory: must exist before compose up so that
   # Podman rootless bind-mount (-v host:container:ro) does not fail on a
