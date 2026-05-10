@@ -2204,10 +2204,39 @@ compose_pull() {
       local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
       local _missing_external=0
 
+      # Build a list of images for active services only. Profile-only services
+      # whose profile is not in COMPOSE_PROFILES are skipped — their images
+      # can safely be absent when --skip-pull is used without those profiles.
       local _remote_images
-      _remote_images=$(grep '^\s*image:' "$_compose_file" 2>/dev/null \
-        | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*$//' \
-        | grep -v 'yashigani/' | grep -v '^\${' | sort -u)
+      local _active_profiles_arg="${COMPOSE_PROFILES[*]:-}"
+      # Profile-aware extraction using python3+yaml when available
+      local _py_script='
+import sys, yaml
+compose_file, active_profiles_str = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
+active_profiles = set(active_profiles_str.split()) if active_profiles_str else set()
+try:
+    with open(compose_file) as f:
+        c = yaml.safe_load(f)
+    for svc, data in (c.get("services") or {}).items():
+        profiles = data.get("profiles") or []
+        img = data.get("image") or ""
+        if not img or "yashigani/" in img or img.startswith("${"):
+            continue
+        if not profiles or any(p in active_profiles for p in profiles):
+            print(img)
+except Exception:
+    pass
+'
+      if command -v python3 >/dev/null 2>&1 && \
+         python3 -c "import yaml" >/dev/null 2>&1; then
+        _remote_images=$(python3 -c "$_py_script" "$_compose_file" "$_active_profiles_arg" 2>/dev/null | sort -u)
+      fi
+      # Fallback to legacy grep (no profile filter) if python3/yaml unavailable
+      if [[ -z "${_remote_images:-}" ]]; then
+        _remote_images=$(grep '^\s*image:' "$_compose_file" 2>/dev/null \
+          | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*$//' \
+          | grep -v 'yashigani/' | grep -v '^\${' | sort -u)
+      fi
 
       for _img in $_remote_images; do
         [[ -z "$_img" ]] && continue

@@ -361,16 +361,43 @@ if [[ "${SKIP_INSTALL}" == "false" ]]; then
     # save by full name:tag. When loaded into root's store, podman image load
     # preserves the name:tag, making 'podman image exists <compose-ref>' succeed.
     #
+    # Only images for always-active services (no profile) are saved. Profile-only
+    # images (wazuh, langflow, letta, openclaw, keycloak, vault, open-webui,
+    # step-ca) are skipped to avoid exhausting disk space (~10 GB of optional images).
+    # The install.sh --skip-pull check uses the same profile-aware filter.
+    #
     # The compose file is in VM_CLONE_DIR (/root/...) so we read it via _vm_sudo
     # and write the image list to a file su can read.
     _COMPOSE_IMGS_FILE="/home/${VM_USER}/.preload_compose_imgs_$$"
     _vm_sudo "
-      grep '^\s*image:' '${VM_CLONE_DIR}/docker/docker-compose.yml' 2>/dev/null \
-        | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*//' | sort -u \
-        > '${_COMPOSE_IMGS_FILE}' 2>/dev/null
+      # Use python3+yaml for profile-aware extraction (only always-active images)
+      _PY_SCRIPT='
+import sys, yaml
+try:
+    with open(sys.argv[1]) as f:
+        c = yaml.safe_load(f)
+    for svc, data in (c.get(\"services\") or {}).items():
+        profiles = data.get(\"profiles\") or []
+        img = data.get(\"image\") or \"\"
+        if not img or \"yashigani/\" in img or img.startswith(\"\${\"):
+            continue
+        if not profiles:  # only always-active (no profile) services
+            print(img)
+except Exception:
+    pass
+'
+      if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+        python3 -c \"\${_PY_SCRIPT}\" '${VM_CLONE_DIR}/docker/docker-compose.yml' 2>/dev/null \
+          | sort -u > '${_COMPOSE_IMGS_FILE}' 2>/dev/null
+      else
+        # Fallback: grep all images (may include profile-only — disk space risk)
+        grep '^\s*image:' '${VM_CLONE_DIR}/docker/docker-compose.yml' 2>/dev/null \
+          | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*//' | sort -u \
+          > '${_COMPOSE_IMGS_FILE}' 2>/dev/null
+      fi
       chown '${VM_USER}:${VM_USER}' '${_COMPOSE_IMGS_FILE}' 2>/dev/null || true
       chmod 644 '${_COMPOSE_IMGS_FILE}' 2>/dev/null || true
-      echo \"Compose images written: \$(wc -l < '${_COMPOSE_IMGS_FILE}')\"
+      echo \"Compose images written (always-active only): \$(wc -l < '${_COMPOSE_IMGS_FILE}')\"
     " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
 
     _vm_ssh "
