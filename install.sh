@@ -2330,6 +2330,25 @@ ghcr.io/openclaw/openclaw:2026.3.1" ;;
       wait "${_batch_pids[@]}" 2>/dev/null || true
     fi
     log_success "All $_total remote images pulled"
+    # v2.23.3: After concurrent Podman pulls, the storage may hold a brief lock.
+    # Verify the locally-built images are still visible before proceeding to
+    # PKI bootstrap (_pki_run_issuer requires them). Retry once with 2s backoff
+    # to accommodate any transient storage lock from the parallel pull.
+    local _gw_check=0
+    for _retry in 1 2; do
+      podman image inspect "localhost/yashigani/gateway:${YASHIGANI_VERSION}" >/dev/null 2>&1 \
+        || podman image inspect "yashigani/gateway:${YASHIGANI_VERSION}" >/dev/null 2>&1 \
+        && _gw_check=1 && break
+      log_warn "Gateway image not immediately visible after parallel pull (retry ${_retry}/2)..."
+      sleep 2
+    done
+    if [[ "$_gw_check" == "0" ]]; then
+      log_error "Gateway image not found after parallel pull — rebuilding..."
+      "${COMPOSE_CMD[@]}" -f "$compose_file" build gateway || {
+        log_error "Gateway rebuild failed — cannot continue"
+        exit 1
+      }
+    fi
   else
     log_info "Pulling remote container images..."
     "${COMPOSE_CMD[@]}" -f "$compose_file" pull --ignore-buildable 2>/dev/null || \
@@ -2962,13 +2981,18 @@ compose_up() {
     # ephemeral docker container (daemon = root) to create the subdir in that case.
     # Falls back to plain mkdir if docker is not available or if the call fails.
     if ! mkdir -p "${data_dir}/audit" 2>/dev/null; then
-      local _alpine_mkdir="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
-      if ! docker run --rm \
-             --volume "${data_dir}:/d:rw" \
-             "$_alpine_mkdir" \
-             mkdir -p /d/audit 2>/dev/null; then
-        log_error "Cannot create ${data_dir}/audit — run: sudo mkdir -p \"${data_dir}/audit\""
-        exit 1
+      local _alpine_mkdir_digest="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+      # Prefer --pull=never with cached alpine:3; fall back to digest-pinned pull.
+      if ! docker run --rm --pull=never \
+               --volume "${data_dir}:/d:rw" \
+               "alpine:3" mkdir -p /d/audit 2>/dev/null; then
+        if ! docker run --rm \
+               --volume "${data_dir}:/d:rw" \
+               "$_alpine_mkdir_digest" \
+               mkdir -p /d/audit 2>/dev/null; then
+          log_error "Cannot create ${data_dir}/audit — run: sudo mkdir -p \"${data_dir}/audit\""
+          exit 1
+        fi
       fi
       log_info "Created ${data_dir}/audit via ephemeral docker container (non-root Docker path)"
     fi
@@ -4897,14 +4921,23 @@ _pki_run_issuer() {
     # internally, so it can chown inside the container regardless of host caller uid).
     # Same pattern as _pki_chown_client_keys() docker_run mode.
     # alpine:3 digest (amd64+arm64 manifest list — 2026-04-29; rotate each release):
-    local _alpine_chown="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
-    if ! docker run --rm \
-           --volume "${secrets_in}:/s:rw" \
-           "$_alpine_chown" \
-           chown 1001:1001 /s 2>/dev/null; then
-      # Fallback to plain chown (works when installer runs as root / id -u == 0)
-      chown 1001:1001 "$secrets_in" 2>/dev/null || true
-    fi
+    local _alpine_chown_digest="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+    # Prefer --pull=never with the tag-only ref if alpine:3 is already in the
+    # local Docker store (avoids registry round-trips, including rate-limit hits
+    # on Docker Hub). Fall back to the digest-pinned pull for fresh installs
+    # (supply-chain safe: digest is verified at pull time). Finally fall back to
+    # plain chown as a last resort (only works if installer runs as root).
+    _docker_chown_dir() {
+      local _dir="$1" _target="$2"
+      docker run --rm --pull=never \
+             --volume "${_dir}:${_target}:rw" \
+             "alpine:3" chown 1001:1001 "${_target}" 2>/dev/null && return 0
+      docker run --rm \
+             --volume "${_dir}:${_target}:rw" \
+             "$_alpine_chown_digest" chown 1001:1001 "${_target}" 2>/dev/null && return 0
+      chown 1001:1001 "$_dir" 2>/dev/null || true
+    }
+    _docker_chown_dir "${secrets_in}" /s
     # Retro #3ah (v2.23.1): the issuer also writes back to
     # service_identities.yaml (bootstrap_token_sha256 fields) via the
     # /manifest.yaml bind mount. Without ownership match the write fails
@@ -4913,12 +4946,17 @@ _pki_run_issuer() {
     # We bind-mount the parent dir and chown the file inside the container.
     local _manifest_dir; _manifest_dir="$(dirname "$manifest_in")"
     local _manifest_base; _manifest_base="$(basename "$manifest_in")"
-    if ! docker run --rm \
-           --volume "${_manifest_dir}:/m:rw" \
-           "$_alpine_chown" \
-           chown 1001:1001 "/m/${_manifest_base}" 2>/dev/null; then
-      chown 1001:1001 "$manifest_in" 2>/dev/null || true
-    fi
+    _docker_chown_file() {
+      local _dir="$1" _file="$2"
+      docker run --rm --pull=never \
+             --volume "${_dir}:/m:rw" \
+             "alpine:3" chown 1001:1001 "/m/${_file}" 2>/dev/null && return 0
+      docker run --rm \
+             --volume "${_dir}:/m:rw" \
+             "$_alpine_chown_digest" chown 1001:1001 "/m/${_file}" 2>/dev/null && return 0
+      chown 1001:1001 "${_dir}/${_file}" 2>/dev/null || true
+    }
+    _docker_chown_file "${_manifest_dir}" "${_manifest_base}"
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -5160,17 +5198,24 @@ _pki_chown_client_keys() {
         # Bind-mount the secrets dir into a minimal container; chown+chmod the
         # specific file path relative to the mount root /s.
         # The container is rm'd immediately; no persistent state.
+        # Prefer --pull=never with tag-only ref if alpine:3 is cached locally
+        # (avoids Docker Hub rate-limit hits); fall back to digest-pinned pull.
         local _rel_file="${_file#"${_secrets_dir}/"}"
         local _container_cmd="chown ${_uid}:${_uid} /s/${_rel_file}"
         if [[ -n "$_extra_chmod" ]]; then
           _container_cmd="${_container_cmd} && chmod ${_extra_chmod} /s/${_rel_file}"
         fi
-        if ! docker run --rm \
+        if ! docker run --rm --pull=never \
                --volume "${_secrets_dir}:/s:rw" \
-               "$_alpine_image" \
-               sh -c "$_container_cmd"; then
-          log_error "docker run chown/chmod failed on ${_label} — aborting"
-          return 1
+               "alpine:3" \
+               sh -c "$_container_cmd" 2>/dev/null; then
+          if ! docker run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "$_container_cmd"; then
+            log_error "docker run chown/chmod failed on ${_label} — aborting"
+            return 1
+          fi
         fi
         ;;
       podman_run)
