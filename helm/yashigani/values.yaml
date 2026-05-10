@@ -728,10 +728,11 @@ agentBundles:
     image:
       # ANOMALY 2026-05-02: langchain/langgraph-api is not publicly available on
       # Docker Hub — pull fails. Agent bundle disabled by default (enabled: false).
-      # G16 hold-back 2026-05-10: no stable public tag exists; floating "latest"
-      # replaced with "not-yet-available" sentinel per image-pinning policy.
-      # Action: confirm registry source + obtain digest before enabling.
-      # Planned resolution: v2.23.4 backlog — track upstream for public release.
+      # G16 hold-back 2026-05-10 (resolution shipped in v2.23.3): no stable public
+      # tag exists; floating "latest" replaced with "not-yet-available" sentinel
+      # per image-pinning policy. Sentinel is unpullable by design — operators
+      # must supply a real tag+digest before flipping `enabled: true`.
+      # Re-evaluate when langchain/langgraph-api publishes a public tag.
       repository: langchain/langgraph-api
       tag: "not-yet-available"
       pullPolicy: IfNotPresent
