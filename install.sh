@@ -3058,7 +3058,7 @@ compose_up() {
     # only applies to the Podman path.
     if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
       log_info "Upgrade + Podman: pre-starting postgres for SSL injection (V232-SMOKE-004)..."
-      "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${_pull_flag[@]+"${_pull_flag[@]}"} up -d postgres 2>/dev/null || true
+      "${COMPOSE_CMD[@]}" "${compose_files[@]}" up ${_pull_flag[@]+"${_pull_flag[@]}"} -d postgres 2>/dev/null || true
       # Wait up to 60s for postgres to accept connections.
       local _pg_ready=0 _pg_i
       for _pg_i in $(seq 1 30); do
@@ -3207,11 +3207,11 @@ echo '[postgres-ssl-upgrade] pg_hba.conf updated'
     # healthy. With set -euo pipefail this caused install to abort before
     # bootstrap_postgres, leaving admin accounts unseeded. Core service health is
     # validated by run_health_check (step 12); this non-zero is non-fatal here.
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} ${_pull_flag[@]+"${_pull_flag[@]}"} up -d --remove-orphans || true
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up ${_pull_flag[@]+"${_pull_flag[@]}"} -d --remove-orphans || true
   else
     log_info "Starting services..."
     # ROOTLESS-9: same rationale as upgrade path above.
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} ${_pull_flag[@]+"${_pull_flag[@]}"} up -d || true
+    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up ${_pull_flag[@]+"${_pull_flag[@]}"} -d || true
   fi
 
   log_success "Services started"
