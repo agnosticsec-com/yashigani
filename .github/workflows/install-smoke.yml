@@ -1,39 +1,34 @@
-# Last updated: 2026-05-08T00:00:00+01:00 (v2.23.3: formally mark macOS smoke as INFORMATIONAL; update triggers for v2.23.3 branch)
+# Last updated: 2026-05-10T12:18:00+01:00 (v2.23.3: macOS smoke promoted to GATE — self-hosted M4 runner live)
 # install-smoke.yml — Install smoke-test matrix
 #
-# Matrix: ubuntu-latest × (docker|podman) — GATE (required for merge)
-#         macos-latest  × (docker|podman) — INFORMATIONAL ONLY (never blocks)
+# Matrix: ubuntu-latest                     × (docker|podman) — GATE (required for merge)
+#         [self-hosted, macos, arm64, m-chip] × (docker|podman) — GATE (required for merge)
 #
 # =============================================================================
-# INFORMATIONAL — macOS smoke cells
+# macOS smoke — GATE (live since 2026-05-10)
 # =============================================================================
-# macOS smoke cells are set continue-on-error: true and are EXCLUDED from the
-# smoke-gate. They do NOT block PRs or releases. They are retained in the
-# matrix for diagnostic signal only.
+# macOS smoke cells run on self-hosted Apple Silicon hardware (max-m4-yashigani,
+# Apple M4, macOS 15.7.5). They are part of smoke-gate and DO block PRs/releases.
 #
-# Root cause: GH hosted macOS runners (macos-latest = Sonoma/Sequoia arm64)
-# do NOT support the Apple Virtualization Framework (VZ) or nested
-# virtualization. Both Colima (Docker on macOS) and Podman machine (Podman on
-# macOS) require a VZ-backed VM to start their daemons. GH hosted runners fail
-# non-deterministically at `colima start` / `podman machine start` with errors
-# such as "exiting, status={Exiting:true}" or "Setting up Rosetta share".
+# Why self-hosted: GH-hosted macOS runners (macos-latest) are themselves VMs
+# running on Apple Silicon hosts. Apple Silicon does not support nested
+# virtualization at the hardware level, so colima/podman-machine (which require
+# Apple's Virtualization.framework to start a VM) fail deterministically on
+# GH-hosted Apple Silicon runners. Self-hosted runs on bare metal — no nesting,
+# VZ works, VM-backed daemons start normally.
 #
-# This is a GitHub Actions infrastructure constraint, not a Yashigani bug.
-# Customer-facing macOS installs use self-hosted hardware (Apple Silicon or
-# Intel) where VZ is available. Those paths are validated by the team's own
-# Mac runners, not GH hosted runners.
+# Runner registration: launchd service
+#   actions.runner.agnosticsec-com-yashigani.max-m4-yashigani
+#   located at /Users/max/Documents/Claude/actions-runner-yashigani
+#   labels: self-hosted, macos, arm64, m-chip
 #
-# v2.23.2 context: macOS smoke pre-existing failures were accepted via ad-hoc
-# Tiago risk-accept during the v2.23.2 release. v2.23.3 formalises that
-# acceptance structurally in the workflow file and release-process.md so no
-# further per-release ad-hoc accept is needed.
+# Resource impact when CI fires: ~2 CPU + 4 GB RAM for ~10 min per cell.
+# Idle: ~50 MB RAM, no CPU.
 #
-# How to promote macOS cells to GATE when self-hosted runners are available:
-#   1. Set runs-on for macos cells to the self-hosted runner label.
-#   2. Change `gates: false` to `gates: true` in the macos matrix entries.
-#   3. Remove this INFORMATIONAL block (or update it to reflect the new status).
-#   4. Remove continue-on-error: ${{ !matrix.gates }} (or leave it in place as
-#      a no-op — it evaluates to false when gates: true).
+# Security note: Yashigani goes private post-v2.23.3 — until then, only PRs from
+# trusted actors should be allowed to run on the self-hosted runner. Configure
+# repo settings → Actions → "Require approval for all outside collaborators"
+# until private flip.
 # =============================================================================
 #
 # Runner cost (GH hosted):
@@ -83,15 +78,15 @@ jobs:
             runtime: podman
             gates: true       # included in smoke-gate
 
-          - os: macos-latest
+          - os: [self-hosted, macos, arm64, m-chip]
             os-label: macos
             runtime: docker
-            gates: false      # informational — requires self-hosted runner for VZ
+            gates: true       # self-hosted M4 runner live 2026-05-10 (max-m4-yashigani) — no nested-virt limitation
 
-          - os: macos-latest
+          - os: [self-hosted, macos, arm64, m-chip]
             os-label: macos
             runtime: podman
-            gates: false      # informational — requires self-hosted runner for VZ
+            gates: true       # self-hosted M4 runner live 2026-05-10 (max-m4-yashigani) — no nested-virt limitation
 
     runs-on: ${{ matrix.os }}
     # macOS cells continue-on-error because GH hosted runners lack VZ support.
