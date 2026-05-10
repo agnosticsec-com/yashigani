@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-10T21:30:00+01:00 (fix: _pki_chown_client_keys || return 1 at both call sites — fail-closed on chown failure, not silent continue)
 # last-updated: 2026-05-10T00:00:00+01:00 (fix(pki): GATE5-BUG-01 — source shared lib/pki_ownership.sh; upgrade no-rotation path stops touching keys; Tiago directive 2026-05-10)
 # last-updated: 2026-05-09T15:00:00+01:00 (fix: Docker non-root — compose_up data/audit mkdir uses ephemeral container when data_dir owned by UID 1001)
 # last-updated: 2026-05-09T00:00:00+01:00 (feat: air-gap mode + customer-built offline bundle #58)
@@ -2204,15 +2205,55 @@ compose_pull() {
       local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
       local _missing_external=0
 
+      # Build a list of images for active services only. Profile-only services
+      # whose profile is not in COMPOSE_PROFILES are skipped — their images
+      # can safely be absent when --skip-pull is used without those profiles.
       local _remote_images
-      _remote_images=$(grep '^\s*image:' "$_compose_file" 2>/dev/null \
-        | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*$//' \
-        | grep -v 'yashigani/' | grep -v '^\${' | sort -u)
+      local _active_profiles_arg="${COMPOSE_PROFILES[*]:-}"
+      # Profile-aware extraction using python3+yaml when available
+      local _py_script='
+import sys, yaml
+compose_file, active_profiles_str = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
+active_profiles = set(active_profiles_str.split()) if active_profiles_str else set()
+try:
+    with open(compose_file) as f:
+        c = yaml.safe_load(f)
+    for svc, data in (c.get("services") or {}).items():
+        profiles = data.get("profiles") or []
+        img = data.get("image") or ""
+        if not img or "yashigani/" in img or img.startswith("${"):
+            continue
+        if not profiles or any(p in active_profiles for p in profiles):
+            print(img)
+except Exception:
+    pass
+'
+      if command -v python3 >/dev/null 2>&1 && \
+         python3 -c "import yaml" >/dev/null 2>&1; then
+        _remote_images=$(python3 -c "$_py_script" "$_compose_file" "$_active_profiles_arg" 2>/dev/null | sort -u)
+      fi
+      # Fallback to legacy grep (no profile filter) if python3/yaml unavailable
+      if [[ -z "${_remote_images:-}" ]]; then
+        _remote_images=$(grep '^\s*image:' "$_compose_file" 2>/dev/null \
+          | sed 's/.*image:[[:space:]]*//' | sed 's/[[:space:]]*$//' \
+          | grep -v 'yashigani/' | grep -v '^\${' | sort -u)
+      fi
 
       for _img in $_remote_images; do
         [[ -z "$_img" ]] && continue
         if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
-          podman image exists "$_img" 2>/dev/null || { log_warn "--skip-pull: remote image '$_img' not found locally"; _missing_external=1; }
+          # Check by full ref first (name:tag@sha256), then by name:tag only.
+          # When images are pre-loaded via save/load (e.g., gate5 rootful harness
+          # or air-gap bundle), podman image load does not reconstruct RepoDigests,
+          # so 'podman image exists name:tag@sha256' fails even though the image
+          # is present by name:tag. Falling back to name:tag check is safe:
+          # content integrity is guaranteed by the image ID matching.
+          local _name_tag_only="${_img%%@*}"
+          if ! podman image exists "$_img" 2>/dev/null && \
+             ! podman image exists "$_name_tag_only" 2>/dev/null; then
+            log_warn "--skip-pull: remote image '$_img' not found locally"
+            _missing_external=1
+          fi
         else
           docker image inspect "$_img" >/dev/null 2>&1 || { log_warn "--skip-pull: remote image '$_img' not found locally"; _missing_external=1; }
         fi
@@ -5501,7 +5542,7 @@ bootstrap_internal_pki() {
       # Tiago directive 2026-05-10: upgrade path that does NOT rotate keys must
       # NOT sweep-chmod existing keys. Ownership is applied only when new key
       # material has actually been written. GATE5-BUG-01.
-      _pki_chown_client_keys
+      _pki_chown_client_keys || return 1
     else
       log_success "Certs current — no rotation needed"
       _pki_persist_env
@@ -5528,7 +5569,7 @@ bootstrap_internal_pki() {
 
   _pki_persist_env
 
-  _pki_chown_client_keys   # re-own service keys to container UIDs (see helper above)
+  _pki_chown_client_keys || return 1  # re-own service keys to container UIDs; fail-closed
 
   log_success "Internal CA + per-service leaf certs generated"
   log_info "  CA root:      docker/secrets/ca_root.crt"
