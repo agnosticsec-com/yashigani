@@ -61,7 +61,7 @@
 #   - sudo rights for 'su' user
 #
 # Version: v2.23.3
-# Last-Updated: 2026-05-10T18:45:00+01:00
+# Last-Updated: 2026-05-10T19:05:00+01:00
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -342,20 +342,34 @@ if [[ "${SKIP_INSTALL}" == "false" ]]; then
   INSTALL_LOG="${EVIDENCE_DIR}/install-${TIMESTAMP}.log"
   VM_EXITCODE_FILE="${VM_CLONE_DIR}/.install_exit_code"
 
-  # Podman rootless: ensure user podman socket is active before install.
-  # The socket may have been stopped by the previous uninstall, or may not
-  # have been started since boot. install.sh's preflight checks podman info
-  # which requires the socket to be listening.
+  # Podman rootless: ensure user podman socket is active and will stay active
+  # for the duration of the install (30+ minutes). The socket is managed by
+  # systemd user services. Without loginctl linger, the user slice exits when
+  # the SSH session closes, taking the podman socket with it mid-install.
+  # With linger enabled, the user slice persists. The socket itself is
+  # socket-activated: it starts when a client connects and stays listening.
+  # Additionally, run a keepalive ping every 30s in the background so the
+  # socket-activated podman.service doesn't idle-timeout between API calls.
   if [[ "${RUNTIME}" == "podman" && "${ROOTFUL}" == "false" ]]; then
-    _info "Ensuring podman user socket is active..."
-    _vm_ssh "systemctl --user start podman.socket 2>/dev/null || true; sleep 2" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
+    _info "Ensuring podman user socket is active and persistent..."
+    _vm_ssh "
+      loginctl enable-linger \$(id -un) 2>/dev/null || true
+      systemctl --user start podman.socket 2>/dev/null || true
+      sleep 2
+      # Background keepalive: ping podman every 25s to prevent idle-timeout
+      # between the image-build and PKI-bootstrap steps (can be >30s apart).
+      nohup bash -c 'while sleep 25; do podman info >/dev/null 2>&1 || true; done' \
+        >/dev/null 2>&1 &
+      disown
+      echo keepalive_started
+    " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
     _PODMAN_READY="$(_vm_ssh "podman info >/dev/null 2>&1 && echo ok || echo fail" 2>/dev/null || echo fail)"
     if [[ "${_PODMAN_READY}" != "ok" ]]; then
       _ev "Podman socket start output:"
       _vm_ssh "podman info 2>&1 || true" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
       _record_fail "Podman not reachable after socket start"
     else
-      _ev "Podman socket: active"
+      _ev "Podman socket: active (linger + keepalive enabled)"
     fi
   fi
 
