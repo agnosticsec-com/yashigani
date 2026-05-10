@@ -199,7 +199,7 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 | 12 | Risk register updated | Compliance Reviewer | exception-register.md | All accepted risks logged |
 | 13 | Maintainer HITL GO | Release Coordinator | Verbal/chat confirmation | "GO release" |
 | 14 | Tag + push | Release Engineer | `git tag v<ver>` | Tag visible on GitHub |
-| G16 | Image-bump sweep | Captain (sweep) / Maxine (sign-off) | `ci-evidence/<sha>/image-bump-sweep.txt` | `Image sweep: PASS` |
+| G16 | Image-bump sweep | Container specialist (sweep) / Release coordinator (sign-off) | `ci-evidence/<sha>/image-bump-sweep.txt` | `Image sweep: PASS` |
 
 ---
 
@@ -211,7 +211,7 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 
 **Failure mode:** HARD STOP — no merge to main, no release tag, until every image passes.
 
-**Owner:** Captain runs the sweep and writes the evidence file. Maxine reviews and signs off in the release evidence directory before Gate 13.
+**Owner:** The container specialist runs the sweep and writes the evidence file. The release coordinator reviews and signs off in the release evidence directory before Gate 13.
 
 ### What to check
 
@@ -222,7 +222,7 @@ Execute in order. Gate N does not start until Gate N-1 is GREEN.
 2. For each image: confirm the pin is at the **latest published stable** upstream tag (not a floating stub; not a dated-but-behind pin).
 3. For each image: confirm the release overlay (`docker-compose.release.yml`, `values.release.yaml`) uses `name:tag@sha256:<digest>` form.
 
-### Command sequence (Captain runs at branch-cut)
+### Command sequence (container specialist runs at branch-cut)
 
 ```sh
 # 1. Enumerate every image reference
@@ -267,7 +267,7 @@ grep -E 'digest:' helm/yashigani/values.release.yaml | wc -l
 
 ### Evidence file format
 
-Captain writes `ci-evidence/<sha>/image-bump-sweep.txt` with the following structure:
+The container specialist writes `ci-evidence/<sha>/image-bump-sweep.txt` with the following structure:
 
 ```
 Image sweep: PASS
