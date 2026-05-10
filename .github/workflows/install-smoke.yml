@@ -1,4 +1,4 @@
-# Last updated: 2026-05-10T22:35:00+01:00 (v2.23.3: macOS smoke promoted to GATE — self-hosted M4 runner live; carries M4 install/job-ceiling timeout bumps from #128)
+# Last updated: 2026-05-11T00:00:00+01:00 (v2.23.3: macOS smoke promoted to GATE + M7 G16 image-bump-sweep gate codified; macOS chown fix)
 # install-smoke.yml — Install smoke-test matrix
 #
 # Matrix: ubuntu-latest                     × (docker|podman) — GATE (required for merge)
