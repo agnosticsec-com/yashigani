@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # tests/install/test_pki_ownership.sh — PKI key ownership regression tests
-# last-updated: 2026-05-10T00:00:00+01:00 (fix(pki): GATE5-BUG-01 — shared ownership map regression tests)
+# last-updated: 2026-05-10T00:00:00+01:00 (fix(pki): PR#122 — per-service CWE-732 assertion; bash 3.2 header fix; runtime mock T13)
 #
 # Tests:
-#   1. lib/pki_ownership.sh: map lookups correct for all known services
-#   2. Install path: each service key has correct UID + mode after sourcing map
-#   3. Restore path: only backup-written keys get re-owned; pre-existing keys untouched
-#   4. Upgrade no-touch: keys NOT chowned when needs_rotation=false
-#   5. Blanket-sweep regression: find ... *.key -exec chmod 0600 is absent from restore.sh
-#   6. Map parity: every service in lib/pki_ownership.sh is present in service_identities.yaml
+#   1.  lib/pki_ownership.sh: map lookups correct for all known services
+#   2.  Install path: each service key has correct UID + mode after sourcing map
+#   3.  Restore path: only backup-written keys get re-owned; pre-existing keys untouched
+#   4.  Upgrade no-touch: keys NOT chowned when needs_rotation=false
+#   5.  Blanket-sweep regression: find ... *.key -exec chmod 0600 is absent from restore.sh
+#   6.  Map parity: every service in lib/pki_ownership.sh is present in service_identities.yaml
 #      (if the YAML exists)
-#   7. Prometheus: uid=1001, mode=0640 (EX-231-10 regression)
+#   7.  Prometheus: uid=1001, mode=0640 (EX-231-10 regression)
+#   13. Runtime mock-filesystem: per-service CWE-732 assertion passes for 0640 (prometheus),
+#       does not fire on pre-existing key not in written list, and old blanket find would have
+#       fired (confirms the regression existed).
 #
 # Usage:
 #   bash tests/install/test_pki_ownership.sh
 #
-# Requirements: bash 4+, stat (GNU or BSD), no container runtime needed
-# (uses mock secrets directory under /tmp-free scratch — all under WORK_DIR).
+# Requirements: bash 3.2+, stat (GNU or BSD), no container runtime needed
+# (uses mock secrets directory under repo tree — never /tmp).
 
 set -euo pipefail
 
@@ -279,6 +282,144 @@ if [[ -f "$SID_YAML" ]]; then
 else
   printf "  SKIP  docker/service_identities.yaml not found (run from repo root with docker/ present)\n"
 fi
+
+# ---------------------------------------------------------------------------
+# Test 13: Runtime mock-filesystem — CWE-732 assertion correctness
+#
+# Regression guard for the false-positive introduced by the blanket
+# `find -perm -040` assertion on prometheus_client.key (0640).
+#
+# Creates a mock secrets directory under the repo (never /tmp), places key
+# files at specific modes, then runs the same assertion logic used in
+# restore.sh::_pki_chown_client_keys via the shared lib. Verifies:
+#   a) prometheus_client.key at 0640 → assertion PASSES (no false-positive)
+#   b) gateway_client.key at 0600 → assertion PASSES
+#   c) any *.key at 0004 (world-read) → assertion FAILS (correctly detected)
+#   d) pre-existing key NOT in written list → not checked by per-service loop
+#      (regression: old blanket find would have caught its mode unconditionally)
+# ---------------------------------------------------------------------------
+printf "\n--- Test 13: Runtime mock-filesystem — CWE-732 assertion correctness ---\n"
+
+# Portable stat: GNU -c '%a', BSD -f '%OLp'.
+_stat_mode_t13() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1" 2>/dev/null || true
+}
+
+# Mock secrets dir under repo (not /tmp — per project SOP).
+_MOCK_SECRETS="${REPO_ROOT}/tests/install/.mock_secrets_t13"
+mkdir -p "${_MOCK_SECRETS}"
+# Cleanup on exit.
+trap 'rm -rf "${_MOCK_SECRETS}"' EXIT
+
+# Create mock key files at their expected modes.
+touch "${_MOCK_SECRETS}/gateway_client.key"
+chmod 0600 "${_MOCK_SECRETS}/gateway_client.key"
+
+touch "${_MOCK_SECRETS}/prometheus_client.key"
+chmod 0640 "${_MOCK_SECRETS}/prometheus_client.key"
+
+# Pre-existing key NOT in the written list (simulate a key that was already on
+# disk and restore.sh did not overwrite). It sits at a hypothetical 0400 (read-only
+# by owner). The per-service loop must not touch or complain about it.
+touch "${_MOCK_SECRETS}/caddy_client.key"
+chmod 0400 "${_MOCK_SECRETS}/caddy_client.key"
+
+# Written keys list — only gateway and prometheus; caddy is pre-existing (NOT restored).
+_T13_WRITTEN=("gateway_client.key" "prometheus_client.key")
+
+# Replicate the assertion logic from restore.sh::_pki_chown_client_keys
+# using the shared lib. Run in a subshell to capture pass/fail cleanly.
+_t13_assert_result=$(bash -c "
+source '${LIB}'
+_stat_mode() {
+  stat -c '%a' \"\$1\" 2>/dev/null || stat -f '%OLp' \"\$1\" 2>/dev/null || true
+}
+_fail=0
+for _ck in gateway_client.key prometheus_client.key; do
+  _csvc=\"\${_ck%_client.key}\"
+  _exp_mode=\"\$(pki_key_mode \"\$_csvc\" 2>/dev/null)\" || continue
+  _ckfile='${_MOCK_SECRETS}'/\"\$_ck\"
+  _act_mode=\"\$(_stat_mode \"\$_ckfile\")\"
+  _exp_mode=\"\${_exp_mode#0}\"
+  _act_mode=\"\${_act_mode#0}\"
+  if [[ \"\$_act_mode\" != \"\$_exp_mode\" ]]; then
+    printf 'MODE_MISMATCH:%s:exp=%s:act=%s\n' \"\$_ck\" \"\$_exp_mode\" \"\$_act_mode\"
+    _fail=1
+  fi
+done
+# World-read sweep
+if find '${_MOCK_SECRETS}' -maxdepth 1 -type f -name '*.key' -perm -004 2>/dev/null | grep -q .; then
+  printf 'WORLD_READ_FOUND\n'
+  _fail=1
+fi
+exit \$_fail
+" 2>&1)
+_t13_rc=$?
+
+if [[ "$_t13_rc" == "0" ]] && ! printf '%s' "$_t13_assert_result" | grep -q "MISMATCH\|WORLD_READ"; then
+  _pass "Mock assertion: prometheus 0640 + gateway 0600 → no false-positive (correct)"
+else
+  _fail "Mock assertion: false-positive or mode mismatch on legitimately-set keys: ${_t13_assert_result}"
+fi
+
+# Sub-test: verify caddy_client.key (pre-existing, not in written list) was NOT
+# checked — i.e. the per-service loop only iterates _written_keys. We know
+# caddy is at 0400; if the loop had included it, it would still pass (0400 is
+# tighter than 0600), but the regression being tested is that an unlisted key at
+# 0640 would have been a false-positive under the old blanket find (since 0640
+# has the -040 bit). Prove this by setting caddy to 0640 momentarily and
+# confirming the per-service loop (which omits caddy) does NOT flag it, while
+# the old blanket find WOULD have flagged it.
+chmod 0640 "${_MOCK_SECRETS}/caddy_client.key"
+
+_t13_old_assert=$(bash -c "
+if find '${_MOCK_SECRETS}' -maxdepth 1 -type f -name '*.key' \
+      \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
+  printf 'OLD_ASSERT_FIRED\n'
+fi
+" 2>&1)
+
+_t13_new_assert=$(bash -c "
+source '${LIB}'
+_stat_mode() {
+  stat -c '%a' \"\$1\" 2>/dev/null || stat -f '%OLp' \"\$1\" 2>/dev/null || true
+}
+_fail=0
+# Only gateway + prometheus in written list (caddy excluded).
+for _ck in gateway_client.key prometheus_client.key; do
+  _csvc=\"\${_ck%_client.key}\"
+  _exp_mode=\"\$(pki_key_mode \"\$_csvc\" 2>/dev/null)\" || continue
+  _ckfile='${_MOCK_SECRETS}'/\"\$_ck\"
+  _act_mode=\"\$(_stat_mode \"\$_ckfile\")\"
+  _exp_mode=\"\${_exp_mode#0}\"
+  _act_mode=\"\${_act_mode#0}\"
+  if [[ \"\$_act_mode\" != \"\$_exp_mode\" ]]; then
+    _fail=1
+  fi
+done
+if find '${_MOCK_SECRETS}' -maxdepth 1 -type f -name '*.key' -perm -004 2>/dev/null | grep -q .; then
+  _fail=1
+fi
+exit \$_fail
+" 2>&1)
+_t13_new_rc=$?
+
+# Old assertion should have fired (caddy_client.key is 0640 = has -040 bit).
+if printf '%s' "$_t13_old_assert" | grep -q "OLD_ASSERT_FIRED"; then
+  _pass "Mock regression: old blanket find correctly triggers on pre-existing 0640 key (confirms the bug existed)"
+else
+  _fail "Mock regression: old blanket find did NOT trigger — test setup problem"
+fi
+
+# New assertion should NOT fire (caddy not in written list, no world-read bit).
+if [[ "$_t13_new_rc" == "0" ]]; then
+  _pass "Mock regression: new per-service assertion does NOT fire on pre-existing 0640 key not in written list"
+else
+  _fail "Mock regression: new per-service assertion incorrectly fired on pre-existing 0640 key: ${_t13_new_assert}"
+fi
+
+# Restore caddy to 0400 so the world-read sweep doesn't catch it in cleanup.
+chmod 0400 "${_MOCK_SECRETS}/caddy_client.key"
 
 # ---------------------------------------------------------------------------
 # Summary

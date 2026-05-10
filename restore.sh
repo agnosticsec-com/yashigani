@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Last updated: 2026-05-10T00:00:00+01:00 (fix(pki): PR#122 — replace blanket CWE-732 find assertion with per-service pki_key_mode check; eliminates false-positive on prometheus_client.key 0640)
 # Last updated: 2026-05-10T00:00:00+01:00 (fix(pki): GATE5-BUG-01 — source shared lib/pki_ownership.sh; restore stops blanket-chmod; per-key ownership on written keys only; Tiago directive 2026-05-10)
 # Last updated: 2026-05-09T00:00:00+01:00 (feat: MP.L2-3.8.9 — add --encrypted path for age-encrypted .tar.gz.age backups)
 # Last updated: 2026-05-08T12:00:00+01:00 (fix/k8s-postgres-exec-privilege-flow: _refresh_pgdata_ca — replace install -o (root-only) with cp+chmod; pg_ctl now called directly; K8s exec privilege model corrected)
@@ -838,13 +839,64 @@ _pki_chown_client_keys() {
 
   log_success "Service key ownership applied to ${#_written_keys[@]} restored key(s)"
 
-  # S1 / CWE-732 assertion: no group/world-readable private key files.
-  # Note: for 'unshare' mode, subuid-range-owned files may not be stat-able
-  # by the host caller — the find will silently skip them. This is acceptable
-  # because unshare applied the correct mode inside the namespace above.
+  # S1 / CWE-732 assertion — data-driven per-service mode check.
+  #
+  # Replaces the previous blanket `find -perm -040` which fired a false-positive
+  # on prometheus_client.key (legitimately 0640 per EX-231-10).
+  #
+  # Two sub-checks:
+  #   A) Per-service: actual mode must match pki_key_mode() for every written key
+  #      that is in the shared map. This catches silent chmod regression on any
+  #      service, including future 0640 services.
+  #   B) World-readable sweep: any *.key file with the world-read bit (004) is
+  #      always wrong — no service requires world-readable private keys.
+  #
+  # Note: for 'unshare' mode, subuid-range-owned files may not be stat-able by
+  # the host caller — stat returns empty. We treat empty-stat as skip (not PASS)
+  # to avoid false-positives; the log makes the skip visible.
+  #
+  # Portable stat: GNU stat -c '%a'; BSD stat -f '%OLp' (macOS).
+  _stat_mode() {
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1" 2>/dev/null || true
+  }
+
+  local _cwe732_fail=0
+
+  # Sub-check A: per-service mode parity for written keys in the shared map.
+  local _ck _csvc _exp_mode _act_mode _ckfile
+  for _ck in "${_written_keys[@]+"${_written_keys[@]}"}"; do
+    _csvc="${_ck%_client.key}"
+    if ! _exp_mode="$(pki_key_mode "$_csvc" 2>/dev/null)"; then
+      # Not a known service key (CA key or custom) — skip mode check for sub-A;
+      # sub-B world-read sweep covers it.
+      continue
+    fi
+    _ckfile="${_secrets_dir}/${_ck}"
+    if [[ ! -f "$_ckfile" ]]; then
+      continue  # already reported as missing above
+    fi
+    _act_mode="$(_stat_mode "$_ckfile")"
+    if [[ -z "$_act_mode" ]]; then
+      log_warn "CWE-732 check: cannot stat ${_ck} (unshare namespace?) — mode unverified"
+      continue
+    fi
+    # Normalise: strip leading zeros that BSD stat omits (e.g. "640" vs "0640").
+    _exp_mode="${_exp_mode#0}"
+    _act_mode="${_act_mode#0}"
+    if [[ "$_act_mode" != "$_exp_mode" ]]; then
+      log_error "CWE-732: ${_ck} mode is ${_act_mode}, expected ${_exp_mode} (from pki_key_mode)"
+      _cwe732_fail=1
+    fi
+  done
+
+  # Sub-check B: world-readable bit on any *.key is always wrong.
   if find "${_secrets_dir}" -maxdepth 1 -type f -name '*.key' \
-        \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
-    log_error "CWE-732: group/world-readable *.key file(s) under ${_secrets_dir} after restore chown"
+        -perm -004 2>/dev/null | grep -q .; then
+    log_error "CWE-732: world-readable *.key file(s) under ${_secrets_dir} after restore chown"
+    _cwe732_fail=1
+  fi
+
+  if [[ "$_cwe732_fail" == "1" ]]; then
     exit 1
   fi
 }
