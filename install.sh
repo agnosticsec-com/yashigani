@@ -3257,27 +3257,49 @@ echo '[postgres-ssl-upgrade] pg_hba.conf updated'
     # bootstrap_postgres, leaving admin accounts unseeded. Core service health is
     # validated by run_health_check (step 12); this non-zero is non-fatal here.
     # v2.23.3: when images were pre-seeded (YASHIGANI_COMPOSE_PULL_POLICY=never),
-    # pass --pull never to Docker Compose so digest-pinned image refs don't
-    # trigger registry round-trips for locally-cached images. Only safe here
-    # because the tarball cache is trusted (same path as --air-gap bundle).
-    # podman-compose does not support --pull; this flag only applies on Docker.
-    local _compose_up_pull_args=()
+    # Docker/Podman's image store has images by name:tag but NOT by digest (the
+    # OCI manifest list digest changes when images are saved/loaded via tarballs).
+    # docker compose up with digest-pinned image refs (image: foo:tag@sha256:...)
+    # fails with "No such image" even with --pull never, because Docker resolves
+    # the image by the full spec including digest. Fix: strip @sha256:... from all
+    # image: lines in a temporary copy of the compose file, then use that for up.
+    # The compose file on disk is NOT modified — the temp file is used only for up.
+    # This is equivalent to the --air-gap bundle behaviour.
+    local _compose_files_up=("${compose_files[@]}")
     if [[ "${YASHIGANI_COMPOSE_PULL_POLICY:-}" == "never" ]] && \
        [[ "${YSG_PODMAN_RUNTIME:-false}" != "true" ]]; then
-      log_info "Using --pull never (images pre-seeded from trusted cache)"
-      _compose_up_pull_args=(--pull never)
+      log_info "Pre-seeded mode: stripping image digests in compose file for local cache lookup"
+      local _digest_stripped_compose
+      _digest_stripped_compose="$(mktemp "${WORK_DIR}/docker/docker-compose.tmp.XXXXXX.yml")"
+      sed 's|@sha256:[a-f0-9]\{64\}||g' "${compose_file}" > "$_digest_stripped_compose"
+      _compose_files_up=("-f" "$_digest_stripped_compose")
+      log_info "  temp compose file: $(basename "$_digest_stripped_compose")"
     fi
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans ${_compose_up_pull_args[@]+"${_compose_up_pull_args[@]}"} || true
+    "${COMPOSE_CMD[@]}" "${_compose_files_up[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d --remove-orphans || true
+    # Clean up temp compose file if it was created
+    if [[ "${YASHIGANI_COMPOSE_PULL_POLICY:-}" == "never" ]] && \
+       [[ "${YSG_PODMAN_RUNTIME:-false}" != "true" ]]; then
+      rm -f "${_digest_stripped_compose:-}" 2>/dev/null || true
+    fi
   else
     log_info "Starting services..."
     # ROOTLESS-9: same rationale as upgrade path above.
-    local _compose_up_pull_args2=()
+    # v2.23.3: same digest-strip for pre-seeded images (fresh install path).
+    local _compose_files_up2=("${compose_files[@]}")
     if [[ "${YASHIGANI_COMPOSE_PULL_POLICY:-}" == "never" ]] && \
        [[ "${YSG_PODMAN_RUNTIME:-false}" != "true" ]]; then
-      log_info "Using --pull never (images pre-seeded from trusted cache)"
-      _compose_up_pull_args2=(--pull never)
+      log_info "Pre-seeded mode: stripping image digests in compose file for local cache lookup"
+      local _digest_stripped_compose2
+      _digest_stripped_compose2="$(mktemp "${WORK_DIR}/docker/docker-compose.tmp.XXXXXX.yml")"
+      sed 's|@sha256:[a-f0-9]\{64\}||g' "${compose_file}" > "$_digest_stripped_compose2"
+      _compose_files_up2=("-f" "$_digest_stripped_compose2")
+      log_info "  temp compose file: $(basename "$_digest_stripped_compose2")"
     fi
-    "${COMPOSE_CMD[@]}" "${compose_files[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d ${_compose_up_pull_args2[@]+"${_compose_up_pull_args2[@]}"} || true
+    "${COMPOSE_CMD[@]}" "${_compose_files_up2[@]}" ${profile_args[@]+"${profile_args[@]}"} up -d || true
+    if [[ "${YASHIGANI_COMPOSE_PULL_POLICY:-}" == "never" ]] && \
+       [[ "${YSG_PODMAN_RUNTIME:-false}" != "true" ]]; then
+      rm -f "${_digest_stripped_compose2:-}" 2>/dev/null || true
+    fi
   fi
 
   log_success "Services started"
