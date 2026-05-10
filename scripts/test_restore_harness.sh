@@ -61,7 +61,7 @@
 #   - sudo rights for 'su' user
 #
 # Version: v2.23.3
-# Last-Updated: 2026-05-10T15:45:00+01:00
+# Last-Updated: 2026-05-10T16:05:00+01:00
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -730,46 +730,68 @@ else
     fi
 
     if [[ "${RESTORE_EXIT}" == "0" ]]; then
-      # Restart the stack after restore.
-      # For Podman rootless: use podman-compose (Python package) directly.
-      # 'podman compose' on some VM configurations delegates to the docker-compose
-      # binary (/usr/libexec/docker/cli-plugins/docker-compose) which rejects
-      # Podman-managed networks ("incorrect label com.docker.compose.network").
-      # podman-compose (Python) creates and manages the same network labels it
-      # creates and therefore handles restarts cleanly.
-      # For Docker: use 'docker compose' (compose plugin).
+      # Post-restore stack health strategy:
+      # restore.sh (both Docker and Podman rootless) does NOT stop containers —
+      # it updates secrets in-place and reloads postgres TLS. The stack remains
+      # running throughout the restore. Calling 'compose up -d' unconditionally
+      # after restore stops the running containers and races their restart against
+      # compose network reconciliation, causing transient 000 health failures.
+      #
+      # Correct strategy:
+      #   1. Check if gateway is already healthy (restore.sh left it running).
+      #   2. If healthy — skip compose restart (nothing to do).
+      #   3. If not healthy — the stack was stopped or crashed; attempt compose
+      #      restart and wait for recovery.
       _ev ""
-      _ev "=== Restarting stack post-restore ==="
-      if [[ "${RUNTIME}" == "podman" ]]; then
-        _vm_run "
-          cd '${VM_CLONE_DIR}' && \
-          podman-compose -f docker/docker-compose.yml up -d 2>&1 || true
-        " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
+      _ev "=== Post-restore gateway healthz check ==="
+
+      # Quick healthz probe (no retry) to see if gateway is already up
+      _PRE_RESTART_HEALTHZ="$(_vm_ssh "curl -s -o /dev/null -w '%{http_code}' --insecure --max-time 10 'https://${INSTALL_DOMAIN}/healthz' 2>/dev/null" 2>/dev/null || echo "000")"
+      _ev "Pre-restart gateway /healthz: HTTP ${_PRE_RESTART_HEALTHZ}"
+
+      if [[ "${_PRE_RESTART_HEALTHZ}" =~ ^2 ]]; then
+        _ev "Gateway already healthy post-restore — skipping compose restart"
+        _ok "Gateway healthy post-restore (no restart needed)"
+        HEALTHZ_CODE="${_PRE_RESTART_HEALTHZ}"
       else
-        _vm_run "
-          cd '${VM_CLONE_DIR}' && \
-          docker compose -f docker/docker-compose.yml up -d 2>&1 || true
-        " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
-      fi
-
-      # Wait for services to come up
-      _info "Waiting 30s for services to restart post-restore..."
-      sleep 30
-
-      # Check healthz
-      HEALTHZ_RETRIES=0
-      HEALTHZ_MAX=6
-      HEALTHZ_CODE=""
-      while [[ $HEALTHZ_RETRIES -lt $HEALTHZ_MAX ]]; do
-        HEALTHZ_CODE="$(_vm_ssh "curl -s -o /dev/null -w '%{http_code}' --insecure --max-time 10 'https://${INSTALL_DOMAIN}/healthz' 2>/dev/null" 2>/dev/null || echo "000")"
-        if [[ "${HEALTHZ_CODE}" =~ ^2 ]]; then
-          break
+        # Gateway is down — attempt compose restart then wait for recovery.
+        # For Podman rootless: use podman-compose (Python) not 'podman compose'
+        # (which on this VM delegates to docker-compose and fails on Podman
+        # network labels).
+        _ev ""
+        _ev "=== Restarting stack post-restore ==="
+        _info "Gateway not healthy — attempting compose restart..."
+        if [[ "${RUNTIME}" == "podman" ]]; then
+          _vm_run "
+            cd '${VM_CLONE_DIR}' && \
+            podman-compose -f docker/docker-compose.yml up -d 2>&1 || true
+          " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
+        else
+          _vm_run "
+            cd '${VM_CLONE_DIR}' && \
+            docker compose -f docker/docker-compose.yml up -d 2>&1 || true
+          " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
         fi
-        HEALTHZ_RETRIES=$((HEALTHZ_RETRIES + 1))
-        _info "Post-restore healthz: ${HEALTHZ_CODE} — retry ${HEALTHZ_RETRIES}/${HEALTHZ_MAX}..."
-        sleep 10
-      done
-      _ev "Post-restore Gateway /healthz: HTTP ${HEALTHZ_CODE}"
+
+        # Wait for services to come up
+        _info "Waiting 30s for services to restart post-restore..."
+        sleep 30
+
+        # Check healthz with retries
+        HEALTHZ_RETRIES=0
+        HEALTHZ_MAX=6
+        HEALTHZ_CODE=""
+        while [[ $HEALTHZ_RETRIES -lt $HEALTHZ_MAX ]]; do
+          HEALTHZ_CODE="$(_vm_ssh "curl -s -o /dev/null -w '%{http_code}' --insecure --max-time 10 'https://${INSTALL_DOMAIN}/healthz' 2>/dev/null" 2>/dev/null || echo "000")"
+          if [[ "${HEALTHZ_CODE}" =~ ^2 ]]; then
+            break
+          fi
+          HEALTHZ_RETRIES=$((HEALTHZ_RETRIES + 1))
+          _info "Post-restore healthz: ${HEALTHZ_CODE} — retry ${HEALTHZ_RETRIES}/${HEALTHZ_MAX}..."
+          sleep 10
+        done
+        _ev "Post-restart Gateway /healthz: HTTP ${HEALTHZ_CODE}"
+      fi
 
       if [[ ! "${HEALTHZ_CODE}" =~ ^2 ]]; then
         _record_fail "Post-restore gateway healthz failed: HTTP ${HEALTHZ_CODE}"
