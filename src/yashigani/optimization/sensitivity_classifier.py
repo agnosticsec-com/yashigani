@@ -131,6 +131,13 @@ class SensitivityClassifier:
 
         Returns:
             SensitivityResult with level, triggers, and per-layer details
+
+        Fail-closed degradation (v2.23.3 — Laura CVA finding LAURA-CVA-V233-SKLEARN #2):
+            If ollama is unavailable AND sklearn returns UNCERTAIN, the result is
+            floored at RESTRICTED rather than falling through to PUBLIC. Defence-in-depth
+            for the case where both non-regex layers cannot contribute a positive signal.
+            Rationale: "I don't know" from two ML layers during a partial outage is a
+            reason to be MORE conservative, not less.
         """
         triggers: list[str] = []
         layer_results = {}
@@ -141,16 +148,25 @@ class SensitivityClassifier:
 
         # Layer 2: sklearn (opt-out)
         sklearn_level = SensitivityLevel.PUBLIC
+        sklearn_uncertain = False  # True when backend signalled UNCERTAIN or failed
         if self._enable_sklearn and self._sklearn:
             try:
-                sklearn_level = self._scan_sklearn(text, triggers)
+                # Call backend once; derive both level and uncertainty from the same result.
+                raw_sklearn = self._sklearn.classify(text)
+                sklearn_uncertain = raw_sklearn.label == "UNCERTAIN"
+                if raw_sklearn.confidence > 0.5:
+                    sklearn_level = _label_to_level(raw_sklearn.label)
+                    if sklearn_level != SensitivityLevel.PUBLIC:
+                        triggers.append(f"sklearn:{raw_sklearn.label}({raw_sklearn.confidence:.2f})")
                 layer_results["sklearn"] = sklearn_level
             except Exception as exc:
                 logger.warning("sklearn sensitivity scan failed: %s", exc)
                 layer_results["sklearn"] = SensitivityLevel.PUBLIC
+                sklearn_uncertain = True  # treat exception as uncertain
 
         # Layer 3: Ollama deep scan (opt-out)
         ollama_level = SensitivityLevel.PUBLIC
+        ollama_unavailable = False
         if self._enable_ollama:
             try:
                 ollama_level = self._scan_ollama(text, triggers)
@@ -158,10 +174,24 @@ class SensitivityClassifier:
             except Exception as exc:
                 logger.warning("Ollama sensitivity scan failed: %s", exc)
                 layer_results["ollama"] = SensitivityLevel.PUBLIC
+                ollama_unavailable = True
 
         # Take the highest (most conservative) result
         all_levels = [regex_level, sklearn_level, ollama_level]
         final_level = max(all_levels, key=lambda l: l.rank)
+
+        # Fail-closed: if ollama is unavailable AND sklearn is uncertain, floor at RESTRICTED.
+        # Both ML layers have failed to produce a definitive SAFE signal — the conservative
+        # verdict is RESTRICTED, not PUBLIC.
+        if ollama_unavailable and sklearn_uncertain:
+            if final_level.rank < SensitivityLevel.RESTRICTED.rank:
+                logger.warning(
+                    "Fail-closed: ollama unavailable and sklearn UNCERTAIN — "
+                    "elevating result from %s to RESTRICTED",
+                    final_level.value,
+                )
+                triggers.append("fail-closed:ollama-unavailable+sklearn-uncertain")
+                final_level = SensitivityLevel.RESTRICTED
 
         # Detect conflicts between layers
         unique_levels = set(l for l in all_levels if l != SensitivityLevel.PUBLIC)
@@ -211,35 +241,38 @@ class SensitivityClassifier:
         return self._scan_sklearn(text, triggers)
 
     def _scan_ollama(self, text: str, triggers: list[str]) -> SensitivityLevel:
-        """Layer 3: Ollama deep contextual scan."""
-        try:
-            import httpx
-            prompt = (
-                "Classify the sensitivity of the following text. "
-                "Reply with ONLY one word: PUBLIC, INTERNAL, CONFIDENTIAL, or RESTRICTED.\n"
-                "Rules:\n"
-                "- RESTRICTED: contains credit card numbers, API keys, passwords, government classified info\n"
-                "- CONFIDENTIAL: contains SSN, phone numbers, IBAN, medical records, personally identifiable info\n"
-                "- INTERNAL: contains email addresses, internal project names, employee names\n"
-                "- PUBLIC: no sensitive data detected\n\n"
-                f"Text: {text[:2000]}\n\n"  # Truncate to avoid overwhelming small models
-                "Classification:"
-            )
-            resp = httpx.post(
-                f"{self._ollama_url}/api/generate",
-                json={"model": self._ollama_model, "prompt": prompt, "stream": False},
-                timeout=10.0,
-            )
-            if resp.status_code == 200:
-                body = resp.json()
-                answer = body.get("response", "").strip().upper()
-                for level in SensitivityLevel:
-                    if level.value in answer:
-                        if level != SensitivityLevel.PUBLIC:
-                            triggers.append(f"ollama:{level.value}")
-                        return level
-        except Exception as exc:
-            logger.warning("Ollama sensitivity scan error: %s", exc)
+        """Layer 3: Ollama deep contextual scan.
+
+        Raises any transport or timeout exception so that classify() can detect
+        that ollama was genuinely unavailable and apply fail-closed logic.
+        A clean PUBLIC response (ollama reachable, text classified as non-sensitive)
+        returns SensitivityLevel.PUBLIC without raising.
+        """
+        import httpx  # noqa: PLC0415 — intentional lazy import
+        prompt = (
+            "Classify the sensitivity of the following text. "
+            "Reply with ONLY one word: PUBLIC, INTERNAL, CONFIDENTIAL, or RESTRICTED.\n"
+            "Rules:\n"
+            "- RESTRICTED: contains credit card numbers, API keys, passwords, government classified info\n"
+            "- CONFIDENTIAL: contains SSN, phone numbers, IBAN, medical records, personally identifiable info\n"
+            "- INTERNAL: contains email addresses, internal project names, employee names\n"
+            "- PUBLIC: no sensitive data detected\n\n"
+            f"Text: {text[:2000]}\n\n"  # Truncate to avoid overwhelming small models
+            "Classification:"
+        )
+        resp = httpx.post(
+            f"{self._ollama_url}/api/generate",
+            json={"model": self._ollama_model, "prompt": prompt, "stream": False},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            body = resp.json()
+            answer = body.get("response", "").strip().upper()
+            for level in SensitivityLevel:
+                if level.value in answer:
+                    if level != SensitivityLevel.PUBLIC:
+                        triggers.append(f"ollama:{level.value}")
+                    return level
         return SensitivityLevel.PUBLIC
 
     def add_pattern(self, pattern: str, level: SensitivityLevel, description: str) -> None:
@@ -256,8 +289,21 @@ class SensitivityClassifier:
 
 
 def _label_to_level(label: str) -> SensitivityLevel:
-    """Map a classifier label to a sensitivity level."""
+    """Map a classifier label to a sensitivity level.
+
+    Handles both SensitivityLevel value names (PUBLIC/INTERNAL/CONFIDENTIAL/RESTRICTED)
+    and the backend's binary CLEAN/UNSAFE labels:
+      UNSAFE  → RESTRICTED  (injection or sensitive content detected)
+      CLEAN   → PUBLIC      (no sensitive content)
+      UNCERTAIN → PUBLIC    (no definitive signal; fail-closed handled in classify())
+    """
     label = label.upper().replace("__LABEL__", "").strip()
+    # Backend binary labels — checked before SensitivityLevel scan to avoid
+    # "RESTRICTED" accidentally matching if it ever appears in a label string.
+    if label == "UNSAFE":
+        return SensitivityLevel.RESTRICTED
+    if label in ("CLEAN", "UNCERTAIN"):
+        return SensitivityLevel.PUBLIC
     for level in SensitivityLevel:
         if level.value in label:
             return level
