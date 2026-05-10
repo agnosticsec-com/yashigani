@@ -330,28 +330,45 @@ if [[ "${SKIP_INSTALL}" == "false" ]]; then
               chown -R 1001:1001 '${VM_CLONE_DIR}/docker/data' '${VM_CLONE_DIR}/docker/certs' '${VM_CLONE_DIR}/docker/logs'" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
   fi
 
-  # Podman rootful: pre-load yashigani base images from user-space storage into
-  # the root podman storage. Without this, the rootful 'sudo podman build'
-  # would try to pull the python base image from Docker Hub as an anonymous
-  # unauthenticated request — subject to the 100/6h rate limit.
-  # User-space podman (rootless, UID 1004) already has the built images from
-  # prior runs; saving and loading them avoids any registry round-trip.
+  # Podman rootful: pre-load images from user-space storage into root podman
+  # storage. Without this, the rootful 'sudo podman build' tries to pull the
+  # python base image from Docker Hub as an unauthenticated request — subject
+  # to the 100-req/6h rate limit, which blocks the gateway/backoffice build.
+  #
+  # Loads:
+  #   1. yashigani/gateway + yashigani/backoffice (so build uses layer cache)
+  #   2. docker.io/library/python (base image for gateway+backoffice Dockerfiles)
+  #
+  # The save|load pipe is efficient — it bypasses the registry entirely.
   if [[ "${RUNTIME}" == "podman" && "${ROOTFUL}" == "true" ]]; then
-    _info "Pre-loading yashigani images into root podman storage (avoiding Docker Hub rate limit)..."
+    _info "Pre-loading yashigani + base images into root podman storage (avoiding Docker Hub rate limit)..."
     _vm_ssh "
       YASHIGANI_VERSION=\$(grep -m1 '^YASHIGANI_VERSION=' '${VM_CLONE_DIR}/install.sh' 2>/dev/null \
         | cut -d'\"' -f2 || echo '2.23.2')
+      echo \"Detected YASHIGANI_VERSION=\${YASHIGANI_VERSION}\"
+
+      # Load yashigani/gateway and backoffice (provides build cache layers)
       for img in yashigani/gateway yashigani/backoffice; do
-        # Try user-space podman first (tag with version), then fall back to :latest
         for tag in \"\${YASHIGANI_VERSION}\" latest; do
           if podman image inspect \"localhost/\${img}:\${tag}\" >/dev/null 2>&1 || \
              podman image inspect \"\${img}:\${tag}\" >/dev/null 2>&1; then
             echo \"Transferring \${img}:\${tag} to root storage...\"
-            podman image save \"\${img}:\${tag}\" 2>/dev/null | sudo podman image load 2>&1 | tail -3 || true
+            podman image save \"\${img}:\${tag}\" 2>/dev/null | sudo podman image load 2>&1 | tail -1 || true
             break
           fi
         done
       done
+
+      # Load the python base image (avoids Docker Hub rate limit during build).
+      # The Dockerfile FROM line uses a digest; find the matching local image.
+      for python_ref in 'docker.io/library/python' 'python'; do
+        if podman image inspect \"\${python_ref}\" >/dev/null 2>&1; then
+          echo \"Transferring python base image to root storage...\"
+          podman image save \"\${python_ref}\" 2>/dev/null | sudo podman image load 2>&1 | tail -1 || true
+          break
+        fi
+      done
+
       echo 'Pre-load complete'
     " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
   fi
