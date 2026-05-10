@@ -61,7 +61,7 @@
 #   - sudo rights for 'su' user
 #
 # Version: v2.23.3
-# Last-Updated: 2026-05-10T19:05:00+01:00
+# Last-Updated: 2026-05-10T19:15:00+01:00
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -328,6 +328,32 @@ if [[ "${SKIP_INSTALL}" == "false" ]]; then
   if [[ "${RUNTIME}" == "docker" ]]; then
     _vm_sudo "mkdir -p '${VM_CLONE_DIR}/docker/data' '${VM_CLONE_DIR}/docker/certs' '${VM_CLONE_DIR}/docker/logs' && \
               chown -R 1001:1001 '${VM_CLONE_DIR}/docker/data' '${VM_CLONE_DIR}/docker/certs' '${VM_CLONE_DIR}/docker/logs'" 2>&1 | tee -a "${EVIDENCE_FILE}" || true
+  fi
+
+  # Podman rootful: pre-load yashigani base images from user-space storage into
+  # the root podman storage. Without this, the rootful 'sudo podman build'
+  # would try to pull the python base image from Docker Hub as an anonymous
+  # unauthenticated request — subject to the 100/6h rate limit.
+  # User-space podman (rootless, UID 1004) already has the built images from
+  # prior runs; saving and loading them avoids any registry round-trip.
+  if [[ "${RUNTIME}" == "podman" && "${ROOTFUL}" == "true" ]]; then
+    _info "Pre-loading yashigani images into root podman storage (avoiding Docker Hub rate limit)..."
+    _vm_ssh "
+      YASHIGANI_VERSION=\$(grep -m1 '^YASHIGANI_VERSION=' '${VM_CLONE_DIR}/install.sh' 2>/dev/null \
+        | cut -d'\"' -f2 || echo '2.23.2')
+      for img in yashigani/gateway yashigani/backoffice; do
+        # Try user-space podman first (tag with version), then fall back to :latest
+        for tag in \"\${YASHIGANI_VERSION}\" latest; do
+          if podman image inspect \"localhost/\${img}:\${tag}\" >/dev/null 2>&1 || \
+             podman image inspect \"\${img}:\${tag}\" >/dev/null 2>&1; then
+            echo \"Transferring \${img}:\${tag} to root storage...\"
+            podman image save \"\${img}:\${tag}\" 2>/dev/null | sudo podman image load 2>&1 | tail -3 || true
+            break
+          fi
+        done
+      done
+      echo 'Pre-load complete'
+    " 2>&1 | tee -a "${EVIDENCE_FILE}" || true
   fi
 
   # ---------------------------------------------------------------------------
