@@ -86,9 +86,11 @@ jobs:
           - os: [self-hosted, macos, arm64, m-chip]
             os-label: macos
             runtime: podman
-            gates: false      # INFORMATIONAL: macOS+Podman PKI bootstrap fails on applehv (virtiofs :U remap
-                              # incompatibility with rootless Podman on macOS). Tracking for v2.23.3 follow-on.
-                              # macOS/docker cell (above) is the hard gate for macOS installs.
+            gates: true       # GATE 2026-05-11: macOS+Podman applehv install verified clean-slate on M4.
+                              # Prior INFORMATIONAL demotion was driven by accumulated runner-state
+                              # contamination (stale named volumes carrying old PKI material across runs),
+                              # not a real product bug. Clean-slate step below resets compose state per
+                              # cell run so this stays deterministic.
 
     runs-on: ${{ matrix.os }}
     # macOS cells continue-on-error because GH hosted runners lack VZ support.
@@ -151,7 +153,34 @@ jobs:
       # -----------------------------------------------------------------------
       # Runtime setup — macOS / Podman
       # Podman machine provides the daemon via a VM on macOS.
+      #
+      # Clean-slate guard (added 2026-05-11): self-hosted M4 runner persists
+      # podman storage across CI runs. Named compose volumes (docker_postgres_data,
+      # docker_audit_data, etc.) carry PKI cert material from prior installs;
+      # the next install issues fresh certs but compose remounts old volumes
+      # with stale data — gateway/backoffice then crash with "SSL certificate
+      # verify failed" / pgbouncer "query_wait_timeout" because the cert chain
+      # in the volume no longer matches the fresh CA on disk. Hard-reset compose
+      # state per cell run to guarantee deterministic installs.
       # -----------------------------------------------------------------------
+      - name: "[macos/podman] Clean-slate compose state"
+        if: matrix.os-label == 'macos' && matrix.runtime == 'podman'
+        run: |
+          # Ensure podman machine is up first (down -v needs the daemon)
+          podman machine start 2>/dev/null || true
+          # Project-scoped tear-down: containers, networks, and ANONYMOUS volumes
+          podman compose -f docker/docker-compose.yml down --volumes --remove-orphans 2>/dev/null || true
+          # Named volumes (docker_postgres_data, docker_audit_data, etc.) — these
+          # hold the stale PKI material; remove explicitly. Filter by name prefix
+          # so we never touch volumes from other compose projects on the runner.
+          for _v in $(podman volume ls -q --filter name=^docker 2>/dev/null); do
+            podman volume rm -f "${_v}" 2>/dev/null || true
+          done
+          # Wipe install.sh-generated artefacts in the workspace too (git-ignored
+          # secrets dir + .env carry the same cert-material correlation)
+          rm -rf docker/secrets/* docker/.env 2>/dev/null || true
+          echo "Clean-slate verified: containers=$(podman ps -aq | wc -l), volumes=$(podman volume ls -q --filter name=^docker | wc -l)"
+
       - name: "[macos/podman] Install Podman + init machine"
         if: matrix.os-label == 'macos' && matrix.runtime == 'podman'
         run: |
