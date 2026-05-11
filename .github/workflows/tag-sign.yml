@@ -131,22 +131,39 @@ jobs:
             echo "See docs/release-process.md §9 for key setup instructions." >&2
             exit 1
           fi
-          echo "${GPG_PRIVATE_KEY}" | gpg --batch --import
-          # Retrieve the full 40-char fingerprint of the imported signing key.
-          #
-          # Key has UID `tr@agnosticsec.com`.  We do NOT filter by UID email
-          # (the original `releases@agnosticsec.com` filter was wrong and was
-          # the root cause of every signing failure since v2.23.2).
-          #
-          # GnuPG 2.1+ --with-colons format: the full fingerprint lives on the
-          # `fpr:` record (field 10), NOT on the `sec:` record (field 5 there
-          # is the short key ID and is often empty in GnuPG 2.4+ runners).
-          # Use `fpr:` extraction which is stable across all GnuPG 2.x versions.
+
+          # Import the armored private key.
+          # --batch --no-tty: non-interactive; suppress any interactive prompts.
+          # The key in GPG_PRIVATE_KEY has UID `tr@agnosticsec.com`.
+          # GnuPG 2.1+ stores secret keys in private-keys-v1.d/; --batch import
+          # without --passphrase-fd may silently skip migration on passphrase-
+          # protected keys.  Provide passphrase via --passphrase-fd so the key
+          # is fully stored and queryable via --list-secret-keys.
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg \
+            --batch --yes --no-tty \
+            --pinentry-mode loopback \
+            --passphrase-fd 3 \
+            --import \
+            3< <(printf '%s' "${GPG_PASSPHRASE}")
+
+          # Retrieve the full 40-char fingerprint.
+          # GnuPG 2.1+ --with-colons: fpr: record field 10 is the fingerprint.
           KEY_FP=$(gpg --list-secret-keys --with-colons \
             | awk -F: '/^fpr/ { print $10; exit }')
+
+          # Fallback: extract from --fingerprint output if --with-colons is empty
+          # (happens with some key formats on certain GnuPG builds).
           if [[ -z "${KEY_FP}" ]]; then
-            echo "ERROR: Could not extract GPG key fingerprint from imported key." >&2
+            KEY_FP=$(gpg --list-secret-keys --fingerprint --with-colons \
+              | awk -F: '/^fpr/ { print $10; exit }')
+          fi
+
+          if [[ -z "${KEY_FP}" ]]; then
+            echo "ERROR: Could not extract GPG key fingerprint after import." >&2
+            echo "--- gpg --list-secret-keys --with-colons ---" >&2
             gpg --list-secret-keys --with-colons >&2 || true
+            echo "--- gpg --list-secret-keys ---" >&2
+            gpg --list-secret-keys >&2 || true
             exit 1
           fi
           echo "KEY_FP=${KEY_FP}" >> "$GITHUB_ENV"
