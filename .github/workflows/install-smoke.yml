@@ -25,9 +25,9 @@
 # Mac runners, not GH hosted runners.
 #
 # v2.23.2 context: macOS smoke pre-existing failures were accepted via ad-hoc
-# Tiago risk-accept during the v2.23.2 release. v2.23.3 formalises that
-# acceptance structurally in the workflow file and release-process.md so no
-# further per-release ad-hoc accept is needed.
+# engineering risk-accept during the v2.23.2 release. v2.23.3 formalises that
+# acceptance structurally in the workflow file so no further per-release ad-hoc
+# accept is needed.
 #
 # How to promote macOS cells to GATE when self-hosted runners are available:
 #   1. Set runs-on for macos cells to the self-hosted runner label.
@@ -457,8 +457,7 @@ jobs:
 # in the workflow run UI but do not fail smoke-gate.
 #
 # This is the formalised structural replacement for the v2.23.2 ad-hoc
-# Tiago risk-accept on macOS smoke. No per-release risk-accept is needed.
-# See release-process.md §2.3 for pre-flight interpretation guidance.
+# engineering risk-accept on macOS smoke. No per-release risk-accept is needed.
 # ---------------------------------------------------------------------------
   smoke-gate:
     name: "smoke-gate (Linux + mutation only)"
