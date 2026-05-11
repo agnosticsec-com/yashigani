@@ -169,6 +169,10 @@ jobs:
           # Init and start the Podman machine (VM-backed on macOS)
           podman machine init --cpus 2 --memory 4096 --disk-size 20 ysg-smoke || true
           podman machine start ysg-smoke
+          # Give the SSH tunnel a moment to settle before issuing `podman info`
+          # (same pattern as Colima's `sleep 5` — the machine reports "started
+          # successfully" before the SSH daemon is accepting connections).
+          sleep 8
           # Confirm connectivity
           podman info
           podman-compose version
