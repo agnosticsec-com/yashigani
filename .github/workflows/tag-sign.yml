@@ -1,4 +1,4 @@
-# Last updated: 2026-05-02T10:00:00+01:00
+# Last updated: 2026-05-11T00:00:00+01:00
 name: Tag — GPG Sign & Verify
 
 # Triggered when a version tag is pushed (e.g. v2.23.2).
@@ -46,6 +46,11 @@ jobs:
   sign-tag:
     name: GPG Sign Release Tag
     runs-on: ubuntu-latest
+    # Guard: only run on actual tag refs (refs/tags/…), not on branch pushes
+    # where the branch name happens to match the v*.*.* pattern (e.g. v2.23.3).
+    # GitHub workflow triggers with `push: tags:` do NOT filter out branch-push
+    # events when the branch name matches the tag pattern.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
 
     steps:
       # -----------------------------------------------------------------------
@@ -127,8 +132,14 @@ jobs:
             exit 1
           fi
           echo "${GPG_PRIVATE_KEY}" | gpg --batch --import
-          # Retrieve the imported key fingerprint
-          KEY_FP=$(gpg --list-secret-keys --with-colons 'releases@agnosticsec.com' \
+          # Retrieve the imported key fingerprint.
+          # Extract first secret-key fingerprint regardless of UID email — the
+          # key in GPG_PRIVATE_KEY has UID `tr@agnosticsec.com`, not the original
+          # `releases@agnosticsec.com` placeholder used when this workflow was
+          # drafted. Filtering by UID returned nothing → empty KEY_FP →
+          # "invalid fingerprint" exit 2. Drop the email filter entirely;
+          # single-key keyring is the deployed pattern (one signing key per repo).
+          KEY_FP=$(gpg --list-secret-keys --with-colons \
             | awk -F: '/^sec/ { print $5 }' | head -1)
           echo "KEY_FP=${KEY_FP}" >> "$GITHUB_ENV"
           echo "[INFO] Imported key fingerprint: ${KEY_FP}"
@@ -143,7 +154,7 @@ jobs:
         if: steps.sig_check.outputs.already_signed == 'false'
         run: |
           git config user.name  "Agnostic Security Releases"
-          git config user.email "releases@agnosticsec.com"
+          git config user.email "tr@agnosticsec.com"
           git config user.signingkey "${KEY_FP}"
           git config tag.gpgsign true
 
@@ -185,7 +196,7 @@ jobs:
             --armor --output /dev/null --sign /dev/null 2>/dev/null || true
 
           git -c "gpg.program=gpg" tag -s "${TAG}" "${COMMIT}" \
-            --local-user "releases@agnosticsec.com" \
+            --local-user "${KEY_FP}" \
             -m "${MSG}"
 
           echo "[INFO] Signed tag created: ${TAG} -> ${COMMIT}"
@@ -234,7 +245,7 @@ jobs:
             echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
             echo "| Tag | \`${TAG}\` |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Commit | \`${COMMIT}\` |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Signer | releases@agnosticsec.com |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Signer | tr@agnosticsec.com |" >> "$GITHUB_STEP_SUMMARY"
             echo "| Method | GPG (git tag -s) |" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**Verify the signature:**" >> "$GITHUB_STEP_SUMMARY"
