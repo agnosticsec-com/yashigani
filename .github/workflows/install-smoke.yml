@@ -154,29 +154,27 @@ jobs:
         if: matrix.os-label == 'macos' && matrix.runtime == 'podman'
         run: |
           brew install podman podman-compose 2>/dev/null || true
+          # Ensure the default Podman machine exists and is running.
           # Apple Silicon (applehv) only allows ONE VM active at a time.
-          # Stop all running Podman machines before starting ysg-smoke.
-          # `podman machine ls -q` returns machine names; `podman machine stop`
-          # is a no-op for already-stopped machines.
-          # This is safe: the Docker/Colima cell runs in a parallel job and uses
-          # a different hypervisor backend (vz, not applehv) — stopping Podman
-          # machines does NOT affect the Colima VM.
+          # podman-machine-default is used as the system default connection so
+          # plain `podman ...` commands route to it without extra env setup.
+          # If another machine is running (e.g. from a previous CI job), stop
+          # it first so podman-machine-default can start.
           while IFS= read -r _mname; do
-            _clean="${_mname%\*}"   # strip the trailing '*' that podman adds to the default
-            echo "Ensuring Podman machine stopped: ${_clean}"
-            podman machine stop "${_clean}" 2>/dev/null || true
+            _clean="${_mname%\*}"
+            if [ "$_clean" != "podman-machine-default" ]; then
+              echo "Stopping non-default Podman machine: ${_clean}"
+              podman machine stop "${_clean}" 2>/dev/null || true
+            fi
           done < <(podman machine ls -q 2>/dev/null)
-          # Init and start the Podman machine (VM-backed on macOS)
-          podman machine init --cpus 2 --memory 4096 --disk-size 20 ysg-smoke || true
-          podman machine start ysg-smoke
-          # Poll until `podman info` succeeds — the machine reports "started
-          # successfully" before the SSH daemon finishes initialising.
-          # Cap at 60 s (tested: typically ready in 15–20 s on M4).
-          _deadline=$(( $(date +%s) + 60 ))
+          podman machine init --cpus 2 --memory 4096 --disk-size 20 2>/dev/null || true
+          podman machine start 2>/dev/null || true   # start the default machine; no-op if running
+          # Poll until `podman info` succeeds (SSH daemon needs time to init)
+          _deadline=$(( $(date +%s) + 90 ))
           until podman info >/dev/null 2>&1; do
             if [ "$(date +%s)" -ge "$_deadline" ]; then
-              echo "ERROR: Podman machine not ready after 60 s"
-              podman info   # run once more to surface the actual error
+              echo "ERROR: Podman machine not ready after 90 s"
+              podman info
               exit 1
             fi
             sleep 3
