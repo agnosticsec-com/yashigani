@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-13T15:00:00+00:00 (fix(podman): scope :U-override-load to macOS Podman only — LINUX-SHARED-MOUNT-UID-CLOBBER)
 # last-updated: 2026-05-13T13:00:00+00:00 (fix(podman): always apply :U-bearing override on macOS Podman — MACOS-PODMAN-OVERRIDE-LOAD-GAP)
 # last-updated: 2026-05-13T00:00:00+00:00 (fix(podman): add :U to all secret bind-mounts and ephemeral chown — MACOS-PODMAN-PKI-VIRTIOFS-U)
 # last-updated: 2026-05-12T00:00:00+01:00 (fix(install): write agent-bundle token placeholders before PKI chown — INSTALLER-BUG-AGENT-TOKENS)
@@ -2927,41 +2928,48 @@ compose_up() {
       fi
     fi
 
-    # 4. Apply the Podman rootless override unconditionally on macOS.
+    # 4. Apply Podman rootless overrides.
     #    COMPOSE_CMD was already resolved by resolve_compose_cmd() above.
     #
-    #    MACOS-PODMAN-OVERRIDE-LOAD-GAP fix (2026-05-13):
-    #    The prior logic gated the override on `command -v podman-compose` being
-    #    absent — i.e. it only loaded the override when using `podman compose`
-    #    (built-in). On Homebrew macOS, `podman-compose` (the Python wrapper) IS
-    #    in PATH, so the condition was TRUE and the override was silently skipped.
-    #    Result: the :U bind-mount flag added by PR #135 was a no-op for any user
-    #    with `brew install podman-compose`, causing `statfs: operation not permitted`
-    #    on every virtiofs secret bind-mount.
+    #    Override split (LINUX-SHARED-MOUNT-UID-CLOBBER — #138 regression fix):
     #
-    #    The :U flag is a Podman-runtime concern (instructs podman to lchown the
-    #    host-side mount source to the container UID's subuid mapping before the
-    #    mount). It is independent of which compose binary is used:
-    #      - podman-compose 1.5.0 (Python): natively parses :U as a propagation
-    #        option and passes it to `podman run -v src:dst:U,...` — verified by
-    #        source inspection (propagation_re includes U, mount_desc_to_volume_args
-    #        emits it). Config output confirmed to preserve the flag.
-    #      - podman compose (built-in): delegates directly to podman run; :U works.
-    #    The override is NEVER loaded on the Docker path (YSG_PODMAN_RUNTIME guard
-    #    above), so applying it here is safe for all supported runtimes.
+    #    docker-compose.podman-override.yml — ALL Podman (Linux + macOS):
+    #      security_opt: label=disable (needed where SELinux is active — RHEL/Fedora);
+    #      Ollama HOME + OLLAMA_MODELS env; promtail profile disable;
+    #      backoffice YASHIGANI_AGENT_UPSTREAM_HOSTNAMES env.
+    #      No :U volume entries.
     #
-    #    Ava Track B v6 anomaly: v6 succeeded without the override because the
-    #    install directory (yashigani-v6-userflow) had its docker/secrets already
-    #    subuid-chowned by a prior run. The nuke step purges containers + volumes
-    #    but does NOT wipe the bind-mount source directories. A true clean-state
-    #    install (new directory) always needs the override.
-    log_info "Using ${COMPOSE_CMD[*]} with rootless override"
+    #    docker-compose.podman-virtiofs-override.yml — macOS Podman ONLY:
+    #      :U on all secrets bind-mounts. Required on macOS because podman unshare
+    #      is unavailable on the remote client and virtiofs returns EPERM without it.
+    #      MUST NOT be loaded on Linux rootless: :U lchowns the ENTIRE host-side
+    #      source directory to the last-processed container's subuid-mapped UID,
+    #      clobbering the per-file UIDs that `podman unshare chown` set. Consequence:
+    #      redis (UID 999) loses ownership of redis_client.key → healthcheck fail →
+    #      install hangs at `podman wait`. (Reproduced: Ava Track A v5, 2026-05-13.)
+    #
+    #    Why :U is safe on macOS but unsafe on Linux:
+    #      macOS: no `podman unshare` → per-file UIDs never set → :U sets consistent
+    #        subuid ownership so all containers read from the same mapped namespace.
+    #      Linux: `podman unshare chown` sets per-file UIDs before containers start.
+    #        Adding :U afterward overwrites those per-file UIDs, breaking services
+    #        whose UID differs from the last container processed.
     local podman_override="${WORK_DIR}/docker/docker-compose.podman-override.yml"
     if [[ -f "$podman_override" ]]; then
       compose_files+=("-f" "$podman_override")
-      log_info "Applying Podman rootless override (:U mounts + security_opt)"
+      log_info "Applying Podman rootless override (security_opt + env overrides)"
     else
-      log_warn "Podman rootless override not found at ${podman_override} — :U mounts will not apply"
+      log_warn "Podman rootless override not found at ${podman_override}"
+    fi
+    # macOS virtiofs :U override — macOS Podman only
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      local podman_virtiofs_override="${WORK_DIR}/docker/docker-compose.podman-virtiofs-override.yml"
+      if [[ -f "$podman_virtiofs_override" ]]; then
+        compose_files+=("-f" "$podman_virtiofs_override")
+        log_info "Applying Podman virtiofs :U override (macOS only)"
+      else
+        log_warn "Podman virtiofs override not found at ${podman_virtiofs_override} — :U mounts will not apply (macOS virtiofs may fail)"
+      fi
     fi
 
     # 5. Build images with podman build (compose build uses Docker buildx)
@@ -3791,11 +3799,16 @@ register_agent_bundles() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
   local compose_file="${WORK_DIR}/docker/docker-compose.yml"
 
-  # Rebuild compose file args (same logic as compose_up)
+  # Rebuild compose file args (same logic as compose_up — keep in sync)
   local compose_files=("-f" "$compose_file")
   if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
     local podman_override="${WORK_DIR}/docker/docker-compose.podman-override.yml"
     [[ -f "$podman_override" ]] && compose_files+=("-f" "$podman_override")
+    # macOS virtiofs :U override — macOS Podman only (see compose_up for full rationale)
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      local podman_virtiofs_override="${WORK_DIR}/docker/docker-compose.podman-virtiofs-override.yml"
+      [[ -f "$podman_virtiofs_override" ]] && compose_files+=("-f" "$podman_virtiofs_override")
+    fi
   fi
 
   # Run the entire registration flow inside the backoffice container.
