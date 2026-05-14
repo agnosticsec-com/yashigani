@@ -147,6 +147,14 @@ class EventType(str, Enum):
     PASSWORD_REUSE_REJECTED = "PASSWORD_REUSE_REJECTED"
     # v2.23.3 — OWASP API7 DNS-rebinding defence (issue #91)
     SSRF_PINNED_RESOLVER_USED = "SSRF_PINNED_RESOLVER_USED"
+    # v2.23.4 — Q3 arch-completion: admin-action reactivation + blocked login
+    # LOGIN_BLOCKED_SUSPENDED_IDENTITY: emitted when a user-tier login attempt
+    # is blocked because the HUMAN identity is suspended/inactive.
+    # Admin must use POST /admin/users/{username}/reactivate to restore access.
+    LOGIN_BLOCKED_SUSPENDED_IDENTITY = "LOGIN_BLOCKED_SUSPENDED_IDENTITY"
+    # IDENTITY_REACTIVATED: emitted when an admin explicitly reactivates a
+    # suspended identity via POST /admin/users/{username}/reactivate.
+    IDENTITY_REACTIVATED = "IDENTITY_REACTIVATED"
 
 
 # ---------------------------------------------------------------------------
@@ -1300,3 +1308,51 @@ class AdminUserApiKeyIssuedEvent(AuditEvent):
     target_identity_id: str = ""
     key_last4: str = ""
     grace_seconds: int = 30      # grace window applied to prior token
+
+
+@dataclass
+class LoginBlockedSuspendedIdentityEvent(AuditEvent):
+    """Written when a user-tier login is blocked because their HUMAN identity
+    is suspended or inactive in the identity registry.
+
+    The user must contact an admin who can call
+    POST /admin/users/{username}/reactivate (requires StepUp).
+
+    Security invariants:
+      - No session is created (login is rejected before session issuance).
+      - username is logged for forensic triage (not account_id — account_id
+        may not be meaningful to operators; username is the primary handle).
+
+    Q3 / v2.23.4 arch-completion.
+    """
+
+    event_type: str = EventType.LOGIN_BLOCKED_SUSPENDED_IDENTITY
+    account_tier: str = AccountTier.USER
+    masking_applied: bool = True
+    username: str = ""          # target user whose login was blocked
+    identity_id: str = ""       # identity_id that is suspended
+    identity_status: str = ""   # "suspended" or "inactive"
+    slug: str = ""              # slug of the blocked identity (for correlation)
+
+
+@dataclass
+class IdentityReactivatedEvent(AuditEvent):
+    """Written when an admin explicitly reactivates a suspended HUMAN identity
+    via POST /admin/users/{username}/reactivate.
+
+    Security invariants:
+      - Admin must hold a valid StepUp session (TOTP within 5 min).
+      - acting_admin_account_id is account_id of the acting admin (not username).
+      - target_username is the user whose identity was reactivated.
+      - plaintext tokens and secrets are never logged.
+
+    ASVS V7.1.1 / Q3 arch-completion.
+    """
+
+    event_type: str = EventType.IDENTITY_REACTIVATED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True
+    acting_admin_account_id: str = ""   # admin performing the reactivation
+    target_username: str = ""           # user being reactivated
+    target_identity_id: str = ""        # identity_id being reactivated
+    reason: str = ""                    # optional reason supplied in request body

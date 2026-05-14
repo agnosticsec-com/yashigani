@@ -1263,35 +1263,54 @@ def _register_human_identity_on_login(record, state) -> None:
     slug = _auth_email_to_slug(email)
 
     # Idempotency guard: if already registered, check status.
-    # F9 (Laura Gap 3 threat-model): if the identity was suspended by admin
-    # (disable→re-enable cycle), the local-auth login must reactivate it —
-    # not skip it — otherwise the re-enabled user has a suspended HUMAN
-    # identity and cannot reach /v1/*.
+    # Q3 / v2.23.4 (Tiago directive 2026-05-15): auto-reactivate on login
+    # REVERTED. A suspended identity is an admin-action-only reactivation.
+    # If identity is suspended/inactive:
+    #   - Block the login (403)
+    #   - Audit-log LOGIN_BLOCKED_SUSPENDED_IDENTITY
+    #   - Do NOT reactivate, do NOT issue session
+    # Admin must call POST /admin/users/{username}/reactivate (StepUp required)
+    # to restore access.
     existing = registry.get_by_slug(slug)
     if existing is not None:
         identity_id = existing.get("identity_id", "")
         existing_status = existing.get("status", "active")
         if existing_status in ("suspended", "inactive"):
-            # Identity exists but was suspended (admin disabled user, then re-enabled
-            # the local-auth account but did not unsuspend the identity manually).
-            # Re-activate the identity so the user can reach /v1/*.
-            registry.reactivate(identity_id)
-            _log.info(
-                "HUMAN identity reactivated on login for %s "
-                "(slug=%s, identity_id=%s, was_status=%s) — "
-                "disable→re-enable cycle detected (F9 ACS-RISK-044 mitigation)",
+            # Audit-log before raising so the forensic record is present
+            # even if an upstream exception handler swallows the 403.
+            from yashigani.audit.schema import LoginBlockedSuspendedIdentityEvent
+            _blocked_state = state
+            if getattr(_blocked_state, "audit_writer", None) is not None:
+                _blocked_state.audit_writer.write(LoginBlockedSuspendedIdentityEvent(
+                    username=record.username,
+                    identity_id=identity_id,
+                    identity_status=existing_status,
+                    slug=slug,
+                ))
+            _log.warning(
+                "Q3 LOGIN BLOCKED: user=%s identity_id=%s status=%s slug=%s — "
+                "admin must reactivate via POST /admin/users/%s/reactivate",
                 record.username,
-                slug,
                 identity_id,
                 existing_status,
-            )
-        else:
-            _log.debug(
-                "HUMAN identity already active for %s (slug=%s, identity_id=%s) — skip re-register",
-                record.username,
                 slug,
-                identity_id,
+                record.username,
             )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "account_suspended",
+                    "message": (
+                        "Account suspended. Contact your administrator to restore access."
+                    ),
+                },
+            )
+        _log.debug(
+            "HUMAN identity already active for %s (slug=%s, identity_id=%s) — skip re-register",
+            record.username,
+            slug,
+            identity_id,
+        )
         return
 
     # New user — register with HUMAN kind.

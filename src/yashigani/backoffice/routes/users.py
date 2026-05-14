@@ -10,9 +10,10 @@ guarantee that password_hash, totp_secret, recovery_codes, and lockout
 counters are never leaked in list responses.
 """
 
-# Last updated: 2026-05-14T00:00:00+01:00
+# Last updated: 2026-05-15T00:00:00+01:00
 from __future__ import annotations
 
+import logging as _log_mod
 from typing import Optional
 
 import re as _re
@@ -26,10 +27,72 @@ from yashigani.auth.totp import generate_provisioning
 from yashigani.backoffice.schemas.bopla import UserAccountPublic, UserCreateResponse
 
 router = APIRouter()
+_log = _log_mod.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Q1 / v2.23.4 — Username derivation algorithm (Tiago 2026-05-15)
+#
+# Algorithm:
+#   Given email  <local>@<host>:
+#   1. Local-part: keep as-is but strip chars outside [a-zA-Z0-9_\-]
+#      (plus-tag content KEPT — only the literal '+' is stripped because
+#       Tiago verbatim example "aliceworkx (keep)" means alice+work@x.com
+#       yields "aliceworkx": strip '+', keep "work", concat with first label "x")
+#   2. First domain label: everything before the first '.' in host. Hyphens kept.
+#      my-co.com → "my-co"; example.co.uk → "example"; x.com → "x"
+#   3. Concatenate: <sanitised-local><first-label>, lowercase
+#   4. Truncate to 64 chars
+#   5. Residual collision on DB UNIQUE → 409 (handled in create_user handler)
+#
+# Tiago verbatim examples (2026-05-15):
+#   alice@domain.com   → alicedomain
+#   alice@my-co.com    → alicemy-co
+#   alice+work@x.com   → aliceworkx  (strip '+', keep "work", concat "x")
+#   a@x.co.uk          → ax
+# ---------------------------------------------------------------------------
+
+_DERIVE_STRIP_RE = _re.compile(r"[^a-zA-Z0-9_\-]")
+
+
+def _derive_username_from_email(email: str) -> str:
+    """
+    Derive a username from an email address per Q1 / v2.23.4 algorithm.
+
+    Steps:
+      1. Split on '@' to get local-part and host.
+      2. Strip unsupported chars from local-part (keep alphanumeric / _ / -;
+         strip '+' and any other special char — the content after '+' is
+         preserved because stripping '+' only removes the delimiter, not the tag).
+      3. Take the first label of the host (before the first '.').
+      4. Concatenate, lowercase, truncate to 64 chars.
+
+    Returns the derived username (never empty — at minimum a single char from
+    a 1-char local + 1-char TLD will survive; callers are responsible for
+    downstream uniqueness enforcement).
+    """
+    local, _, host = email.partition("@")
+    # Step 1 — sanitise local part: strip anything outside [a-zA-Z0-9_\-]
+    # This removes '+' (delimiter) while keeping what follows it.
+    clean_local = _DERIVE_STRIP_RE.sub("", local)
+    # Step 2 — first domain label (before first '.')
+    first_label = host.split(".")[0]
+    # Step 3 — concatenate, lowercase, truncate
+    username = (clean_local + first_label).lower()[:64]
+    return username
 
 
 class FullResetRequest(BaseModel):
     totp_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class ReactivateRequest(BaseModel):
+    """Optional reason for the reactivate audit trail."""
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=512,
+        description="Optional admin-supplied reason for this reactivation (audit log).",
+    )
 
 
 class CreateUserRequest(BaseModel):
@@ -38,11 +101,12 @@ class CreateUserRequest(BaseModel):
 
     `email` is now REQUIRED for user-tier account creation (Tiago design intent:
     "email as the username for normal users"). The canonical identity for a user
-    is their email address — `username` is a deprecated convenience alias.
+    is their email address — `username` is a derived convenience alias.
 
-    If `username` is not supplied, it is derived from the local part of `email`
-    (e.g. alice@example.com → username="alice"). If supplied explicitly it is
-    accepted as-is (max 64 chars) for backward compatibility with older callers.
+    If `username` is not supplied, it is derived using _derive_username_from_email()
+    (Q1 / v2.23.4 algorithm: <sanitised-local><first-domain-label>, lowercase,
+    max 64 chars). If supplied explicitly it is accepted as-is (max 64 chars) for
+    backward compatibility with older callers.
 
     Admin records are unchanged — admin usernames are already emails (set at
     create_admin() time in local_auth.py:161 / pg_auth.py:99).
@@ -55,25 +119,21 @@ class CreateUserRequest(BaseModel):
         min_length=3,
         max_length=64,
         description=(
-            "Optional username override. Deprecated for user-tier accounts — "
-            "email is the canonical identity. If omitted, derived from the "
-            "local part of email."
+            "Optional username override. If omitted, derived from email using the "
+            "Q1 algorithm: <sanitised-local><first-domain-label>, lowercase, max 64 chars."
         ),
     )
 
     @model_validator(mode="after")
     def _derive_username_if_absent(self) -> "CreateUserRequest":
         """
-        If username is not supplied, derive it from the email local part.
+        If username is not supplied, derive it from email using the Q1 algorithm.
 
         Uses model_validator (post-field-validation) so self.email is guaranteed
         to be a valid EmailStr value at this point.
         """
         if self.username is None:
-            local = str(self.email).partition("@")[0]
-            # Sanitise: keep alphanumeric + underscore + hyphen, max 64 chars.
-            derived = _re.sub(r"[^a-zA-Z0-9_\-]", "_", local)[:64]
-            self.username = derived if len(derived) >= 3 else f"u_{derived}"
+            self.username = _derive_username_from_email(str(self.email))
         return self
 
 
@@ -149,7 +209,33 @@ async def create_user(body: CreateUserRequest, session: AdminSession):
     from yashigani.auth.password import generate_password
 
     temp_password = generate_password(36)
-    record = await state.auth_service.create_user(effective_username, temp_password)
+    try:
+        record = await state.auth_service.create_user(effective_username, temp_password)
+    except Exception as exc:
+        # Q1: catch DB UNIQUE constraint violation on derived username.
+        # asyncpg raises asyncpg.UniqueViolationError (subclass of
+        # asyncpg.PostgresError); the message includes "unique" and the
+        # constraint name. We catch broadly here and re-raise non-uniqueness
+        # errors so we don't swallow unexpected failures.
+        exc_str = str(exc).lower()
+        if "unique" in exc_str or "duplicate" in exc_str:
+            _log.info(
+                "Q1 username collision on derived username %r for email %r — returning 409",
+                effective_username,
+                effective_email,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "username_collision",
+                    "message": (
+                        f"The username '{effective_username}' derived from email '{effective_email}' "
+                        "collides with an existing record. Supply an explicit `username` in the request."
+                    ),
+                    "derived_username": effective_username,
+                },
+            ) from exc
+        raise
     # Always set email — it is required for user-tier accounts (Gap 1).
     await state.auth_service.set_email(effective_username, effective_email)
     record.email = effective_email
@@ -307,6 +393,103 @@ async def enable_user(username: str, session: AdminSession):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "account_not_found"})
     state.audit_writer.write(_config_event(session.account_id, "user_account_enabled", username, "enabled"))
     return {"status": "ok"}
+
+
+@router.post("/{username}/reactivate")
+async def reactivate_user(username: str, body: ReactivateRequest, session: StepUpAdminSession):
+    """
+    Reactivate a suspended HUMAN identity for a user-tier account.
+
+    Q3 / v2.23.4 arch-completion: auto-reactivate on login was reverted (Tiago
+    directive 2026-05-15 — "admin-action-only, audit-logged"). This endpoint is
+    the sole reactivation path.
+
+    Requirements:
+      - Caller: admin tier + fresh StepUp (StepUpAdminSession, TOTP within 5 min).
+      - Target: must exist, must be account_tier == "user" (404 if admin).
+      - Resolves target's HUMAN identity via slug; calls registry.reactivate().
+      - Audit-logged with admin actor + target user + optional reason.
+
+    Returns 200 with reactivated identity metadata on success.
+    Returns 404 if user not found or not user-tier.
+    Returns 404 if no HUMAN identity exists in registry (user never logged in).
+    Returns 409 if identity is already active (idempotent — callers may retry).
+    """
+    state = backoffice_state
+    assert state.auth_service is not None  # set unconditionally at startup
+    assert state.audit_writer is not None  # set unconditionally at startup
+
+    record = await state.auth_service.get_account(username)
+    if record is None or record.account_tier != "user":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "account_not_found"})
+
+    registry = getattr(state, "identity_registry", None)
+    if registry is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "user_identity_registry_unavailable",
+                "message": "Identity registry not available on this deployment tier.",
+            },
+        )
+
+    # Resolve HUMAN identity by slug
+    from yashigani.backoffice.routes.auth import _auth_email_to_slug
+    email = record.email or f"{record.username}@yashigani.local"
+    slug = _auth_email_to_slug(email)
+    identity = registry.get_by_slug(slug)
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "identity_not_found",
+                "message": (
+                    f"No HUMAN identity found for user '{username}'. "
+                    "Ensure the user has logged in at least once to register their identity."
+                ),
+            },
+        )
+
+    identity_id = identity["identity_id"]
+    current_status = identity.get("status", "active")
+
+    if current_status == "active":
+        # Idempotent: already active — return success without re-writing Redis.
+        return {
+            "status": "ok",
+            "identity_id": identity_id,
+            "identity_status": "active",
+            "message": "Identity is already active. No change required.",
+        }
+
+    # Reactivate the suspended/inactive identity.
+    registry.reactivate(identity_id)
+
+    # Audit log — admin actor + target + reason
+    from yashigani.audit.schema import IdentityReactivatedEvent
+    state.audit_writer.write(IdentityReactivatedEvent(
+        acting_admin_account_id=session.account_id,
+        target_username=username,
+        target_identity_id=identity_id,
+        reason=body.reason or "",
+    ))
+
+    _log.info(
+        "Q3 admin reactivate: admin=%s target=%s identity_id=%s was_status=%s reason=%r",
+        session.account_id,
+        username,
+        identity_id,
+        current_status,
+        body.reason,
+    )
+
+    return {
+        "status": "ok",
+        "identity_id": identity_id,
+        "identity_status": "active",
+        "username": username,
+        "message": f"Identity reactivated. User '{username}' can now access /v1/*.",
+    }
 
 
 @router.post("/{username}/api-key")

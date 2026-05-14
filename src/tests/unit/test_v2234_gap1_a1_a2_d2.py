@@ -3,15 +3,18 @@ v2.23.4 arch-completion — Bundle 1 regression tests.
 
 Covers:
   A1 — Gap 1: email-as-username enforcement in CreateUserRequest
-  A2 — F9: suspended-identity check on login path (_register_human_identity_on_login)
+  A2 — F9 / Q3 REVISED: suspended-identity check on login path
+       (_register_human_identity_on_login) — Q3 (2026-05-15) REVERTS
+       auto-reactivate on login; suspended identity now blocks login (403).
+       Full Q3 tests are in test_v2234_gap3_q3_reactivate.py.
   D2 — BYOK SP-key load-time validation spot-check
 
 Source references:
   src/yashigani/backoffice/routes/users.py   — CreateUserRequest (A1)
-  src/yashigani/backoffice/routes/auth.py    — _register_human_identity_on_login (A2)
+  src/yashigani/backoffice/routes/auth.py    — _register_human_identity_on_login (A2/Q3)
   src/yashigani/sso/saml.py                 — SAMLProvider.__init__ + _assert_rsa_sp_key (D2)
 
-Last updated: 2026-05-14T00:00:00+01:00
+Last updated: 2026-05-15T00:00:00+01:00
 """
 from __future__ import annotations
 
@@ -157,28 +160,26 @@ def _call_register(record, registry):
 
 class TestSuspendedIdentityCheck:
     """
-    A2 / F9 regression: disable→re-enable cycle must NOT leave user with
-    a suspended HUMAN identity.
+    A2 / Q3 regression: suspended HUMAN identity on login path.
 
-    Laura Gap 3 threat-model (LAURA-V234-GAP3-TM §F9):
-      "If Tom implements Gap 3 ... without checking status, a user whose
-       identity was suspended in identity_registry (e.g. via admin
-       suspend_owned_by()) but whose admin_accounts record was NOT disabled
-       can log in via local-auth and get a fresh session. Their identity is
-       in the registry but with status='suspended'. The local-auth path would
-       call registry.register() → ValueError('Slug already taken')."
+    REVISED 2026-05-15 (Q3 Tiago directive): auto-reactivate on login REVERTED.
+    Suspended identity now BLOCKS login (403) and audit-logs the attempt.
+    Admin must call POST /admin/users/{username}/reactivate to restore access.
 
-    The fix: when get_by_slug() returns a suspended identity, call
-    registry.reactivate(identity_id) instead of silently skipping.
+    Full Q3 test coverage is in test_v2234_gap3_q3_reactivate.py.
+    These A2 tests are updated to reflect the new Q3 behaviour so they
+    don't falsely fail as regressions of a no-longer-intended behaviour.
     """
 
-    def test_suspended_identity_is_reactivated_on_login(self):
+    def test_suspended_identity_blocks_login(self):
         """
-        F9 primary: if existing identity has status='suspended', reactivate() is called.
+        Q3: suspended identity → _register_human_identity_on_login raises 403.
 
-        Before fix: existing identity → return early (reactivate never called).
-        After fix: suspended identity → reactivate() called.
+        Before be75aab: existing identity → return early (no reactivate).
+        After be75aab (pre-Q3): suspended identity → auto-reactivate().
+        After Q3 revert: suspended identity → HTTPException(403, account_suspended).
         """
+        from fastapi import HTTPException
         record = _A2Record(username="alice", account_id="u-001")
         existing = {
             "identity_id": "idnt_suspended",
@@ -187,16 +188,21 @@ class TestSuspendedIdentityCheck:
             "status": "suspended",
         }
         registry = _make_a2_registry(existing_identity=existing)
-        _call_register(record, registry)
 
-        registry.reactivate.assert_called_once_with("idnt_suspended")
-        # register() must NOT be called — reactivate, not re-create.
+        with pytest.raises(HTTPException) as exc_info:
+            _call_register(record, registry)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "account_suspended"
+        # Must NOT reactivate — admin-only action.
+        registry.reactivate.assert_not_called()
         registry.register.assert_not_called()
 
-    def test_inactive_identity_is_reactivated_on_login(self):
+    def test_inactive_identity_blocks_login(self):
         """
-        F9 variant: status='inactive' is treated identically to 'suspended'.
+        Q3 variant: status='inactive' is treated identically to 'suspended' — blocks login.
         """
+        from fastapi import HTTPException
         record = _A2Record(username="alice", account_id="u-001")
         existing = {
             "identity_id": "idnt_inactive",
@@ -205,10 +211,12 @@ class TestSuspendedIdentityCheck:
             "status": "inactive",
         }
         registry = _make_a2_registry(existing_identity=existing)
-        _call_register(record, registry)
 
-        registry.reactivate.assert_called_once_with("idnt_inactive")
-        registry.register.assert_not_called()
+        with pytest.raises(HTTPException) as exc_info:
+            _call_register(record, registry)
+
+        assert exc_info.value.status_code == 403
+        registry.reactivate.assert_not_called()
 
     def test_active_identity_not_reactivated(self):
         """
@@ -259,21 +267,22 @@ class TestSuspendedIdentityCheck:
         registry.register.assert_not_called()
         registry.reactivate.assert_not_called()
 
-    def test_disable_reenable_cycle_produces_working_identity(self):
+    def test_disable_reenable_cycle_requires_admin_reactivate(self):
         """
-        End-to-end: simulate admin disable → re-enable → login cycle.
+        Q3 REVISED: disable→re-enable cycle now requires explicit admin reactivation.
 
         Step 1: user exists with active HUMAN identity.
         Step 2: admin disables user → identity suspended (suspend_owned_by).
-        Step 3: admin re-enables user account (does NOT explicitly reactivate identity).
-        Step 4: user logs in → _register_human_identity_on_login detects suspended
-                identity and calls reactivate().
-        Step 5: user's identity is active again → /v1/* works.
+        Step 3: admin re-enables user account (identity still suspended).
+        Step 4: user attempts login → blocked with 403 account_suspended.
+        Step 5: admin calls POST /admin/users/{username}/reactivate (StepUp).
+        Step 6: user logs in again → identity is active → /v1/* works.
 
-        This test asserts Step 4-5: the reactivation path fires correctly.
-        If this test fails, the disable→re-enable cycle leaves the user
-        with a permanently suspended identity and no access to /v1/*.
+        This test asserts Step 4: login must NOT succeed while identity is
+        suspended, and auto-reactivate must NOT fire. The full admin-reactivate
+        endpoint tests (Step 5-6) are in test_v2234_gap3_q3_reactivate.py.
         """
+        from fastapi import HTTPException
         record = _A2Record(username="bob", account_id="u-bob-001")
 
         # Step 3 state: account is re-enabled but identity is still suspended.
@@ -285,12 +294,17 @@ class TestSuspendedIdentityCheck:
         }
 
         registry = _make_a2_registry(existing_identity=suspended_identity)
-        _call_register(record, registry)
 
-        # Verify Step 4: reactivate() was called with the correct identity_id.
-        registry.reactivate.assert_called_once_with("idnt_bob_human")
+        # Step 4: login attempt is blocked.
+        with pytest.raises(HTTPException) as exc_info:
+            _call_register(record, registry)
 
-        # Verify: register() was NOT called (identity already exists, just suspended).
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "account_suspended"
+
+        # Critical: reactivate NOT called — admin must do it explicitly.
+        registry.reactivate.assert_not_called()
+        # register NOT called — identity already exists.
         registry.register.assert_not_called()
 
     def test_admin_tier_suspended_identity_not_reactivated(self):
