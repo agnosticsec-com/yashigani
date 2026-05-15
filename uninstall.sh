@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # uninstall.sh — Tear down the Yashigani stack.
 # Usage: ./uninstall.sh [--remove-volumes] [--runtime=docker|podman] [--yes|-y]
+# Last updated: 2026-05-15T17:00:00+00:00 (fix(uninstall): stub missing required env vars before compose down — BUG-UNINSTALL-PARTIAL-ENV)
 # Last updated: 2026-05-15T14:00:00+00:00 (fix(uninstall): wipe docker/secrets/ on --remove-volumes + final straggler pass — BUG-3-MULTI-USER-INSTALL-PKI + BUG-1-REDIS-STRAGGLER)
 # Last updated: 2026-05-15T12:00:00+00:00 (fix(uninstall): force-remove dependent containers before volume rm — BUG-UNINSTALL-DEPGRAPH-LEAK)
 # Last updated: 2026-05-15T10:00:00+00:00 (fix(uninstall): stub docker/.env for compose-down in DR scenario — BUG-UNINSTALL-NO-ENV)
@@ -224,22 +225,30 @@ _remove_auto_start
 # Step 2: Stop the compose stack
 #
 # BUG-UNINSTALL-NO-ENV: docker-compose.yml uses ${VAR:?} fail-closed declarations
-# for 6 required variables. Without a populated docker/.env, compose refuses to
+# for required variables. Without a populated docker/.env, compose refuses to
 # parse the file and exits non-zero before sending any down/stop signals to
 # containers. This breaks the canonical DR "clean Step 0" path (fresh clone,
 # no prior install.sh run in this checkout).
 #
-# Fix: if docker/.env is absent, write a stub file with placeholder values for
-# all required vars before calling compose down. The stub is removed immediately
-# after compose returns (success or failure). A sentinel flag (_STUB_ENV_CREATED)
-# ensures we NEVER delete a real .env that was already present.
+# BUG-UNINSTALL-PARTIAL-ENV: a .env that EXISTS but is INCOMPLETE (written by
+# install.sh before it hit a failure) causes the same compose parse error. The
+# original guard [ ! -f "$_ENV_FILE" ] does not fire when the file exists.
+#
+# Fix (covers BOTH bugs):
+#   Phase A — absent .env: write a stub file, register for cleanup on EXIT.
+#             _STUB_ENV_CREATED="true" ensures we NEVER delete a real .env.
+#   Phase B — partial .env: dynamically detect which :? vars are unset in the
+#             current process env AND absent from docker/.env, then export a stub
+#             value for each. Process-env takes precedence over .env file for
+#             compose (documented compose env-var precedence). No file is mutated —
+#             the exports live only for the duration of this shell.
 #
 # The :? declarations in docker-compose.yml are kept intact — they are the
 # correct fail-closed posture for install-time. This fix is local to uninstall.sh.
 #
-# Regression guard: the test in tests/integration/uninstall_sh_missing_env_test.sh
-# runs `compose config` against the stub to catch any new :? var added to
-# docker-compose.yml without a matching stub entry here.
+# Regression guard: tests/integration/uninstall_sh_missing_env_test.sh covers
+# the absent-env case; tests/integration/uninstall_sh_partial_env_test.sh covers
+# the partial-env case.
 # ---------------------------------------------------------------------------
 
 _ENV_FILE="${SCRIPT_DIR}/docker/.env"
@@ -278,6 +287,53 @@ _cleanup_stub() {
     fi
 }
 trap _cleanup_stub EXIT
+
+# ---------------------------------------------------------------------------
+# BUG-UNINSTALL-PARTIAL-ENV: Phase B — export stub values for any :? var
+# that is not already set in process env AND not present in docker/.env.
+#
+# Detection: grep the active compose file at uninstall-time for ${VAR:?}
+# patterns — this is zero-maintenance (catches new vars automatically) and
+# costs one grep per uninstall run.
+#
+# Precedence: compose reads env vars (process environment) BEFORE it reads
+# .env files. Exporting a var here overrides any absent or empty value in
+# docker/.env without touching the file on disk.
+#
+# _PARTIAL_ENV_STUBBED is set to a space-separated list of vars we export,
+# for logging only.
+# ---------------------------------------------------------------------------
+_PARTIAL_ENV_STUBBED=""
+
+if [ -f "$COMPOSE_FILE" ]; then
+    # Extract all :? var names from compose file, one per line, deduplicated.
+    _required_vars="$(grep -oE '\$\{[A-Z_]+:\?' "$COMPOSE_FILE" 2>/dev/null \
+        | sed 's/^\${//;s/:?$//' \
+        | sort -u || true)"
+
+    while IFS= read -r _var; do
+        [ -z "$_var" ] && continue
+
+        # Check 1: already set in process environment?
+        if [ -n "${!_var+x}" ] && [ -n "${!_var}" ]; then
+            continue
+        fi
+
+        # Check 2: present (non-empty) in docker/.env?
+        if [ -f "$_ENV_FILE" ] && grep -qE "^${_var}=.+" "$_ENV_FILE" 2>/dev/null; then
+            continue
+        fi
+
+        # Missing — export a stub value for compose parse.
+        export "${_var}=__yashigani_uninstall_stub__"
+        _PARTIAL_ENV_STUBBED="${_PARTIAL_ENV_STUBBED} ${_var}"
+    done <<< "$_required_vars"
+fi
+
+if [ -n "$_PARTIAL_ENV_STUBBED" ]; then
+    echo "  [info] Partial docker/.env detected — stubbed missing required vars for compose parse (BUG-UNINSTALL-PARTIAL-ENV):${_PARTIAL_ENV_STUBBED}"
+    echo "  [info] docker/.env on disk is unchanged."
+fi
 
 # ---------------------------------------------------------------------------
 # shellcheck disable=SC2086
