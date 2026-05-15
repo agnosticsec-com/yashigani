@@ -1,4 +1,4 @@
-# Last updated: 2026-05-14T23:00:00+01:00 (chore: explicit lupa>=2.1 in dev extras — C1/F4)
+# Last updated: 2026-05-15T00:00:00+01:00 (fix(deps): add email-validator>=2.1 for pydantic v2 EmailStr — be75aab follow-up)
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -37,6 +37,7 @@ dependencies = [
     "python3-saml>=1.16",
     # Audit export
     "pydantic>=2.7",
+    "email-validator>=2.1",   # required by pydantic v2 EmailStr; not bundled in pydantic itself
     # v2.23.1 — internal mTLS PKI manifest loader (yashigani.pki.identity)
     "PyYAML>=6",
     # v0.2.0 — TLS bootstrap + observability
