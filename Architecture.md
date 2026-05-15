@@ -1,4 +1,4 @@
-<!-- last-updated: 2026-05-03T00:00:00+01:00 -->
+<!-- last-updated: 2026-05-15T11:30:00+01:00 (docs: remove unimplemented bare-metal/no-container install claims — v2.23.4) -->
 # Yashigani Architecture and Feature History
 
 ---
@@ -368,7 +368,7 @@ v0.6.1 restructured the licensing tiers to reflect real-world deployment segment
 
 ### 4.18 v0.6.0 — Universal Installer and Licensing
 
-Yashigani became self-distributable. The universal installer auto-detects OS, architecture, and cloud provider, then performs a full production-grade installation on Linux, MacOS, cloud VMs, and bare-metal. Three licensing tiers were introduced: Community (free, no key), Professional (paid, signed key), and Enterprise (paid, signed key with multi-tenancy). License verification uses ECDSA P-256 offline signature validation — no license server call-home required. Feature gates enforce SAML, OIDC, and SCIM access at the tier boundary. Agent and organization limits are enforced per tier.
+Yashigani became self-distributable. The universal installer auto-detects OS, architecture, and cloud provider, then performs a full production-grade installation on Linux and macOS hosts (Docker or Podman runtime required). Three licensing tiers were introduced: Community (free, no key), Professional (paid, signed key), and Enterprise (paid, signed key with multi-tenancy). License verification uses ECDSA P-256 offline signature validation — no license server call-home required. Feature gates enforce SAML, OIDC, and SCIM access at the tier boundary. Agent and organization limits are enforced per tier.
 
 ### 4.19 v0.5.0 — Data Platform and Full Observability
 
@@ -539,7 +539,7 @@ The initial release established the core security envelope. Yashigani began as a
 
 ### 5.9 Infrastructure and Deployment
 
-- Universal installer (Linux, macOS, cloud VM, bare-metal; auto-detects OS, arch, cloud provider, GPU, and container runtime)
+- Universal installer (Linux, macOS, cloud VM; auto-detects OS, arch, cloud provider, GPU, and container runtime)
 - GPU detection at install time: Apple Silicon M-series (unified memory, Metal, ANE), NVIDIA (nvidia-smi, CUDA), AMD (rocm-smi, ROCm), lspci fallback; model recommendations printed based on detected VRAM (since v0.8.4)
 - Podman support as first-class runtime alongside Docker Engine and Docker Desktop (v0.8.4; runtime detection, compose command selection, and auto-apply podman override in v1.09.5)
 - Interactive fallback prompts when OS, runtime, or GPU detection fails (since v0.8.4)
@@ -692,22 +692,6 @@ The universal installer auto-detects the cloud provider via instance metadata an
 | Load Balancer | ALB / NLB | Cloud Load Balancing | Azure Load Balancer |
 
 Gateway nodes run on EC2 / GCE / Azure VMs or as Kubernetes deployments on EKS / GKE / AKS. All stateful services (Postgres, Redis, Vault) can be replaced with cloud-managed equivalents — the gateway configuration accepts standard connection strings.
-
-### 6.4 Bare-Metal and On-Premises VM
-
-The universal installer supports bare-metal Linux and macOS hosts without container runtimes (though Docker and Kubernetes are the recommended paths). On bare-metal, the installer:
-
-1. Detects OS and architecture (x86_64, arm64)
-2. Installs required system packages via the native package manager
-3. Configures systemd units for all Yashigani services
-4. Bootstraps TLS (self-signed by default, ACME if a public hostname is provided)
-5. Initializes PostgreSQL, Redis, and Vault with generated credentials
-6. Prints all auto-generated passwords and the admin bootstrap token at install time
-
-Suitable for: regulated industries with no-cloud or no-container requirements, air-gapped environments, on-premises data centers.
-
-**Minimum hardware (production bare-metal):** 8 vCPU, 16 GB RAM, 100 GB NVMe SSD.
-**Recommended hardware (production bare-metal):** 12 vCPU, 32 GB RAM, 180 GB NVMe SSD.
 
 ---
 

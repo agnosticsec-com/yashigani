@@ -1,3 +1,4 @@
+<!-- last-updated: 2026-05-15T11:30:00+01:00 (docs: remove unimplemented bare-metal claim from v0.6.0 entry — v2.23.4) -->
 <!-- last-updated: 2026-05-11T22:00:00+01:00 (v2.23.3 GA — flip [Unreleased] block to [v2.23.3]) -->
 
 # Changelog
@@ -488,7 +489,7 @@ Theme: Operational hardening + OPA Policy Assistant.
 Theme: Universal installer + licensing.
 
 ### Added
-- Universal installer (Linux, macOS, cloud VM, bare-metal — auto-detects OS, arch, cloud, GPU, runtime)
+- Universal installer (Linux, macOS, cloud VM — auto-detects OS, arch, cloud, GPU, runtime)
 - Three licence tiers: Community (free, no key), Professional (paid, signed key), Enterprise (paid, signed key, multi-tenancy)
 - ECDSA P-256 offline licence verification (no call-home)
 - Feature gates: SAML, OIDC, SCIM tier-bounded
