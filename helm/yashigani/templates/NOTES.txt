@@ -41,10 +41,11 @@ AGENT BUNDLES — notes for operators:
   <image>:<tag>` to confirm ARM64 manifest presence before enabling the bundle.
   Finding: HELM-K8S-ARM64-IMAGE-DEFAULT (secondary, 2026-05-13).
 
-  Kyverno: This chart ships Kyverno ClusterPolicy resources when
-  admissionPolicies.enabled=true (default). Docker Desktop K8s and lightweight
-  clusters that do not include Kyverno CRDs will fail with
-  "no matches for kind ClusterPolicy". Install with:
-    --set admissionPolicies.enabled=false
-  and apply policies separately on clusters that run Kyverno.
-  Finding: documented during Track C v3 install (2026-05-13).
+  Kyverno admission policies (admissionPolicies.enabled) default to FALSE.
+  To enable, install Kyverno cluster-wide first:
+    helm repo add kyverno https://kyverno.github.io/kyverno/
+    helm repo update
+    helm install kyverno kyverno/kyverno -n kyverno --create-namespace
+  Then deploy Yashigani with --set admissionPolicies.enabled=true.
+  The chart will fail-loud with remediation steps if Kyverno CRDs are absent.
+  Finding: ccc7abf/adf6fda (2026-05-15).
