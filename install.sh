@@ -200,6 +200,13 @@ OPTIONS
                                           --non-interactive mode if both Docker and
                                           Podman are installed. Default in interactive
                                           mode: prompt with Podman pre-selected.
+  --http-port  <N>                        Host port to bind for HTTP (default: 80; or 8080
+                                          on macOS / rootless Podman). Use a higher port if
+                                          80 is not externally reachable in your network
+                                          config — see install guide §1.3. Range: 1-65535.
+  --https-port <N>                        Host port to bind for HTTPS (default: 443; or 8443
+                                          on macOS / rootless Podman). Same network note as
+                                          --http-port. Range: 1-65535.
   --skip-preflight                        Skip preflight checks
   --skip-pull                             Skip docker compose pull (use local images)
   --upgrade                               Upgrade an existing installation
@@ -214,6 +221,8 @@ OPTIONS
 ENVIRONMENT
   YSG_INSTALL_DIR        Install directory when run via curl (default: \$HOME/.yashigani)
   YASHIGANI_LICENSE_FILE Alternative path to license file
+  YASHIGANI_HTTP_PORT    Host HTTP port (overridden by --http-port flag if both set)
+  YASHIGANI_HTTPS_PORT   Host HTTPS port (overridden by --https-port flag if both set)
   YSG_DEBUG              Set to 1 for verbose output
 
 EXAMPLES
@@ -297,6 +306,30 @@ parse_args() {
             ;;
           *) log_error "--runtime must be one of: docker, podman, k8s"; exit 1 ;;
         esac
+        ;;
+      --http-port)
+        _raw_http_port="${2:?'--http-port requires a port number (1-65535)'}"
+        if ! [[ "$_raw_http_port" =~ ^[0-9]+$ ]] || [[ "$_raw_http_port" -lt 1 || "$_raw_http_port" -gt 65535 ]]; then
+          log_error "--http-port must be an integer 1-65535, got: ${_raw_http_port}"
+          exit 1
+        fi
+        if [[ -n "${YASHIGANI_HTTP_PORT:-}" && "${YASHIGANI_HTTP_PORT}" != "$_raw_http_port" ]]; then
+          log_info "--http-port flag (${_raw_http_port}) overrides env YASHIGANI_HTTP_PORT (${YASHIGANI_HTTP_PORT})"
+        fi
+        export YASHIGANI_HTTP_PORT="$_raw_http_port"
+        shift 2
+        ;;
+      --https-port)
+        _raw_https_port="${2:?'--https-port requires a port number (1-65535)'}"
+        if ! [[ "$_raw_https_port" =~ ^[0-9]+$ ]] || [[ "$_raw_https_port" -lt 1 || "$_raw_https_port" -gt 65535 ]]; then
+          log_error "--https-port must be an integer 1-65535, got: ${_raw_https_port}"
+          exit 1
+        fi
+        if [[ -n "${YASHIGANI_HTTPS_PORT:-}" && "${YASHIGANI_HTTPS_PORT}" != "$_raw_https_port" ]]; then
+          log_info "--https-port flag (${_raw_https_port}) overrides env YASHIGANI_HTTPS_PORT (${YASHIGANI_HTTPS_PORT})"
+        fi
+        export YASHIGANI_HTTPS_PORT="$_raw_https_port"
+        shift 2
         ;;
       --skip-preflight)  SKIP_PREFLIGHT=true;   shift ;;
       --skip-pull)       SKIP_PULL=true;         shift ;;
@@ -3201,10 +3234,41 @@ compose_up() {
     fi
 
     if [[ "$_need_high_ports" -eq 1 ]]; then
-      grep -q "^YASHIGANI_HTTP_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTP_PORT=8080" >> "$env_file"
-      grep -q "^YASHIGANI_HTTPS_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTPS_PORT=8443" >> "$env_file"
-      export YASHIGANI_HTTP_PORT=8080
-      export YASHIGANI_HTTPS_PORT=8443
+      # CLI flags (--http-port / --https-port) take precedence over the
+      # auto-detected high-port defaults. Only apply 8080/8443 defaults if the
+      # operator has not already specified a port via flag or pre-existing env var.
+      if [[ -z "${YASHIGANI_HTTP_PORT:-}" ]]; then
+        grep -q "^YASHIGANI_HTTP_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTP_PORT=8080" >> "$env_file"
+        export YASHIGANI_HTTP_PORT=8080
+      fi
+      if [[ -z "${YASHIGANI_HTTPS_PORT:-}" ]]; then
+        grep -q "^YASHIGANI_HTTPS_PORT=" "$env_file" 2>/dev/null || echo "YASHIGANI_HTTPS_PORT=8443" >> "$env_file"
+        export YASHIGANI_HTTPS_PORT=8443
+      fi
+    fi
+
+    # Persist CLI-supplied port overrides to .env so compose picks them up.
+    # This runs unconditionally (after the high-ports block) — if the operator
+    # passed --http-port or --https-port, write those values to .env regardless
+    # of platform/rootless detection. update-or-append pattern: sed if key exists,
+    # append if not.
+    if [[ -n "${YASHIGANI_HTTP_PORT:-}" ]]; then
+      if grep -q "^YASHIGANI_HTTP_PORT=" "$env_file" 2>/dev/null; then
+        local _tmp_env; _tmp_env="$(mktemp)"
+        sed "s|^YASHIGANI_HTTP_PORT=.*|YASHIGANI_HTTP_PORT=${YASHIGANI_HTTP_PORT}|" "$env_file" > "$_tmp_env"
+        mv "$_tmp_env" "$env_file"
+      else
+        echo "YASHIGANI_HTTP_PORT=${YASHIGANI_HTTP_PORT}" >> "$env_file"
+      fi
+    fi
+    if [[ -n "${YASHIGANI_HTTPS_PORT:-}" ]]; then
+      if grep -q "^YASHIGANI_HTTPS_PORT=" "$env_file" 2>/dev/null; then
+        local _tmp_env; _tmp_env="$(mktemp)"
+        sed "s|^YASHIGANI_HTTPS_PORT=.*|YASHIGANI_HTTPS_PORT=${YASHIGANI_HTTPS_PORT}|" "$env_file" > "$_tmp_env"
+        mv "$_tmp_env" "$env_file"
+      else
+        echo "YASHIGANI_HTTPS_PORT=${YASHIGANI_HTTPS_PORT}" >> "$env_file"
+      fi
     fi
 
     # 3. Create Docker-compatible directories for promtail (best-effort).
