@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
-# uninstall_sh_depgraph_leak_test.sh — Regression test for BUG-UNINSTALL-DEPGRAPH-LEAK.
+# uninstall_sh_depgraph_leak_test.sh — Regression test for BUG-UNINSTALL-DEPGRAPH-LEAK
+# and BUG-1-REDIS-STRAGGLER (post-volume-rm sweep).
 #
-# Verifies that uninstall.sh force-removes dependent containers left in Exited
-# state before attempting volume rm. Without the fix, `podman volume rm` fails
-# with "still in use" because Exited containers from a depends_on chain still
-# hold a reference to the named volume.
-#
-# Test scenarios:
-#   (a) Verify code path exists: confirm the belt-and-braces container-removal
-#       block is present in uninstall.sh (compile-time check — no live stack).
-#   (b) On Linux with Podman available: simulate Exited containers referencing
-#       a named volume, run the container-removal loop code path, assert volumes
-#       are freed. Gated to Linux-Podman only (macOS Podman has different VM
-#       semantics; Docker Engine auto-removes on compose down).
+# Verifies that uninstall.sh:
+#   (a) Force-removes dependent containers left in Exited state before volume rm
+#       (BUG-UNINSTALL-DEPGRAPH-LEAK).
+#   (b) Includes a final post-volume-rm straggler sweep to catch containers that
+#       respawn during Podman network teardown (BUG-1-REDIS-STRAGGLER — redis
+#       restart:always edge case).
+#   (c) On Linux with rootful Podman: simulate both conditions end-to-end.
 #
 # Exit codes:
 #   0 — all checks PASS (or appropriately SKIPPED)
 #   1 — one or more checks FAIL
 #
-# BUG-UNINSTALL-DEPGRAPH-LEAK
-# last-updated: 2026-05-15T12:00:00+00:00
+# BUG-UNINSTALL-DEPGRAPH-LEAK + BUG-1-REDIS-STRAGGLER
+# last-updated: 2026-05-15T14:00:00+00:00
 
 set -uo pipefail
 IFS=$'\n\t'
@@ -196,6 +192,50 @@ else
             fi
         fi
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# CHECK (a.5 / b): Final post-volume-rm straggler sweep — BUG-1-REDIS-STRAGGLER
+# ---------------------------------------------------------------------------
+_section "CHECK (a.5): Post-volume-rm straggler sweep block exists in uninstall.sh"
+
+# Assert the final straggler pass sentinel comment is present
+if grep -q "BUG-1.*REDIS.*STRAGGLER\|redis-straggler\|Redis-straggler" "$UNINSTALL_SH"; then
+    _pass "(a.5.1) Redis-straggler sweep marker present in uninstall.sh"
+else
+    _fail "(a.5.1) Redis-straggler sweep marker NOT found in uninstall.sh"
+fi
+
+# Assert the final sweep uses a separate loop from the first belt-and-braces pass
+_belt_count="$(grep -c 'ps -a -q --filter' "$UNINSTALL_SH" 2>/dev/null || echo 0)"
+if [[ "$_belt_count" -ge 4 ]]; then
+    # 2 label strategies × 2 passes (belt-and-braces + straggler) = 4 filter calls minimum
+    _pass "(a.5.2) At least 4 ps --filter calls present (2 passes × 2 label strategies)"
+else
+    _fail "(a.5.2) Only ${_belt_count} ps --filter call(s) found — expected 4+ (two sweep passes)"
+fi
+
+# Assert the straggler sweep appears AFTER the volume-rm loop
+# Skip the header-comment match (line 1-10) by filtering to lines > 10
+_straggler_line="$(grep -n 'redis-straggler\|Redis-straggler\|BUG-1.*incomplete' "$UNINSTALL_SH" | \
+    awk -F: '$1 > 10 {print $1; exit}' || true)"
+_vol_loop_line2="$(grep -n 'UNINSTALL-LEAVES-VOLUMES' "$UNINSTALL_SH" | head -1 | cut -d: -f1 || true)"
+
+if [[ -n "$_straggler_line" && -n "$_vol_loop_line2" ]]; then
+    if [[ "$_straggler_line" -gt "$_vol_loop_line2" ]]; then
+        _pass "(a.5.3) Straggler sweep (line ${_straggler_line}) appears AFTER volume-rm loop (line ${_vol_loop_line2})"
+    else
+        _fail "(a.5.3) Straggler sweep (line ${_straggler_line}) appears BEFORE volume-rm loop (line ${_vol_loop_line2}) — wrong order"
+    fi
+else
+    _fail "(a.5.3) Could not locate straggler sweep or volume-rm loop markers (straggler=${_straggler_line:-MISSING}, vol=${_vol_loop_line2:-MISSING})"
+fi
+
+# Assert --time 0 is used in the straggler sweep for immediate SIGKILL
+if grep -A30 'BUG-1.*REDIS.*STRAGGLER\|redis-straggler\|Redis-straggler' "$UNINSTALL_SH" | grep -q -- '--time 0'; then
+    _pass "(a.5.4) Straggler sweep uses --time 0 (immediate SIGKILL)"
+else
+    _fail "(a.5.4) Straggler sweep does NOT use --time 0 — containers may linger 10s each"
 fi
 
 # ---------------------------------------------------------------------------
