@@ -211,12 +211,12 @@ adminBootstrap:
   # bundles python3 + pyotp + secrets which is everything we need; reusing
   # it avoids another image pull.
   image:
-    # Built locally by install.sh from the v2.23.3 tagged source.
+    # Built locally by install.sh from the v2.23.4 tagged source.
     # For K8s deployments: push to your own private registry and update
     # the repository field accordingly. Pin your post-build digest with
     # `@sha256:<digest>` for supply-chain attestation (recommended).
     repository: yashigani-gateway
-    tag: "2.23.3"
+    tag: "2.23.4"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -232,12 +232,12 @@ adminBootstrap:
 gateway:
   enabled: true
   image:
-    # Built locally by install.sh from the v2.23.3 tagged source.
+    # Built locally by install.sh from the v2.23.4 tagged source.
     # For K8s deployments: push to your own private registry and update
     # the repository field accordingly. Pin your post-build digest with
     # `@sha256:<digest>` for supply-chain attestation (recommended).
     repository: yashigani-gateway
-    tag: "2.23.3"
+    tag: "2.23.4"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit (scheduler sizing).
@@ -298,12 +298,12 @@ backoffice:
     - letta
     - openclaw
   image:
-    # Built locally by install.sh from the v2.23.3 tagged source.
+    # Built locally by install.sh from the v2.23.4 tagged source.
     # For K8s deployments: push to your own private registry and update
     # the repository field accordingly. Pin your post-build digest with
     # `@sha256:<digest>` for supply-chain attestation (recommended).
     repository: yashigani-backoffice
-    tag: "2.23.3"
+    tag: "2.23.4"
     pullPolicy: IfNotPresent
   replicaCount: 2
   # YSG-RISK-005 #3av: requests = 50% of limit.

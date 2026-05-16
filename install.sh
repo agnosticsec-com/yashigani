@@ -69,7 +69,7 @@ fi
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="2.23.3"
+YASHIGANI_VERSION="2.23.4"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -389,7 +389,7 @@ parse_args() {
       printf "  Build the bundle first on a connected host:\n" >&2
       printf "    ./scripts/prepare-airgap-bundle.sh --profile core\n" >&2
       printf "  Then transfer the bundle to this host and run:\n" >&2
-      printf "    ./install.sh --air-gap --bundle yashigani-airgap-v2.23.3-core.tar.zst\n" >&2
+      printf "    ./install.sh --air-gap --bundle yashigani-airgap-v2.23.4-core.tar.zst\n" >&2
       exit 1
     fi
     if [[ "$DRY_RUN" != "true" && ! -f "$AIR_GAP_BUNDLE" ]]; then

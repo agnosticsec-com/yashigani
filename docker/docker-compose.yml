@@ -1,6 +1,6 @@
 ---
-# Yashigani v2.23.3 — Docker Compose stack
-# Last updated: 2026-05-10T12:00:00+01:00 (fix: BUG-AG-005 bump header to 2.23.3)
+# Yashigani v2.23.4 — Docker Compose stack
+# Last updated: 2026-05-16T18:00:00+01:00 (v2.23.4: bump version 2.23.3 → 2.23.4 across install/build/helm/airgap)
 # Last updated: 2026-05-10T00:00:00+01:00 (fix: G16 image-pin + to_thread run_migrations; start_period 30s→60s)
 # Last updated: 2026-05-09T00:00:00+01:00 (fix/v233-base-regressions: add YASHIGANI_DB_AES_KEY to backoffice env — smoke fix)
 #
@@ -156,7 +156,7 @@ services:
   # ---------------------------------------------------------------------------
   gateway:
     dns_search: ["."]
-    image: yashigani/gateway:${YASHIGANI_VERSION:-2.23.3}
+    image: yashigani/gateway:${YASHIGANI_VERSION:-2.23.4}
     build:
       context: ..
       dockerfile: docker/Dockerfile.gateway
@@ -280,7 +280,7 @@ services:
   # ---------------------------------------------------------------------------
   backoffice:
     dns_search: ["."]
-    image: yashigani/backoffice:${YASHIGANI_VERSION:-2.23.3}
+    image: yashigani/backoffice:${YASHIGANI_VERSION:-2.23.4}
     build:
       context: ..
       dockerfile: docker/Dockerfile.backoffice

@@ -1,11 +1,11 @@
-# Last updated: 2026-05-15T00:00:00+01:00 (fix(deps): add email-validator>=2.1 for pydantic v2 EmailStr — be75aab follow-up)
+# Last updated: 2026-05-16T18:00:00+01:00 (v2.23.4: bump version 2.23.3 → 2.23.4 across install/build/helm/airgap)
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "yashigani"
-version = "2.23.3"
+version = "2.23.4"
 description = "Security enforcement gateway for MCP servers and agentic AI systems"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
