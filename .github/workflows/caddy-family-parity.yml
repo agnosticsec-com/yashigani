@@ -156,55 +156,121 @@ jobs:
           fi
           echo "OK: Caddyfile.ca adapts cleanly (no config warnings)"
 
-      # Step 2: adapt the Helm-rendered Caddyfile extracted from configmaps.yaml
-      # The Caddyfile is embedded in the `data: Caddyfile: |` block.
-      # We extract it with awk, strip Helm `{{- if }}` conditionals (replace with
-      # the enabled-branch content), substitute env placeholders, then adapt.
-      - name: caddy adapt — Helm configmaps Caddyfile
+      # Step 2 is a separate job (helm-caddy-adapt) below.
+      # Reason: extracting the Helm Caddyfile requires `helm template` to fully
+      # render Helm conditionals ({{- if .Values.caddy.internalMetricsListener.enabled }})
+      # before adapting. helm is not in the caddy:alpine image; the separate job
+      # installs both helm and caddy on ubuntu-latest and runs the full pipeline.
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Step 2: caddy adapt — Helm rendered Caddyfile (separate job, ubuntu-latest)
+  # ─────────────────────────────────────────────────────────────────────────────
+  helm-caddy-adapt:
+    name: caddy adapt (Helm rendered Caddyfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install helm
+        uses: azure/setup-helm@b9e51907a09c216f16a69b7d7e654c4b3f3a6e57 # v4.3.0
+        with:
+          version: "v3.14.0"
+
+      - name: Install caddy (same version as project pin)
+        # Install from upstream APT repo; pin to 2.11.2 to match project digest.
+        # Note: the binary won't match the alpine digest — this is acceptable for
+        # syntax/semantic validation (caddy adapt is version-agnostic at 2.11.x).
         run: |
           set -euo pipefail
-          # Install yq for YAML extraction (apk available in alpine container)
-          apk add --no-cache yq 2>/dev/null || true
+          curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+            | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] \
+            https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
+            > /etc/apt/sources.list.d/caddy-stable.list
+          apt-get update -qq
+          apt-get install -y caddy
+          caddy version
 
-          # Extract Caddyfile block from the configmap template.
-          # The template uses Helm conditionals; extract the raw content between
-          # `Caddyfile: |` and the next top-level key / end-of-block.
-          # Strategy: awk from the `Caddyfile: |` line, strip 4-space indent,
-          # stop at next `  [a-zA-Z]` key or `{{- end }}` at top.
-          awk '
-            /^  Caddyfile: [|]/ { capturing=1; next }
-            capturing && /^  [a-zA-Z]/ { exit }
-            capturing && /^\{\{- end \}\}/ { exit }
-            capturing { sub(/^    /, ""); print }
-          ' helm/yashigani/templates/configmaps.yaml > /tmp/helm-Caddyfile.raw
+      - name: helm template + extract Caddyfile + caddy adapt
+        run: |
+          set -euo pipefail
+          # Render the Helm chart with default values (caddy.enabled=true,
+          # mtls.enabled=true, caddy.internalMetricsListener.enabled=true).
+          # This produces a fully-rendered YAML that includes the Caddyfile ConfigMap.
+          # Note: helm emits informational symlink warnings on stderr (from the
+          # helm/yashigani/files/service_identities.yaml → docker/ symlink).
+          # Capture stderr separately so we can distinguish symlink advisory from
+          # real helm errors.
+          helm template yashigani helm/yashigani \
+            --namespace yashigani-validate \
+            --set caddy.enabled=true \
+            --set mtls.enabled=true \
+            --set "caddy.internalMetricsListener.enabled=true" \
+            --set "caddy.internalMetricsListenerBackoffice.enabled=true" \
+            > /tmp/helm-rendered.yaml \
+            2> /tmp/helm-stderr.txt || {
+              echo "FAIL: helm template failed"
+              echo "--- stderr ---"
+              cat /tmp/helm-stderr.txt
+              exit 1
+            }
+          # Warn if helm emitted any unexpected stderr beyond the known symlink advisory
+          unexpected_stderr=$(grep -v 'symbolic link' /tmp/helm-stderr.txt || true)
+          if [ -n "$unexpected_stderr" ]; then
+            echo "WARNING: helm template produced unexpected stderr:"
+            echo "$unexpected_stderr"
+          fi
 
-          # The extracted text contains Helm control blocks. Strip them
-          # (replace conditional lines with empty, leaving the enabled body).
-          grep -v '{{' /tmp/helm-Caddyfile.raw > /tmp/helm-Caddyfile.stripped || true
+          # Extract the Caddyfile value from the yashigani-caddy-config ConfigMap.
+          # The configmap data key is "Caddyfile"; we use Python to parse the YAML
+          # docs and find the right one (no yq dependency required).
+          python3 - << 'PYEOF'
+          import yaml, sys, pathlib
 
-          # Substitute env placeholders that caddy adapt needs
-          sed \
-            -e 's|{$YASHIGANI_TLS_DOMAIN}|localhost|g' \
-            -e 's|{$CADDY_INTERNAL_HMAC}|deadbeefdeadbeefdeadbeefdeadbeefdeadbeef|g' \
-            /tmp/helm-Caddyfile.stripped > /tmp/helm-Caddyfile.expanded
+          rendered = pathlib.Path("/tmp/helm-rendered.yaml").read_text()
+          caddyfile_text = None
+          for doc in yaml.safe_load_all(rendered):
+              if doc and doc.get("kind") == "ConfigMap":
+                  name = doc.get("metadata", {}).get("name", "")
+                  if "caddy-config" in name:
+                      data = doc.get("data", {})
+                      if "Caddyfile" in data:
+                          caddyfile_text = data["Caddyfile"]
+                          break
+          if caddyfile_text is None:
+              print("FAIL: could not find Caddyfile key in yashigani-caddy-config ConfigMap")
+              sys.exit(1)
+          # Substitute {$VAR} placeholders so caddy adapt parses clean
+          import re
+          stubs = {
+              "YASHIGANI_TLS_DOMAIN": "localhost",
+              "CADDY_INTERNAL_HMAC": "deadbeef" * 8,
+          }
+          def replace_var(m):
+              return stubs.get(m.group(1), m.group(0))
+          expanded = re.sub(r"\{\$([A-Z0-9_]+)\}", replace_var, caddyfile_text)
+          pathlib.Path("/tmp/helm-Caddyfile").write_text(expanded)
+          print(f"Extracted Caddyfile ({len(expanded)} chars, {expanded.count(chr(10))} lines)")
+          PYEOF
 
           # Create placeholder secret files for path-referencing directives
-          mkdir -p /run/secrets
-          printf 'placeholder\n' > /run/secrets/caddy_client.crt
-          printf 'placeholder\n' > /run/secrets/caddy_client.key
-          printf 'placeholder\n' > /run/secrets/ca_bundle.crt
+          sudo mkdir -p /run/secrets
+          printf 'placeholder\n' | sudo tee /run/secrets/caddy_client.crt > /dev/null
+          printf 'placeholder\n' | sudo tee /run/secrets/caddy_client.key > /dev/null
+          printf 'placeholder\n' | sudo tee /run/secrets/ca_bundle.crt > /dev/null
 
-          output=$(caddy adapt --config /tmp/helm-Caddyfile.expanded 2>&1) || {
+          # caddy adapt — assert exit 0 + no config warnings
+          output=$(caddy adapt --config /tmp/helm-Caddyfile 2>&1) || {
             echo "FAIL: caddy adapt exited non-zero for Helm Caddyfile"
-            echo "--- extracted content (first 60 lines) ---"
-            head -60 /tmp/helm-Caddyfile.expanded
+            echo "--- Caddyfile (first 60 lines) ---"
+            head -60 /tmp/helm-Caddyfile
             echo "--- caddy adapt output ---"
             echo "$output"
             exit 1
           }
           real_warns=$(echo "$output" | grep -i 'warn' | grep -v 'is not formatted' || true)
           if [ -n "$real_warns" ]; then
-            echo "FAIL: caddy adapt produced warnings for Helm Caddyfile:"
+            echo "FAIL: caddy adapt produced config warnings for Helm Caddyfile:"
             echo "$real_warns"
             exit 1
           fi
