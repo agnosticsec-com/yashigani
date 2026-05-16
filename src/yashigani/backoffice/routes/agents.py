@@ -10,14 +10,19 @@ RBAC + agent data document is pushed to OPA. Push failure is non-fatal for
 the mutation — it is logged but does not roll back the registry change.
 
 Routes:
-  GET    /admin/agents                          — list all agents
+  GET    /admin/agents                          — list all agents (AgentRegistry — service/machine agents)
   POST   /admin/agents                          — register new agent
   GET    /admin/agents/{agent_id}               — get agent detail
   PUT    /admin/agents/{agent_id}               — update agent fields
   DELETE /admin/agents/{agent_id}               — deactivate (soft delete)
   POST   /admin/agents/{agent_id}/token/rotate  — rotate PSK, return new token once
 
-Last updated: 2026-05-16T00:00:00+01:00
+  GET    /admin/identities                      — list HUMAN identities from IdentityRegistry
+                                                  (v2.23.4 F4 fix — surfaces local-auth users who
+                                                  have logged in at least once and been auto-registered
+                                                  via da6de8b; also lists SSO-registered identities)
+
+Last updated: 2026-05-17T00:00:00+01:00
 """
 
 from __future__ import annotations
@@ -322,6 +327,25 @@ class AgentQuickStartResponse(BaseModel):
     )
 
 
+class IdentityResponse(BaseModel):
+    """
+    Lightweight response model for a HUMAN identity in the IdentityRegistry.
+
+    Returned by GET /admin/identities.  Only fields meaningful for the admin
+    panel are included — the full registry record has many agent-oriented fields
+    (system_prompt, capabilities, etc.) that are empty for auto-registered HUMAN
+    identities created by local-auth login.
+    """
+    identity_id: str
+    kind: str
+    name: str
+    slug: str
+    description: str = Field(default="")
+    status: str
+    created_at: str
+    last_seen_at: str = Field(default="")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -333,6 +357,20 @@ def _get_registry():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Agent registry unavailable",
+        )
+    return reg
+
+
+def _get_identity_registry():
+    """Return identity_registry or raise 503 if not initialised (community-tier)."""
+    reg = getattr(backoffice_state, "identity_registry", None)
+    if reg is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "identity_registry_unavailable",
+                "message": "Identity registry not available on this deployment tier.",
+            },
         )
     return reg
 
@@ -814,3 +852,60 @@ async def get_agent_quickstart(
         agent_id=agent_id,
         quick_start=_build_quick_start(agent_id, "<your-token>"),
     )
+
+
+# ---------------------------------------------------------------------------
+# v2.23.4 F4 — GET /admin/identities
+# Surfaces HUMAN identities from IdentityRegistry.  Local-auth users who
+# have logged in at least once are auto-registered by da6de8b; SSO users are
+# registered by sso.py on first OIDC/SAML callback.
+#
+# Separate from GET /admin/agents (AgentRegistry — service/machine agents)
+# because the two registries have different schemas and lifecycle semantics.
+# The admin panel can call both endpoints to give operators a complete picture
+# of all authenticated principals: service agents + HUMAN users.
+# ---------------------------------------------------------------------------
+
+
+@router.get("/admin/identities", response_model=list[IdentityResponse])
+async def list_identities(
+    session: AdminSession,
+    kind: Optional[str] = None,
+):
+    """
+    List identities from the IdentityRegistry.
+
+    Optional ``kind`` filter: ``human`` | ``service``.  Defaults to all.
+    Returns 503 if the identity registry is not available (community-tier).
+    """
+    from yashigani.identity.registry import IdentityKind
+
+    registry = _get_identity_registry()
+
+    kind_filter: Optional[IdentityKind] = None
+    if kind is not None:
+        try:
+            kind_filter = IdentityKind(kind.lower())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "invalid_kind",
+                    "message": f"Unknown kind {kind!r}. Valid values: human, service.",
+                },
+            )
+
+    identities = registry.list_all(kind=kind_filter)
+    return [
+        IdentityResponse(
+            identity_id=ident["identity_id"],
+            kind=ident["kind"],
+            name=ident["name"],
+            slug=ident["slug"],
+            description=ident.get("description", ""),
+            status=ident["status"],
+            created_at=ident.get("created_at", ""),
+            last_seen_at=ident.get("last_seen_at", ""),
+        )
+        for ident in identities
+    ]
