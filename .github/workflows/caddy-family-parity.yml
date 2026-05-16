@@ -66,6 +66,18 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      # Helper: check caddy adapt output for non-trivial warnings.
+      # caddy adapt emits one known-benign formatting advisory:
+      #   "Caddyfile input is not formatted; run 'caddy fmt --overwrite'"
+      # This fires whenever the file is not the output of `caddy fmt` —
+      # it is cosmetic (no config change) and fires on our comment-rich files.
+      # We filter it out and fail only on genuine configuration warnings
+      # (e.g. "unrecognized directive", "deprecated option", etc.).
+      #
+      # check_adapt_warnings <name> <output>
+      #   name  — Caddyfile variant name for error messages
+      #   output — captured caddy adapt stdout+stderr
+
       # Step 1a: adapt compose Caddyfile.selfsigned
       - name: caddy adapt — Caddyfile.selfsigned
         run: |
@@ -80,13 +92,16 @@ jobs:
             echo "$output"
             exit 1
           }
-          # Assert no warnings — warnings indicate deprecated/unexpected directives
-          if echo "$output" | grep -iq 'warn'; then
+          # Filter the known-benign "not formatted" advisory before the warn check.
+          # That advisory fires on any file not output by `caddy fmt`; it is
+          # cosmetic and does not indicate a config or security issue.
+          real_warns=$(echo "$output" | grep -i 'warn' | grep -v 'is not formatted' || true)
+          if [ -n "$real_warns" ]; then
             echo "FAIL: caddy adapt produced warnings for Caddyfile.selfsigned:"
-            echo "$output"
+            echo "$real_warns"
             exit 1
           fi
-          echo "OK: Caddyfile.selfsigned adapts cleanly (no warnings)"
+          echo "OK: Caddyfile.selfsigned adapts cleanly (no config warnings)"
 
       # Step 1b: adapt compose Caddyfile.acme
       - name: caddy adapt — Caddyfile.acme
@@ -103,12 +118,13 @@ jobs:
             echo "$output"
             exit 1
           }
-          if echo "$output" | grep -iq 'warn'; then
+          real_warns=$(echo "$output" | grep -i 'warn' | grep -v 'is not formatted' || true)
+          if [ -n "$real_warns" ]; then
             echo "FAIL: caddy adapt produced warnings for Caddyfile.acme:"
-            echo "$output"
+            echo "$real_warns"
             exit 1
           fi
-          echo "OK: Caddyfile.acme adapts cleanly (no warnings)"
+          echo "OK: Caddyfile.acme adapts cleanly (no config warnings)"
 
       # Step 1c: adapt compose Caddyfile.ca
       # The ca variant references cert files by path; create placeholder files
@@ -132,12 +148,13 @@ jobs:
             echo "$output"
             exit 1
           }
-          if echo "$output" | grep -iq 'warn'; then
+          real_warns=$(echo "$output" | grep -i 'warn' | grep -v 'is not formatted' || true)
+          if [ -n "$real_warns" ]; then
             echo "FAIL: caddy adapt produced warnings for Caddyfile.ca:"
-            echo "$output"
+            echo "$real_warns"
             exit 1
           fi
-          echo "OK: Caddyfile.ca adapts cleanly (no warnings)"
+          echo "OK: Caddyfile.ca adapts cleanly (no config warnings)"
 
       # Step 2: adapt the Helm-rendered Caddyfile extracted from configmaps.yaml
       # The Caddyfile is embedded in the `data: Caddyfile: |` block.
@@ -185,12 +202,13 @@ jobs:
             echo "$output"
             exit 1
           }
-          if echo "$output" | grep -iq 'warn'; then
+          real_warns=$(echo "$output" | grep -i 'warn' | grep -v 'is not formatted' || true)
+          if [ -n "$real_warns" ]; then
             echo "FAIL: caddy adapt produced warnings for Helm Caddyfile:"
-            echo "$output"
+            echo "$real_warns"
             exit 1
           fi
-          echo "OK: Helm Caddyfile adapts cleanly (no warnings)"
+          echo "OK: Helm Caddyfile adapts cleanly (no config warnings)"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Step 3: per-listener security directive parity (compose-side only)
