@@ -524,6 +524,14 @@ def rotate_leaves(
             service, int_cert, int_key, manifest.cert_policy, leaf_lifetime_days
         )
         _write_leaf(paths, service, leaf_cert, leaf_key, int_cert)
+        # Ensure bootstrap token exists for this service (idempotent).
+        # K8s upgrade path: on a fresh cluster install the bootstrap job runs
+        # bootstrap() which writes the tokens. On upgrade it runs rotate_leaves()
+        # which previously skipped token generation. The K8s PKI applier now
+        # includes *_bootstrap_token files in the leaves Secret; _ensure_bootstrap_token
+        # creates the file on first rotate if it was absent (migrating pre-token
+        # installs) and is a no-op on subsequent rotates.
+        _ensure_bootstrap_token(paths, service.name)
         rotated.append(service.name)
         logger.info(
             "internal-pki: rotated leaf for %s, valid until %s",
