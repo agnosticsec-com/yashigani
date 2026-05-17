@@ -11,7 +11,7 @@ First-run behaviour:
   Prints all credentials once to stdout in a clearly delimited block.
   Marks bootstrap complete via sentinel file so this never repeats.
 
-Last updated: 2026-05-07T00:00:00+01:00
+Last updated: 2026-05-17T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -387,8 +387,8 @@ def _bootstrap():
 
     # v0.9.0 — WebAuthn + EventBus (optional, graceful degradation if unavailable)
     try:
-        from yashigani.auth.webauthn import WebAuthnService
-        backoffice_state.webauthn_service = WebAuthnService()
+        from yashigani.auth.webauthn import WebAuthnService, WebAuthnConfig
+        backoffice_state.webauthn_service = WebAuthnService(config=WebAuthnConfig())
         logger.info("WebAuthn service initialized")
     except Exception as exc:
         logger.warning("WebAuthn service unavailable (%s) — passkey routes will return 503", exc)
