@@ -50,7 +50,7 @@ Streaming limitations
   response-path inspection. This adds ~2-3s latency but ensures PII
   cannot leak through streamed responses.
 """
-# Last updated: 2026-05-03T00:00:00+01:00
+# Last updated: 2026-05-17T00:00:00+00:00
 from __future__ import annotations
 
 import json
@@ -1153,9 +1153,30 @@ def _resolve_identity(request: Request) -> Optional[dict]:
     Resolve identity from request.
 
     Priority:
-    1. X-Forwarded-User header (SSO via Caddy)
-    2. Authorization: Bearer <api_key>
+    1. yashigani-internal Bearer token (mesh-port internal service calls)
+    2. X-Forwarded-User header (SSO via Caddy)
+    3. Authorization: Bearer <api_key> (registry lookup)
+
+    The yashigani-internal check is intentionally placed BEFORE the
+    identity_registry null-guard so that Open WebUI's hardcoded internal
+    token resolves even when the identity registry is temporarily
+    unavailable (e.g. Redis not yet reachable at startup).  Network
+    isolation on the data bridge / K8s NetworkPolicy is the transport-
+    layer guard for this token; it must never be reachable from the
+    public-facing port.
     """
+    # Fast path: hardcoded internal service-to-service token (Open WebUI,
+    # in-mesh agents).  Must be checked before identity_registry to avoid
+    # a 401 when the registry Redis is slow to start.
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        key = auth[7:]
+        if key == "yashigani-internal":
+            # Internal service-to-service calls (Open WebUI, agents)
+            # Treated as authenticated internal identity — same OPA rules apply
+            return {"identity_id": "internal", "status": "active", "kind": "service",
+                    "groups": [], "allowed_models": [], "sensitivity_ceiling": "RESTRICTED"}
+
     if not _state.identity_registry:
         return None
 
@@ -1166,15 +1187,9 @@ def _resolve_identity(request: Request) -> Optional[dict]:
         if identity:
             return identity
 
-    # API key
-    auth = request.headers.get("Authorization", "")
+    # API key (registry lookup)
     if auth.startswith("Bearer "):
         key = auth[7:]
-        if key == "yashigani-internal":
-            # Internal service-to-service calls (Open WebUI, agents)
-            # Treated as authenticated internal identity — same OPA rules apply
-            return {"identity_id": "internal", "status": "active", "kind": "service",
-                    "groups": [], "allowed_models": [], "sensitivity_ceiling": "RESTRICTED"}
         if key:
             identity = _state.identity_registry.get_by_api_key(key)
             if identity is None:
