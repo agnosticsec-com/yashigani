@@ -53,6 +53,7 @@ Streaming limitations
 # Last updated: 2026-05-17T00:00:00+00:00
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import math
@@ -68,6 +69,33 @@ from pydantic import BaseModel, Field
 from yashigani.pki.client import internal_httpx_client
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Internal service-mesh Bearer token
+#
+# YASHIGANI_INTERNAL_BEARER is a per-install-rotated secret that grants
+# service-to-service identity (Open WebUI, in-mesh agents). It MUST be set
+# by the installer (docker/secrets/yashigani_internal_bearer).  A missing or
+# empty value fails closed at import time so a misconfigured deployment
+# surfaces immediately rather than silently accepting any Bearer value.
+#
+# Use hmac.compare_digest() at every comparison site to avoid timing leaks.
+# ---------------------------------------------------------------------------
+
+def _load_internal_bearer() -> str:
+    """Read YASHIGANI_INTERNAL_BEARER from env; raise RuntimeError if absent."""
+    _val = os.environ.get("YASHIGANI_INTERNAL_BEARER", "")
+    if not _val:
+        raise RuntimeError(
+            "YASHIGANI_INTERNAL_BEARER is not set. "
+            "The gateway cannot start without a per-install internal service token. "
+            "See docker/secrets/yashigani_internal_bearer."
+        )
+    return _val
+
+
+# Cached at module load — fails fast if env-var is absent.
+_INTERNAL_BEARER: str = _load_internal_bearer()
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
@@ -1171,7 +1199,7 @@ def _resolve_identity(request: Request) -> Optional[dict]:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         key = auth[7:]
-        if key == "yashigani-internal":
+        if hmac.compare_digest(key, _INTERNAL_BEARER):
             # Internal service-to-service calls (Open WebUI, agents)
             # Treated as authenticated internal identity — same OPA rules apply
             return {"identity_id": "internal", "status": "active", "kind": "service",

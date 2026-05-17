@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import ipaddress
 import logging
 import math
@@ -41,6 +42,39 @@ from yashigani.auth.spiffe import require_spiffe_id
 from yashigani.pki.client import internal_httpx_client
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Internal service-mesh Bearer token
+#
+# YASHIGANI_INTERNAL_BEARER is a per-install-rotated secret that grants
+# service-to-service identity (Open WebUI, in-mesh agents). It MUST be set
+# by the installer (docker/secrets/yashigani_internal_bearer).  A missing or
+# empty value fails closed at import time so a misconfigured deployment
+# surfaces immediately rather than silently accepting any Bearer value.
+#
+# Use hmac.compare_digest() at every comparison site to avoid timing leaks.
+# ---------------------------------------------------------------------------
+
+def _load_internal_bearer() -> str:
+    """Read YASHIGANI_INTERNAL_BEARER from env; raise RuntimeError if absent."""
+    _val = os.environ.get("YASHIGANI_INTERNAL_BEARER", "")
+    if not _val:
+        raise RuntimeError(
+            "YASHIGANI_INTERNAL_BEARER is not set. "
+            "The gateway cannot start without a per-install internal service token. "
+            "See docker/secrets/yashigani_internal_bearer."
+        )
+    return _val
+
+
+# Cached at module load — fails fast if env-var is absent.
+_INTERNAL_BEARER: str = _load_internal_bearer()
+
+
+def _internal_bearer() -> str:
+    """Return the cached internal Bearer constant."""
+    return _INTERNAL_BEARER
+
 
 _HOP_BY_HOP_HEADERS = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -483,7 +517,7 @@ async def _proxy_request_body(
     if auth_header.startswith("Bearer ") and state.get("jwt_inspector") is not None:
         token = auth_header[len("Bearer "):]
         # Skip JWT validation for internal service keys (Open WebUI, etc.)
-        if token in ("yashigani-internal",):
+        if hmac.compare_digest(token, _internal_bearer()):
             jwt_claims = {"sub": "internal", "iss": "yashigani"}
         else:
             jwt_result = await state["jwt_inspector"].inspect(

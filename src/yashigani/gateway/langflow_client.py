@@ -11,11 +11,37 @@ Langflow is a visual workflow builder. It requires:
 
 import json
 import logging
+import os
 import uuid
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Internal service-mesh Bearer token
+#
+# YASHIGANI_INTERNAL_BEARER is a per-install-rotated secret injected into
+# the Langflow flow template so it can call back through the Yashigani
+# gateway as an internal service. It MUST be set by the installer
+# (docker/secrets/yashigani_internal_bearer).  A missing or empty value
+# fails closed at import time.
+# ---------------------------------------------------------------------------
+
+def _load_internal_bearer() -> str:
+    """Read YASHIGANI_INTERNAL_BEARER from env; raise RuntimeError if absent."""
+    _val = os.environ.get("YASHIGANI_INTERNAL_BEARER", "")
+    if not _val:
+        raise RuntimeError(
+            "YASHIGANI_INTERNAL_BEARER is not set. "
+            "The gateway cannot start without a per-install internal service token. "
+            "See docker/secrets/yashigani_internal_bearer."
+        )
+    return _val
+
+
+# Cached at module load — fails fast if env-var is absent.
+_INTERNAL_BEARER: str = _load_internal_bearer()
 
 # Cached state after first initialization
 _api_key: str | None = None
@@ -98,7 +124,7 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                             },
                         }]
                     if "api_key" in template:
-                        template["api_key"]["value"] = "yashigani-internal"
+                        template["api_key"]["value"] = _INTERNAL_BEARER
                     break
 
         flow_body = {
