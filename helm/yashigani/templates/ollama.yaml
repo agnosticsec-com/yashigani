@@ -155,10 +155,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          command: ["/bin/bash", "-c"]
+          command: ["/bin/sh", "-c"]
           args:
             - |
-              until </dev/tcp/yashigani-ollama/11434 2>/dev/null; do
+              until wget -q -O- http://yashigani-ollama:11434/api/tags >/dev/null 2>&1; do
                 echo "waiting for yashigani-ollama:11434..."; sleep 3
               done
               echo "ollama is reachable"
