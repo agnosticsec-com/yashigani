@@ -25,7 +25,10 @@ uvicorn yashigani.gateway.entrypoint:app \
 MTLS_PID=$!
 
 # ── Internal mesh port 8081 ─────────────────────────────────────────────────
-uvicorn yashigani.gateway.mesh_entrypoint:app \
+# YASHIGANI_IS_MESH_PROCESS=1: prevents entrypoint.py from executing
+# _build_app(mesh_mode=False) as a side-effect when mesh_entrypoint.py
+# imports _build_app from entrypoint.py (avoids duplicate app + shared state conflict).
+YASHIGANI_IS_MESH_PROCESS=1 uvicorn yashigani.gateway.mesh_entrypoint:app \
     --host 0.0.0.0 \
     --port 8081 \
     --no-access-log &
