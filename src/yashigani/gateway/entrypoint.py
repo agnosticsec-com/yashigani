@@ -3,7 +3,7 @@ Yashigani Gateway — ASGI entrypoint.
 Wires all services together and creates the FastAPI app.
 Environment variables configure service endpoints and behaviour.
 
-Last updated: 2026-05-08T00:00:00+00:00
+Last updated: 2026-05-17T00:00:00+00:00
 """
 from __future__ import annotations
 
