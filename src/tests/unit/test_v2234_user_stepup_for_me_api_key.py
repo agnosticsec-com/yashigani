@@ -581,3 +581,117 @@ class TestStructuralGuard:
         assert "AdminSession" not in fn_src, (
             "stepup_verify must NOT use AdminSession — it would reject user-tier sessions"
         )
+
+
+# ---------------------------------------------------------------------------
+# T11–T13 — Iris class-of-bug: provision/password_changed/sessions_invalidated
+#            events derive account_tier from session (ASVS V7.3.4)
+# ---------------------------------------------------------------------------
+
+class TestT11ProvisionEventTier:
+    """T11: _make_provision_event passes account_tier through (Iris class-of-bug)."""
+
+    def test_user_tier_provision_event_has_user_tier(self):
+        """
+        _make_provision_event called with account_tier='user' must produce an event
+        whose account_tier is 'user', not the old hardcoded 'admin'.
+        """
+        from yashigani.backoffice.routes.auth import _make_provision_event
+
+        event = _make_provision_event("alice", account_tier="user")
+        assert event.account_tier == "user", (
+            f"Iris class-of-bug: expected account_tier='user', got {event.account_tier!r}"
+        )
+
+    def test_admin_tier_provision_event_has_admin_tier(self):
+        """Regression guard: admin-tier provision event must still carry 'admin'."""
+        from yashigani.backoffice.routes.auth import _make_provision_event
+
+        event = _make_provision_event("superadmin", account_tier="admin")
+        assert event.account_tier == "admin"
+
+    def test_provision_event_default_is_admin_for_backward_compat(self):
+        """Default (no account_tier arg) must still produce 'admin' for legacy callers."""
+        from yashigani.backoffice.routes.auth import _make_provision_event
+
+        event = _make_provision_event("legacyuser")
+        assert event.account_tier == "admin"
+
+
+class TestT12PasswordChangedEventTier:
+    """T12: _make_password_changed_event passes account_tier through (Iris class-of-bug)."""
+
+    def test_user_tier_password_changed_event_has_user_tier(self):
+        """
+        _make_password_changed_event called with account_tier='user' must produce an
+        event whose account_tier is 'user', not the old hardcoded 'admin'.
+        """
+        from yashigani.backoffice.routes.auth import _make_password_changed_event
+
+        event = _make_password_changed_event(
+            "alice",
+            change_type="self_service",
+            old_hash_tail="abcd1234",
+            new_hash_tail="efgh5678",
+            account_tier="user",
+        )
+        assert event.account_tier == "user", (
+            f"Iris class-of-bug: expected account_tier='user', got {event.account_tier!r}"
+        )
+
+    def test_admin_tier_password_changed_event_has_admin_tier(self):
+        """Regression guard: admin-tier password-changed event still carries 'admin'."""
+        from yashigani.backoffice.routes.auth import _make_password_changed_event
+
+        event = _make_password_changed_event(
+            "superadmin",
+            change_type="forced",
+            old_hash_tail="abcd1234",
+            new_hash_tail="efgh5678",
+            account_tier="admin",
+        )
+        assert event.account_tier == "admin"
+
+
+class TestT13SessionsInvalidatedEventTier:
+    """T13: _make_sessions_invalidated_event passes account_tier through (Iris class-of-bug)."""
+
+    def test_user_tier_sessions_invalidated_event_has_user_tier(self):
+        """
+        _make_sessions_invalidated_event called with account_tier='user' must produce
+        an event whose account_tier is 'user', not the old hardcoded 'admin'.
+        """
+        from yashigani.backoffice.routes.auth import _make_sessions_invalidated_event
+
+        event = _make_sessions_invalidated_event(
+            admin_account="alice",
+            acting_admin="",
+            reason="password_change",
+            account_tier="user",
+        )
+        assert event.account_tier == "user", (
+            f"Iris class-of-bug: expected account_tier='user', got {event.account_tier!r}"
+        )
+
+    def test_admin_tier_sessions_invalidated_event_has_admin_tier(self):
+        """Regression guard: admin-tier sessions-invalidated event still carries 'admin'."""
+        from yashigani.backoffice.routes.auth import _make_sessions_invalidated_event
+
+        event = _make_sessions_invalidated_event(
+            admin_account="superadmin",
+            acting_admin="",
+            reason="password_change",
+            account_tier="admin",
+        )
+        assert event.account_tier == "admin"
+
+    def test_sessions_invalidated_default_is_admin_for_backward_compat(self):
+        """Default (no account_tier arg) must still produce 'admin' for legacy callers."""
+        from yashigani.backoffice.routes.auth import _make_sessions_invalidated_event
+
+        event = _make_sessions_invalidated_event(
+            admin_account="legacyuser",
+            acting_admin="",
+            reason="self_reset",
+        )
+        assert event.account_tier == "admin"

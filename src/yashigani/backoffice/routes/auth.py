@@ -496,6 +496,7 @@ async def self_service_password_reset(body: SelfServiceResetRequest):
             admin_account=body.username,
             acting_admin="",  # self-service reset
             reason="self_reset",
+            account_tier=record.account_tier,
         )
     )
 
@@ -680,6 +681,7 @@ async def change_password(
             change_type="forced" if record.force_password_change else "self_service",
             old_hash_tail=old_hash_tail,
             new_hash_tail=new_hash_tail,
+            account_tier=record.account_tier,
         )
     )
     # ACS gap #95 (auth_log): SESSIONS_INVALIDATED event for session lifecycle audit.
@@ -688,6 +690,7 @@ async def change_password(
             admin_account=record.username,
             acting_admin="",  # self-service password change
             reason="password_change",
+            account_tier=record.account_tier,
         )
     )
     return {"status": "ok", "sessions_invalidated": True, "re_authentication_required": True}
@@ -768,7 +771,7 @@ async def provision_totp_confirm(
             },
         )
 
-    state.audit_writer.write(_make_provision_event(record.username))
+    state.audit_writer.write(_make_provision_event(record.username, account_tier=record.account_tier))
 
     return {"status": "ok", "message": "TOTP enrolment complete."}
 
@@ -810,7 +813,7 @@ async def provision_totp(
             detail={"error": "invalid_totp_code", "message": "TOTP code did not match. Re-scan the QR code."},
         )
 
-    state.audit_writer.write(_make_provision_event(record.username))
+    state.audit_writer.write(_make_provision_event(record.username, account_tier=record.account_tier))
 
     return {
         "status": "ok",
@@ -1114,11 +1117,12 @@ def _make_config_event(username: str, setting: str, prev: str, new: str):
     )
 
 
-def _make_provision_event(username: str):
+def _make_provision_event(username: str, account_tier: str = "admin"):
+    """ASVS V7.3.4: account_tier reflects the actual session tier, not a hardcoded value."""
     from yashigani.audit.schema import TotpProvisionCompletedEvent
 
     return TotpProvisionCompletedEvent(
-        account_tier="admin",
+        account_tier=account_tier,
         user_handle=username,
     )
 
@@ -1156,12 +1160,14 @@ def _make_password_changed_event(
     change_type: str,
     old_hash_tail: str,
     new_hash_tail: str,
+    account_tier: str = "admin",
 ):
-    """ACS gap #95: dedicated PASSWORD_CHANGED event."""
+    """ACS gap #95: dedicated PASSWORD_CHANGED event.
+    ASVS V7.3.4: account_tier reflects the actual session tier, not a hardcoded value."""
     from yashigani.audit.schema import PasswordChangedEvent
 
     return PasswordChangedEvent(
-        account_tier="admin",
+        account_tier=account_tier,
         admin_account=username,
         change_type=change_type,
         old_hash_tail=old_hash_tail,
@@ -1176,12 +1182,14 @@ def _make_sessions_invalidated_event(
     acting_admin: str,
     reason: str,
     sessions_count: int = -1,
+    account_tier: str = "admin",
 ):
-    """ACS gap #95: SESSIONS_INVALIDATED event for session lifecycle audit."""
+    """ACS gap #95: SESSIONS_INVALIDATED event for session lifecycle audit.
+    ASVS V7.3.4: account_tier reflects the actual session tier, not a hardcoded value."""
     from yashigani.audit.schema import SessionsInvalidatedEvent
 
     return SessionsInvalidatedEvent(
-        account_tier="admin",
+        account_tier=account_tier,
         admin_account=admin_account,
         acting_admin=acting_admin,
         reason=reason,
