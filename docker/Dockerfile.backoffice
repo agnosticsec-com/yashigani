@@ -60,7 +60,8 @@ RUN sed -i 's|script_location = src/yashigani/db/migrations|script_location = /u
 COPY scripts/bootstrap_postgres.py /app/scripts/bootstrap_postgres.py
 
 RUN mkdir -p /data/audit /data/bootstrap /var/log/yashigani && \
-    chown -R yashigani:yashigani /data /var/log/yashigani /app
+    chown -R yashigani:yashigani /data /var/log/yashigani /app 2>/dev/null || true && \
+    chmod -R a+rX /usr/local/lib/python3.14/site-packages/yashigani/
 
 USER yashigani
 
