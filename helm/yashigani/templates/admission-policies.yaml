@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-15T00:00:00+01:00 */ -}}
+{{- /* Last updated: 2026-05-17T00:00:00+01:00 */ -}}
 {{- /*
 YSG-RISK-008 — Kyverno ClusterPolicy admission control.
 
@@ -71,7 +71,7 @@ spec:
               - key: "{{ "{{" }} request.object.spec.securityContext.runAsNonRoot || false {{ "}}" }}"
                 operator: Equals
                 value: false
-              - key: "{{ "{{" }} request.object.spec.securityContext.runAsUser || 0 {{ "}}" }}"
+              - key: "{{ "{{" }} request.object.spec.securityContext.runAsUser || `0` {{ "}}" }}"
                 operator: Equals
                 value: 0
 ---
@@ -104,17 +104,18 @@ spec:
                 - {{ .Release.Namespace }}
       validate:
         message: >-
-          YSG-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod
-          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' must set
-          allowPrivilegeEscalation: false.
+          YSG-RISK-008: All containers in pod
+          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' must explicitly set
+          allowPrivilegeEscalation: false. Omitting the field is not permitted
+          (K8s defaults to true when absent).
         foreach:
           - list: "request.object.spec.containers"
             deny:
               conditions:
                 any:
-                  - key: "{{ "{{" }} element.securityContext.allowPrivilegeEscalation || true {{ "}}" }}"
-                    operator: Equals
-                    value: true
+                  - key: "{{ "{{" }} element.securityContext.allowPrivilegeEscalation {{ "}}" }}"
+                    operator: NotEquals
+                    value: false
 ---
 # Policy 3/5: require seccomp RuntimeDefault or Localhost
 apiVersion: kyverno.io/v1
@@ -187,7 +188,7 @@ spec:
                 - {{ .Release.Namespace }}
       validate:
         message: >-
-          YSG-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod
+          YSG-RISK-008: All containers in pod
           '{{ "{{" }} request.object.metadata.name {{ "}}" }}' must set
           capabilities.drop containing ALL.
         foreach:
@@ -233,7 +234,7 @@ spec:
         deny:
           conditions:
             all:
-              - key: "{{ "{{" }} request.object.spec.securityContext.runAsUser || 1 {{ "}}" }}"
+              - key: "{{ "{{" }} request.object.spec.securityContext.runAsUser || `1` {{ "}}" }}"
                 operator: Equals
                 value: 0
     - name: restrict-root-container-level
@@ -246,15 +247,15 @@ spec:
                 - {{ .Release.Namespace }}
       validate:
         message: >-
-          YSG-RISK-008: Container '{{ "{{" }} element.name {{ "}}" }}' in pod
-          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' sets runAsUser: 0.
-          Root containers are not permitted.
+          YSG-RISK-008: All containers in pod
+          '{{ "{{" }} request.object.metadata.name {{ "}}" }}' must not set
+          runAsUser: 0. Root containers are not permitted.
         foreach:
           - list: "request.object.spec.containers"
             deny:
               conditions:
                 all:
-                  - key: "{{ "{{" }} element.securityContext.runAsUser || 1 {{ "}}" }}"
+                  - key: "{{ "{{" }} element.securityContext.runAsUser || `1` {{ "}}" }}"
                     operator: Equals
                     value: 0
 {{- end }}
