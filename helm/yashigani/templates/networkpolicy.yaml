@@ -408,6 +408,40 @@ spec:
           port: 11434
 
 ---
+# ollama-init Job egress — allow the init Job pod to reach yashigani-ollama:11434
+# (wait-for-ollama initContainer + ollama pull in main container).
+# Required because default-deny-egress applies to all pods in the namespace.
+{{- if and .Values.ollama.enabled .Values.openWebui.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ollama-init-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "yashigani.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-ollama-init
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution (required for yashigani-ollama service lookup)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # ollama API — wait-for-ollama initContainer + ollama pull
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-ollama
+      ports:
+        - protocol: TCP
+          port: 11434
+{{- end }}
+---
 # Ollama egress — allow outbound to pull models from registry.ollama.ai
 # SECURITY NOTE: Ollama requires external internet access for model pulls.
 # Restrict to the ollama registry CIDR in production if possible, or use

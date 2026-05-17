@@ -1,4 +1,4 @@
-# last-updated: 2026-05-17T15:30:00+01:00 (fix: ollama-init Job — busybox initContainer + NetworkPolicy ingress for Job pod)
+# last-updated: 2026-05-17T15:45:00+01:00 (fix: ollama-init Job — busybox initContainer + NetworkPolicy ingress + egress for Job pod)
 {{- if .Values.ollama.enabled }}
 ---
 apiVersion: apps/v1
