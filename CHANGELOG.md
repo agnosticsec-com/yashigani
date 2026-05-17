@@ -1,4 +1,6 @@
+<!-- last-updated: 2026-05-17T17:30:00+01:00 (v2.23.4: refresh [Unreleased] — Open WebUI mesh path + K8s OPA alignment + installer wizard + Kyverno fixes — covers 98 commits since v2.23.3) -->
 <!-- last-updated: 2026-05-17T00:00:00+01:00 (v2.23.4: openapi-reenable — auth-gated Swagger UI + API reference docs) -->
+<!-- last-updated: 2026-05-16T18:30:00+01:00 (v2.23.4: draft [Unreleased] entry covering 62 commits since v2.23.3) -->
 <!-- last-updated: 2026-05-15T16:10:00+01:00 (docs: remove docs/release-notes/ cross-references — internal release-engineering tree moved out of repo — v2.23.4) -->
 <!-- last-updated: 2026-05-15T11:30:00+01:00 (docs: remove unimplemented bare-metal claim from v0.6.0 entry — v2.23.4) -->
 <!-- last-updated: 2026-05-11T22:00:00+01:00 (v2.23.3 GA — flip [Unreleased] block to [v2.23.3]) -->
@@ -22,6 +24,21 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ### Added
 
+- **Open WebUI → gateway in-mesh path** — gateway now exposes a dual-port
+  surface: `:8080` for mTLS edge traffic and `:8081` for plain-HTTP in-mesh
+  traffic from Open WebUI carrying an `Authorization: Bearer
+  yashigani-internal` token. Open WebUI joins the `caddy_internal` network
+  and routes chat completions via the gateway rather than direct to Ollama,
+  so OPA policy + identity-binding apply to UI traffic just like to API
+  traffic. Closes the "Open WebUI bypasses the gateway" architectural gap.
+- **Installer use-case wizard** — interactive `install.sh` now asks whether
+  Yashigani will be used by humans with a web UI (default `Y`, installs Open
+  WebUI as the chat surface) or as an API/agent-only deployment (`N`,
+  skips Open WebUI). Non-interactive `--with-openwebui` flag unchanged.
+- **Ollama default-model auto-pull on `--with-openwebui`** — first install
+  with Open WebUI now pulls `qwen2.5:3b` automatically so the chat UI works
+  out of the box. Helm chart equivalent: `ollama-init` Job pulls the same
+  model when `openWebui.enabled=true`. Skip with `--no-default-model`.
 - **SAML BYOK config-load surface** — `broker.add_idp()` now accepts SAML
   identity-provider configurations via the `YASHIGANI_IDP_<N>_SAML_*`
   environment variables (idp metadata URL/XML, SP entity ID, ACS URL, SP
@@ -100,6 +117,60 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
   `style-src`.
 - **Auto-agent-registration — 401 on Layer B header path fixed** during
   installer-driven agent bundle registration.
+- **Helm — K8s OPA policy bundle aligned with compose** — the helm chart
+  previously shipped a stub OPA ConfigMap with package `yashigani.v1_routing`
+  and no `decision` / `allow_v1` rules. Gateway read `result.get("allow",
+  False)` against that empty result → 403 on every K8s chat request.
+  Replaced with the verbatim compose `policy/{yashigani,v1_routing,rbac,
+  agents}.rego` bundle so K8s and compose make the same policy decisions.
+- **Compose — PKI bootstrap_token SHA-256 manifest mismatch** — the
+  gateway failed closed with "Bootstrap token SHA-256 mismatch for 'gateway'"
+  on macOS Podman because (a) `rotate_leaves()` discarded the recomputed
+  hash return value and (b) Podman applehv's host→VM cp-back silently
+  failed to update the host-side manifest. Fixed both: `rotate_leaves()`
+  now persists the hash, and the install path verifies the host manifest
+  matches the in-VM manifest before declaring the gateway ready.
+- **Helm — bootstrap_token files in PKI Secret** — K8s PKI Secret now
+  includes the `bootstrap_token` files referenced by OPA mTLS. Previously
+  absent on K8s installs, which left the rotate-leaves path 503ing on
+  upgrade. Skipped on K8s entrypoint where K8s-native mTLS handles
+  identity binding.
+- **Helm — `ollama-init` Job unblock** — three compounding K8s Job failures
+  fixed: (1) the wait-for-ollama init container now uses a digest-pinned
+  busybox image because the ollama image does not ship `wget` and the
+  `/dev/tcp` shell probe is unreliable on K8s, (2) `allow-ollama-ingress`
+  NetworkPolicy now permits ingress from the Job pod's labels, (3) new
+  `allow-ollama-init-egress` NetworkPolicy permits DNS + ollama egress for
+  the Job pod which was previously caught by `default-deny-egress`.
+- **Open WebUI — network isolation + gateway connectivity** — Open WebUI
+  joined the `caddy_internal` network; gateway connection uses HTTP (mesh
+  port) not HTTPS to avoid certificate-of-internal-DN trust loops.
+  `OPENAI_API_BASE_URL` and `OPENAI_API_KEY` env wiring routes through
+  the gateway with the in-mesh Bearer.
+- **Open WebUI — RAG embeddings via Ollama; HuggingFace offline** —
+  `RAG_EMBEDDING_ENGINE=ollama` + `HF_HUB_OFFLINE=1` +
+  `TRANSFORMERS_OFFLINE=1` so Open WebUI doesn't try to reach
+  huggingface.co on startup in air-gapped installs.
+- **Backoffice — WebAuthn service init signature** — `WebAuthnService.__init__`
+  now correctly receives `config=WebAuthnConfig()` (was missing the
+  positional argument, causing a deferred runtime crash on first WebAuthn
+  registration attempt).
+- **Linux aarch64 Podman rootless — template permission silent-noop** —
+  `RUN chmod -R a+rX /usr/local/lib/python3.14/site-packages/yashigani/`
+  added to gateway + backoffice Dockerfiles. Background: Podman rootless
+  on Linux aarch64 silently drops the CAP_CHOWN that `pip install` relies
+  on, leaving Python package files root:root mode 0640 — unreadable by the
+  in-container yashigani UID 1001. Surface symptom was Jinja
+  `TemplateNotFound` at first HTTP request.
+- **Helm — Kyverno ClusterPolicy three bugs** — JMESPath expression
+  malformed in one resource selector; `foreach` block referenced the wrong
+  variable scope; APE rule referenced a field that may be absent on certain
+  resource shapes. All three now fixed; admission-policies CI test exercises
+  the corrected rules against fixtures.
+- **Uninstall — wazuh-compose anonymous-volume leak** — wazuh add-on
+  containers create anonymous volumes that survive `compose down -v`. The
+  canonical uninstall volume list now includes them, plus a final
+  `podman volume prune --filter dangling=true` pass.
 
 ### Security
 
