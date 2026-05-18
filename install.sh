@@ -6679,12 +6679,34 @@ _pki_chown_client_keys() {
   # adding `group_add: ["1001"]` to every consumer — fragile across the matrix
   # (Docker / Podman rootful / Podman rootless / K8s).
   #
-  # Pragmatic fix: chmod 0644 these two files. The secrets dir is already
+  # YSG-SECRETS-DIST-001 (2026-05-18): yashigani_internal_bearer is consumed
+  # by MULTIPLE container UIDs simultaneously:
+  #   gateway:1001, backoffice:1001  — read via env (YASHIGANI_INTERNAL_BEARER)
+  #   langflow:1000                  — cat /run/secrets/yashigani_internal_bearer
+  #   letta:0 (root in container,    — cat /run/secrets/yashigani_internal_bearer
+  #             non-root on host via
+  #             Podman rootless ns)
+  #   open-webui:0 (same as letta)   — cat /run/secrets/yashigani_internal_bearer
+  # On Podman rootless: file owned 101001 (=host-mapped UID 1001). Container
+  # UID 1000 maps to 101000 on host (≠ 101001); container root maps to the
+  # host calling user (≠ 101001). Both get EPERM on a 0600 file.
+  # A per-consumer chown is impossible without modifying upstream images.
+  # A shared service group requires kernel group mapping across 3 different
+  # upstream image UIDs — fragile and runtime-dependent.
+  # Pragmatic fix: chmod 0644 along with postgres_password/redis_password.
+  # The secrets dir is already 0755 (V232-SMOKE-012, OPA inotify); the host
+  # trust boundary is shell access to WORK_DIR, not the file mode.
+  # The only additional exposure vs the prior state: any host user with ls(1)
+  # access to docker/secrets/ can cat the bearer token — but they could
+  # already cat postgres_password (same dir, same mode after this function).
+  # Risk class: YSG-SECRETS-DIST-001 (accept-with-architecture rationale).
+  #
+  # Pragmatic fix: chmod 0644 these files. The secrets dir is already
   # 0755 (V232-SMOKE-012, OPA inotify), and the host trust boundary is shell
   # access to WORK_DIR — not the file mode of *_password. The only thing 0644
   # changes is "any host user can `cat docker/secrets/postgres_password`",
   # which was already true via the dir mode for *.crt files.
-  for _shared_pw in postgres_password redis_password; do
+  for _shared_pw in postgres_password redis_password yashigani_internal_bearer; do
     local _pwpath="${_secrets_dir}/${_shared_pw}"
     if [[ -f "$_pwpath" ]]; then
       if ! chmod 0644 "$_pwpath" 2>/dev/null; then
@@ -6715,7 +6737,7 @@ _pki_chown_client_keys() {
       fi
     fi
   done
-  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; postgres/redis shared passwords also 0644 (gate V232-SMOKE-018)"
+  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; postgres/redis/bearer shared as 0644 (gate V232-SMOKE-018 + YSG-SECRETS-DIST-001)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001

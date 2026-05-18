@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # lib/pki_ownership.sh — Shared PKI service-key ownership map
+# last-updated: 2026-05-18T00:00:00+01:00 (fix(secrets): YSG-SECRETS-DIST-001 — document multi-UID consumer class)
 # last-updated: 2026-05-10T00:00:00+01:00 (fix(pki): GATE5-BUG-01 — shared ownership map; install + restore unified)
 #
 # Single source of truth for: service name → (container UID, key file mode).
@@ -17,6 +18,30 @@
 # EX-231-10 — prometheus runs as UID 65534 (nobody) with group_add: ["1001"].
 # All other service keys are mode 0600 (owner-read-write only).
 #
+# Multi-UID secret distribution class (YSG-SECRETS-DIST-001, 2026-05-18):
+# Some secrets in docker/secrets/ are consumed by MORE THAN ONE container UID.
+# These secrets CANNOT be chowned to a single UID and remain readable by all
+# consumers without using OS-level ACLs or a shared group (both fragile across
+# Docker / Podman rootless / K8s). They are set to mode 0644 in
+# _pki_chown_client_keys() to allow all consumers to read them.
+# The host trust boundary is shell access to docker/secrets/ — the directory is
+# already mode 0755 (V232-SMOKE-012), so 0644 adds no new host-level exposure.
+#
+# Multi-UID secrets (as of v2.23.4):
+#   postgres_password   — gateway:1001, backoffice:1001, postgres:999, redis:999
+#                         (postgres/redis lose CAP_DAC_OVERRIDE via cap_drop ALL)
+#   redis_password      — gateway:1001, backoffice:1001, redis:999, budget-redis:999
+#   yashigani_internal_bearer
+#                       — gateway:1001+backoffice:1001 (via env); plus
+#                         langflow:1000, letta:0 (rootless→host-user), open-webui:0
+#                         via entrypoint shim `cat /run/secrets/yashigani_internal_bearer`
+#                         (YSG-SECRETS-DIST-001 — close class cycle from 86872a7→5a341cb)
+#
+# When adding a new service that reads a secret already owned by another UID,
+# FIRST check if it belongs to the multi-UID class above. If yes, add it there
+# and set the file to 0644 in _pki_chown_client_keys(). Do NOT just add a chown
+# to the new service's UID — that breaks the existing consumers.
+#
 # Canonical service → UID reference:
 #   caddy:0           Caddy root (cap_drop ALL strips DAC_OVERRIDE — must be 0:0)
 #   gateway:1001      Yashigani gateway Python app
@@ -32,6 +57,11 @@
 #   promtail:0        Promtail root (accesses docker.sock + /var/lib/docker)
 #   grafana:472       Grafana (USER 472 upstream Dockerfile)
 #   prometheus:1001   Prometheus nobody (65534) + group_add 1001 → 0640 group-read
+#   langflow:1000     Bucket-C — langflowai/langflow:1.9.2 USER langflow (UID 1000)
+#   letta:0           Bucket-C — letta/letta:0.16.7 root (data at /root/.letta)
+#   open-webui:0      Bucket-C — open-webui:v0.9.2 root (runs bash start.sh as root)
+#   openclaw:1000     Bucket-C — openclaw Node image USER node (UID 1000); reads
+#                     openclaw_gateway_token via env only (not file at runtime)
 #
 # Do NOT add services here that do NOT read a *_client.key from docker/secrets/.
 # Service identities are defined in docker/service_identities.yaml.
