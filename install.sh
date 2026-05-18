@@ -4642,16 +4642,20 @@ register_agent_bundles() {
   # Run the entire registration flow inside the backoffice container.
   # This avoids shell interpolation issues and timing problems with TOTP.
   # The Python script reads secrets from /run/secrets/, computes TOTP,
-  # authenticates, registers each agent, and writes tokens to /run/secrets/.
+  # authenticates, checks the live registry, registers each unregistered agent,
+  # and writes tokens to /run/secrets/.
+  #
+  # YSG-AGENT-REG-001 fix: skip decision moved into Python (registry-aware).
+  # The old shell-side guard checked token file existence, which diverges from
+  # registry state when the secrets dir is preserved across a re-install that
+  # wiped Docker volumes (registry empty, token files stale-real-valued → all
+  # agents skipped, registry stays empty). The Python script now calls
+  # GET /admin/agents after login to get the live registry state and skips
+  # only agents that are ACTUALLY registered — not agents with stale token files.
   local agents_json='['
   local first=true
   for _profile in "${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}"; do
     [[ -z "$_profile" ]] && continue
-    # Skip if token already exists and isn't a placeholder
-    if [[ -s "${secrets_dir}/${_profile}_token" ]] && ! grep -q "placeholder" "${secrets_dir}/${_profile}_token" 2>/dev/null; then
-      log_info "  ${_profile}: token exists — skipping"
-      continue
-    fi
     case "$_profile" in
       langflow)  local _name="Langflow"  _url="http://langflow:7860"   _proto="langflow" ;;
       letta)     local _name="Letta"     _url="http://letta:8283"     _proto="letta" ;;
@@ -4744,11 +4748,40 @@ except Exception as e:
     # warn-and-continue: agent registration will likely fail with step_up_required,
     # but we do not hard-fail the installer here
 
+# YSG-AGENT-REG-001: query the live registry before registering.
+# GET /admin/agents returns all agents currently in Redis. This is the
+# authoritative source — token files on disk can diverge from the registry
+# when secrets_dir is preserved across a re-install that wiped volumes.
+# Agents already in the registry are skipped (idempotent); agents absent
+# from the registry are registered even if a stale token file exists.
+registered_names = set()
+try:
+    req = urllib.request.Request("https://localhost:8443/admin/agents",
+                                 headers={"X-Caddy-Verified-Secret": caddy_hmac,
+                                          "Cookie": f"__Host-yashigani_admin_session={session}"})
+    resp = urllib.request.urlopen(req, context=_ctx)
+    existing = json.loads(resp.read())
+    registered_names = {a.get("name", "") for a in existing}
+except Exception as e:
+    # Non-fatal: if list fails, attempt registration for all agents.
+    # Worst case: duplicate registration attempt → 409 Conflict (handled below).
+    print(f"WARNING:list_agents_failed:{e}", file=sys.stderr)
+
 # Register agents
 agents = json.loads(os.environ.get("AGENTS_JSON", "[]"))
 results = []
 for agent in agents:
-    reg_data = json.dumps({"name": agent["name"], "upstream_url": agent["url"], "protocol": agent.get("protocol", "openai")}).encode()
+    profile = agent["profile"]
+    aname = agent["name"]
+    # Skip if agent is already registered in the live registry (idempotent).
+    # This check uses registry state, not token-file existence, so it correctly
+    # handles: fresh install (registry empty → register), upgrade (registry has
+    # agent → skip), re-install with wiped volumes (registry empty, stale token
+    # file → register and overwrite stale token).
+    if aname in registered_names:
+        results.append("SKIP:" + aname + ":" + profile)
+        continue
+    reg_data = json.dumps({"name": aname, "upstream_url": agent["url"], "protocol": agent.get("protocol", "openai")}).encode()
     req = urllib.request.Request("https://localhost:8443/admin/agents", data=reg_data,
                                  headers={"Content-Type": "application/json",
                                           "X-Caddy-Verified-Secret": caddy_hmac,
@@ -4757,8 +4790,6 @@ for agent in agents:
         resp = urllib.request.urlopen(req, context=_ctx)
         body = json.loads(resp.read())
         token = body.get("token", "")
-        profile = agent["profile"]
-        aname = agent["name"]
         if token:
             token_path = os.path.join(secrets, profile + "_token")
             try:
@@ -4770,11 +4801,9 @@ for agent in agents:
         else:
             results.append("FAIL:" + aname + ":no_token")
     except urllib.error.HTTPError as e:
-        aname = agent.get("name", "?")
         detail = e.read().decode()[:100]
         results.append("FAIL:" + aname + ":" + str(e.code) + ":" + detail)
     except Exception as e:
-        aname = agent.get("name", "?")
         results.append("FAIL:" + aname + ":" + str(e))
 
 for r in results:
@@ -4798,6 +4827,12 @@ for r in results:
         fi
         log_success "  ${_agent_name}: registered"
         any_registered=true
+        ;;
+      SKIP:*)
+        # YSG-AGENT-REG-001: agent already in registry — no re-registration needed.
+        local _skip_parts="${line#SKIP:}"
+        local _skip_name="${_skip_parts%%:*}"
+        log_info "  ${_skip_name}: already registered — skipping"
         ;;
       FAIL:*)
         local _fail_detail="${line#FAIL:}"
