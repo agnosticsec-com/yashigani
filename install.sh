@@ -4675,6 +4675,7 @@ register_agent_bundles() {
   fi
 
   local reg_output
+  local reg_exit=0
   reg_output="$("${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T -e AGENTS_JSON="${agents_json}" backoffice \
     python3 -c '
 import json, os, ssl, sys, time, urllib.request
@@ -4735,19 +4736,42 @@ if not session:
 
 # Step-up — POST /admin/agents requires StepUpAdminSession (assert_fresh_stepup).
 # A single stepup covers all agent registrations within the 300 s TTL.
-# Use a fresh TOTP code (same secret; step-up endpoint accepts current window).
+#
+# ISSUE-020 (2026-05-19): login and stepup both call pyotp.TOTP(...).now().  If
+# both calls land in the same 30 s TOTP window the server's Postgres-backed
+# replay cache already holds that window's code (inserted by login) and rejects
+# the stepup with invalid_totp_code → session last_totp_verified_at never set
+# → POST /admin/agents returns 401 step_up_required on every attempt.
+#
+# Fix: sleep until the start of the NEXT 30 s TOTP window before computing the
+# stepup code.  Worst-case latency: 30 s; best-case: ~1 s (called at window
+# boundary).  Acceptable in an already-long install path.
+_remaining = 30 - (int(time.time()) % 30)
+# Add 1 s margin so the new window is firmly established before we compute.
+time.sleep(_remaining + 1)
 stepup_code = pyotp.TOTP(totp_secret, digest=hashlib.sha256).now()
 stepup_data = json.dumps({"totp_code": stepup_code}).encode()
 req = urllib.request.Request("https://localhost:8443/auth/stepup", data=stepup_data,
                              headers={"Content-Type": "application/json",
                                       "X-Caddy-Verified-Secret": caddy_hmac,
                                       "Cookie": f"__Host-yashigani_admin_session={session}"})
+# Hard-fail on stepup failure.  A successful stepup is required before any
+# POST /admin/agents call.  The server updates last_totp_verified_at in the
+# existing session (no new cookie is issued) so the same session cookie is
+# valid for the subsequent POSTs.
 try:
-    urllib.request.urlopen(req, context=_ctx)
+    stepup_resp = urllib.request.urlopen(req, context=_ctx)
+    stepup_body = json.loads(stepup_resp.read())
+    if not stepup_body.get("stepup_verified"):
+        print(f"ERROR:stepup_not_verified:{stepup_body}", file=sys.stderr)
+        sys.exit(1)
+except urllib.error.HTTPError as e:
+    detail = e.read().decode()[:200]
+    print(f"ERROR:stepup_failed:{e.code}:{detail}", file=sys.stderr)
+    sys.exit(1)
 except Exception as e:
-    print(f"WARNING:stepup_failed:{e}", file=sys.stderr)
-    # warn-and-continue: agent registration will likely fail with step_up_required,
-    # but we do not hard-fail the installer here
+    print(f"ERROR:stepup_failed:{e}", file=sys.stderr)
+    sys.exit(1)
 
 # YSG-AGENT-REG-001: query the live registry before registering.
 # GET /admin/agents returns all agents currently in Redis. This is the
@@ -4820,7 +4844,17 @@ for agent in agents:
 
 for r in results:
     print(r)
-' 2>&1)" || true
+' 2>&1)" || reg_exit=$?
+
+  # Hard-fail on stepup errors (Python sys.exit(1); output contains ERROR:stepup_*).
+  # Per ISSUE-020: stepup failure means NO agent can be registered; continuing is
+  # misleading and violates [[feedback_test_harness_no_fake_green]] applied to
+  # install scripts — an advertised flag that silently fails is a fake-green class.
+  if [[ $reg_exit -ne 0 ]] && echo "$reg_output" | grep -qE '^ERROR:stepup'; then
+    log_error "Agent registration aborted: stepup failed"
+    echo "$reg_output" | grep '^ERROR:stepup' >&2
+    return 1
+  fi
 
   # Parse results
   local any_registered=false
