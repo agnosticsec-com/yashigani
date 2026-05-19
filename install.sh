@@ -4846,6 +4846,10 @@ for agent in agents:
             try:
                 with open(token_path, "w") as f:
                     f.write(token)
+                try:
+                    os.chmod(token_path, 0o600)
+                except OSError:
+                    pass  # best-effort; host-side chmod applied below
             except PermissionError:
                 pass  # token printed below for host-side capture
             results.append("OK:" + aname + ":" + profile + ":" + token)
@@ -4893,6 +4897,11 @@ for r in results:
           if ! echo "$_token" > "${secrets_dir}/${_profile}_token" 2>/dev/null; then
             if [[ ! -s "${secrets_dir}/${_profile}_token" ]]; then
               log_warn "  ${_agent_name}: token write failed and file not populated — token may be missing from secrets dir"
+            else
+              # Podman rootless: Python wrote the file as UID 101000; host chmod may
+              # fail (owner mismatch) but try anyway — os.chmod() in Python above
+              # already ran as the file owner and is the primary hardening mechanism.
+              chmod 600 "${secrets_dir}/${_profile}_token" 2>/dev/null || true
             fi
           else
             chmod 600 "${secrets_dir}/${_profile}_token" 2>/dev/null || true
@@ -7282,6 +7291,12 @@ main() {
     # in the log (they do not affect file readability and strip cleanly with
     # `cat -v` or `sed 's/\x1b\[[0-9;]*m//g'`).
     exec > >(tee -a "$_log_file") 2>&1
+    # Capture the tee coprocess PID immediately after exec.  This is used at
+    # the very end of main() to drain buffered output before exit (SF-012:
+    # final lines dropped when the outer tee/calling shell closes before the
+    # inner tee subprocess flushes).  NOTE: do NOT use bare `wait` — that
+    # includes the tee coprocess and causes a deadlock (see L2782 comment).
+    _tee_pid=$!
     log_info "Install log: ${_log_file}"
   fi
 
@@ -7549,6 +7564,13 @@ main() {
 
     # Step 13: Completion summary
     print_completion_summary
+  fi
+
+  # SF-012: drain the tee coprocess so the final log lines ([12/13] and [13/13])
+  # are flushed to install.log before the process exits.  Wait on the specific
+  # PID only — bare `wait` would deadlock (see L2782 comment on coprocess + wait).
+  if [[ -n "${_tee_pid:-}" ]]; then
+    wait "$_tee_pid" 2>/dev/null || true
   fi
 }
 

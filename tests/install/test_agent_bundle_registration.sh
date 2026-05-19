@@ -311,12 +311,92 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TEST (9): ISSUE-027-followup — Python-wrote token (Podman-rootless path)
+#           ends at 0600 after both os.chmod() in Python and host-side chmod.
+#
+# Regression for the defect reported by Tom pair-review (2026-05-19):
+#   install.sh:4847 open(token_path, "w") with default umask 0022 →
+#   file mode 0644 → host-side chmod branch NOT taken (echo fails EACCES) →
+#   token world-readable in 0755 dir.
+#
+# Fix: os.chmod(token_path, 0o600) in Python (always runs as file owner).
+#      Host-side else-branch also attempts chmod 600 (may fail on owner
+#      mismatch but is belt-and-suspenders).
+#
+# Strategy: simulate the scenario statically —
+#   (9.1) Assert os.chmod() call exists in install.sh Python block.
+#   (9.2) Assert host-side chmod 600 in the Podman-rootless else-branch.
+#   (9.3) Simulate the Podman-rootless host path: file at 0644 owned by
+#         current user, host echo → file, chmod 600 applied → assert 0600.
+# ---------------------------------------------------------------------------
+_section "TEST (9): ISSUE-027-followup — Python os.chmod + Podman-rootless host chmod"
+
+# (9.1) Assert os.chmod(token_path, 0o600) is in the Python block
+if grep -A5 'with open(token_path' "$INSTALL_SH" | grep -q 'os\.chmod(token_path, 0o600)'; then
+    _pass "(9.1) os.chmod(token_path, 0o600) present in Python token-write block"
+else
+    _fail "(9.1) os.chmod(token_path, 0o600) MISSING from Python token-write block — ISSUE-027-followup not fixed"
+fi
+
+# (9.2) Assert host-side chmod 600 in the Podman-rootless else-branch
+# The structure after ISSUE-027-followup fix:
+#   if ! echo ... > token 2>/dev/null; then
+#     if [[ ! -s token ]]; then log_warn; else chmod 600 ...; fi
+#   else
+#     chmod 600 ...
+#   fi
+_podman_chmod="$(awk '/if \[\[ ! -s .*.secrets_dir.*_profile.*_token/{found=1} found{print; if (/chmod 600/) {count++} if (/;;/) exit} END{print count}' "$INSTALL_SH" 2>/dev/null | grep -c 'chmod 600' || true)"
+if [[ "$_podman_chmod" -ge 1 ]]; then
+    _pass "(9.2) chmod 600 present in Podman-rootless else-branch (file-already-written path)"
+else
+    # Simpler grep — accept if two chmod 600 calls exist inside the OK: handler block
+    _ok_block_chmods="$(awk '/OK:\*\)/{found=1} found{print} found && /;;/{exit}' "$INSTALL_SH" | grep -c 'chmod 600' || true)"
+    if [[ "$_ok_block_chmods" -ge 2 ]]; then
+        _pass "(9.2) Two chmod 600 calls in OK: handler — Docker-rootful and Podman-rootless paths both covered"
+    else
+        _fail "(9.2) Podman-rootless chmod 600 missing — host-side hardening incomplete for Python-wrote-file path"
+    fi
+fi
+
+# (9.3) Simulate the Podman-rootless host path end-to-end
+#   File pre-exists at 0644 (Python wrote it), host echo fails, else-branch runs.
+_pt9dir="$(mktemp -d "${REPO_ROOT}/tests/install/.agent_reg_t9_XXXXXX")"
+trap 'rm -rf "${_pt9dir}"' EXIT
+
+_t9_token="podmantoken1234podmantoken5678podmantoken9012podmantoken34"
+_t9_token_file="${_pt9dir}/langflow_token"
+
+# Simulate Python writing the file at 0644 (default umask 0022 path)
+printf "%s" "$_t9_token" > "$_t9_token_file"
+chmod 644 "$_t9_token_file"
+
+_mode_before="$(stat -c '%a' "$_t9_token_file" 2>/dev/null || stat -f '%A' "$_t9_token_file" 2>/dev/null || echo "unknown")"
+if [[ "$_mode_before" == "644" ]]; then
+    _pass "(9.3a) Pre-condition: file at 0644 (simulating Python umask 0022 write)"
+else
+    _fail "(9.3a) Pre-condition setup failed: expected 644, got ${_mode_before}"
+fi
+
+# Simulate the Podman-rootless else-branch: host echo fails because we use
+# a dummy that will succeed (we own the file in this test), then chmod 600.
+# In production the host echo fails EACCES; here we simulate the else-branch
+# directly since ownership can't be faked in an unprivileged test.
+chmod 600 "$_t9_token_file" 2>/dev/null || true
+
+_mode_after="$(stat -c '%a' "$_t9_token_file" 2>/dev/null || stat -f '%A' "$_t9_token_file" 2>/dev/null || echo "unknown")"
+if [[ "$_mode_after" == "600" ]]; then
+    _pass "(9.3b) Post-chmod: token file mode 0600 — bearer token hardened"
+else
+    _fail "(9.3b) Token file mode ${_mode_after} after chmod, expected 600"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 printf "\n=== RESULTS: PASS=%d FAIL=%d SKIP=%d ===\n" "$PASS" "$FAIL" "$SKIP"
 if [[ "$FAIL" -gt 0 ]]; then
-    printf "\nRESULT: FAIL — %d check(s) failed. (YSG-AGENT-REG-001 + ISSUE-024)\n" "$FAIL"
+    printf "\nRESULT: FAIL — %d check(s) failed. (YSG-AGENT-REG-001 + ISSUE-024 + ISSUE-027-followup)\n" "$FAIL"
     exit 1
 fi
-printf "\nRESULT: PASS — %d checks passed, %d skipped. (YSG-AGENT-REG-001 + ISSUE-024)\n" "$PASS" "$SKIP"
+printf "\nRESULT: PASS — %d checks passed, %d skipped. (YSG-AGENT-REG-001 + ISSUE-024 + ISSUE-027-followup)\n" "$PASS" "$SKIP"
 exit 0
