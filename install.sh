@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-19T00:00:00+01:00 (fix(install): inject X-SPIFFE-ID on POST /admin/agents — close ISSUE-019)
 # last-updated: 2026-05-17T17:00:00+00:00 (feat(install): per-install YASHIGANI_INTERNAL_BEARER token generation — close Captain Bucket-C finding)
 # last-updated: 2026-05-17T09:00:00+01:00 (fix(pki): host-side bootstrap_token_sha256 update in _pki_run_issuer_podman_macos — compose-path SHA mismatch fix)
 # last-updated: 2026-05-17T14:00:00+00:00 (feat(install): write OLLAMA_MODEL to .env when --with-openwebui; ollama-init gated on openwebui profile)
@@ -4782,9 +4783,20 @@ for agent in agents:
         results.append("SKIP:" + aname + ":" + profile)
         continue
     reg_data = json.dumps({"name": aname, "upstream_url": agent["url"], "protocol": agent.get("protocol", "openai")}).encode()
+    # ISSUE-019 (2026-05-19): POST /admin/agents requires a SPIFFE ID
+    # (require_spiffe_id gate, YSG-RISK-012b / ASVS V10.3.5).  install.sh runs
+    # inside the backoffice container and calls localhost:8443 directly (not via
+    # Caddy), so Caddy cannot inject X-SPIFFE-ID from the TLS peer cert.
+    # SpiffePeerCertMiddleware cannot extract the peer cert via the ASGI TLS
+    # extension because uvicorn does not expose it (confirmed 0.39.0 / 0.46.0).
+    # We inject the backoffice identity explicitly.  Trust anchor: this code
+    # runs inside the backoffice container, which is the only entity that holds
+    # backoffice_client.crt.  CaddyVerifiedMiddleware Layer B (X-Caddy-Verified-
+    # Secret HMAC) prevents an external attacker from reaching this route.
     req = urllib.request.Request("https://localhost:8443/admin/agents", data=reg_data,
                                  headers={"Content-Type": "application/json",
                                           "X-Caddy-Verified-Secret": caddy_hmac,
+                                          "X-SPIFFE-ID": "spiffe://yashigani.internal/backoffice",
                                           "Cookie": f"__Host-yashigani_admin_session={session}"})
     try:
         resp = urllib.request.urlopen(req, context=_ctx)
