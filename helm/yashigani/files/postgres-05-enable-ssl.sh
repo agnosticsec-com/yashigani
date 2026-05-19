@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Yashigani v2.23.2 — enable TLS + client-cert verification on Postgres.
-# Last updated: 2026-04-27T20:40:49Z (BUG-59-01: trust intermediate CA, not root)
+# Yashigani v2.23.4 — enable TLS + client-cert verification on Postgres.
+# Last updated: 2026-05-20 (LETTA-001: asyncpg client-cert limitation, letta TLS-only rule)
 #
 # This init script runs ONCE on first initdb of the postgres container (the
 # stock postgres entrypoint executes /docker-entrypoint-initdb.d/*.sh in
@@ -74,20 +74,26 @@ PGCONF
 
 # Rewrite pg_hba.conf so plaintext connections from the network are rejected.
 # local + 127.0.0.1 remain for the postgres entrypoint bootstrap flows.
+# Letta-specific rule added before the clientcert catch-all (asyncpg limitation).
 cat > "${PGDATA}/pg_hba.conf" <<'HBA'
-# TYPE  DATABASE  USER  ADDRESS        METHOD
+# TYPE  DATABASE  USER           ADDRESS        METHOD
 # Local socket — used by the postgres docker-entrypoint itself for init.
-local   all       all                  trust
+local   all       all                           trust
 # Loopback — postgres image runs its own bootstrap on 127.0.0.1.
-host    all       all   127.0.0.1/32   trust
-host    all       all   ::1/128        trust
+host    all       all            127.0.0.1/32   trust
+host    all       all            ::1/128        trust
+# Letta: asyncpg cannot present a client cert via URI params (libpq limitation).
+# YSG-RISK-048: TLS-only (no mTLS) for letta until asyncpg gains client-cert URI support
+# or letta migrates to psycopg3. MUST appear BEFORE the clientcert=verify-ca catch-all.
+hostssl letta     yashigani_app  0.0.0.0/0      scram-sha-256
+hostssl letta     yashigani_app  ::/0           scram-sha-256
 # Everything else must come in over TLS with a client cert signed by our
 # internal CA, AND present a valid scram-sha-256 password. Three factors.
-hostssl all       all   0.0.0.0/0      scram-sha-256  clientcert=verify-ca
-hostssl all       all   ::/0           scram-sha-256  clientcert=verify-ca
+hostssl all       all            0.0.0.0/0      scram-sha-256  clientcert=verify-ca
+hostssl all       all            ::/0           scram-sha-256  clientcert=verify-ca
 # Defence in depth — explicitly reject any plaintext attempt.
-hostnossl all     all   0.0.0.0/0      reject
-hostnossl all     all   ::/0           reject
+hostnossl all     all            0.0.0.0/0      reject
+hostnossl all     all            ::/0           reject
 HBA
 
 chown postgres:postgres "${PGDATA}/pg_hba.conf"

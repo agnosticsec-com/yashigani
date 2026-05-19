@@ -1583,11 +1583,12 @@ services:
       LETTA_LLM_MODEL: "qwen2.5:3b"
       LETTA_EMBEDDING_MODEL: "qwen2.5:3b"
       # Use shared Postgres for persistence (separate DB).
-      # TLS params required: postgres enforces hostssl+clientcert=verify-ca for
-      # ALL connections (no plain-TCP fallback). Certs are issued by install.sh PKI
-      # (letta enrolled in service_identities.yaml, mtls_capable=false).
-      # ca_root.crt = root+intermediate bundle; sslrootcert verifies the server cert.
-      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/letta_client.crt&sslkey=/run/secrets/letta_client.key
+      # asyncpg (letta's SQLAlchemy driver) does not parse libpq URI cert params (sslcert/sslkey).
+      # sslmode=require enables TLS encryption; postgres verifies letta with password + dedicated
+      # pg_hba rule (hostssl letta yashigani_app ... scram-sha-256 — no clientcert).
+      # YSG-RISK-048: TLS without mTLS until asyncpg supports client-cert URI params or letta
+      # migrates to psycopg3. Forward close v2.24.0.
+      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta?sslmode=require
     volumes:
       - letta_data:/root/.letta
       # Captain Bucket-C: mount secrets dir so entrypoint shim can read
