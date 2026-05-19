@@ -4305,7 +4305,7 @@ EOF
     # Continue — the unit file is written; enabling/starting it later still works
   fi
 
-  if systemctl --user enable yashigani.service; then
+  if systemctl --user enable yashigani.service 2>/dev/null; then
     log_success "Auto-start: user yashigani.service enabled"
   else
     log_warn "Auto-start: systemctl --user enable failed — check: systemctl --user status yashigani.service"
@@ -4883,8 +4883,20 @@ for r in results:
         local _profile="${_rest%%:*}"
         local _token="${_rest#*:}"
         if [[ -n "$_profile" && -n "$_token" && "$_token" != "$_profile" ]]; then
-          echo "$_token" > "${secrets_dir}/${_profile}_token"
-          chmod 600 "${secrets_dir}/${_profile}_token"
+          # ISSUE-027 (2026-05-19): Docker-rootful fallback — Python inside the
+          # container may fail to write the token (EACCES) and fall through to
+          # printing it for host-side capture.  On Podman rootless the Python step
+          # succeeds and the file is already owned by the container UID (101000);
+          # the host-side echo then fails with EACCES.  Make the write non-fatal:
+          # attempt it (covers Docker rootful where Python failed), and if it fails
+          # verify the file was already populated by Python.  Either path is correct.
+          if ! echo "$_token" > "${secrets_dir}/${_profile}_token" 2>/dev/null; then
+            if [[ ! -s "${secrets_dir}/${_profile}_token" ]]; then
+              log_warn "  ${_agent_name}: token write failed and file not populated — token may be missing from secrets dir"
+            fi
+          else
+            chmod 600 "${secrets_dir}/${_profile}_token" 2>/dev/null || true
+          fi
         fi
         log_success "  ${_agent_name}: registered"
         any_registered=true
