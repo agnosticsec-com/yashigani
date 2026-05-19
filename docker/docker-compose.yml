@@ -1508,6 +1508,12 @@ services:
       # Disable telemetry
       DO_NOT_TRACK: "true"
       LANGFLOW_AUTO_LOGIN: "true"
+      # YSG-RISK-008 (read_only:true): redirect DB and config dir to named volume.
+      # Default DB path (/app/.venv/.../langflow.db) and default config dir
+      # (/app/data/.cache/langflow) are under the read-only rootfs.
+      # Named volume langflow_data:/app/langflow is writable.
+      LANGFLOW_DATABASE_URL: "sqlite:////app/langflow/langflow.db"
+      LANGFLOW_CONFIG_DIR: "/app/langflow/config"
     volumes:
       - langflow_data:/app/langflow
       # Captain Bucket-C: mount secrets dir so entrypoint shim can read
@@ -1528,8 +1534,10 @@ services:
       # /tmp needed for Python runtime temp files and pip install caching.
       # /app/data: langflow mkdir('/app/data') at startup — ephemeral cache dir,
       # not persisted across restarts (tmpfs acceptable per brief, data in named vol).
+      # mode=1777: langflow runs as uid=1000(user) gid=0(root) — needs world-writable
+      # tmpfs so non-root user can create subdirs at startup.
       - /tmp:size=128m,mode=1777
-      - /app/data:size=64m,mode=0755
+      - /app/data:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     # V232-CSCAN-01k-RES-01: align cap_drop with Helm (agent-bundles.yaml:53).
@@ -1559,14 +1567,14 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      - 'OPENAI_API_KEY=$(cat /run/secrets/yashigani_internal_bearer) && export OPENAI_API_KEY && exec "$@"'
+      # CWD change: letta writes openapi_letta.json to Path("openapi_letta.json")
+      # (relative to CWD) in app.py:162. Upstream WORKDIR is /app (read-only under
+      # read_only:true). cd /tmp before exec so the write lands in /tmp (writable
+      # via existing tmpfs). File is a dev/SDK-generator artifact — never read back
+      # at runtime. FastAPI in-memory openapi_schema is unaffected by CWD.
+      - 'OPENAI_API_KEY=$(cat /run/secrets/yashigani_internal_bearer) && export OPENAI_API_KEY && cd /tmp && exec "$@"'
       - '--'
-    # --no-generation: skip writing openapi_letta.json to CWD (/app/) at startup.
-    # Path("openapi_letta.json").write_text(...) in app.py:162 is a dev artifact
-    # used by SDK generators — it is written but never read back at runtime.
-    # With read_only:true, /app/ is not writable; --no-generation suppresses the
-    # write entirely via sys.argv check. FastAPI in-memory schema is unaffected.
-    command: ["letta", "server", "--host", "0.0.0.0", "--no-generation"]
+    command: ["letta", "server", "--host", "0.0.0.0"]
     environment:
       # Route LLM calls through Yashigani gateway
       OPENAI_API_BASE: http://gateway:8080/v1
@@ -1574,8 +1582,12 @@ services:
       # /run/secrets/yashigani_internal_bearer — do NOT set it here.
       LETTA_LLM_MODEL: "qwen2.5:3b"
       LETTA_EMBEDDING_MODEL: "qwen2.5:3b"
-      # Use shared Postgres for persistence (separate DB)
-      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta
+      # Use shared Postgres for persistence (separate DB).
+      # TLS params required: postgres enforces hostssl+clientcert=verify-ca for
+      # ALL connections (no plain-TCP fallback). Certs are issued by install.sh PKI
+      # (letta enrolled in service_identities.yaml, mtls_capable=false).
+      # ca_root.crt = root+intermediate bundle; sslrootcert verifies the server cert.
+      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta?sslmode=verify-ca&sslrootcert=/run/secrets/ca_root.crt&sslcert=/run/secrets/letta_client.crt&sslkey=/run/secrets/letta_client.key
     volumes:
       - letta_data:/root/.letta
       # Captain Bucket-C: mount secrets dir so entrypoint shim can read

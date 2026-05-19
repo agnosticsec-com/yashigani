@@ -7097,6 +7097,131 @@ _prepare_secrets_dir_for_pki() {
   # Docker / non-Podman path: chown was already applied in generate_secrets().
 }
 
+# ---------------------------------------------------------------------------
+# _chown_agent_volumes — set correct ownership on named volumes for Bucket-C
+# agent containers BEFORE compose_up starts them.
+#
+# Problem (BLOCKER-LF-001 / ASVS V14.1.1 / CWE-272):
+#   Docker creates named volumes owned by root (0:0) on first reference.
+#   langflow runs as uid=1000 (USER langflow in langflowai/langflow Dockerfile)
+#   and writes its SQLite DB + config to /app/langflow (langflow_data volume).
+#   With root-owned volume, langflow gets EACCES on first write → crash-loop.
+#
+#   letta runs as uid=0 inside the container and writes to /root/.letta
+#   (letta_data volume). Root can always write to a root-owned volume — no fix
+#   needed for letta_data.
+#
+# Fix: chown langflow_data to uid=1000 using an ephemeral container (mirrors
+# _pki_chown_client_keys docker_run mode). Idempotent — safe to re-run.
+# Called between bootstrap_internal_pki and compose_up (step 9b→10).
+#
+# K8s: Helm agent-bundles.yaml uses podSecurityContext.fsGroup (set per-bundle
+# via values.yaml) — kubelet applies ownership at mount time. Skip here.
+#
+# Alpine digest reuse: same image as _pki_chown_client_keys — avoid pulling a
+# different image tag; digests locked together for supply-chain consistency.
+# ---------------------------------------------------------------------------
+_chown_agent_volumes() {
+  local _effective_runtime="${YSG_RUNTIME:-}"
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]]; then
+    _effective_runtime="podman"
+  fi
+
+  # K8s: Helm agent-bundles.yaml sets podSecurityContext.fsGroup per bundle via
+  # values.yaml — the kubelet applies volume ownership at mount time. No host-side
+  # chown needed.
+  if [[ "$_effective_runtime" == "k8s" ]]; then
+    log_info "_chown_agent_volumes: K8s runtime — skipping (Helm podSecurityContext.fsGroup handles volume ownership)"
+    return 0
+  fi
+
+  # Only act for docker and podman runtimes.
+  if [[ "$_effective_runtime" != "podman" && "$_effective_runtime" != "docker" ]]; then
+    log_info "_chown_agent_volumes: unknown runtime '${_effective_runtime}' — skipping"
+    return 0
+  fi
+
+  # Same digest as _pki_chown_client_keys — pinned to prevent supply-chain substitution.
+  # alpine:3 (amd64/arm64 manifest list, 2026-04-29). Rotate on next release cycle.
+  local _alpine_image="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+
+  log_info "Chown'ing agent named volumes to container UIDs (runtime: ${_effective_runtime})"
+
+  # langflow_data → uid=1000 (langflowai/langflow USER langflow = UID 1000)
+  # ASVS V14.1.1: least privilege — volume must not be root-owned when process
+  # runs as non-root.
+  local _lf_vol="langflow_data"
+  log_info "  ${_lf_vol}: chown /vol to 1000:1000"
+
+  local _chown_ok=0
+  if [[ "$_effective_runtime" == "docker" ]]; then
+    # docker_run mode: daemon provides root inside container; chown any UID.
+    # --pull=never uses cached alpine:3 if present; fallback to digest pull.
+    if docker run --rm --pull=never \
+         --volume "${_lf_vol}:/vol:rw" \
+         "alpine:3" \
+         chown 1000:1000 /vol 2>/dev/null; then
+      _chown_ok=1
+    elif docker run --rm \
+         --volume "${_lf_vol}:/vol:rw" \
+         "$_alpine_image" \
+         chown 1000:1000 /vol; then
+      _chown_ok=1
+    fi
+  elif [[ "$_effective_runtime" == "podman" ]]; then
+    # Determine Podman sub-mode (same logic as _pki_chown_client_keys).
+    if [[ "$(id -u)" == "0" ]]; then
+      # Rootful Podman: use podman run (plain chown not available for named volumes).
+      if podman run --rm \
+           --volume "${_lf_vol}:/vol:rw" \
+           "$_alpine_image" \
+           chown 1000:1000 /vol 2>/dev/null; then
+        _chown_ok=1
+      fi
+    elif awk -v u="$(id -un)" -F: '$1==u && $3>=65536 {found=1} END{exit !found}' \
+           /etc/subuid 2>/dev/null; then
+      # Rootless local Podman: inspect volume mountpoint, then podman unshare.
+      local _lf_vol_path
+      _lf_vol_path="$(podman volume inspect "${_lf_vol}" --format '{{.Mountpoint}}' 2>/dev/null || echo "")"
+      if [[ -n "$_lf_vol_path" && -d "$_lf_vol_path" ]]; then
+        if podman unshare chown 1000:1000 "$_lf_vol_path" 2>/dev/null; then
+          _chown_ok=1
+        fi
+      fi
+      # Fallback: podman run (idempotent if unshare failed or vol not yet created).
+      if [[ "$_chown_ok" == "0" ]]; then
+        if podman run --rm \
+             --volume "${_lf_vol}:/vol:rw" \
+             "$_alpine_image" \
+             chown 1000:1000 /vol 2>/dev/null; then
+          _chown_ok=1
+        fi
+      fi
+    else
+      # Podman remote (macOS client tunnelling to VM) — podman run only.
+      if podman run --rm \
+           --network=none \
+           --volume "${_lf_vol}:/vol:rw,U" \
+           "$_alpine_image" \
+           chown 1000:1000 /vol 2>/dev/null; then
+        _chown_ok=1
+      fi
+    fi
+  fi
+
+  if [[ "$_chown_ok" == "0" ]]; then
+    log_error "_chown_agent_volumes: failed to chown ${_lf_vol} to 1000:1000 — langflow will EACCES on startup (BLOCKER-LF-001)"
+    return 1
+  fi
+  log_info "  ${_lf_vol}: chown 1000:1000 OK"
+
+  # letta_data: letta runs as uid=0 inside the container; root-owned volume is
+  # correct. No chown needed. Documented here for maintainer clarity.
+  log_info "  letta_data: uid=0 (root) — no chown needed"
+
+  return 0
+}
+
 bootstrap_internal_pki() {
   set_step "9b" "internal mTLS PKI"
   log_step "9b/${TOTAL_STEPS}" "Bootstrapping internal mTLS PKI..."
@@ -7526,6 +7651,12 @@ main() {
     _prepare_secrets_dir_for_pki
     _pki_prompt_lifetimes
     bootstrap_internal_pki
+
+    # Step 9c: chown named volumes for Bucket-C agent containers.
+    # Must run AFTER bootstrap_internal_pki (compose pull creates volumes) and
+    # BEFORE compose_up (containers must not start with root-owned volumes).
+    # BLOCKER-LF-001 / ASVS V14.1.1 / CWE-272.
+    _chown_agent_volumes || return 1
 
     # Step 10: docker compose up -d
     compose_up
