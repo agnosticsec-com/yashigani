@@ -1526,7 +1526,10 @@ services:
     tmpfs:
       # YSG-RISK-008 (v2.23.4): langflow_data:/app/langflow is a named volume.
       # /tmp needed for Python runtime temp files and pip install caching.
+      # /app/data: langflow mkdir('/app/data') at startup — ephemeral cache dir,
+      # not persisted across restarts (tmpfs acceptable per brief, data in named vol).
       - /tmp:size=128m,mode=1777
+      - /app/data:size=64m,mode=0755
     security_opt:
       - no-new-privileges:true
     # V232-CSCAN-01k-RES-01: align cap_drop with Helm (agent-bundles.yaml:53).
@@ -1558,7 +1561,12 @@ services:
       - -c
       - 'OPENAI_API_KEY=$(cat /run/secrets/yashigani_internal_bearer) && export OPENAI_API_KEY && exec "$@"'
       - '--'
-    command: ["letta", "server", "--host", "0.0.0.0"]
+    # --no-generation: skip writing openapi_letta.json to CWD (/app/) at startup.
+    # Path("openapi_letta.json").write_text(...) in app.py:162 is a dev artifact
+    # used by SDK generators — it is written but never read back at runtime.
+    # With read_only:true, /app/ is not writable; --no-generation suppresses the
+    # write entirely via sys.argv check. FastAPI in-memory schema is unaffected.
+    command: ["letta", "server", "--host", "0.0.0.0", "--no-generation"]
     environment:
       # Route LLM calls through Yashigani gateway
       OPENAI_API_BASE: http://gateway:8080/v1
