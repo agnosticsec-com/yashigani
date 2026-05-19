@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-18T00:00:00+01:00 — fix(caddy): add handle /openapi.json + /docs blocks — close Iris Seam 15 — openapi+docs edge routing */ -}}
+{{- /* Last updated: 2026-05-19T00:00:00+01:00 — fix(helm): inject X-SPIFFE-ID on /admin/* Caddy handle — close SIDE-001 — Helm parity for 8a1dbf5 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -839,6 +839,19 @@ data:
         }
       }
       handle /admin/* {
+        {{- if .Values.mtls.enabled }}
+        # SIDE-001 (2026-05-19): inject Caddy's own SPIFFE identity on the
+        # Caddy→backoffice leg so require_spiffe_id("/admin/agents") can verify
+        # the caller.  Browser sessions arrive at Caddy without a client cert;
+        # Caddy presents caddy_client.crt to backoffice via internal-mtls.
+        # require_spiffe_id trusts x-spiffe-id when x-spiffe-id-peer-cert is
+        # absent (uvicorn does not expose the ASGI TLS peer_cert extension).
+        # The hardcoded "spiffe://yashigani.internal/caddy" matches the ACL
+        # entry in service_identities.yaml endpoint_acls["/admin/agents"].
+        # Parity with docker/Caddyfile.{selfsigned,ca,acme} (commit 8a1dbf5).
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID "spiffe://yashigani.internal/caddy"
+        {{- end }}
         reverse_proxy https://yashigani-backoffice:8443 {
           {{- if .Values.mtls.enabled }}
           import internal-mtls-backoffice
