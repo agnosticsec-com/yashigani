@@ -13,6 +13,13 @@
 
 set -eu
 
+# Set umask 0077 so every file created by uvicorn or any Python-layer
+# code defaults to 0600 (owner-only), not 0644.  Defence-in-depth;
+# closes the class of world-readable runtime-written files regardless
+# of whether the caller used os.chmod().
+# Ref: Tom audit finding on 214c4fd collateral to ISSUE-027.
+umask 0077
+
 # ── mTLS port 8080 ─────────────────────────────────────────────────────────
 uvicorn yashigani.gateway.entrypoint:app \
     --host 0.0.0.0 \

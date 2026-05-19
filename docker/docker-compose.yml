@@ -1,5 +1,6 @@
 ---
 # Yashigani v2.23.4 — Docker Compose stack
+# Last updated: 2026-05-19T00:00:00+00:00 (fix(compose): ollama-init profiles — add langflow/letta/openclaw so SF-011 closed; umask 0077 in gateway-start.sh)
 # Last updated: 2026-05-18T00:00:00+00:00 (fix(compose): wire YASHIGANI_INTERNAL_BEARER into x-common-env — close YSG-COMPOSE-ENV-001)
 # Last updated: 2026-05-17T12:00:00+01:00 (feat: ollama-init profiles gate + disk-space check + env var — auto-pull model only when --with-openwebui)
 # Last updated: 2026-05-16T21:00:00+01:00 (fix: YSG-RISK-008 compose hardening — read_only+tmpfs 24/27 + no-new-privileges 27/27)
@@ -792,9 +793,10 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-  # Model bootstrap — pull default LLM model when Open WebUI is enabled.
-  # Gated on `profiles: [openwebui]` — only starts when --with-openwebui is set
-  # (install.sh adds the "openwebui" profile only in that path).
+  # Model bootstrap — pull default LLM model when any AI workload is enabled.
+  # Gated on profiles: [openwebui, langflow, letta, openclaw] — runs when any
+  # of these profiles is active (SF-011 fix 2026-05-19: was openwebui-only,
+  # which left agent-bundle installs with 0 models and HTTP 404 on chat).
   # Model: qwen2.5:3b (1.9 GB, Qwen 2.5 3B-parameter instruct, available on
   # registry.ollama.ai). Override via OLLAMA_MODEL env var in docker/.env.
   # Digest check guards against supply-chain substitution (SOL-SC-03).
@@ -810,8 +812,9 @@ services:
     mem_limit: ${YASHIGANI_OLLAMA_INIT_MEM_LIMIT:-256m}
     cpus: ${YASHIGANI_OLLAMA_INIT_CPU_LIMIT:-0.25}
     environment:
-      # OLLAMA_MODEL: set by install.sh to qwen2.5:3b when --with-openwebui is
-      # selected. Operators may override in docker/.env.
+      # OLLAMA_MODEL: defaults to qwen2.5:3b. install.sh writes this to .env
+      # when --with-openwebui is used; agent-bundle installs rely on this default.
+      # Operators may override in docker/.env.
       # OLLAMA_MODEL_DIGEST: short SHA for supply-chain digest verification.
       # Set to "skip" to bypass (e.g. after an upstream model update).
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
@@ -831,7 +834,7 @@ services:
         if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt "$REQUIRED_KB" ]; then
           AVAIL_GB=$(( AVAIL_KB / 1024 / 1024 ))
           echo "WARNING: Ollama volume has only ~${AVAIL_GB} GB free (need ≥3 GB for model pull)."
-          echo "Skipping model pull to avoid failed install. Free space on the docker volume and re-run install.sh --with-openwebui."
+          echo "Skipping model pull to avoid failed install. Free space on the docker volume and re-run install.sh."
           exit 0
         fi
         echo "Disk space OK (${AVAIL_KB} KB free). Pulling model..."
@@ -862,18 +865,28 @@ services:
       - no-new-privileges:true
     # V232-CSCAN-01k-RES-01: defence-in-depth — Helm counterpart is the
     # ollama-init Job in helm/yashigani/templates/ollama.yaml (gated on
-    # openWebui.enabled).
+    # openWebui.enabled OR any agentBundles.*.enabled — SF-011 parity fix).
     # No cap_add: no privileged-port binding.
     cap_drop: [ALL]
     # EX-231-10: ollama-init needs data (ollama DNS) + edge (model pull).
     networks:
       - data
       - edge    # Required for model registry DNS resolution
-    # Only start when Open WebUI profile is active (--with-openwebui).
-    # Without a model loaded, Open WebUI has no backends to list and the
-    # chat surface shows "no models available".
+    # SF-011 fix (2026-05-19): ollama-init must also run when agent bundles
+    # (langflow, letta, openclaw) are active without --with-openwebui.
+    # The gateway DEFAULT_MODELS env defaults to qwen2.5:3b for ALL inference;
+    # without the model pulled, /v1/chat/completions returns HTTP 404
+    # "model not found" for all agent-bundle workloads regardless of auth.
+    # Root cause: ollama-init was gated on `openwebui` only, so
+    # `--agent-bundles langflow,letta` with no `--with-openwebui` never ran
+    # it → 0 models in ollama → 404 on every chat call.
+    # Fix: add all agent-bundle profiles so ollama-init runs whenever any
+    # AI workload that needs the model is active.
     profiles:
       - openwebui
+      - langflow
+      - letta
+      - openclaw
 
   # ---------------------------------------------------------------------------
   # Prometheus — metrics collection

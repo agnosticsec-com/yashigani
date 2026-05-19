@@ -72,6 +72,14 @@ RUN mkdir -p /data/audit /data/bootstrap /var/log/yashigani && \
     chown -R yashigani:yashigani /data /var/log/yashigani /app 2>/dev/null || true && \
     chmod -R a+rX /usr/local/lib/python3.14/site-packages/yashigani/
 
+# umask 0077 wrapper — sets file-creation mask before uvicorn starts so
+# every runtime-written file (audit logs, alembic state, Python open())
+# defaults to 0600 (owner-only), not 0644. Defence-in-depth; closes the
+# class of world-readable runtime files regardless of caller remembering
+# os.chmod(). Ref: Tom audit finding on 214c4fd collateral to ISSUE-027.
+COPY --chown=root:root docker/backoffice-start.sh /usr/local/bin/backoffice-start.sh
+USER root
+RUN chmod 0755 /usr/local/bin/backoffice-start.sh
 USER yashigani
 
 EXPOSE 8443
@@ -92,11 +100,5 @@ ENV PYTHONUNBUFFERED=1 \
 # Internal mTLS (v2.23.1) — mutual TLS terminated by uvicorn.
 # Pattern A for Python ssl: ca_root.crt is the trust anchor; private root key
 # never enters this image (root.key is host-only 0400).
-CMD ["uvicorn", "yashigani.backoffice.entrypoint:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8443", \
-     "--ssl-keyfile", "/run/secrets/backoffice_client.key", \
-     "--ssl-certfile", "/run/secrets/backoffice_client.crt", \
-     "--ssl-ca-certs", "/run/secrets/ca_root.crt", \
-     "--ssl-cert-reqs", "2", \
-     "--no-access-log"]
+# backoffice-start.sh sets umask 0077 then exec's uvicorn.
+CMD ["/bin/sh", "/usr/local/bin/backoffice-start.sh"]
