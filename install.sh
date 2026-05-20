@@ -6687,64 +6687,6 @@ _pki_run_issuer() {
 }
 
 # ---------------------------------------------------------------------------
-# _ensure_secrets_group — create GID 2002 (ysg-secrets) on the host if not
-# already present.  This group is the shared read principal for the three
-# multi-UID secrets: postgres_password, redis_password, yashigani_internal_bearer.
-# Each of those files is chmod'd 0640 and chgrp'd to 2002 by _pki_chown_client_keys
-# so that only containers explicitly granted group_add: ["2002"] (postgres, redis,
-# budget-redis, open-webui, langflow, letta) can read them — not the world.
-#
-# Runtime matrix:
-#   Linux Docker / Linux Podman rootful: groupadd -g 2002 ysg-secrets (requires sudo
-#     or root; install.sh already uses sudo for other host operations).
-#   Linux Podman rootless: same groupadd call — the group must exist on the host so
-#     that `podman unshare chgrp 2002` can resolve it inside the user namespace.
-#   macOS Docker Desktop / macOS Podman via Colima: macOS has no /etc/group shared
-#     with the Linux VM. The chgrp is applied via `docker/podman run alpine` (the
-#     docker_run / podman_run dispatch in _pki_chown_client_keys), which runs inside
-#     the VM where GID 2002 is freely addressable.  groupadd on the Mac side is
-#     irrelevant and skipped.
-#
-# Idempotent: `getent group 2002` test + `|| true` on groupadd; safe to re-run.
-# Design: IRIS-DESIGN-002 (Option B) + LAURA-TM-GID-001 (GID-003/GID-006).
-# ---------------------------------------------------------------------------
-_ensure_secrets_group() {
-  # macOS: group creation is not needed — chgrp is applied inside the Linux VM
-  # via the docker_run / podman_run dispatch.  Skip host groupadd on Darwin.
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    log_info "_ensure_secrets_group: macOS — skipping host groupadd (chgrp applied inside VM)"
-    return 0
-  fi
-
-  # K8s: secrets are delivered as secretKeyRef; no file-mode concern on this path.
-  if [[ "${YSG_RUNTIME:-}" == "k8s" ]]; then
-    log_info "_ensure_secrets_group: K8s runtime — skipping (secrets delivered via secretKeyRef)"
-    return 0
-  fi
-
-  if getent group 2002 >/dev/null 2>&1; then
-    log_info "_ensure_secrets_group: GID 2002 already exists — idempotent skip"
-    return 0
-  fi
-
-  log_info "Creating ysg-secrets GID 2002 (required for multi-UID secret read access — IRIS-DESIGN-002)"
-  # groupadd requires root; on non-root installs delegate via sudo.
-  # Pattern: same as the install.sh iptables + volume-chown sudo calls.
-  if [[ "$(id -u)" == "0" ]]; then
-    groupadd -g 2002 ysg-secrets || {
-      log_error "_ensure_secrets_group: groupadd -g 2002 ysg-secrets failed"
-      return 1
-    }
-  else
-    sudo groupadd -g 2002 ysg-secrets || {
-      log_error "_ensure_secrets_group: sudo groupadd -g 2002 ysg-secrets failed"
-      return 1
-    }
-  fi
-  log_success "Created ysg-secrets GID 2002"
-}
-
-# ---------------------------------------------------------------------------
 # _pki_chown_client_keys — re-own each service's private key to the UID of
 # the consuming container, and chmod all certificate files to 0644.
 # Called on both fresh install and skip paths so keys and certs are always
@@ -7228,7 +7170,7 @@ _pki_chown_client_keys() {
     fi
   done
 
-  # Shared GID 2002 (ysg-secrets) design — replaces the obsolete 0644 approach.
+  # GID 2002 — numeric-only group ID for cross-container secret-read access.
   #
   # CONTEXT (resolved by Option B — IRIS-DESIGN-002 + LAURA-TM-GID-001):
   # Three secrets require multi-UID read access from containers running with
@@ -7245,6 +7187,16 @@ _pki_chown_client_keys() {
   # No world-readable bit — S1 invariant (_fix_config_perms -perm -004) passes cleanly.
   # ASVS V6.4.1 PASS. CWE-732 S1 clean. Prometheus already uses this pattern (GID 1001).
   #
+  # NUMERIC GID — NO /etc/group ENTRY REQUIRED BY DESIGN (IRIS-DESIGN-003 Option C /
+  # LAURA-TM-GROUPADD-001): Linux file permission checks are numeric (kernel inode GID
+  # comparison). `chgrp 2002`, `group_add: ["2002"]` in compose/Podman, and
+  # `supplementalGroups: [2002]` in Helm all operate on the raw GID integer and do not
+  # consult /etc/group. No `groupadd` call and no sudo escalation are required.
+  # K8s already uses numeric-only GID; this aligns Compose with that semantic.
+  # `ls -l` will show "2002" rather than a group name — this is expected and correct.
+  # See internal-docs/yashigani/iris-install-groupadd-design-review.md (IRIS-DESIGN-003)
+  # and internal-docs/yashigani/laura-install-groupadd-threat-model.md (LAURA-TM-GROUPADD-001).
+  #
   # GID-006 (LAURA-TM-GID-001 GO-BLOCKING): Podman rootless chgrp MUST go through
   # `podman unshare` (the unshare case in _do_chgrp). Host-side `chgrp 2002` sets
   # raw host GID 2002, not the subgid-mapped container GID — file becomes unreadable.
@@ -7253,7 +7205,7 @@ _pki_chown_client_keys() {
   # This block covers fresh-install + upgrade/preserve paths.
   # Residual YSG-SECRETS-DIST-002 (LOW): full ./secrets:/run/secrets:ro bind-mount
   # means a GID-2002-member container can read all three files — filed in risk register.
-  log_info "Applying GID 2002 (ysg-secrets) + mode 0640 to shared secrets (IRIS-DESIGN-002)"
+  log_info "Applying GID 2002 (numeric, no /etc/group entry) + mode 0640 to shared secrets (IRIS-DESIGN-003 Option C)"
   for _shared_pw in postgres_password redis_password yashigani_internal_bearer; do
     local _pwpath="${_secrets_dir}/${_shared_pw}"
     if [[ -f "$_pwpath" ]]; then
@@ -7527,11 +7479,6 @@ bootstrap_internal_pki() {
   _pki_validate_lifetimes
   # YSG-CERT-SAN-001: resolve public hostname + IP for Caddy cert SAN.
   _detect_public_access_params
-  # IRIS-DESIGN-002 / LAURA-TM-GID-001: ensure GID 2002 (ysg-secrets) exists
-  # on the host before _pki_chown_client_keys applies chgrp 2002 to shared secrets.
-  # macOS + K8s paths skip groupadd (see _ensure_secrets_group header).
-  _ensure_secrets_group || return 1
-
   local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
   if [[ -f "$ca_root" ]]; then
     log_info "Root CA already present — checking renewal status"
