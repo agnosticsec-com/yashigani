@@ -1379,15 +1379,48 @@ check_installer_preflight() {
       if [[ "${YSG_OS:-}" == "macos" ]]; then
         log_info "macOS+Docker: skipping host chown for $_bm_dir (virtiofs UID mapping — PKI container will see UID 1001)"
       else
-        # shellcheck disable=SC2012
+        # Non-root Docker caller: attempt direct chown; if EPERM, escalate via
+        # ephemeral container (same pattern as _do_chown docker_run mode in
+        # _pki_chown_client_keys). No host sudo required — Docker daemon grants
+        # root inside the container. TM-004 (accepted): install user must already
+        # be in the docker group to run Yashigani; docker socket grants effective
+        # root regardless of this chown pattern. No new attack surface introduced.
+        #
+        # TM-001 + TM-002 (Laura): declare digest-pinned alpine here so both
+        # docker run branches use the pinned ref. ASVS V14.3.1 / V14.2.5.
+        local _alpine_image="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
         local _dir_uid
+        # shellcheck disable=SC2012
         _dir_uid="$(ls -nd "$_bm_dir" 2>/dev/null | awk '{print $3}')"
         if [[ "$_dir_uid" != "1001" ]]; then
           if chown 1001:1001 "$_bm_dir" 2>/dev/null; then
             log_info "chown 1001:1001 applied to $_bm_dir"
           else
-            log_error "Cannot chown $_bm_dir to 1001:1001 — run: sudo chown 1001:1001 \"$_bm_dir\""
-            _bm_failed=1
+            # Direct chown failed (EPERM — install user not root).
+            # Escalate via ephemeral container: try local cache first (--pull=never),
+            # fall back to digest-pinned pull. Both branches use $_alpine_image
+            # (TM-002: no floating alpine:3 tag pull on cache miss).
+            log_info "direct chown failed — using docker run to chown $_bm_dir (non-root Docker caller)"
+            if ! docker info >/dev/null 2>&1; then
+              log_error "Cannot chown $_bm_dir to 1001:1001: direct chown failed (EPERM) and docker daemon is unreachable."
+              log_error "Ensure your user is in the docker group, or run the installer as root:"
+              log_error "  sudo groupadd docker && sudo usermod -aG docker \$USER && newgrp docker"
+              log_error "  # OR: sudo bash install.sh"
+              _bm_failed=1
+            elif docker run --rm --pull=never \
+                   --volume "${_bm_dir}:/t:rw" \
+                   "$_alpine_image" chown 1001:1001 /t 2>/dev/null || \
+                 docker run --rm \
+                   --volume "${_bm_dir}:/t:rw" \
+                   "$_alpine_image" chown 1001:1001 /t; then
+              log_info "docker run chown 1001:1001 applied to $_bm_dir"
+            else
+              log_error "Cannot chown $_bm_dir to 1001:1001 (direct chown and docker run container fallback both failed)."
+              log_error "Ensure your user is in the docker group, or run the installer as root:"
+              log_error "  sudo groupadd docker && sudo usermod -aG docker \$USER && newgrp docker"
+              log_error "  # OR: sudo bash install.sh"
+              _bm_failed=1
+            fi
           fi
         fi
       fi
