@@ -7111,7 +7111,7 @@ _prepare_secrets_dir_for_pki() {
 #   (letta_data volume). Root can always write to a root-owned volume — no fix
 #   needed for letta_data.
 #
-# Fix: chown langflow_data to uid=1000 using an ephemeral container (mirrors
+# Fix: chown docker_langflow_data to uid=1000 using an ephemeral container (mirrors
 # _pki_chown_client_keys docker_run mode). Idempotent — safe to re-run.
 # Called between bootstrap_internal_pki and compose_up (step 9b→10).
 #
@@ -7147,10 +7147,16 @@ _chown_agent_volumes() {
 
   log_info "Chown'ing agent named volumes to container UIDs (runtime: ${_effective_runtime})"
 
+  # Docker Compose prefixes named volumes with the project name derived from the
+  # directory containing the compose file. Our compose file lives under docker/,
+  # so the project name is "docker" → volumes are docker_langflow_data, etc.
+  # This matches the _project_prefix convention in _check_contaminated_volumes.
+  local _compose_project_prefix="docker"
+
   # langflow_data → uid=1000 (langflowai/langflow USER langflow = UID 1000)
   # ASVS V14.1.1: least privilege — volume must not be root-owned when process
   # runs as non-root.
-  local _lf_vol="langflow_data"
+  local _lf_vol="${_compose_project_prefix}_langflow_data"
   log_info "  ${_lf_vol}: chown /vol to 1000:1000"
 
   local _chown_ok=0
@@ -7215,9 +7221,9 @@ _chown_agent_volumes() {
   fi
   log_info "  ${_lf_vol}: chown 1000:1000 OK"
 
-  # letta_data: letta runs as uid=0 inside the container; root-owned volume is
-  # correct. No chown needed. Documented here for maintainer clarity.
-  log_info "  letta_data: uid=0 (root) — no chown needed"
+  # ${_compose_project_prefix}_letta_data: letta runs as uid=0 inside the container;
+  # root-owned volume is correct. No chown needed. Documented here for maintainer clarity.
+  log_info "  ${_compose_project_prefix}_letta_data: uid=0 (root) — no chown needed"
 
   return 0
 }
