@@ -102,16 +102,20 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                     starter_data = flow.get("data", {})
                     break
 
-        # Patch the LanguageModel node to use the Ollama provider via Yashigani gateway.
+        # Patch the LanguageModel node to use the Ollama provider via direct
+        # Ollama container access.
         #
         # Langflow 1.9.2 LanguageModelComponent template fields (verified 2026-05-20):
         #   model         — model name string (e.g. "qwen2.5:3b")
-        #   ollama_base_url — base URL for the Ollama-compatible endpoint
-        #   api_key       — API key (Bearer token for gateway auth)
+        #   ollama_base_url — base URL for the Ollama API (native protocol)
         #
-        # We point ollama_base_url at our gateway's /v1/ OpenAI-compat endpoint.
-        # The Ollama provider in langflow sends OpenAI-format requests, which our
-        # gateway accepts.  Internal service auth uses YASHIGANI_INTERNAL_BEARER.
+        # We point ollama_base_url at the Ollama container directly (http://ollama:11434)
+        # rather than the gateway's /v1/ endpoint.  The gateway expects mTLS client certs
+        # on port 8080; langflow has no client cert and the connection is rejected at the
+        # TLS handshake.  Direct access to ollama:11434 is safe — langflow is an internal
+        # trusted service on the compose stack network (no external exposure).
+        # Internal-service-to-internal-service: network isolation is the boundary (no
+        # app-layer authN on the Ollama API; Ollama has none).
         if starter_data:
             for node in starter_data.get("nodes", []):
                 node_data = node.get("data", {})
@@ -123,23 +127,17 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                             template["model"]["value"] = "qwen2.5:3b"
                         else:
                             template["model"] = "qwen2.5:3b"
-                    # Point at our internal OpenAI-compat gateway endpoint
+                    # Point directly at the Ollama container (native Ollama protocol)
                     if "ollama_base_url" in template:
                         if isinstance(template["ollama_base_url"], dict):
-                            template["ollama_base_url"]["value"] = "http://gateway:8080/v1"
+                            template["ollama_base_url"]["value"] = "http://ollama:11434"
                         else:
-                            template["ollama_base_url"] = "http://gateway:8080/v1"
-                    # Internal service Bearer token for gateway authN
-                    if "api_key" in template:
-                        if isinstance(template["api_key"], dict):
-                            template["api_key"]["value"] = _INTERNAL_BEARER
-                        else:
-                            template["api_key"] = _INTERNAL_BEARER
+                            template["ollama_base_url"] = "http://ollama:11434"
                     break
 
         flow_body = {
             "name": "Yashigani Chat",
-            "description": "Default chat flow for Yashigani gateway — Ollama provider via gateway /v1/ endpoint",
+            "description": "Default chat flow for Yashigani gateway — Ollama provider via ollama:11434",
             "endpoint_name": "yashigani-chat",
         }
         if starter_data:
@@ -152,7 +150,7 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
         )
         if resp.status_code in (200, 201):
             _flow_id = resp.json().get("id", "")
-            logger.info("Langflow: created flow %s with Ollama/gateway config", _flow_id)
+            logger.info("Langflow: created flow %s with Ollama/direct config", _flow_id)
         else:
             raise RuntimeError(f"Langflow flow creation failed: {resp.status_code} {resp.text[:200]}")
 
