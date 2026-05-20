@@ -94,7 +94,7 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                 break
 
     if not _flow_id:
-        # Find the "Basic Prompting" starter flow and patch it to use OpenAI via gateway
+        # Find the "Basic Prompting" starter flow and patch it to use Ollama provider via gateway
         starter_data = None
         if resp.status_code == 200:
             for flow in flows:
@@ -102,34 +102,44 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
                     starter_data = flow.get("data", {})
                     break
 
-        # Patch the LanguageModel node to use OpenAI provider via Yashigani gateway
+        # Patch the LanguageModel node to use the Ollama provider via Yashigani gateway.
+        #
+        # Langflow 1.9.2 LanguageModelComponent template fields (verified 2026-05-20):
+        #   model         — model name string (e.g. "qwen2.5:3b")
+        #   ollama_base_url — base URL for the Ollama-compatible endpoint
+        #   api_key       — API key (Bearer token for gateway auth)
+        #
+        # We point ollama_base_url at our gateway's /v1/ OpenAI-compat endpoint.
+        # The Ollama provider in langflow sends OpenAI-format requests, which our
+        # gateway accepts.  Internal service auth uses YASHIGANI_INTERNAL_BEARER.
         if starter_data:
             for node in starter_data.get("nodes", []):
                 node_data = node.get("data", {})
                 if node_data.get("type") == "LanguageModelComponent":
                     template = node_data.get("node", {}).get("template", {})
-                    # Switch model from Anthropic to OpenAI with our gateway
+                    # Set model name (string field in langflow 1.9.2)
                     if "model" in template:
-                        template["model"]["value"] = [{
-                            "name": "qwen2.5:3b",
-                            "provider": "OpenAI",
-                            "category": "OpenAI",
-                            "icon": "OpenAI",
-                            "metadata": {
-                                "api_key_param": "api_key",
-                                "context_length": 32768,
-                                "model_class": "ChatOpenAI",
-                                "model_name_param": "model",
-                                "base_url_param": "openai_api_base",
-                            },
-                        }]
+                        if isinstance(template["model"], dict):
+                            template["model"]["value"] = "qwen2.5:3b"
+                        else:
+                            template["model"] = "qwen2.5:3b"
+                    # Point at our internal OpenAI-compat gateway endpoint
+                    if "ollama_base_url" in template:
+                        if isinstance(template["ollama_base_url"], dict):
+                            template["ollama_base_url"]["value"] = "http://gateway:8080/v1"
+                        else:
+                            template["ollama_base_url"] = "http://gateway:8080/v1"
+                    # Internal service Bearer token for gateway authN
                     if "api_key" in template:
-                        template["api_key"]["value"] = _INTERNAL_BEARER
+                        if isinstance(template["api_key"], dict):
+                            template["api_key"]["value"] = _INTERNAL_BEARER
+                        else:
+                            template["api_key"] = _INTERNAL_BEARER
                     break
 
         flow_body = {
             "name": "Yashigani Chat",
-            "description": "Default chat flow for Yashigani gateway — uses OpenAI-compat API via gateway",
+            "description": "Default chat flow for Yashigani gateway — Ollama provider via gateway /v1/ endpoint",
             "endpoint_name": "yashigani-chat",
         }
         if starter_data:
@@ -142,7 +152,7 @@ async def _ensure_initialized(client: httpx.AsyncClient, base_url: str) -> tuple
         )
         if resp.status_code in (200, 201):
             _flow_id = resp.json().get("id", "")
-            logger.info("Langflow: created flow %s with OpenAI config", _flow_id)
+            logger.info("Langflow: created flow %s with Ollama/gateway config", _flow_id)
         else:
             raise RuntimeError(f"Langflow flow creation failed: {resp.status_code} {resp.text[:200]}")
 
