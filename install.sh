@@ -1780,8 +1780,17 @@ _write_aes_key_to_env() {
     return 0
   fi
 
-  # Create .env if it doesn't exist
+  # Create .env if it doesn't exist.
+  # A4 (Laura BLOCKING / CWE-732 / ASVS V6.4.1): chmod 0600 IMMEDIATELY after
+  # touch, before any credentials are written.  Without this, ambient umask 022
+  # creates a 0644 file; secrets (YASHIGANI_DB_AES_KEY, POSTGRES_PASSWORD,
+  # REDIS_PASSWORD, OWUI_SECRET_KEY, TOTP material) land world-readable until a
+  # later chmod corrects it.  This also ensures A2's o+rX sweep cannot widen the
+  # file: o+rX on a 0600 file would set 0604 (world-readable), which the explicit
+  # 0600 here prevents because the sweep runs after this function.
+  # docker/.env is also explicitly pruned from the A2 find sweep in _fix_config_perms.
   touch "$env_file"
+  chmod 0600 "$env_file"  # A4: secrets-bearing env file must be owner-only (laura-install-umask-threat-model.md)
 
   # --- Helper: set a var in .env (update if exists, append if not) ---
   _env_set() {
@@ -3246,51 +3255,40 @@ _fix_config_perms() {
 
   log_info "Ensuring bind-mounted config files are readable by container UIDs..."
 
-  # Directories that contain only config (never secrets) — widen to o+rX
-  local _config_dirs=(
-    "${work_dir}/config"
-    "${work_dir}/policy"
-  )
+  # A2 (Iris SUSTAINABILITY / iris-install-umask-design-review.md §6 Amendment 2):
+  # Replace the manually-enumerated _docker_config_paths array with a single
+  # find + chmod sweep over the entire work_dir, pruning the four paths that must
+  # never be widened:
+  #
+  #   docker/secrets  — secret material; all perms enforced by generate_secrets()
+  #                     and _prepare_secrets_dir_for_pki(); guarded by S1 assertion below
+  #   .git            — git repository metadata; not bind-mounted; may contain remote
+  #                     URLs with embedded credentials in legacy .git/config formats
+  #   .ysg_work       — temp scratch dir used during tarball extraction; cleaned post-install
+  #   docker/.env     — secrets-bearing env file; must be 0600 (A4); explicit prune here
+  #                     because o+rX on a 0600 file yields 0604 (world-readable).
+  #                     A4 (write_env_vars touch+chmod 0600) runs before this sweep,
+  #                     so the 0600 bit is already set; this prune is belt-and-suspenders.
+  #
+  # Rational: manual enumeration drifts when new bind-mounted services land (pgbouncer-letta
+  # arc proved this). Single sweep + explicit prune list is the sustainable shape —
+  # new compose bind-sources are automatically included without a code change here.
+  #
+  # NOTE: docker/letta-runtime/openapi_letta.json is :rw (not :ro).
+  # WARNING: The letta container WRITES this file at runtime (app.py:162).
+  #          Write access depends on the container running as UID 0 (root).
+  #          If a user: directive is ever added to the letta service definition,
+  #          the write WILL fail silently — review at that time.
+  #          (A3 / Iris §2 Issue B / iris-install-umask-design-review.md 2026-05-20)
+  find "${work_dir}" \
+    -not \( -path "${work_dir}/docker/secrets" -prune \) \
+    -not \( -path "${work_dir}/.git" -prune \) \
+    -not \( -path "${work_dir}/.ysg_work" -prune \) \
+    -not \( -path "${work_dir}/docker/.env" -prune \) \
+    -exec chmod o+rX {} + 2>/dev/null \
+    || log_warn "chmod o+rX sweep had partial failures (non-fatal — secrets/ not touched)"
 
-  # Individual files / dirs inside docker/ that are bind-mounted as :ro config
-  # These are deliberately listed (not a blanket chmod on docker/) so that
-  # docker/secrets/ is never touched.
-  local _docker_config_paths=(
-    "${work_dir}/docker/pgbouncer"
-    "${work_dir}/docker/postgres"
-    "${work_dir}/docker/service_identities.yaml"
-    "${work_dir}/docker/openclaw"
-    "${work_dir}/docker/letta-runtime"
-    "${work_dir}/docker/keycloak"
-  )
-
-  # Caddyfile variants — glob-safe enumeration
-  local _caddyfiles=()
-  while IFS= read -r -d '' _cf; do
-    _caddyfiles+=("$_cf")
-  done < <(find "${work_dir}/docker" -maxdepth 1 -name "Caddyfile*" -print0 2>/dev/null)
-
-  for _dir in "${_config_dirs[@]}"; do
-    if [[ -d "$_dir" ]]; then
-      chmod -R o+rX "$_dir" 2>/dev/null \
-        || log_warn "  chmod o+rX failed for ${_dir} (non-fatal — may already be readable)"
-      log_info "  Config readable: ${_dir}"
-    fi
-  done
-
-  for _path in "${_docker_config_paths[@]}"; do
-    if [[ -e "$_path" ]]; then
-      chmod -R o+rX "$_path" 2>/dev/null \
-        || log_warn "  chmod o+rX failed for ${_path} (non-fatal)"
-      log_info "  Config readable: ${_path}"
-    fi
-  done
-
-  for _cf in "${_caddyfiles[@]}"; do
-    chmod o+r "$_cf" 2>/dev/null \
-      || log_warn "  chmod o+r failed for ${_cf} (non-fatal)"
-    log_info "  Config readable: ${_cf}"
-  done
+  log_info "  Config sweep applied (work_dir minus secrets/.git/.ysg_work/docker/.env)"
 
   # Invariant: secrets dir must NOT have been touched — assert no world-readable
   # non-certificate files under docker/secrets/ (CWE-732 / v2.23.1 S1).
@@ -3299,8 +3297,14 @@ _fix_config_perms() {
   # keys and password/token files are checked here.
   local _secrets_dir="${work_dir}/docker/secrets"
   if [[ -d "$_secrets_dir" ]]; then
-    if find "${_secrets_dir}" -type f ! -name "*.crt" \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
-      log_error "CWE-732: group/world-readable non-cert file(s) found under ${_secrets_dir} after _fix_config_perms" >&2
+    # A1 (Iris BLOCKING / iris-install-umask-design-review.md):
+    # Check only WORLD-readable (-perm -004), NOT group-readable (-perm -040).
+    # caddy_internal_hmac is intentionally 0440 (group-readable for caddy<->backoffice
+    # HMAC handoff); checking -perm -040 caused a false-positive abort on every install.
+    # Group-readable is a legitimate design choice for specific files in docker/secrets/;
+    # world-readable (o+r) on ANY secret file there is always wrong.
+    if find "${_secrets_dir}" -type f ! -name "*.crt" -perm -004 2>/dev/null | grep -q .; then
+      log_error "CWE-732: world-readable non-cert file(s) found under ${_secrets_dir} after _fix_config_perms" >&2
       log_error "This is a security regression — check for chmod errors above." >&2
       exit 1
     fi
