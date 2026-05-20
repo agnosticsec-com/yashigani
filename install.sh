@@ -1716,11 +1716,21 @@ _generate_saml_sp_key() {
   # Bug fix (7cdbcf9 follow-up): secrets_dir may not yet exist at step 5;
   # mkdir -p is idempotent so safe on both fresh install and re-run.
   mkdir -p "${secrets_dir}"
-  umask 077
-  if ! openssl genrsa -out "${sp_key_file}" 4096 2>/dev/null; then
-    log_error "Failed to generate SAML SP RSA key (YSG-RISK-044)"
-    exit 1
-  fi
+  # Scope umask 077 to a sub-shell so it does NOT bleed into the parent installer
+  # process.  An unscoped `umask 077` here caused all subsequent files written by
+  # generate_secrets() and any tarball/git extract to land as 0600/0700, making
+  # bind-mounted config files unreadable by container UIDs (pgbouncer=70,
+  # prometheus=65534, etc.).  Fix: sub-shell inherits the restrictive umask,
+  # generates the key, then the sub-shell exits and the parent umask is restored.
+  # The explicit chmod 0400 / 0644 below re-enforce key perms independent of umask.
+  # (fix: umask-077-bleed / Ava phase-1 failure 2026-05-20)
+  (
+    umask 077
+    if ! openssl genrsa -out "${sp_key_file}" 4096 2>/dev/null; then
+      log_error "Failed to generate SAML SP RSA key (YSG-RISK-044)"
+      exit 1
+    fi
+  )
 
   # Post-generation RSA invariant: confirm the key we just wrote is actually RSA.
   # Catches the (theoretical) case where openssl behaves unexpectedly OR someone
@@ -3197,6 +3207,106 @@ with open('${tmp_config}', 'w') as f:
       log_success "Docker config updated — anonymous pulls enabled"
     fi
   fi
+}
+
+# =============================================================================
+# Pre-compose-up: ensure bind-mounted config files are readable by container UIDs
+# =============================================================================
+# Config files live in the source tree at their source-tree permissions (0644).
+# If the installer runs in a restrictive umask context (e.g. the invoking shell
+# set umask 077 before extracting the tarball), extracted files land as 0600 and
+# container processes (pgbouncer UID 70, prometheus UID 65534, OPA, caddy, etc.)
+# cannot read them.
+#
+# This function restores readable permissions on all bind-mounted config paths
+# immediately before compose_up.  It uses `o+rX` (add read/execute for others,
+# preserving existing bits) so:
+#   - Regular files: 0600 → 0604 (readable) or 0644 → 0644 (unchanged)
+#   - Directories:   0700 → 0705 (traversable)
+#
+# SECURITY BOUNDARY: this function MUST NOT touch docker/secrets/ — all secret
+# files must remain 0600 (or tighter).  Only the specific source-tree paths that
+# are bind-mounted as :ro config are widened here.  The secrets dir has its own
+# hardened perms enforced by generate_secrets() and _prepare_secrets_dir_for_pki().
+#
+# Paths enumerated from docker/docker-compose.yml bind-mount audit:
+#   config/           — prometheus, alertmanager, grafana, loki, otel, promtail, jaeger
+#   policy/           — OPA policy files
+#   docker/Caddyfile* — caddy config
+#   docker/pgbouncer/ — pgbouncer.ini, pgbouncer-letta.ini
+#   docker/postgres/  — init scripts (05-enable-ssl.sh, init-agent-dbs.sh)
+#   docker/service_identities.yaml
+#   docker/openclaw/  — openclaw.json
+#   docker/letta-runtime/ — openapi_letta.json
+#   docker/keycloak/  — keycloak realm imports
+#
+# (fix: umask-077-bleed / Ava phase-1 failure 2026-05-20)
+_fix_config_perms() {
+  local work_dir="${WORK_DIR}"
+
+  log_info "Ensuring bind-mounted config files are readable by container UIDs..."
+
+  # Directories that contain only config (never secrets) — widen to o+rX
+  local _config_dirs=(
+    "${work_dir}/config"
+    "${work_dir}/policy"
+  )
+
+  # Individual files / dirs inside docker/ that are bind-mounted as :ro config
+  # These are deliberately listed (not a blanket chmod on docker/) so that
+  # docker/secrets/ is never touched.
+  local _docker_config_paths=(
+    "${work_dir}/docker/pgbouncer"
+    "${work_dir}/docker/postgres"
+    "${work_dir}/docker/service_identities.yaml"
+    "${work_dir}/docker/openclaw"
+    "${work_dir}/docker/letta-runtime"
+    "${work_dir}/docker/keycloak"
+  )
+
+  # Caddyfile variants — glob-safe enumeration
+  local _caddyfiles=()
+  while IFS= read -r -d '' _cf; do
+    _caddyfiles+=("$_cf")
+  done < <(find "${work_dir}/docker" -maxdepth 1 -name "Caddyfile*" -print0 2>/dev/null)
+
+  for _dir in "${_config_dirs[@]}"; do
+    if [[ -d "$_dir" ]]; then
+      chmod -R o+rX "$_dir" 2>/dev/null \
+        || log_warn "  chmod o+rX failed for ${_dir} (non-fatal — may already be readable)"
+      log_info "  Config readable: ${_dir}"
+    fi
+  done
+
+  for _path in "${_docker_config_paths[@]}"; do
+    if [[ -e "$_path" ]]; then
+      chmod -R o+rX "$_path" 2>/dev/null \
+        || log_warn "  chmod o+rX failed for ${_path} (non-fatal)"
+      log_info "  Config readable: ${_path}"
+    fi
+  done
+
+  for _cf in "${_caddyfiles[@]}"; do
+    chmod o+r "$_cf" 2>/dev/null \
+      || log_warn "  chmod o+r failed for ${_cf} (non-fatal)"
+    log_info "  Config readable: ${_cf}"
+  done
+
+  # Invariant: secrets dir must NOT have been touched — assert no world-readable
+  # non-certificate files under docker/secrets/ (CWE-732 / v2.23.1 S1).
+  # Note: *.crt files are intentionally 0644 (public material — CA and client certs
+  # must be readable by all container UIDs for mTLS peer verification). Only private
+  # keys and password/token files are checked here.
+  local _secrets_dir="${work_dir}/docker/secrets"
+  if [[ -d "$_secrets_dir" ]]; then
+    if find "${_secrets_dir}" -type f ! -name "*.crt" \( -perm -004 -o -perm -040 \) 2>/dev/null | grep -q .; then
+      log_error "CWE-732: group/world-readable non-cert file(s) found under ${_secrets_dir} after _fix_config_perms" >&2
+      log_error "This is a security regression — check for chmod errors above." >&2
+      exit 1
+    fi
+  fi
+
+  log_success "Bind-mounted config permissions verified"
 }
 
 # =============================================================================
@@ -7687,6 +7797,15 @@ main() {
     # BEFORE compose_up (containers must not start with root-owned volumes).
     # BLOCKER-LF-001 / ASVS V14.1.1 / CWE-272.
     _chown_agent_volumes || return 1
+
+    # Step 9d: ensure bind-mounted config files are readable by container UIDs.
+    # Fixes umask 077 bleed: if the invoking shell had a restrictive umask at
+    # tarball-extract time, config files land as 0600 and container processes
+    # (pgbouncer UID 70, prometheus UID 65534, OPA, caddy, etc.) cannot read them.
+    # Must run AFTER PKI (which writes certs into docker/secrets/) so the
+    # invariant check can assert secrets/ was not accidentally widened.
+    # (fix: umask-077-bleed / Ava phase-1 failure 2026-05-20)
+    _fix_config_perms
 
     # Step 10: docker compose up -d
     compose_up
