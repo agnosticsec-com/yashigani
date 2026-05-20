@@ -1,5 +1,6 @@
 ---
 # Yashigani v2.23.4 — Docker Compose stack
+# Last updated: 2026-05-20T10:50:00+01:00 (fix(compose): AGENT-RUNTIME-003c drop sslmode=require from LETTA_PG_URI — pg8000 alembic path)
 # Last updated: 2026-05-20T10:30:00+01:00 (fix(compose): AGENT-RUNTIME-003b drop cd /tmp from letta shim + langflow ALEMBIC_LOG_TO_STDOUT)
 # Last updated: 2026-05-20T00:06:00+01:00 (fix(postgres,compose): LETTA-001 — pg_hba letta-specific TLS rule + sslmode=require URI)
 # Last updated: 2026-05-19T00:00:00+00:00 (fix(compose): ollama-init profiles — add langflow/letta/openclaw so SF-011 closed; umask 0077 in gateway-start.sh)
@@ -1592,12 +1593,14 @@ services:
       LETTA_LLM_MODEL: "qwen2.5:3b"
       LETTA_EMBEDDING_MODEL: "qwen2.5:3b"
       # Use shared Postgres for persistence (separate DB).
-      # asyncpg (letta's SQLAlchemy driver) does not parse libpq URI cert params (sslcert/sslkey).
-      # sslmode=require enables TLS encryption; postgres verifies letta with password + dedicated
-      # pg_hba rule (hostssl letta yashigani_app ... scram-sha-256 — no clientcert).
-      # YSG-RISK-048: TLS without mTLS until asyncpg supports client-cert URI params or letta
-      # migrates to psycopg3. Forward close v2.24.0.
-      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta?sslmode=require
+      # asyncpg (letta's SQLAlchemy async driver) and pg8000 (alembic sync driver) both
+      # cannot negotiate TLS via URI params — asyncpg ignores libpq cert params; pg8000
+      # uses ssl_context not sslmode kwarg. Plain TCP + scram-sha-256 is the working config.
+      # pg_hba rule is `host letta yashigani_app scram-sha-256` (plain TCP, before the
+      # hostssl clientcert catch-all).
+      # YSG-RISK-048: plain TCP + password-only auth for letta; forward-close v2.24.0
+      # when letta migrates to psycopg3 or asyncpg adds URI cert support.
+      LETTA_PG_URI: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta
     volumes:
       - letta_data:/root/.letta
       # Captain Bucket-C: mount secrets dir so entrypoint shim can read

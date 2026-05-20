@@ -82,11 +82,12 @@ local   all       all                           trust
 # Loopback — postgres image runs its own bootstrap on 127.0.0.1.
 host    all       all            127.0.0.1/32   trust
 host    all       all            ::1/128        trust
-# Letta: asyncpg cannot present a client cert via URI params (libpq limitation).
-# YSG-RISK-048: TLS-only (no mTLS) for letta until asyncpg gains client-cert URI support
-# or letta migrates to psycopg3. MUST appear BEFORE the clientcert=verify-ca catch-all.
-hostssl letta     yashigani_app  0.0.0.0/0      scram-sha-256
-hostssl letta     yashigani_app  ::/0           scram-sha-256
+# Letta: asyncpg (runtime) and pg8000 (alembic) cannot negotiate TLS via URI params.
+# YSG-RISK-048: plain TCP + scram-sha-256 for letta; mTLS forward-close target v2.24.0.
+# MUST appear BEFORE the hostssl clientcert=verify-ca catch-all.
+# AGENT-RUNTIME-003c: pg8000 alembic path fails with sslmode kwarg on hostssl rule.
+host letta     yashigani_app  0.0.0.0/0      scram-sha-256
+host letta     yashigani_app  ::/0           scram-sha-256
 # Everything else must come in over TLS with a client cert signed by our
 # internal CA, AND present a valid scram-sha-256 password. Three factors.
 hostssl all       all            0.0.0.0/0      scram-sha-256  clientcert=verify-ca
