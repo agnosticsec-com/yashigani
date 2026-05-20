@@ -1562,8 +1562,13 @@ services:
     cpus: ${YASHIGANI_LETTA_CPU_LIMIT:-1.0}
     # Captain Bucket-C: entrypoint shim reads YASHIGANI_INTERNAL_BEARER from
     # /run/secrets/yashigani_internal_bearer and exports it as OPENAI_API_KEY.
-    # Letta 0.16.7 CMD: letta server --host 0.0.0.0
-    # (verified from upstream Dockerfile at tag 0.16.7).
+    # Letta 0.16.7 upstream: ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+    #                        CMD ["./letta/server/startup.sh"]
+    # startup.sh: runs `alembic upgrade head` then starts letta server.
+    # AGENT-RUNTIME-003: original shim used `exec "$@"` which resolved to
+    # `exec letta server --host 0.0.0.0` — bypassing startup.sh and alembic
+    # migrations, causing "relation 'organizations' does not exist" crash.
+    # Fix: exec /app/letta/server/startup.sh (absolute path — safe from CWD=/tmp).
     entrypoint:
       - /bin/sh
       - -c
@@ -1572,9 +1577,8 @@ services:
       # read_only:true). cd /tmp before exec so the write lands in /tmp (writable
       # via existing tmpfs). File is a dev/SDK-generator artifact — never read back
       # at runtime. FastAPI in-memory openapi_schema is unaffected by CWD.
-      - 'OPENAI_API_KEY=$(cat /run/secrets/yashigani_internal_bearer) && export OPENAI_API_KEY && cd /tmp && exec "$@"'
-      - '--'
-    command: ["letta", "server", "--host", "0.0.0.0"]
+      # startup.sh uses only absolute paths — CWD=/tmp is safe for migration phase.
+      - 'OPENAI_API_KEY=$(cat /run/secrets/yashigani_internal_bearer) && export OPENAI_API_KEY && cd /tmp && exec /app/letta/server/startup.sh'
     environment:
       # Route LLM calls through Yashigani gateway
       OPENAI_API_BASE: http://gateway:8080/v1
