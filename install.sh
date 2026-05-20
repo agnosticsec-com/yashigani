@@ -6654,6 +6654,64 @@ _pki_run_issuer() {
 }
 
 # ---------------------------------------------------------------------------
+# _ensure_secrets_group — create GID 2002 (ysg-secrets) on the host if not
+# already present.  This group is the shared read principal for the three
+# multi-UID secrets: postgres_password, redis_password, yashigani_internal_bearer.
+# Each of those files is chmod'd 0640 and chgrp'd to 2002 by _pki_chown_client_keys
+# so that only containers explicitly granted group_add: ["2002"] (postgres, redis,
+# budget-redis, open-webui, langflow, letta) can read them — not the world.
+#
+# Runtime matrix:
+#   Linux Docker / Linux Podman rootful: groupadd -g 2002 ysg-secrets (requires sudo
+#     or root; install.sh already uses sudo for other host operations).
+#   Linux Podman rootless: same groupadd call — the group must exist on the host so
+#     that `podman unshare chgrp 2002` can resolve it inside the user namespace.
+#   macOS Docker Desktop / macOS Podman via Colima: macOS has no /etc/group shared
+#     with the Linux VM. The chgrp is applied via `docker/podman run alpine` (the
+#     docker_run / podman_run dispatch in _pki_chown_client_keys), which runs inside
+#     the VM where GID 2002 is freely addressable.  groupadd on the Mac side is
+#     irrelevant and skipped.
+#
+# Idempotent: `getent group 2002` test + `|| true` on groupadd; safe to re-run.
+# Design: IRIS-DESIGN-002 (Option B) + LAURA-TM-GID-001 (GID-003/GID-006).
+# ---------------------------------------------------------------------------
+_ensure_secrets_group() {
+  # macOS: group creation is not needed — chgrp is applied inside the Linux VM
+  # via the docker_run / podman_run dispatch.  Skip host groupadd on Darwin.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    log_info "_ensure_secrets_group: macOS — skipping host groupadd (chgrp applied inside VM)"
+    return 0
+  fi
+
+  # K8s: secrets are delivered as secretKeyRef; no file-mode concern on this path.
+  if [[ "${YSG_RUNTIME:-}" == "k8s" ]]; then
+    log_info "_ensure_secrets_group: K8s runtime — skipping (secrets delivered via secretKeyRef)"
+    return 0
+  fi
+
+  if getent group 2002 >/dev/null 2>&1; then
+    log_info "_ensure_secrets_group: GID 2002 already exists — idempotent skip"
+    return 0
+  fi
+
+  log_info "Creating ysg-secrets GID 2002 (required for multi-UID secret read access — IRIS-DESIGN-002)"
+  # groupadd requires root; on non-root installs delegate via sudo.
+  # Pattern: same as the install.sh iptables + volume-chown sudo calls.
+  if [[ "$(id -u)" == "0" ]]; then
+    groupadd -g 2002 ysg-secrets || {
+      log_error "_ensure_secrets_group: groupadd -g 2002 ysg-secrets failed"
+      return 1
+    }
+  else
+    sudo groupadd -g 2002 ysg-secrets || {
+      log_error "_ensure_secrets_group: sudo groupadd -g 2002 ysg-secrets failed"
+      return 1
+    }
+  fi
+  log_success "Created ysg-secrets GID 2002"
+}
+
+# ---------------------------------------------------------------------------
 # _pki_chown_client_keys — re-own each service's private key to the UID of
 # the consuming container, and chmod all certificate files to 0644.
 # Called on both fresh install and skip paths so keys and certs are always
@@ -6933,6 +6991,127 @@ _pki_chown_client_keys() {
     return 0
   }
 
+  # Helper: chgrp a single file to group <gid> using the active strategy.
+  # Mirrors _do_chown exactly (same 3-mode dispatch) but issues chgrp not chown.
+  #
+  # CRITICAL (Laura GID-006): on Podman rootless the host-side GID is subgid-mapped.
+  # `podman unshare chgrp 2002 <file>` resolves GID 2002 in the user-namespace
+  # and writes the correct host subgid-mapped value to the inode automatically.
+  # A plain `chgrp 2002 <file>` on the host would set raw host GID 2002 which does
+  # NOT match the container-presented GID 2002 after subgid mapping — the file
+  # becomes unreadable. The unshare case MUST use `podman unshare chgrp`.
+  #
+  # Design: IRIS-DESIGN-002 §8 + LAURA-TM-GID-001 GID-003 + GID-006.
+  _do_chgrp() {
+    local _gid="$1" _file="$2" _label="$3"
+    case "$_chown_mode" in
+      direct)
+        if ! chgrp "${_gid}" "$_file"; then
+          log_error "chgrp ${_gid} failed on ${_label} — aborting"
+          return 1
+        fi
+        ;;
+      unshare)
+        # GID-006: MUST use podman unshare — NOT host-side chgrp.
+        local _unshare_grp_ok=0
+        if podman unshare chgrp "${_gid}" "$_file" 2>/dev/null; then
+          _unshare_grp_ok=1
+        fi
+        if [[ "$_unshare_grp_ok" == "0" ]]; then
+          log_warn "podman unshare chgrp ${_gid} failed on ${_label} — falling back to podman_run"
+          local _rel_file="${_file#"${_secrets_dir}/"}"
+          if ! podman run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "chgrp ${_gid} /s/${_rel_file}" 2>/dev/null; then
+            log_error "podman_run fallback chgrp ${_gid} also failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
+        ;;
+      docker_run)
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        if ! docker run --rm --pull=never \
+               --volume "${_secrets_dir}:/s:rw" \
+               "alpine:3" \
+               sh -c "chgrp ${_gid} /s/${_rel_file}" 2>/dev/null; then
+          if ! docker run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "chgrp ${_gid} /s/${_rel_file}"; then
+            log_error "docker_run chgrp ${_gid} failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
+        ;;
+      podman_run)
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        if ! podman run --rm \
+               --network=none \
+               --volume "${_secrets_dir}:/s:rw,U" \
+               "$_alpine_image" \
+               sh -c "chgrp ${_gid} /s/${_rel_file}" 2>/dev/null; then
+          log_warn "podman run chgrp ${_gid} failed on ${_label} (macOS TCC Privacy may block virtiofs access)"
+          log_warn "  To fix permanently: grant Podman Full Disk Access in System Settings > Privacy"
+        fi
+        ;;
+    esac
+    return 0
+  }
+
+  # Helper: chmod 0640 a file using the active strategy.
+  # Called paired with _do_chgrp for the shared secrets (GID-003).
+  _do_chmod_0640() {
+    local _file="$1" _label="$2"
+    case "$_chown_mode" in
+      direct)
+        if ! chmod 0640 "$_file"; then
+          log_error "chmod 0640 failed on ${_label} — aborting"
+          return 1
+        fi
+        ;;
+      unshare)
+        if ! podman unshare chmod 0640 "$_file" 2>/dev/null; then
+          log_warn "podman unshare chmod 0640 failed on ${_label} — falling back to podman_run"
+          local _rel_file="${_file#"${_secrets_dir}/"}"
+          if ! podman run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "chmod 0640 /s/${_rel_file}" 2>/dev/null; then
+            log_error "podman_run fallback chmod 0640 also failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
+        ;;
+      docker_run)
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        if ! docker run --rm --pull=never \
+               --volume "${_secrets_dir}:/s:rw" \
+               "alpine:3" \
+               sh -c "chmod 0640 /s/${_rel_file}" 2>/dev/null; then
+          if ! docker run --rm \
+                 --volume "${_secrets_dir}:/s:rw" \
+                 "$_alpine_image" \
+                 sh -c "chmod 0640 /s/${_rel_file}"; then
+            log_error "docker_run chmod 0640 failed on ${_label} — aborting"
+            return 1
+          fi
+        fi
+        ;;
+      podman_run)
+        local _rel_file="${_file#"${_secrets_dir}/"}"
+        if ! podman run --rm \
+               --network=none \
+               --volume "${_secrets_dir}:/s:rw,U" \
+               "$_alpine_image" \
+               sh -c "chmod 0640 /s/${_rel_file}" 2>/dev/null; then
+          log_warn "podman run chmod 0640 failed on ${_label} (macOS TCC Privacy may block virtiofs access)"
+        fi
+        ;;
+    esac
+    return 0
+  }
+
   # Iterate all services from the shared map (lib/pki_ownership.sh).
   # pki_service_uid + pki_key_mode replace the inline array and the prometheus
   # special-case. Adding a new service updates lib/pki_ownership.sh only.
@@ -7016,78 +7195,40 @@ _pki_chown_client_keys() {
     fi
   done
 
-  # gate V232-SMOKE-018 (2026-05-04): postgres + redis containers run as root
-  # inside the image (no `user:` override in compose) AND `cap_drop: [ALL]`,
-  # which strips CAP_DAC_OVERRIDE. Without DAC_OVERRIDE root cannot read files
-  # outside its DAC reach — and the host bind-mount of secrets/ exposes
-  # `postgres_password` / `redis_password` as 1001:1001 mode 0600. Result:
-  # postgres docker-entrypoint.sh fails reading POSTGRES_PASSWORD_FILE; redis
-  # fails reading the password supplied to --requirepass; both crash-loop.
+  # Shared GID 2002 (ysg-secrets) design — replaces the obsolete 0644 approach.
   #
-  # Both files are also read by gateway/backoffice (UID 1001) when constructing
-  # their DSN, so split-ownership (chown to 999, group 1001) would require
-  # adding `group_add: ["1001"]` to every consumer — fragile across the matrix
-  # (Docker / Podman rootful / Podman rootless / K8s).
+  # CONTEXT (resolved by Option B — IRIS-DESIGN-002 + LAURA-TM-GID-001):
+  # Three secrets require multi-UID read access from containers running with
+  # cap_drop: [ALL] (which strips CAP_DAC_OVERRIDE):
+  #   postgres_password      — postgres UID 999 reads via POSTGRES_PASSWORD_FILE
+  #   redis_password         — redis/budget-redis UID 999 reads via --requirepass
+  #   yashigani_internal_bearer — open-webui/langflow/letta (UID 0 in container)
+  #                               read via Bucket-C entrypoint shim
+  # gateway/backoffice/pgbouncer receive all three via .env env var — no file read.
+  # openclaw receives bearer via OPENCLAW_GATEWAY_TOKEN env var — no file read.
   #
-  # YSG-SECRETS-DIST-001 (2026-05-18): yashigani_internal_bearer is consumed
-  # by MULTIPLE container UIDs simultaneously:
-  #   gateway:1001, backoffice:1001  — read via env (YASHIGANI_INTERNAL_BEARER)
-  #   langflow:1000                  — cat /run/secrets/yashigani_internal_bearer
-  #   letta:0 (root in container,    — cat /run/secrets/yashigani_internal_bearer
-  #             non-root on host via
-  #             Podman rootless ns)
-  #   open-webui:0 (same as letta)   — cat /run/secrets/yashigani_internal_bearer
-  # On Podman rootless: file owned 101001 (=host-mapped UID 1001). Container
-  # UID 1000 maps to 101000 on host (≠ 101001); container root maps to the
-  # host calling user (≠ 101001). Both get EPERM on a 0600 file.
-  # A per-consumer chown is impossible without modifying upstream images.
-  # A shared service group requires kernel group mapping across 3 different
-  # upstream image UIDs — fragile and runtime-dependent.
-  # Pragmatic fix: chmod 0644 along with postgres_password/redis_password.
-  # The secrets dir is already 0755 (V232-SMOKE-012, OPA inotify); the host
-  # trust boundary is shell access to WORK_DIR, not the file mode.
-  # The only additional exposure vs the prior state: any host user with ls(1)
-  # access to docker/secrets/ can cat the bearer token — but they could
-  # already cat postgres_password (same dir, same mode after this function).
-  # Risk class: YSG-SECRETS-DIST-001 (accept-with-architecture rationale).
+  # SOLUTION: chgrp 2002 + chmod 0640 on each file.
+  # Containers that need file-read get group_add: ["2002"] in compose (Captain scope).
+  # No world-readable bit — S1 invariant (_fix_config_perms -perm -004) passes cleanly.
+  # ASVS V6.4.1 PASS. CWE-732 S1 clean. Prometheus already uses this pattern (GID 1001).
   #
-  # Pragmatic fix: chmod 0644 these files. The secrets dir is already
-  # 0755 (V232-SMOKE-012, OPA inotify), and the host trust boundary is shell
-  # access to WORK_DIR — not the file mode of *_password. The only thing 0644
-  # changes is "any host user can `cat docker/secrets/postgres_password`",
-  # which was already true via the dir mode for *.crt files.
+  # GID-006 (LAURA-TM-GID-001 GO-BLOCKING): Podman rootless chgrp MUST go through
+  # `podman unshare` (the unshare case in _do_chgrp). Host-side `chgrp 2002` sets
+  # raw host GID 2002, not the subgid-mapped container GID — file becomes unreadable.
+  #
+  # GID-003 (LAURA-TM-GID-001 GO-BLOCKING): chgrp+chmod applied at every write site.
+  # This block covers fresh-install + upgrade/preserve paths.
+  # Residual YSG-SECRETS-DIST-002 (LOW): full ./secrets:/run/secrets:ro bind-mount
+  # means a GID-2002-member container can read all three files — filed in risk register.
+  log_info "Applying GID 2002 (ysg-secrets) + mode 0640 to shared secrets (IRIS-DESIGN-002)"
   for _shared_pw in postgres_password redis_password yashigani_internal_bearer; do
     local _pwpath="${_secrets_dir}/${_shared_pw}"
     if [[ -f "$_pwpath" ]]; then
-      if ! chmod 0644 "$_pwpath" 2>/dev/null; then
-        log_warn "chmod 0644 failed on ${_shared_pw} — fall through to docker/podman_run"
-        local _rel_pw="${_pwpath#"${_secrets_dir}/"}"
-        case "$_chown_mode" in
-          docker_run)
-            # v2.23.3: try --pull=never with tag-only alpine:3 first to avoid
-            # Docker Hub rate-limit hits; fall back to digest-pinned pull if needed.
-            if ! docker run --rm --pull=never \
-                   --volume "${_secrets_dir}:/s:rw" \
-                   "alpine:3" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null; then
-              docker run --rm --volume "${_secrets_dir}:/s:rw" \
-                "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
-                || { log_error "docker_run chmod 0644 failed on ${_shared_pw}"; return 1; }
-            fi
-            ;;
-          podman_run)
-            podman run --rm --volume "${_secrets_dir}:/s:rw" \
-              "$_alpine_image" sh -c "chmod 0644 /s/${_rel_pw}" 2>/dev/null \
-              || { log_error "podman_run chmod 0644 failed on ${_shared_pw}"; return 1; }
-            ;;
-          unshare)
-            podman unshare chmod 0644 "$_pwpath" 2>/dev/null \
-              || { log_error "podman unshare chmod 0644 failed on ${_shared_pw}"; return 1; }
-            ;;
-        esac
-      fi
+      _do_chgrp "2002" "$_pwpath" "${_shared_pw}" || return 1
+      _do_chmod_0640 "$_pwpath" "${_shared_pw}" || return 1
     fi
   done
-  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; postgres/redis/bearer shared as 0644 (gate V232-SMOKE-018 + YSG-SECRETS-DIST-001)"
+  log_info "Set ${#_uid1001_secrets[@]} password files to 1001:1001; shared secrets (postgres/redis/bearer) chgrp 2002 + chmod 0640 (IRIS-DESIGN-002 Option B — replaces 0644)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001
@@ -7353,6 +7494,10 @@ bootstrap_internal_pki() {
   _pki_validate_lifetimes
   # YSG-CERT-SAN-001: resolve public hostname + IP for Caddy cert SAN.
   _detect_public_access_params
+  # IRIS-DESIGN-002 / LAURA-TM-GID-001: ensure GID 2002 (ysg-secrets) exists
+  # on the host before _pki_chown_client_keys applies chgrp 2002 to shared secrets.
+  # macOS + K8s paths skip groupadd (see _ensure_secrets_group header).
+  _ensure_secrets_group || return 1
 
   local ca_root="${WORK_DIR}/docker/secrets/ca_root.crt"
   if [[ -f "$ca_root" ]]; then
