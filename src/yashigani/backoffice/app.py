@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from yashigani.auth.spiffe import require_spiffe_id
+from yashigani.backoffice.redirect_guard import assert_safe_redirect_target
 
 try:
     from prometheus_client import (
@@ -701,6 +702,14 @@ def create_backoffice_app() -> FastAPI:
             )
             if not any(request.cookies.get(k) for k in _admin_cookies):
                 next_path = request.url.path
+                # Defence-in-depth server-side guard (F1 — ACS scan 2026-05-21).
+                # next_path is request.url.path (server-assigned, not user-controlled),
+                # but we assert it here so the invariant holds even if a future
+                # refactor changes the source of next_path.  CWE-601, ASVS V5.1.5.
+                # nosec: open-redirect — next_path is request.url.path (server-assigned
+                # route match, not a user query parameter echo). Consumption is also
+                # guarded client-side by safeNext() in login.js (V232-CSCAN-01d).
+                assert_safe_redirect_target(next_path, request=request)
                 return RedirectResponse(
                     url=f"/admin/login?next={next_path}",
                     status_code=302,
