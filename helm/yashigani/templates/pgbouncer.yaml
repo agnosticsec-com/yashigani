@@ -35,6 +35,12 @@ spec:
         runAsUser: 70
         runAsGroup: 70
         fsGroup: 70
+        # IRIS-DESIGN-002 / LAURA-TM-GID-001 / Ava-79c2f5d: pgbouncer reads
+        # /run/secrets/pgbouncer_userlist (SCRAM verifier, mode 0440, Secret
+        # defaultMode). supplementalGroups adds GID 2002 for Compose↔Helm parity;
+        # on K8s the Secret defaultMode:0440 means owner-read suffices, but the
+        # group membership is added for runtime parity with the compose path.
+        supplementalGroups: [2002]
         seccompProfile:
           type: RuntimeDefault
       containers:

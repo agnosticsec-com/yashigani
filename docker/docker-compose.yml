@@ -1180,6 +1180,12 @@ services:
     # V232-CSCAN-01k-RES-01: align cap_drop with Helm (pgbouncer.yaml:50).
     # No cap_add: pgbouncer binds port 5432 (non-privileged).
     cap_drop: [ALL]
+    # IRIS-DESIGN-002 / LAURA-TM-GID-001 / Ava-79c2f5d: pgbouncer reads
+    # /run/secrets/pgbouncer_userlist (SCRAM verifier, chgrp'd GID 2002, mode 0640).
+    # Without group_add:2002 the process (GID 70) gets EACCES. Same class-of-bug
+    # as cycle 3 Iris Option B; pattern established in 1ee65ea.
+    group_add:
+      - "2002"
     # EX-231-10: pgbouncer is data-plane only.
     networks:
       - data
@@ -1669,6 +1675,11 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
+    # IRIS-DESIGN-002 / LAURA-TM-GID-001 / Ava-79c2f5d: letta-pgbouncer also reads
+    # /run/secrets/pgbouncer_userlist (SCRAM verifier, chgrp'd GID 2002, mode 0640).
+    # Same fix as pgbouncer above — pgbouncer_userlist consumer via 4acc118 SCRAM commit.
+    group_add:
+      - "2002"
     # EX-231-10: letta-pgbouncer is a data-plane dep; sits on `data` network
     # alongside postgres and letta.
     networks:
