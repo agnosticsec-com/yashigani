@@ -6,19 +6,20 @@
 # YSG-RISK-049 architectural close — ref:
 #   internal-docs/yashigani/iris-v240-pgbouncer-auth-query-design.md
 #   internal-docs/yashigani/laura-v240-pgbouncer-auth-query-threat-model.md
+# YSG-RISK-050 closed — ref:
+#   internal-docs/yashigani/iris-v240-ysg-risk-050-cert-separation-design.md
 #
 # Mounted into postgres pod via yashigani-postgres-init ConfigMap key
 # "10-pgbouncer-auth.sh". Runs ONCE on first initdb, after 05-enable-ssl.sh.
 #
-# K8s CIDR NOTE: The pg_hba carveout uses 10.0.0.0/8 (standard K8s pod pool).
-# If your cluster uses a different pod CIDR, override via values.yaml
-# pgbouncer.authNetworkCidr — Captain scope to wire substitution here.
-# (Docker Compose path uses 172.16.0.0/12 — the docker bridge pool default.)
+# pg_hba CIDR NOTE (REMOVED v2.24.0): The A2 carveout and its CIDR
+# (formerly 10.0.0.0/8 for K8s / 172.16.0.0/12 for Compose) are removed
+# as part of YSG-RISK-050 close. pgbouncer_authenticator now presents
+# pgbouncer-auth_client.crt; the catch-all applies uniformly.
+# values.yaml pgbouncer.authNetworkCidr field removed — no longer needed.
 #
 # See docker/postgres/10-pgbouncer-auth.sh for full canonical documentation.
-# This file MUST remain byte-identical to the docker version EXCEPT for the
-# pg_hba CIDR (K8s pod network vs Docker bridge network). Drift register entry:
-# drift-class "pgbouncer auth_query init script" — docker vs helm CIDR only.
+# This file MUST remain functionally identical to the docker version.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -88,27 +89,36 @@ $$;
 REVOKE CONNECT ON DATABASE template1 FROM pgbouncer_authenticator;
 SQL
 
-# ─── 4. pg_hba carveout — Amendment A2 (K8s pod CIDR = 10.0.0.0/8) ──────────
-# K8s: pod CIDR 10.0.0.0/8 covers standard K8s cluster pod networks.
-# Override via values.yaml pgbouncer.authNetworkCidr if cluster uses different range.
-echo "[10-pgbouncer-auth] Inserting pg_hba carveout for pgbouncer_authenticator (Amendment A2)"
-
-CARVEOUT="hostssl  yashigani  pgbouncer_authenticator  10.0.0.0/8  scram-sha-256"
-CARVEOUT_COMMENT="# pgbouncer auth_query connection (Amendment A2 — YSG-RISK-049 close, 2026-05-22)."
-CARVEOUT_COMMENT2="# scram-sha-256, NO clientcert, CIDR-scoped to K8s pod network (10.0.0.0/8)."
-CARVEOUT_COMMENT3="# Residual cert separation: YSG-RISK-050 LOW (deferred to v2.24.x hardening)."
+# ─── 4. pg_hba carveout removal — YSG-RISK-050 CLOSED (v2.24.0) ─────────────
+# YSG-RISK-050 CLOSED: carveout removed. pgbouncer_authenticator now presents
+# pgbouncer-auth_client.crt (dedicated outbound cert, CN=pgbouncer-auth).
+# pg_hba catch-all (hostssl all all 0.0.0.0/0 scram-sha-256 clientcert=verify-ca)
+# applies uniformly — no special-case rule for pgbouncer_authenticator needed.
+# pgbouncer.authNetworkCidr values.yaml field removed (no longer used).
+#
+# Idempotent removal: cleans up the A2 carveout if present from a prior
+# v2.24.0-pre / YSG-RISK-049-only install. No-op on fresh installs that never
+# had the carveout. Both the carveout line and its associated comment lines are
+# removed. Design ref: iris-v240-ysg-risk-050-cert-separation-design.md §3.
+echo "[10-pgbouncer-auth] Removing pg_hba A2 carveout for pgbouncer_authenticator (YSG-RISK-050 close)"
 
 if grep -q "pgbouncer_authenticator" "${PGDATA}/pg_hba.conf"; then
-  echo "[10-pgbouncer-auth] pg_hba carveout already present — skipping insertion (idempotent)"
+  sed -i '/pgbouncer_authenticator/d' "${PGDATA}/pg_hba.conf"
+  sed -i '/Amendment A2.*YSG-RISK-049/d' "${PGDATA}/pg_hba.conf"
+  echo "[10-pgbouncer-auth] Removed A2 carveout (YSG-RISK-050 close — uniform catch-all now covers pgbouncer_authenticator)"
 else
-  sed -i \
-    "s|^hostssl\s\+all\s\+all\s\+0\.0\.0\.0/0|${CARVEOUT_COMMENT}\n${CARVEOUT_COMMENT2}\n${CARVEOUT_COMMENT3}\n${CARVEOUT}\n&|" \
-    "${PGDATA}/pg_hba.conf"
-  echo "[10-pgbouncer-auth] pg_hba carveout inserted before catch-all"
+  echo "[10-pgbouncer-auth] No A2 carveout present — nothing to remove (fresh install, idempotent)"
 fi
 
-echo "[10-pgbouncer-auth] pg_hba.conf state:"
-grep -E "pgbouncer_authenticator|hostssl all" "${PGDATA}/pg_hba.conf"
+# Reload pg_hba.conf so the change takes effect without a full restart.
+# During initdb, postgres is not running in server mode yet — the file is read
+# on next server start. This is correct for the init-script path.
+# For the upgrade path, pg_reload_conf() fires immediately and the updated
+# pg_hba.conf is picked up by the live server.
+psql -v ON_ERROR_STOP=1 --username postgres -c "SELECT pg_reload_conf();" 2>/dev/null || true
+
+echo "[10-pgbouncer-auth] pg_hba.conf state (hostssl lines):"
+grep "^hostssl" "${PGDATA}/pg_hba.conf" || echo "  (no hostssl lines — fresh initdb, normal)"
 
 echo "[10-pgbouncer-auth] Done. pgbouncer auth_query postgres-side setup complete (K8s)."
 echo "[10-pgbouncer-auth] Summary:"
@@ -116,4 +126,4 @@ echo "  - Role pgbouncer_authenticator: created/updated"
 echo "  - Function yashigani.ysg_pgbouncer_get_auth: created/updated"
 echo "  - EXECUTE: pgbouncer_authenticator only (PUBLIC revoked)"
 echo "  - CONNECT letta: revoked from pgbouncer_authenticator"
-echo "  - pg_hba carveout: 10.0.0.0/8, yashigani db, scram-sha-256, no clientcert"
+echo "  - pg_hba A2 carveout: removed (YSG-RISK-050 close); catch-all applies uniformly"

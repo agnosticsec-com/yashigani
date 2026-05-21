@@ -1248,15 +1248,10 @@ pgbouncer:
   #   Option C isolation: dedicated Secret, NOT merged into yashigani-postgres-secrets.
   #   See secrets.yaml comment block for full provisioning instructions.
   authSecretName: ""
-  # authNetworkCidr: CIDR of the compose `data` internal Docker bridge network.
-  #   Used by Tom's 10-pgbouncer-auth.sh (postgres init) to scope the pg_hba
-  #   carveout rule for pgbouncer_authenticator (Amendment A2 — no clientcert).
-  #   Compose: Docker assigns this dynamically; default bridge range is 172.20.0.0/16.
-  #   Tom: grep the actual subnet from `docker network inspect yashigani_data`
-  #   after compose up, or use this default if the compose data network is unassigned.
-  #   K8s: use the cluster pod CIDR (e.g. 10.244.0.0/16 for flannel, 192.168.0.0/16
-  #   for Calico). Tom's Helm init ConfigMap substitutes this value.
-  authNetworkCidr: "172.20.0.0/16"
+  # authNetworkCidr REMOVED (YSG-RISK-050 close v2.24.0): the pg_hba A2 CIDR
+  # carveout is gone. pgbouncer_authenticator now presents pgbouncer-auth_client.crt
+  # (dedicated outbound cert); the catch-all hostssl rule applies uniformly.
+  # No CIDR override is needed. See iris-v240-ysg-risk-050-cert-separation-design.md.
 
 # ---------------------------------------------------------------------------
 # Partition maintenance CronJob — DB partition pre-creation (runs monthly)
