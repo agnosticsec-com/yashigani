@@ -1126,19 +1126,17 @@ services:
     dns_search: ["."]
     environment:
       DATABASE_URL: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/yashigani
-      # YSG-RISK-049 CLOSED — SCRAM-SHA-256 Step 2 (Iris+Laura two-step plan).
-      # auth_file in pgbouncer.ini points to /run/secrets/pgbouncer_userlist (Su 8dd4c41).
-      # Verifier pre-computed by install.sh PKI block — no cleartext on disk.
-      # asyncpg 0.29+ supports SCRAM-SHA-256; full stack aligned (asyncpg→pgbouncer→postgres).
-      AUTH_TYPE: scram-sha-256
+      # YSG-RISK-049 ACCEPTED-LOW non-KMS-only (Tiago directive 2026-05-21).
+      # plain auth_type: pgbouncer needs cleartext to construct SCRAM proof toward postgres.
+      # KMS-configured deployments bypass on-disk cleartext via src/yashigani/kms/.
+      # edoburu entrypoint writes cleartext userlist.txt from DATABASE_URL at startup.
+      AUTH_TYPE: plain
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "100"
       DEFAULT_POOL_SIZE: "20"
     # exec-chain fix (9b9d2b8): pass pgbouncer.ini explicitly to edoburu entrypoint.
-    # SCRAM-SHA-256 Step 2: auth_file in pgbouncer.ini points to /run/secrets/pgbouncer_userlist
-    # (Option c — no cp shim; pgbouncer reads verifier directly from bind-mount; read_only-safe).
-    # edoburu entrypoint still generates /etc/pgbouncer/userlist.txt from DATABASE_URL — that
-    # file is unused; pgbouncer honours auth_file from pgbouncer.ini over the default.
+    # edoburu entrypoint writes cleartext userlist.txt from DATABASE_URL at startup.
+    # auth_type=plain in pgbouncer.ini; edoburu default userlist.txt path used.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -1180,12 +1178,6 @@ services:
     # V232-CSCAN-01k-RES-01: align cap_drop with Helm (pgbouncer.yaml:50).
     # No cap_add: pgbouncer binds port 5432 (non-privileged).
     cap_drop: [ALL]
-    # IRIS-DESIGN-002 / LAURA-TM-GID-001 / Ava-79c2f5d: pgbouncer reads
-    # /run/secrets/pgbouncer_userlist (SCRAM verifier, chgrp'd GID 2002, mode 0640).
-    # Without group_add:2002 the process (GID 70) gets EACCES. Same class-of-bug
-    # as cycle 3 Iris Option B; pattern established in 1ee65ea.
-    group_add:
-      - "2002"
     # EX-231-10: pgbouncer is data-plane only.
     networks:
       - data
@@ -1633,16 +1625,16 @@ services:
       # edoburu image uses DATABASE_URL to populate [databases] section at startup.
       # Points at the `letta` database (separate DB from yashigani — clean isolation).
       DATABASE_URL: postgresql://yashigani_app:${POSTGRES_PASSWORD}@postgres:5432/letta
-      # YSG-RISK-049 CLOSED — SCRAM-SHA-256 Step 2 (Iris+Laura two-step plan).
-      # Same yashigani_app user as yashigani-pgbouncer; single pgbouncer_userlist file
-      # sufficient — [databases] section differentiates backends (Iris §81 / Laura §2.8).
-      AUTH_TYPE: scram-sha-256
+      # YSG-RISK-049 ACCEPTED-LOW non-KMS-only (Tiago directive 2026-05-21).
+      # plain auth_type: pgbouncer needs cleartext to construct SCRAM proof toward postgres.
+      # edoburu entrypoint writes cleartext userlist.txt from DATABASE_URL at startup.
+      AUTH_TYPE: plain
       POOL_MODE: session
       MAX_CLIENT_CONN: "50"
       DEFAULT_POOL_SIZE: "20"
     # exec-chain fix (9b9d2b8): pass pgbouncer.ini explicitly to edoburu entrypoint.
-    # SCRAM-SHA-256 Step 2: auth_file in pgbouncer.ini points to /run/secrets/pgbouncer_userlist
-    # (Option c — no cp shim; pgbouncer reads verifier directly from bind-mount; read_only-safe).
+    # edoburu entrypoint writes cleartext userlist.txt from DATABASE_URL at startup.
+    # auth_type=plain in pgbouncer-letta.ini; edoburu default userlist.txt path used.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -1675,11 +1667,6 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
-    # IRIS-DESIGN-002 / LAURA-TM-GID-001 / Ava-79c2f5d: letta-pgbouncer also reads
-    # /run/secrets/pgbouncer_userlist (SCRAM verifier, chgrp'd GID 2002, mode 0640).
-    # Same fix as pgbouncer above — pgbouncer_userlist consumer via 4acc118 SCRAM commit.
-    group_add:
-      - "2002"
     # EX-231-10: letta-pgbouncer is a data-plane dep; sits on `data` network
     # alongside postgres and letta.
     networks:

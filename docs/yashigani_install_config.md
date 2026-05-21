@@ -865,6 +865,8 @@ Yashigani stores all sensitive credentials (API keys, passwords, tokens) through
 
 No configuration required. Secrets are stored as files in `docker/secrets/` on the host and mounted read-only into containers at `/run/secrets/`. The backoffice bootstrap manages creation and rotation.
 
+**PostgreSQL credential posture (YSG-RISK-049):** The default non-KMS deployment stores the PostgreSQL application password as cleartext in `docker/secrets/postgres_password` (mode 0600). PgBouncer's edoburu entrypoint writes a cleartext `userlist.txt` at startup from the `DATABASE_URL` environment variable. This is the dev/standalone posture (YSG-RISK-049 accepted LOW for non-KMS deployments). Production deployments should configure a KMS provider (`YSG_KMS_PROVIDER=vault|azure|aws|gcp|keeper`); KMS-configured deployments fetch credentials at runtime via `src/yashigani/kms/` and do not rely on the on-disk cleartext userlist path.
+
 Verify secrets are present after first run:
 
 ```bash

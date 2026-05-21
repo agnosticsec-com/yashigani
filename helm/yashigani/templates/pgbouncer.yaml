@@ -35,12 +35,6 @@ spec:
         runAsUser: 70
         runAsGroup: 70
         fsGroup: 70
-        # IRIS-DESIGN-002 / LAURA-TM-GID-001 / Ava-79c2f5d: pgbouncer reads
-        # /run/secrets/pgbouncer_userlist (SCRAM verifier, mode 0440, Secret
-        # defaultMode). supplementalGroups adds GID 2002 for Compose↔Helm parity;
-        # on K8s the Secret defaultMode:0440 means owner-read suffices, but the
-        # group membership is added for runtime parity with the compose path.
-        supplementalGroups: [2002]
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -60,9 +54,8 @@ spec:
               containerPort: 5432
               protocol: TCP
           # exec-chain fix (9b9d2b8): pass pgbouncer.ini explicitly to edoburu entrypoint.
-          # SCRAM-SHA-256 Step 2 (YSG-RISK-049 CLOSED): auth_file in pgbouncer.ini points
-          # to /run/secrets/pgbouncer_userlist (K8s Secret pgbouncer-auth-secret — see below).
-          # Option c: pgbouncer reads verifier directly; no cp shim; readOnlyRootFilesystem compatible.
+          # auth_type=plain (YSG-RISK-049 ACCEPTED-LOW non-KMS-only — Tiago directive 2026-05-21).
+          # edoburu entrypoint writes cleartext userlist.txt from DATABASE_URL at startup.
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -79,7 +72,7 @@ spec:
             - name: DATABASE_URL
               value: "postgresql://yashigani_app:$(POSTGRES_PASSWORD)@yashigani-postgres:5432/yashigani"
             - name: AUTH_TYPE
-              value: "scram-sha-256"
+              value: "plain"
             - name: POOL_MODE
               value: {{ .Values.pgbouncer.env.poolMode | quote }}
             - name: MAX_CLIENT_CONN
@@ -131,15 +124,6 @@ spec:
               mountPath: /etc/pgbouncer/pgbouncer.ini
               subPath: pgbouncer.ini
               readOnly: true
-            # SCRAM-SHA-256 Step 2 (YSG-RISK-049 CLOSED): pgbouncer_userlist mounted as a
-            # subPath into /run/secrets/ alongside the PKI certs volume. The pgbouncer.ini
-            # auth_file = /run/secrets/pgbouncer_userlist reads the SCRAM verifier directly.
-            # K8s Secret pgbouncer-auth-secret populated by install.sh output (operator provides
-            # via helm install --set-file pgbouncer.userlistContent=docker/secrets/pgbouncer_userlist).
-            - name: pgbouncer-auth
-              mountPath: /run/secrets/pgbouncer_userlist
-              subPath: pgbouncer_userlist
-              readOnly: true
           {{- end }}
       {{- if .Values.mtls.enabled }}
       volumes:
@@ -150,10 +134,6 @@ spec:
         - name: pgbouncer-config
           configMap:
             name: yashigani-pgbouncer-config
-        - name: pgbouncer-auth
-          secret:
-            secretName: {{ .Values.pgbouncer.authSecretName | default "yashigani-pgbouncer-auth" }}
-            defaultMode: 0440
       {{- end }}
 ---
 apiVersion: v1
