@@ -46,6 +46,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from yashigani.backoffice.state import backoffice_state
 from yashigani.auth.session import _mask_ip
 from yashigani.backoffice.schemas.bopla import IdPPublic
+from yashigani.backoffice.redirect_guard import assert_safe_redirect_target
 from yashigani.licensing.enforcer import (
     require_feature,
     LicenseFeatureGated,
@@ -513,6 +514,13 @@ async def initiate_oidc(idp_id: str, request: Request):
     # Store state with PKCE code_verifier for the callback (ASVS 10.4.6).
     _store_state(r, state, idp_id, nonce, code_verifier=code_verifier)
 
+    # Defence-in-depth: assert auth_url is a safe redirect target (F1 — ACS scan 2026-05-21).
+    # auth_url is produced by broker.get_oidc_auth_url() and already validated against
+    # allowed_auth_endpoint_pattern (sso/oidc.py:299). This assertion is a belt-and-suspenders
+    # check. allow_absolute_https=True because the IdP endpoint is always an absolute HTTPS URL.
+    # nosec: open-redirect — auth_url is validated against allowed_auth_endpoint_pattern
+    # by the OIDC broker before reaching this point. CWE-601, ASVS V5.1.5.
+    assert_safe_redirect_target(auth_url, request=request, allow_absolute_https=True)
     return RedirectResponse(url=auth_url, status_code=status.HTTP_302_FOUND)
 
 
@@ -543,10 +551,9 @@ async def oidc_callback(
             error_description,
         )
         _write_sso_failure_audit(idp_id, idp_id, f"idp_error:{error}", client_ip)
-        return RedirectResponse(
-            url=f"/login?error=sso_failed&idp={idp_id}",
-            status_code=status.HTTP_302_FOUND,
-        )
+        _redirect_url = f"/login?error=sso_failed&idp={idp_id}"
+        assert_safe_redirect_target(_redirect_url, request=request)  # F1 defence-in-depth
+        return RedirectResponse(url=_redirect_url, status_code=status.HTTP_302_FOUND)
 
     # Validate required parameters
     if not code or not state:
@@ -611,10 +618,9 @@ async def oidc_callback(
 
     if not sso_result.success:
         _write_sso_failure_audit(idp_id, sso_result.idp_name or idp_id, sso_result.error, client_ip)
-        return RedirectResponse(
-            url=f"/login?error=sso_failed&idp={idp_id}",
-            status_code=status.HTTP_302_FOUND,
-        )
+        _redirect_url = f"/login?error=sso_failed&idp={idp_id}"
+        assert_safe_redirect_target(_redirect_url, request=request)  # F1 defence-in-depth
+        return RedirectResponse(url=_redirect_url, status_code=status.HTTP_302_FOUND)
 
     # -----------------------------------------------------------------------
     # V6.8.4 — acr/amr allowlist validation (ASVS V6.3.3)
@@ -655,10 +661,9 @@ async def oidc_callback(
                 f"acr_not_in_allowlist:got={_claim_acr!r}:allowed={_required_acr!r}",
                 client_ip,
             )
-            return RedirectResponse(
-                url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
-                status_code=status.HTTP_302_FOUND,
-            )
+            _redirect_url = f"/login?error=auth_strength_insufficient&idp={idp_id}"
+            assert_safe_redirect_target(_redirect_url, request=request)  # F1 defence-in-depth
+            return RedirectResponse(url=_redirect_url, status_code=status.HTTP_302_FOUND)
 
     # amr subset check: every required method must appear in the claim.
     if _required_amr is not None:
@@ -676,10 +681,9 @@ async def oidc_callback(
                 f"amr_methods_missing:got={_claim_amr!r}:missing={_missing_amr!r}",
                 client_ip,
             )
-            return RedirectResponse(
-                url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
-                status_code=status.HTTP_302_FOUND,
-            )
+            _redirect_url = f"/login?error=auth_strength_insufficient&idp={idp_id}"
+            assert_safe_redirect_target(_redirect_url, request=request)  # F1 defence-in-depth
+            return RedirectResponse(url=_redirect_url, status_code=status.HTTP_302_FOUND)
 
     logger.info(
         "OIDC acr=%r amr=%r auth_time=%s for IdP %s",
@@ -1042,10 +1046,9 @@ async def saml_acs(idp_id: str, request: Request):
 
     if not sso_result.success:
         _write_saml_failure_audit(idp_id, idp.name, sso_result.error, client_ip)
-        return RedirectResponse(
-            url=f"/login?error=sso_failed&idp={idp_id}",
-            status_code=status.HTTP_302_FOUND,
-        )
+        _redirect_url = f"/login?error=sso_failed&idp={idp_id}"
+        assert_safe_redirect_target(_redirect_url, request=request)  # F1 defence-in-depth
+        return RedirectResponse(url=_redirect_url, status_code=status.HTTP_302_FOUND)
 
     # -----------------------------------------------------------------------
     # V6.8.4 — SAML AuthnContextClassRef allowlist (mirrors OIDC acr check)
@@ -1082,10 +1085,9 @@ async def saml_acs(idp_id: str, request: Request):
                 f"authn_context_class_ref_not_in_allowlist:got={_saml_classref!r}:allowed={_required_saml_acr!r}",
                 client_ip,
             )
-            return RedirectResponse(
-                url=f"/login?error=auth_strength_insufficient&idp={idp_id}",
-                status_code=status.HTTP_302_FOUND,
-            )
+            _redirect_url = f"/login?error=auth_strength_insufficient&idp={idp_id}"
+            assert_safe_redirect_target(_redirect_url, request=request)  # F1 defence-in-depth
+            return RedirectResponse(url=_redirect_url, status_code=status.HTTP_302_FOUND)
 
     logger.info(
         "SAML AuthnContextClassRef=%r authn_instant=%s for IdP %s",
