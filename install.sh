@@ -7510,36 +7510,53 @@ _pki_chown_client_keys() {
   #   consumers meant any compromised container could read all three secrets.
   #   Ref: compose lines 588–590 (budget-redis DAC_OVERRIDE note).
   #
-  # Fix — per-consumer single-UID ownership:
-  #   postgres_password   → 999:999 0600  (postgres UID; only postgres reads file directly)
-  #   redis_password      → 999:999 0600  (redis/budget-redis UID; both read as owner)
-  #   yashigani_internal_bearer → 0:2002 0640
-  #       open-webui (UID 0) + letta (UID 0): read as owner (UID 0 == file UID 0)
-  #       langflow (UID 1000): reads via group GID 2002 (retains group_add:["2002"] — Captain scope)
-  #       GID 2002 scope reduced from 6 consumers to 1 file + 1 service (langflow only).
+  # Fix — per-consumer GID-based ownership (rework v2 — Ava E2E gate FAIL on 999:999 0600):
   #
-  # YSG-RISK-049 pattern: identical to pgbouncer_authenticator_password (70:0 0640,
-  # dedicated mount). postgres_password + redis_password now follow the same class.
+  #   postgres_password   → 1001:999 0640
+  #     backoffice + gateway (UID 1001): FILE-READ as owner (primary path in entrypoint.py:334
+  #     and gateway/entrypoint.py:215). postgres (UID 999, GID 999): reads as group (startup
+  #     via POSTGRES_PASSWORD_FILE env). Rotator (UID 1001) writes atomically via
+  #     tmp+chmod(0o640)+os.chown(-1,999)+rename — Tom scope, A2 amendment.
+  #
+  #   redis_password      → 1001:999 0640
+  #     backoffice + gateway (UID 1001): FILE-READ as owner (primary path in entrypoint.py:78
+  #     and gateway/_redis_url.py:81). redis + budget-redis (UID 999, GID 999): read as group
+  #     (startup cmd). Rotator (UID 1001) writes atomically — Tom scope, A2 amendment.
+  #
+  #   yashigani_internal_bearer → 0:2002 0640  (UNCHANGED)
+  #     open-webui (UID 0) + letta (UID 0): read as owner.
+  #     langflow (UID 1000): reads via group GID 2002 (group_add:["2002"] — Captain scope).
+  #     gateway + backoffice: ENV-ONLY (os.environ — no file DAC needed).
+  #
+  # The prior 999:999 0600 scheme caused PermissionError on gateway + backoffice at
+  # startup (UID 1001, cap_drop:[ALL], no DAC_OVERRIDE): file-read failed; OSError
+  # fallback read empty env var; gateway crash-looped on Redis auth failure.
+  # Ava gate FAIL recorded at tip a3cf4a3. RCA in iris-v240-ysg-secrets-dist-002-rework-design.md.
+  #
+  # Cross-secret reachability (GID 999 shared by redis + postgres): non-issue because
+  # per-file mounts mean each service sees only its own secret — Laura §5 GO verdict.
   #
   # Upgrade path: _pki_chown_client_keys() is re-run by install.sh upgrade path.
-  # Existing v2.24.0-pre files at GID 2002 0640 are rechowned here on upgrade.
+  # Files at old 999:999 0600 (tip a3cf4a3) are rechowned to 1001:999 0640 here.
   #
-  # Iris design: iris-v240-ysg-secrets-dist-002-close-design.md
-  # Laura A1 amendment: laura-v240-ysg-secrets-dist-002-close-threat-model.md
+  # Iris rework design: iris-v240-ysg-secrets-dist-002-rework-design.md
+  # Laura GO-with-amendments: laura-v240-ysg-secrets-dist-002-rework-threat-model.md
   local _pp_path="${_secrets_dir}/postgres_password"
   local _rp_path="${_secrets_dir}/redis_password"
   local _ib_path="${_secrets_dir}/yashigani_internal_bearer"
   if [[ -f "$_pp_path" ]]; then
-    _do_chown "999:999" "$_pp_path" "postgres_password" "0600" || return 1
+    _do_chown "1001:999" "$_pp_path" "postgres_password" || return 1
+    _do_chmod_0640 "$_pp_path" "postgres_password" || return 1
   fi
   if [[ -f "$_rp_path" ]]; then
-    _do_chown "999:999" "$_rp_path" "redis_password" "0600" || return 1
+    _do_chown "1001:999" "$_rp_path" "redis_password" || return 1
+    _do_chmod_0640 "$_rp_path" "redis_password" || return 1
   fi
   if [[ -f "$_ib_path" ]]; then
     _do_chown "0:2002" "$_ib_path" "yashigani_internal_bearer" || return 1
     _do_chmod_0640 "$_ib_path" "yashigani_internal_bearer" || return 1
   fi
-  log_info "Per-consumer ownership set: postgres_password+redis_password → 999:999 0600; yashigani_internal_bearer → 0:2002 0640 (YSG-SECRETS-DIST-002 CLOSED, Laura A1)"
+  log_info "Per-consumer ownership set: postgres_password+redis_password → 1001:999 0640; yashigani_internal_bearer → 0:2002 0640 (YSG-SECRETS-DIST-002 REWORK — Iris rework + Laura A1)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001

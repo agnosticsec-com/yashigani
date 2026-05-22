@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib/pki_ownership.sh — Shared PKI service-key ownership map
-# last-updated: 2026-05-22T00:00:00+01:00 (feat(install): YSG-SECRETS-DIST-002 CLOSED — per-consumer ownership; GID 2002 narrowed to bearer+langflow)
+# last-updated: 2026-05-22T12:00:00+01:00 (feat(install): YSG-SECRETS-DIST-002 REWORK — 1001:999 0640 for password secrets; fix wrong consumer-table comments — Iris rework + Laura A1)
 # last-updated: 2026-05-18T00:00:00+01:00 (fix(secrets): YSG-SECRETS-DIST-001 — document multi-UID consumer class)
 # last-updated: 2026-05-10T00:00:00+01:00 (fix(pki): GATE5-BUG-01 — shared ownership map; install + restore unified)
 #
@@ -20,28 +20,38 @@
 # All other service keys are mode 0600 (owner-read-write only).
 #
 # Multi-UID secret distribution class (YSG-SECRETS-DIST-001, 2026-05-18):
-# DISSOLVED as of v2.24.0 (YSG-SECRETS-DIST-002 CLOSED, Laura A1 amendment).
+# REWORKED as of v2.24.0 (YSG-SECRETS-DIST-002 REWORK — Iris rework design + Laura GO-with-amendments).
+# Prior 999:999 0600 scheme for password secrets caused Ava E2E gate FAIL at tip a3cf4a3:
+# gateway + backoffice run as UID 1001 with cap_drop:[ALL] (no DAC_OVERRIDE); file-read
+# of 999:999 0600 raised PermissionError → OSError fallback → empty env var → crash-loop.
 #
-# All three former multi-UID members are now set to single per-consumer ownership
-# in _pki_chown_client_keys(). GID 2002 is narrowed to one file + one service:
+# Corrected ownership in _pki_chown_client_keys() (install.sh):
 #
-#   postgres_password   → 999:999 0600
-#     Only postgres (UID 999) reads this directly via POSTGRES_PASSWORD_FILE.
-#     gateway + backoffice receive it via .env env var — no file read.
+#   redis_password      → 1001:999 0640
+#     backoffice + gateway (UID 1001): FILE-READ as owner (primary path — NOT env var).
+#       backoffice/entrypoint.py:78-83: open(redis_pwd_file) primary; OSError→env fallback.
+#       gateway/_redis_url.py:80-86: open(pwd_file) primary; OSError→env fallback.
+#     redis + budget-redis (UID 999, GID 999): read as group at startup (requirepass).
+#     backoffice rotator (UID 1001): FILE-WRITE via atomic tmp+chmod(0o640)+os.chown(-1,999)+rename.
+#       Rotator MUST chown -1:999 and chmod 0o640 atomically — see secrets/rotator.py (Tom scope,
+#       Laura A2 amendment: explicit os.chown on tmp before rename to guarantee GID 999 post-rotation).
 #
-#   redis_password      → 999:999 0600
-#     redis + budget-redis (both UID 999) read as owner. gateway + backoffice
-#     receive it via .env env var — no file read.
+#   postgres_password   → 1001:999 0640
+#     backoffice + gateway (UID 1001): FILE-READ as owner when DSN contains ${POSTGRES_PASSWORD}.
+#       backoffice/entrypoint.py:334-341: open(pg_pwd_file) primary; OSError→warning.
+#       gateway/entrypoint.py:215-219: same DSN-substitution FILE-READ pattern.
+#     postgres (UID 999, GID 999): read as group at startup via POSTGRES_PASSWORD_FILE.
+#     Same rotator write constraint as redis_password.
 #
-#   yashigani_internal_bearer → 0:2002 0640
+#   yashigani_internal_bearer → 0:2002 0640  (UNCHANGED)
 #     open-webui (UID 0) + letta (UID 0): read as owner.
 #     langflow (UID 1000): reads via group GID 2002 (group_add:["2002"] retained
 #     on langflow only in compose — Captain scope, YSG-SECRETS-DIST-002).
-#     gateway + backoffice receive it via .env env var — no file read.
+#     gateway + backoffice: ENV-ONLY (os.environ.get — no file DAC needed).
 #
-# Design authority: iris-v240-ysg-secrets-dist-002-close-design.md (Option i)
-# Blocking amendment: laura-v240-ysg-secrets-dist-002-close-threat-model.md (A1)
-# cap_drop:[ALL] + CAP_DAC_OVERRIDE interaction that drove A1: compose lines 588–590.
+# Design authority: iris-v240-ysg-secrets-dist-002-rework-design.md
+# Threat model: laura-v240-ysg-secrets-dist-002-rework-threat-model.md (GO-with-amendments)
+# cap_drop:[ALL] + CAP_DAC_OVERRIDE interaction: compose lines 588–590.
 #
 # When adding a new service that reads a secret already owned by another UID,
 # prefer a per-consumer dedicated bind-mount (YSG-RISK-049/050 pattern) rather
