@@ -153,7 +153,7 @@ INTERNAL_CA_ACCEPT_EXPIRED=false  # --accept-expired-ca for test environments
 INTERNAL_CA_DEFER=false      # true when --with-internal-ca is passed without cert/key paths
 TLS_MODE_EXPLICITLY_SET=""   # set to "true" when --tls-mode flag is parsed
 COMPOSE_PROFILES=()          # populated by select_agent_bundles()
-REUSE_VOLUMES=false        # --reuse-volumes: skip contaminated-volume pre-check (BUG-INSTALL-ON-CONTAMINATED-VOLUMES)
+REUSE_VOLUMES=false        # --reuse-volumes or auto-set on additive re-run: skip contaminated-volume pre-check
 
 # Internal mTLS PKI — two-tier (root → intermediate → leaf).
 # Lifetimes are clamped to the bounds in docker/service_identities.yaml
@@ -1542,8 +1542,56 @@ run_preflight() {
     exit 1
   fi
 
-  bash "$preflight_script"
+  # BUG-B+-001: on a re-run against an existing running stack, ports 80/443 are
+  # bound by the running Caddy container. Passing --skip-ports tells preflight.sh
+  # to accept those ports as "already ours" rather than treating them as conflicts.
+  # Detection: secrets dir populated + at least one compose container running.
+  local _preflight_args=()
+  if _is_existing_yashigani_running; then
+    log_info "Existing Yashigani install detected — skipping port-in-use checks (BUG-B+-001)"
+    _preflight_args+=("--skip-ports")
+  fi
+
+  # shellcheck disable=SC2068  # intentional: empty array expands to nothing
+  bash "$preflight_script" ${_preflight_args[@]+"${_preflight_args[@]}"}
   log_success "Preflight checks passed"
+}
+
+# _is_existing_yashigani_running — BUG-B+-001 helper
+# Returns 0 (true) if: secrets dir is populated AND at least one yashigani
+# compose container is currently running under either Docker or Podman.
+# Used by run_preflight (skip port check) and check_existing_installation
+# (skip contaminated-volume check on additive re-run).
+_is_existing_yashigani_running() {
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+  # Secrets dir must exist and contain the root CA cert (written by PKI bootstrap;
+  # indicates a completed prior install, not just a partial one).
+  [[ -f "${_secrets_dir}/ca_root.crt" ]] || return 1
+
+  # Check whether any compose containers for this project are running.
+  local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  [[ -f "$_compose_file" ]] || return 1
+
+  # macOS does not ship `timeout` (GNU coreutils) — use docker/podman ps directly.
+  # The socket is local so hang risk is low. Use label filter (fastest — no compose
+  # parsing) as primary, compose ps as fallback.
+  # Label filter: works even without compose CLI installed.
+  if docker ps --filter 'label=com.docker.compose.project=docker' \
+       --format '{{.Names}}' 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  if podman ps --filter 'label=io.podman.compose.project=docker' \
+       --format '{{.Names}}' 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  # Compose ps fallback (slower — requires parsing the compose file)
+  if docker compose -f "$_compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+    return 0
+  fi
+  if podman compose -f "$_compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+    return 0
+  fi
+  return 1
 }
 
 # =============================================================================
@@ -2175,8 +2223,29 @@ _backup_existing_data() {
     # the running containers expect (pgbouncer=70, redis=999, postgres=999,
     # grafana=472, gateway/backoffice=1001). cp -r without -p was losing the
     # uids during backup, then restore preserved root:root and broke services.
-    cp -rp "${WORK_DIR}/docker/secrets" "${backup_dir}/secrets"
-    log_info "  secrets/ backed up (ownership/mode preserved)"
+    #
+    # BUG-B+-003: on Podman rootless the secrets dir files are owned by
+    # subuid-remapped UIDs (e.g. 100069, 100998, 101000, 102001). The installer
+    # runs as UID 1000 (the host user), which cannot read those files directly.
+    # Fix: use `podman unshare tar` to read inside the rootless user namespace,
+    # where the remapped UIDs appear as their original values and are accessible.
+    local _secrets_src="${WORK_DIR}/docker/secrets"
+    local _secrets_dest="${backup_dir}/secrets"
+    if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" && "$(id -u)" != "0" ]]; then
+      # Podman rootless path: tar inside the user namespace, extract outside.
+      mkdir -p "$_secrets_dest"
+      if podman unshare bash -c "tar -cf - -C '${_secrets_src}' ." \
+           | tar -xpf - -C "$_secrets_dest" 2>/dev/null; then
+        log_info "  secrets/ backed up via podman unshare tar (BUG-B+-003)"
+      else
+        log_warn "  secrets/ backup via podman unshare failed — skipping secrets backup (BUG-B+-003)"
+        log_warn "  Secrets are preserved in live volumes; this is non-fatal for upgrade."
+        rm -rf "$_secrets_dest"
+      fi
+    else
+      cp -rp "$_secrets_src" "$_secrets_dest"
+      log_info "  secrets/ backed up (ownership/mode preserved)"
+    fi
   fi
 
   # Backup .env (contains passwords as env vars)
@@ -2339,7 +2408,14 @@ check_existing_installation() {
       resolve_compose_cmd 2>/dev/null || true
     fi
     if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
-      if timeout 10 "${COMPOSE_CMD[@]}" -f "$compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+      # macOS does not ship `timeout` (GNU coreutils). Use label filter via
+      # docker/podman ps (fastest, no compose parsing, socket is local) and fall
+      # back to compose ps without timeout.
+      local _runtime_bin="${COMPOSE_CMD[0]%%[[:space:]]*}"
+      if "$_runtime_bin" ps --filter 'label=com.docker.compose.project=docker' \
+           --format '{{.Names}}' 2>/dev/null | grep -q .; then
+        running=true
+      elif "${COMPOSE_CMD[@]}" -f "$compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
         running=true
       fi
     fi
@@ -2356,6 +2432,16 @@ check_existing_installation() {
   fi
 
   if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    # BUG-B+-002: additive re-run (--with-openwebui / --agent-bundles on a
+    # running stack). The live project volumes are NOT contamination — they belong
+    # to the running install and carry the current PKI CA. Mark REUSE_VOLUMES so
+    # _check_contaminated_volumes skips the false-positive check on REUSE_VOLUMES=true.
+    # The live project volumes belong to the running install (same PKI CA) — not contamination.
+    if [[ "$INSTALL_OPENWEBUI" == "true" || -n "$AGENT_BUNDLES" ]]; then
+      log_info "Additive re-run detected (--with-openwebui / --agent-bundles on running stack)"
+      log_info "Existing PKI CA and volumes preserved — skipping contamination check (BUG-B+-002)"
+      REUSE_VOLUMES=true
+    fi
     log_warn "Pass --upgrade to update the existing installation."
     log_warn "Continuing with current images..."
     SKIP_PULL=true
@@ -6106,6 +6192,49 @@ _do_chmod_0640() {
   return 0
 }
 
+# _safe_read_secret — BUG-B+-004: Podman-rootless-aware secret file reader
+#
+# On Podman rootless, secrets are owned by subuid-remapped UIDs that the host
+# installer user (UID 1000) cannot read directly. This helper tries:
+#   1. Direct read (works on Docker / Podman rootful / first-install)
+#   2. `podman unshare cat` (works on Podman rootless re-run)
+#   3. Read from .env (last-resort — value is already there from first install)
+#
+# Usage: _safe_read_secret <file> <ENV_KEY> <env_file>
+# Writes the value to stdout; returns 0 on success, 1 if all attempts fail.
+_safe_read_secret() {
+  local _sr_file="$1"
+  local _sr_env_key="${2:-}"
+  local _sr_env_file="${3:-}"
+  local _sr_val
+
+  # Attempt 1: direct cat (most common case)
+  if _sr_val="$(cat "$_sr_file" 2>/dev/null)" && [[ -n "$_sr_val" ]]; then
+    printf '%s' "$_sr_val"
+    return 0
+  fi
+
+  # Attempt 2: Podman rootless — read inside the user namespace
+  if [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]] && command -v podman >/dev/null 2>&1; then
+    if _sr_val="$(podman unshare cat "$_sr_file" 2>/dev/null)" && [[ -n "$_sr_val" ]]; then
+      printf '%s' "$_sr_val"
+      return 0
+    fi
+  fi
+
+  # Attempt 3: read from .env (value already present from first install)
+  if [[ -n "$_sr_env_key" && -n "$_sr_env_file" && -f "$_sr_env_file" ]]; then
+    if _sr_val="$(grep "^${_sr_env_key}=" "$_sr_env_file" 2>/dev/null | cut -d= -f2-)"; then
+      if [[ -n "$_sr_val" ]]; then
+        printf '%s' "$_sr_val"
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
 generate_secrets() {
   local secrets_dir="${WORK_DIR}/docker/secrets"
 
@@ -6212,14 +6341,18 @@ generate_secrets() {
       log_info "caddy_internal_hmac already present — preserving (use REINSTALL=true to rotate)"
     fi
     # Always sync CADDY_INTERNAL_HMAC into .env (may be absent if secret was just created).
+    # BUG-B+-004: use _safe_read_secret — direct cat fails on Podman rootless (subuid owner).
     local _hmac_val
-    _hmac_val="$(cat "$hmac_file")"
-    if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
-      local tmp_env; tmp_env="$(mktemp)"
-      sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
-      mv "$tmp_env" "$env_file"
+    if _hmac_val="$(_safe_read_secret "$hmac_file" "CADDY_INTERNAL_HMAC" "$env_file")"; then
+      if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
+        local tmp_env; tmp_env="$(mktemp)"
+        sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
+        mv "$tmp_env" "$env_file"
+      else
+        echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+      fi
     else
-      echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+      log_warn "Cannot read caddy_internal_hmac — CADDY_INTERNAL_HMAC already in .env, preserving existing value (BUG-B+-004)"
     fi
 
     # Bucket-C finding (Captain gitleaks baseline 2026-05-17): per-install
@@ -6235,14 +6368,18 @@ generate_secrets() {
       log_info "yashigani_internal_bearer already present — preserving (upgrade path)"
     fi
     # Always sync into .env so Compose can interpolate YASHIGANI_INTERNAL_BEARER.
+    # BUG-B+-004: use _safe_read_secret — direct cat fails on Podman rootless (subuid owner).
     local _bearer_val_up
-    _bearer_val_up="$(cat "$_bearer_file_up")"
-    if grep -q "^YASHIGANI_INTERNAL_BEARER=" "$env_file" 2>/dev/null; then
-      local tmp_env; tmp_env="$(mktemp)"
-      sed "s|^YASHIGANI_INTERNAL_BEARER=.*|YASHIGANI_INTERNAL_BEARER=${_bearer_val_up}|" "$env_file" > "$tmp_env"
-      mv "$tmp_env" "$env_file"
+    if _bearer_val_up="$(_safe_read_secret "$_bearer_file_up" "YASHIGANI_INTERNAL_BEARER" "$env_file")"; then
+      if grep -q "^YASHIGANI_INTERNAL_BEARER=" "$env_file" 2>/dev/null; then
+        local tmp_env; tmp_env="$(mktemp)"
+        sed "s|^YASHIGANI_INTERNAL_BEARER=.*|YASHIGANI_INTERNAL_BEARER=${_bearer_val_up}|" "$env_file" > "$tmp_env"
+        mv "$tmp_env" "$env_file"
+      else
+        echo "YASHIGANI_INTERNAL_BEARER=${_bearer_val_up}" >> "$env_file"
+      fi
     else
-      echo "YASHIGANI_INTERNAL_BEARER=${_bearer_val_up}" >> "$env_file"
+      log_warn "Cannot read yashigani_internal_bearer — YASHIGANI_INTERNAL_BEARER already in .env, preserving existing value (BUG-B+-004)"
     fi
 
     # #2-fix: sync installer version into .env on upgrade path (same as fresh install).
@@ -6456,14 +6593,18 @@ generate_secrets() {
   fi
   # Write/update CADDY_INTERNAL_HMAC in .env so Compose can interpolate it
   # into the Caddy, gateway, and backoffice environment blocks.
+  # BUG-B+-004 (sweep): safe read — file may be subuid-owned on Podman rootless re-run.
   local _hmac_val
-  _hmac_val="$(cat "$hmac_file")"
-  if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
-    local tmp_env; tmp_env="$(mktemp)"
-    sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
-    mv "$tmp_env" "$env_file"
+  if _hmac_val="$(_safe_read_secret "$hmac_file" "CADDY_INTERNAL_HMAC" "$env_file")"; then
+    if grep -q "^CADDY_INTERNAL_HMAC=" "$env_file" 2>/dev/null; then
+      local tmp_env; tmp_env="$(mktemp)"
+      sed "s|^CADDY_INTERNAL_HMAC=.*|CADDY_INTERNAL_HMAC=${_hmac_val}|" "$env_file" > "$tmp_env"
+      mv "$tmp_env" "$env_file"
+    else
+      echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+    fi
   else
-    echo "CADDY_INTERNAL_HMAC=${_hmac_val}" >> "$env_file"
+    log_warn "Cannot read caddy_internal_hmac — CADDY_INTERNAL_HMAC already in .env, preserving (BUG-B+-004)"
   fi
 
   # --- Bucket-C: per-install YASHIGANI_INTERNAL_BEARER ---------------------
@@ -6484,7 +6625,8 @@ generate_secrets() {
   else
     log_info "yashigani_internal_bearer already present — preserving (use --remove-volumes to rotate)"
     local _bearer_token
-    _bearer_token="$(cat "$_bearer_file")"
+    # BUG-B+-004 (sweep): safe read — may be subuid-owned on Podman rootless re-install.
+    _bearer_token="$(_safe_read_secret "$_bearer_file" "YASHIGANI_INTERNAL_BEARER" "$env_file" || true)"
   fi
   # Sync YASHIGANI_INTERNAL_BEARER into .env for Compose interpolation.
   if grep -q "^YASHIGANI_INTERNAL_BEARER=" "$env_file" 2>/dev/null; then
@@ -6754,9 +6896,11 @@ print_completion_summary() {
   fi
   # --- YASHIGANI_INTERNAL_BEARER audit line (masked — operator sanity check) ---
   local _ibearer_file="${WORK_DIR}/docker/secrets/yashigani_internal_bearer"
-  if [[ -s "$_ibearer_file" ]]; then
+  if [[ -s "$_ibearer_file" || -f "$_ibearer_file" ]]; then
     local _ibearer_full
-    _ibearer_full="$(cat "$_ibearer_file")"
+    # BUG-B+-004 (sweep): safe read — may be subuid-owned on Podman rootless.
+    _ibearer_full="$(_safe_read_secret "$_ibearer_file" "YASHIGANI_INTERNAL_BEARER" \
+                     "${WORK_DIR}/docker/.env" 2>/dev/null || true)"
     local _ibearer_len="${#_ibearer_full}"
     local _ibearer_preview="${_ibearer_full:0:4}...${_ibearer_full: -4} (${_ibearer_len} chars)"
     printf "  ${C_YELLOW}║${C_RESET}  ${C_BOLD}Internal Bearer token:${C_RESET}                                        ${C_YELLOW}║${C_RESET}\n"

@@ -2067,7 +2067,14 @@ volumes:
   # Test IdP volume
   keycloak_data:
     driver: local
-  # Agent bundle volumes
+  # Agent bundle volumes — always declared at project level (Docker Compose creates all
+  # top-level named volumes on `docker compose up`, regardless of which profiles are
+  # active). The volumes are empty until the agent service actually starts under its
+  # profile (langflow/letta/openclaw/openwebui). This is a Docker Compose design
+  # constraint: per-profile volume scoping is not supported natively. The volumes are
+  # benign when empty; the _check_contaminated_volumes guard in install.sh is
+  # intentionally NOT triggered by these agent volumes on the additive re-run path
+  # (REUSE_VOLUMES=true is set in check_existing_installation — BUG-B+-002).
   openclaw_data:
     driver: local
   langflow_data:
