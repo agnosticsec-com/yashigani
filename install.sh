@@ -8351,6 +8351,253 @@ _postgres_byo_ca_trust_sync() {
   return 0
 }
 
+# =============================================================================
+# _activate_byo_ca — stage customer CA files and re-issue all leaf certs
+# =============================================================================
+# Called when BYO CA files are ready:
+#   (a) Fresh install with provide-now path (--with-internal-ca + cert/key flags)
+#   (b) Deferred activation re-run (--internal-ca-cert + --internal-ca-key only)
+#   (c) CA rotation (same flags as b, against an existing BYO install)
+#
+# Pre-conditions (enforced by caller):
+#   - _validate_byo_ca_files() already succeeded
+#   - INTERNAL_CA_CERT, INTERNAL_CA_KEY are non-empty absolute paths
+#   - INTERNAL_CA_ROOT may be empty (optional)
+#   - WORK_DIR is set and is the install root
+#
+# Steps:
+#   1. Backup existing CA files (if any) into docker/backups/
+#   2. Stage BYO files into docker/secrets/ atomically
+#   3. Write ca_source.* fields into service_identities.yaml
+#   4. Run _pki_run_issuer bootstrap (Tom's #a55e0ee branches on byo_intermediate)
+#   5. Re-own service keys to container UIDs
+#   6. Sync postgres trust bundle (Captain's _postgres_byo_ca_trust_sync)
+#   7. Clear sentinel + update .env
+#
+# The issuer bootstrap in step 4 detects ca_source.mode == byo_intermediate,
+# skips root/intermediate generation, and signs leaves against the customer's
+# intermediate key — per Tom's a55e0ee implementation.
+# =============================================================================
+_activate_byo_ca() {
+  local _cert="$INTERNAL_CA_CERT"
+  local _key="$INTERNAL_CA_KEY"
+  local _root="${INTERNAL_CA_ROOT:-}"
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+  local _manifest="${WORK_DIR}/docker/service_identities.yaml"
+  local _env_file="${WORK_DIR}/docker/.env"
+  local _backup_dir
+  _backup_dir="${WORK_DIR}/docker/backups/byo_ca_$(date -u +%Y%m%dT%H%M%SZ)"
+
+  log_step "9b-byo" "BYO internal CA activation"
+  log_info "Activating BYO internal CA: ${_cert}"
+
+  # ---- Step 1: Backup existing CA files if present ---
+  if [[ -f "${_secrets_dir}/ca_root.crt" || -f "${_secrets_dir}/ca_intermediate.crt" ]]; then
+    log_info "Backing up existing CA files to ${_backup_dir}/"
+    mkdir -p "${_backup_dir}"
+    for _f in ca_root.crt ca_intermediate.crt ca_intermediate.key; do
+      [[ -f "${_secrets_dir}/${_f}" ]] \
+        && install -m 0600 -p "${_secrets_dir}/${_f}" "${_backup_dir}/${_f}" \
+        || true
+    done
+    log_info "  Backup: ${_backup_dir}/"
+  fi
+
+  # ---- Step 2: Stage BYO files atomically ---
+  # Certs are group-readable (0644) so container processes can read them.
+  # Key is owner-only (0600) — only the PKI issuer container reads it.
+  log_info "Staging BYO CA files into docker/secrets/"
+
+  install -m 0644 -p "${_cert}" "${_secrets_dir}/byo_ca_intermediate.crt" \
+    || { log_error "_activate_byo_ca: failed to copy BYO cert to secrets dir"; return 1; }
+  install -m 0600 -p "${_key}" "${_secrets_dir}/byo_ca_intermediate.key" \
+    || { log_error "_activate_byo_ca: failed to copy BYO key to secrets dir"; return 1; }
+
+  if [[ -n "$_root" ]]; then
+    install -m 0644 -p "${_root}" "${_secrets_dir}/byo_ca_root.crt" \
+      || { log_error "_activate_byo_ca: failed to copy BYO root cert to secrets dir"; return 1; }
+    log_info "  byo_ca_root.crt staged (customer root)"
+  fi
+
+  log_info "  byo_ca_intermediate.crt staged"
+  log_info "  byo_ca_intermediate.key staged (mode 0600)"
+
+  # S1 assertion: no world/group-readable key under docker/secrets/
+  if find "${_secrets_dir}" -name "byo_ca_intermediate.key" \
+       \( -perm -004 -o -perm -040 \) | grep -q .; then
+    log_error "CWE-732: byo_ca_intermediate.key is group/world-readable — aborting"
+    return 1
+  fi
+
+  # ---- Step 3: Write ca_source fields into service_identities.yaml ---
+  # The issuer container reads these at bootstrap time to determine whether to
+  # generate its own CA or use the customer-supplied files. Container-internal
+  # path: secrets dir is mounted at /secrets inside the issuer container.
+  log_info "Writing ca_source.byo fields into service_identities.yaml"
+
+  local _has_root=0
+  [[ -n "$_root" ]] && _has_root=1
+
+  python3 - "${_manifest}" "${_has_root}" <<'PYEOF' \
+    || { log_error "_activate_byo_ca: failed to update service_identities.yaml ca_source fields"; return 1; }
+import sys, yaml, pathlib
+
+manifest_path = pathlib.Path(sys.argv[1])
+has_root = sys.argv[2] == "1"
+
+with open(manifest_path) as f:
+    m = yaml.safe_load(f)
+
+m.setdefault("ca_source", {})
+m["ca_source"]["mode"] = "byo_intermediate"
+m["ca_source"].setdefault("byo", {})
+m["ca_source"]["byo"]["intermediate_cert_path"] = "/secrets/byo_ca_intermediate.crt"
+m["ca_source"]["byo"]["intermediate_key_path"]  = "/secrets/byo_ca_intermediate.key"
+m["ca_source"]["byo"]["root_cert_path"]         = "/secrets/byo_ca_root.crt" if has_root else None
+
+# Preserve structure: write back with safe_dump (no anchors, block style)
+with open(manifest_path, "w") as f:
+    yaml.safe_dump(m, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+print("ca_source.mode = byo_intermediate written to manifest")
+PYEOF
+
+  log_info "  service_identities.yaml updated: ca_source.mode=byo_intermediate"
+
+  # ---- Step 4: Run PKI issuer bootstrap ---
+  # Tom's a55e0ee bootstrap() branches on ca_source.mode == byo_intermediate:
+  #   - Skips root + intermediate generation
+  #   - Reads /secrets/byo_ca_intermediate.{crt,key} as the signing CA
+  #   - Issues all leaf certs under the customer intermediate
+  # The _pki_run_issuer dispatcher handles Docker vs Podman vs macOS.
+  log_info "Running PKI issuer bootstrap against BYO intermediate CA..."
+  _pki_validate_lifetimes
+  _detect_public_access_params
+
+  local _san_args=()
+  [[ -n "${YSG_PUBLIC_HOSTNAME:-}" ]] && _san_args+=(--caddy-extra-dns "${YSG_PUBLIC_HOSTNAME}")
+  [[ -n "${YSG_PUBLIC_IP:-}" ]]       && _san_args+=(--caddy-extra-ip  "${YSG_PUBLIC_IP}")
+
+  if ! _pki_run_issuer bootstrap \
+         --root-lifetime-years   "$YASHIGANI_ROOT_CA_LIFETIME_YEARS" \
+         --intermediate-lifetime-days "$YASHIGANI_INTERMEDIATE_LIFETIME_DAYS" \
+         --leaf-lifetime-days    "$YASHIGANI_CERT_LIFETIME_DAYS" \
+         "${_san_args[@]}"; then
+    log_error "_activate_byo_ca: PKI issuer bootstrap failed — BYO CA leaves NOT issued"
+    return 1
+  fi
+
+  _pki_persist_env
+  log_success "BYO CA leaf certs issued by customer intermediate"
+
+  # ---- Step 5: Re-own service keys to container UIDs ---
+  _pki_chown_client_keys || return 1
+
+  # ---- Step 6: Postgres trust-bundle sync ---
+  # _postgres_byo_ca_trust_sync is Captain's implementation (38512fd).
+  # It invokes 05-enable-ssl.sh inside the running postgres container
+  # (if running) to atomically update PGDATA/root.crt and issue pg_ctl reload.
+  # Falls back to a warn if postgres is not running — the updated secrets/ca_root.crt
+  # will be consumed at next postgres start.
+  _postgres_byo_ca_trust_sync \
+    || log_warn "_activate_byo_ca: trust sync did not propagate to running postgres — restart manually: docker compose restart postgres"
+
+  # ---- Step 7: Clear deferred sentinel + update .env ---
+  local _sentinel="${_secrets_dir}/.byo_ca_pending"
+  if [[ -f "$_sentinel" ]]; then
+    rm -f "$_sentinel" \
+      || log_warn "_activate_byo_ca: could not remove ${_sentinel} — non-fatal"
+    log_info "Cleared deferred sentinel: .byo_ca_pending"
+  fi
+
+  # Write/update YASHIGANI_BYO_CA_MODE in .env (sed-update if already present)
+  if grep -q "^YASHIGANI_BYO_CA_MODE=" "$_env_file" 2>/dev/null; then
+    sed -i.bak "s|^YASHIGANI_BYO_CA_MODE=.*|YASHIGANI_BYO_CA_MODE=byo_intermediate|" "$_env_file" \
+      && rm -f "${_env_file}.bak" || true
+  else
+    echo "YASHIGANI_BYO_CA_MODE=byo_intermediate" >> "$_env_file"
+  fi
+  log_info "YASHIGANI_BYO_CA_MODE=byo_intermediate written to .env"
+
+  log_success "BYO internal CA activated"
+  log_info "  CA root trust anchor:    docker/secrets/byo_ca_root.crt (if supplied)"
+  log_info "  Intermediate (signing):  docker/secrets/byo_ca_intermediate.crt"
+  log_info "  All service leaf certs re-issued under customer intermediate"
+  log_info "  Restart services to pick up new certs:"
+  log_info "    docker compose restart gateway backoffice pgbouncer redis budget-redis policy"
+}
+
+# =============================================================================
+# _activate_byo_ca_rerun — deferred-then-activated re-run short-circuit
+# =============================================================================
+# Detects if this is a BYO CA activation re-run against an existing install
+# (i.e. --internal-ca-cert was supplied, ca_root.crt already exists OR sentinel
+# .byo_ca_pending exists). If so: validate files, activate, restart if running,
+# and exit. This short-circuits the full install flow.
+#
+# Returns 0 if this is NOT a re-run path (caller continues full install).
+# Exits  0 if this IS a re-run path (activation complete).
+# Exits  1 if this IS a re-run path but activation failed.
+# =============================================================================
+_activate_byo_ca_rerun() {
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+  local _sentinel="${_secrets_dir}/.byo_ca_pending"
+  local _ca_root="${_secrets_dir}/ca_root.crt"
+
+  # Determine whether this looks like a re-run activation:
+  #   - --internal-ca-cert was supplied (INTERNAL_CA_CERT non-empty)
+  #   - AND an existing install is present (ca_root.crt exists OR sentinel exists)
+  if [[ -z "$INTERNAL_CA_CERT" ]]; then
+    return 0  # no cert supplied — not a re-run activation path
+  fi
+
+  if [[ ! -f "$_ca_root" && ! -f "$_sentinel" ]]; then
+    return 0  # no existing install detected — treat as fresh install with BYO
+  fi
+
+  log_info "BYO CA re-run detected: existing install + --internal-ca-cert supplied"
+  [[ -f "$_sentinel" ]] && log_info "  Deferred sentinel present: .byo_ca_pending"
+  [[ -f "$_ca_root"   ]] && log_info "  Existing CA root present: ca_root.crt"
+
+  # Validate files (Laura's requirements — same path as fresh install)
+  if ! _validate_byo_ca_files; then
+    log_error "BYO CA validation failed — aborting re-run. Check the flags and retry."
+    exit 1
+  fi
+
+  # Detect if the stack is running so we can restart it after activation
+  local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  local _stack_running=false
+  if [[ -f "$_compose_file" && ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+    if timeout 10 "${COMPOSE_CMD[@]}" -f "$_compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+      _stack_running=true
+      log_info "  Stack is running — will restart services after BYO CA activation"
+    fi
+  fi
+
+  # Activate the BYO CA
+  _activate_byo_ca || exit 1
+
+  # Restart services if the stack was running (picks up new leaf certs)
+  if [[ "$_stack_running" == "true" ]]; then
+    log_info "Restarting services to pick up new BYO CA leaf certs..."
+    if "${COMPOSE_CMD[@]}" -f "$_compose_file" \
+         restart gateway backoffice pgbouncer redis budget-redis policy 2>&1 | \
+         while IFS= read -r _line; do log_info "  [compose restart] ${_line}"; done; then
+      log_success "Services restarted with new BYO CA leaf certs"
+    else
+      log_warn "Service restart returned non-zero — check container logs"
+      log_warn "  docker compose restart gateway backoffice pgbouncer redis budget-redis policy"
+    fi
+  else
+    log_info "Stack not running. BYO CA files are in place."
+    log_info "Start Yashigani with: docker compose -f docker/docker-compose.yml up -d"
+  fi
+
+  log_success "BYO CA activation re-run complete"
+  exit 0
+}
+
 # Subcommand entry — for `install.sh --pki-action=<action>` used in maintenance.
 handle_pki_subcommand() {
   case "$PKI_ACTION" in
@@ -8534,6 +8781,15 @@ main() {
     if [[ ${#COMPOSE_CMD[@]} -eq 0 ]]; then
       resolve_compose_cmd 2>/dev/null || true
     fi
+
+    # BYO CA re-run / deferred-activation short-circuit.
+    # If --internal-ca-cert was supplied against an existing install (ca_root.crt
+    # or .byo_ca_pending sentinel present), activate the BYO CA and exit.
+    # COMPOSE_CMD is now resolved so the stack-running check inside
+    # _activate_byo_ca_rerun works correctly.
+    # Returns 0 if this is NOT a re-run path (continues full install).
+    # Exits 0 or 1 if this IS a re-run path (does not return).
+    _activate_byo_ca_rerun
     # Derive RUNTIME from resolved COMPOSE_CMD: "podman-compose" or "podman compose"
     # → podman; "docker compose" or "docker-compose" → docker.
     if [[ -z "${RUNTIME:-}" ]]; then
@@ -8797,7 +9053,41 @@ main() {
     # allow installer-side writes; see _prepare_secrets_dir_for_pki comment).
     _prepare_secrets_dir_for_pki
     _pki_prompt_lifetimes
-    bootstrap_internal_pki
+
+    # BYO CA — provide-now fresh-install path.
+    # When the operator supplied --with-internal-ca + cert/key flags (or the
+    # interactive wizard collected them), INSTALL_INTERNAL_CA=true AND
+    # INTERNAL_CA_DEFER=false AND INTERNAL_CA_CERT is set.
+    # In this case _activate_byo_ca() stages the customer files, writes the
+    # manifest ca_source fields, and calls _pki_run_issuer bootstrap — which
+    # then branches on ca_source.mode=byo_intermediate (Tom a55e0ee).
+    # bootstrap_internal_pki is SKIPPED (it would generate a Yashigani-owned CA).
+    # The deferred path (INTERNAL_CA_DEFER=true) still runs bootstrap_internal_pki
+    # to generate a Yashigani CA for the initial install; the sentinel
+    # .byo_ca_pending is written below after step 9b completes.
+    if [[ "$INSTALL_INTERNAL_CA" == "true" \
+       && "$INTERNAL_CA_DEFER" != "true" \
+       && -n "$INTERNAL_CA_CERT" ]]; then
+      _activate_byo_ca || { log_error "BYO CA activation failed — aborting"; exit 1; }
+    else
+      bootstrap_internal_pki
+    fi
+
+    # BYO CA deferred sentinel — written after step 9b so it exists before
+    # compose_up starts. Fresh install completed with Yashigani-generated PKI;
+    # the sentinel signals that a BYO CA activation is outstanding.
+    if [[ "$INSTALL_INTERNAL_CA" == "true" && "$INTERNAL_CA_DEFER" == "true" ]]; then
+      local _byo_sentinel="${WORK_DIR}/docker/secrets/.byo_ca_pending"
+      touch "$_byo_sentinel" 2>/dev/null \
+        || log_warn "Could not write .byo_ca_pending sentinel — non-fatal"
+      chmod 0600 "$_byo_sentinel" 2>/dev/null || true
+      log_info "BYO CA deferred sentinel written: docker/secrets/.byo_ca_pending"
+      log_info "Activate BYO CA later with:"
+      log_info "  install.sh --internal-ca-cert /path/to/intermediate.pem \\"
+      log_info "             --internal-ca-key  /path/to/intermediate.key  \\"
+      log_info "             --internal-ca-root /path/to/root.pem \\"
+      log_info "             --byo-ca-fingerprint <sha256>"
+    fi
 
     # Step 9c: chown named volumes for Bucket-C agent containers.
     # Must run AFTER bootstrap_internal_pki (compose pull creates volumes) and

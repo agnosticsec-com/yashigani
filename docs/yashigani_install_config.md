@@ -3153,13 +3153,32 @@ If you cannot supply the CA material at install time (e.g., your PKI team needs 
   --internal-ca-root /absolute/path/to/root.pem
 ```
 
-The initial install completes with a Yashigani-generated PKI and writes a sentinel file `docker/secrets/.byo_ca_pending`. All services are operational. The re-run activates your BYO CA by:
+The initial install completes with a Yashigani-generated PKI and writes a sentinel file `docker/secrets/.byo_ca_pending`. All services are operational. To activate your BYO CA later, re-run with all three flags plus `--byo-ca-fingerprint` (required in non-interactive mode):
 
-1. Validating the three CA files.
-2. Copying `ca_root.crt` (from `--internal-ca-root`) and `ca_intermediate.crt` + `.key` (from `--internal-ca-cert` / `--internal-ca-key`) into `docker/secrets/`.
-3. Calling `_pki_run_issuer rotate-leaves` to re-issue all leaf certs under the new trust anchor.
-4. Syncing the postgres trust bundle (see §29.5).
-5. Restarting services.
+```bash
+./install.sh \
+  --internal-ca-cert /absolute/path/to/intermediate.pem \
+  --internal-ca-key  /absolute/path/to/intermediate.key \
+  --internal-ca-root /absolute/path/to/root.pem \
+  --byo-ca-fingerprint <sha256-of-intermediate-cert>
+```
+
+Compute the fingerprint with:
+
+```bash
+python3 -c "from yashigani.pki.drivers.byo_ca import compute_ca_fingerprint; \
+  print(compute_ca_fingerprint('/path/to/intermediate.pem'))"
+```
+
+The re-run activates your BYO CA by:
+
+1. Validating the three CA files (X.509 parse, key-pair match, Basic Constraints, validity window, chain verification, fingerprint match).
+2. Backing up current `docker/secrets/ca_root.crt` + `ca_intermediate.*` to `docker/backups/byo_ca_<timestamp>/`.
+3. Copying BYO files into `docker/secrets/` (cert 0644, key 0600).
+4. Writing `ca_source.mode = byo_intermediate` into `docker/service_identities.yaml`.
+5. Running `_pki_run_issuer bootstrap` — which, with the manifest updated, issues all leaf certs under the customer intermediate.
+6. Syncing the postgres trust bundle (see §29.5).
+7. Restarting running services (gateway, backoffice, pgbouncer, redis, budget-redis, policy).
 
 ### 29.4 CA rotation
 
@@ -3169,7 +3188,8 @@ When your CA expires or is compromised, provide the new files via the same re-ru
 ./install.sh \
   --internal-ca-cert /path/to/new-intermediate.pem \
   --internal-ca-key  /path/to/new-intermediate.key \
-  --internal-ca-root /path/to/new-root.pem
+  --internal-ca-root /path/to/new-root.pem \
+  --byo-ca-fingerprint <sha256-of-new-intermediate-cert>
 ```
 
 This is idempotent. Running it twice with the same cert produces the same leaf certs. The rotation procedure for an active install:
@@ -3219,13 +3239,11 @@ The script is idempotent: if the trust bundle is already current, it prints `Tru
 
 The Helm chart BYO CA path (`mtls.byoCa.existingSecret`) is scheduled for v2.24.1. For v2.24.0, the BYO CA feature is Compose / Podman only. See `helm/yashigani/values.yaml` for the planned `mtls.byoCa` block (present as documentation; not yet wired to the bootstrap job).
 
-### 29.7 Reverting to a Yashigani-generated PKI
+### 29.7 Removal — revert to Yashigani-generated PKI
 
-```bash
-./install.sh --pki-action=bootstrap --reset-ca
-```
+Removal of a BYO CA (reverting to a Yashigani-generated PKI) is **not supported in v2.24.0**. The `--pki-action=bootstrap --reset-ca` flag combination is filed as a v2.24.1 task. As a workaround, perform a fresh install (uninstall then reinstall without the `--with-internal-ca` flag).
 
-This clears `docker/secrets/ca_root.*` and `ca_intermediate.*`, regenerates a fresh Yashigani-generated PKI, rotates leaves, and syncs postgres. The same PGDATA/root.crt update path applies.
+> **Filed for v2.24.1:** `--pki-action=bootstrap --reset-ca` — clear BYO CA files, regenerate Yashigani PKI, rotate leaves, sync postgres.
 
 ---
 
