@@ -1,7 +1,7 @@
 """
 Yashigani internal PKI issuer — generates root, intermediate, and leaf certs.
 
-Last updated: 2026-05-18T00:00:00+01:00
+Last updated: 2026-05-23T00:00:00+01:00
 
 Invoked by:
   * install.sh bootstrap_internal_pki()  — first-install cert generation
@@ -44,7 +44,6 @@ import datetime as _dt
 import hashlib
 import logging
 import secrets
-import stat
 import sys
 import uuid
 from dataclasses import dataclass
@@ -57,8 +56,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 
 from yashigani.pki.identity import (
+    CASource,
     CertPolicy,
-    Manifest,
     ManifestError,
     ServiceIdentity,
     load_manifest,
@@ -191,6 +190,190 @@ def _load_key(path: Path) -> ec.EllipticCurvePrivateKey:
 
 def _load_cert(path: Path) -> x509.Certificate:
     return x509.load_pem_x509_certificate(path.read_bytes())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BYO-CA helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_byo_intermediate(
+    ca_source: "CASource",
+) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey, Optional[x509.Certificate]]:
+    """Load and validate customer-supplied BYO intermediate CA material.
+
+    Returns:
+        (intermediate_cert, intermediate_key, root_cert_or_None)
+
+    ``root_cert_or_None`` is the customer root cert when ``ca_source.byo_root_cert_path``
+    is provided, otherwise None (in which case the intermediate is used as the trust
+    anchor written to ``ca_root.crt`` — valid for short-chain deployments where the
+    customer intermediate is self-signed or the root is not provided).
+
+    Validation performed (mirrors ByoCADriver H3/M2/M3):
+      - All required paths must exist and be non-empty
+      - Intermediate cert must carry basicConstraints CA:TRUE + keyUsage keyCertSign
+      - Intermediate cert must be within its validity window (not expired, not future)
+      - Intermediate private key must be parseable as an EC key
+      - Key/cert must form a matching pair (verified via public-key comparison)
+      - If root cert provided: root must carry basicConstraints CA:TRUE and intermediate
+        must be directly issued by the root (cryptographic chain check)
+
+    Raises RuntimeError on any validation failure.
+    """
+    # --- Path presence checks ---
+    int_cert_path_str = (ca_source.byo_intermediate_cert_path or "").strip()
+    int_key_path_str = (ca_source.byo_intermediate_key_path or "").strip()
+    if not int_cert_path_str:
+        raise RuntimeError(
+            "ca_source.byo.intermediate_cert_path is required for byo_intermediate mode "
+            "but is missing or empty in the manifest."
+        )
+    if not int_key_path_str:
+        raise RuntimeError(
+            "ca_source.byo.intermediate_key_path is required for byo_intermediate mode "
+            "but is missing or empty in the manifest."
+        )
+    int_cert_path = Path(int_cert_path_str)
+    int_key_path = Path(int_key_path_str)
+    if not int_cert_path.exists():
+        raise RuntimeError(
+            f"BYO intermediate cert not found at {int_cert_path}. "
+            "Check ca_source.byo.intermediate_cert_path in service_identities.yaml."
+        )
+    if not int_key_path.exists():
+        raise RuntimeError(
+            f"BYO intermediate key not found at {int_key_path}. "
+            "Check ca_source.byo.intermediate_key_path in service_identities.yaml."
+        )
+
+    # --- Parse intermediate cert ---
+    try:
+        int_cert = x509.load_pem_x509_certificate(int_cert_path.read_bytes())
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot parse BYO intermediate cert at {int_cert_path}: {exc}"
+        ) from exc
+
+    # --- H3: basicConstraints CA:TRUE ---
+    try:
+        bc_ext = int_cert.extensions.get_extension_for_class(x509.BasicConstraints)
+        if not bc_ext.value.ca:
+            raise RuntimeError(
+                f"BYO intermediate cert at {int_cert_path} does not have "
+                "basicConstraints CA:TRUE. Supply a CA certificate, not a leaf cert."
+            )
+    except x509.ExtensionNotFound:
+        raise RuntimeError(
+            f"BYO intermediate cert at {int_cert_path} is missing the "
+            "BasicConstraints extension. A CA certificate must carry basicConstraints CA:TRUE."
+        )
+
+    # --- H3: keyUsage keyCertSign ---
+    try:
+        ku_ext = int_cert.extensions.get_extension_for_class(x509.KeyUsage)
+        if not ku_ext.value.key_cert_sign:
+            raise RuntimeError(
+                f"BYO intermediate cert at {int_cert_path} does not have "
+                "keyUsage keyCertSign. A CA certificate must be permitted to sign certs."
+            )
+    except x509.ExtensionNotFound:
+        raise RuntimeError(
+            f"BYO intermediate cert at {int_cert_path} is missing the KeyUsage extension. "
+            "A CA certificate must carry keyUsage with at least keyCertSign."
+        )
+
+    # --- M2: Validity window ---
+    now = _utcnow()
+    if now < int_cert.not_valid_before_utc:
+        raise RuntimeError(
+            f"BYO intermediate cert at {int_cert_path} is not yet valid "
+            f"(notBefore={int_cert.not_valid_before_utc.isoformat()}, now={now.isoformat()})."
+        )
+    if now > int_cert.not_valid_after_utc:
+        raise RuntimeError(
+            f"BYO intermediate cert at {int_cert_path} is expired "
+            f"(notAfter={int_cert.not_valid_after_utc.isoformat()}, now={now.isoformat()}). "
+            "Provide a current intermediate certificate."
+        )
+
+    # --- Parse intermediate key ---
+    try:
+        raw_key = serialization.load_pem_private_key(int_key_path.read_bytes(), password=None)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot parse BYO intermediate key at {int_key_path}: {exc}"
+        ) from exc
+    if not isinstance(raw_key, ec.EllipticCurvePrivateKey):
+        raise RuntimeError(
+            f"BYO intermediate key at {int_key_path} is not an EC private key. "
+            "Yashigani requires EC keys for internal PKI leaf issuance. "
+            "Provide an EC P-256, P-384, or P-521 key."
+        )
+    int_key: ec.EllipticCurvePrivateKey = raw_key
+
+    # --- Key/cert pair match (public-key comparison) ---
+    cert_pub = int_cert.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    key_pub = int_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if cert_pub != key_pub:
+        raise RuntimeError(
+            f"BYO intermediate cert at {int_cert_path} and key at {int_key_path} "
+            "do not form a matching pair (public key mismatch). "
+            "Verify you supplied the correct key for this certificate."
+        )
+
+    # --- Optional root cert ---
+    root_cert: Optional[x509.Certificate] = None
+    root_cert_path_str = (ca_source.byo_root_cert_path or "").strip()
+    if root_cert_path_str:
+        root_cert_path = Path(root_cert_path_str)
+        if not root_cert_path.exists():
+            raise RuntimeError(
+                f"BYO root cert not found at {root_cert_path}. "
+                "Check ca_source.byo.root_cert_path in service_identities.yaml."
+            )
+        try:
+            root_cert = x509.load_pem_x509_certificate(root_cert_path.read_bytes())
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot parse BYO root cert at {root_cert_path}: {exc}"
+            ) from exc
+        # Root must be a CA cert
+        try:
+            root_bc = root_cert.extensions.get_extension_for_class(x509.BasicConstraints)
+            if not root_bc.value.ca:
+                raise RuntimeError(
+                    f"BYO root cert at {root_cert_path} does not have "
+                    "basicConstraints CA:TRUE. Supply a root CA certificate."
+                )
+        except x509.ExtensionNotFound:
+            raise RuntimeError(
+                f"BYO root cert at {root_cert_path} is missing the BasicConstraints extension."
+            )
+        # Cryptographic chain check: intermediate must be directly issued by root
+        try:
+            int_cert.verify_directly_issued_by(root_cert)
+        except Exception as chain_exc:
+            raise RuntimeError(
+                f"BYO intermediate cert at {int_cert_path} is not directly issued by "
+                f"the root cert at {root_cert_path} (cryptographic chain check failed). "
+                f"Detail: {chain_exc}"
+            ) from chain_exc
+
+    logger.info(
+        "internal-pki: BYO intermediate cert loaded from %s "
+        "(subject=%s, not_after=%s, root=%s)",
+        int_cert_path,
+        int_cert.subject.rfc4514_string(),
+        int_cert.not_valid_after_utc,
+        root_cert_path_str or "none (intermediate used as trust anchor)",
+    )
+    return int_cert, int_key, root_cert
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,19 +694,63 @@ def bootstrap(
 ) -> dict[str, str]:
     """First-install: generate root + intermediate + leaves for every non-revoked service.
 
+    Behaviour varies by ca_source.mode in the manifest:
+
+    ``yashigani_generated`` (default):
+        Generate Yashigani's own root CA, sign an intermediate, sign all leaf certs.
+
+    ``byo_intermediate`` (v2.24.0+):
+        Skip root and intermediate generation.  Load the customer-supplied intermediate
+        cert + key (and optionally the customer root cert) from the paths declared in
+        ca_source.byo.{intermediate_cert_path, intermediate_key_path, root_cert_path}.
+        Validate the BYO material (basicConstraints, keyUsage, expiry, key/cert pair,
+        and cryptographic chain to root if root is supplied).  Copy the validated files
+        into the canonical secrets-dir locations (ca_root.crt = customer root or
+        customer intermediate when root not provided; ca_intermediate.crt = customer
+        intermediate).  Then sign leaf certs using the customer intermediate exactly
+        as in the yashigani_generated path.
+
+    ``byo_root``:
+        Not implemented in v2.24.0.  Raises RuntimeError.  Use ``byo_intermediate``
+        instead (the customer provides a sub-CA delegated from their root; the root
+        key never touches the Yashigani host).
+
+    ``remote_acme``:
+        Existing behaviour (unchanged).
+
     caddy_extra_dns_sans / caddy_extra_ip_sans — appended to the caddy leaf cert
     SAN only (YSG-CERT-SAN-001). Enables demo / system-use access via VM IP or
     hostname without a CA-signed cert. Other services are unaffected.
 
     Returns a dict of service_name -> sha256 of the bootstrap token written.
     """
+    manifest = load_manifest(str(paths.manifest_path))
+    policy = manifest.cert_policy
+    ca_source = manifest.ca_source
+
+    # ── Mode: byo_root — not implemented in v2.24.0 ─────────────────────────
+    if ca_source.mode == "byo_root":
+        raise RuntimeError(
+            "ca_source.mode=byo_root is not supported in v2.24.0. "
+            "Use byo_intermediate instead: provide a sub-CA cert + key that your "
+            "root CA has already signed, and supply the root cert for chain validation. "
+            "byo_root (where Yashigani signs its own intermediate under your root) "
+            "is deferred to a future release."
+        )
+
+    # ── Mode: byo_intermediate ────────────────────────────────────────────────
+    if ca_source.mode == "byo_intermediate":
+        return _bootstrap_byo_intermediate(
+            paths, ca_source, policy, leaf_lifetime_days,
+            caddy_extra_dns_sans, caddy_extra_ip_sans,
+        )
+
+    # ── Mode: yashigani_generated (default) + remote_acme (pass-through) ─────
     if paths.root_cert.exists() or paths.root_key.exists():
         raise RuntimeError(
             f"Root CA already exists at {paths.root_cert} / {paths.root_key}. "
             "Refusing to overwrite. Use rotate-root --confirm to rotate."
         )
-    manifest = load_manifest(str(paths.manifest_path))
-    policy = manifest.cert_policy
 
     # 1. Root
     root_cert, root_key = build_root(policy, root_lifetime_years)
@@ -551,6 +778,82 @@ def bootstrap(
         hashes_by_service[service.name] = _ensure_bootstrap_token(paths, service.name)
         logger.info(
             "internal-pki: leaf issued for %s, valid until %s",
+            service.name,
+            leaf_cert.not_valid_after_utc,
+        )
+
+    _update_manifest_hashes(paths.manifest_path, hashes_by_service)
+    return hashes_by_service
+
+
+def _bootstrap_byo_intermediate(
+    paths: IssuerPaths,
+    ca_source: "CASource",
+    policy: CertPolicy,
+    leaf_lifetime_days: Optional[int],
+    caddy_extra_dns_sans: Optional[list[str]],
+    caddy_extra_ip_sans: Optional[list[str]],
+) -> dict[str, str]:
+    """Inner implementation for bootstrap() when ca_source.mode == 'byo_intermediate'.
+
+    1. Load + validate customer intermediate (and optional root) via _load_byo_intermediate().
+    2. Write trust bundle:
+       ca_root.crt      = customer root cert (if provided) else customer intermediate cert
+       ca_intermediate.crt = customer intermediate cert
+       ca_intermediate.key = customer intermediate key
+       NOTE: ca_root.key is NOT written — the customer root private key is never stored
+             on the Yashigani host.
+    3. Issue leaf certs signed by the customer intermediate.
+    4. Write bootstrap tokens and update manifest hashes.
+    """
+    # Guard: refuse to overwrite an existing BYO or generated intermediate.
+    # For BYO mode the canonical check is on the intermediate (the root key
+    # is never written, so paths.root_key can't be the sentinel).
+    if paths.intermediate_cert.exists() or paths.intermediate_key.exists():
+        raise RuntimeError(
+            f"Intermediate CA already exists at {paths.intermediate_cert} / "
+            f"{paths.intermediate_key}. Refusing to overwrite. "
+            "Delete the existing intermediate files and re-run bootstrap, "
+            "or use rotate-leaves to re-issue leaf certs against the existing intermediate."
+        )
+
+    # 1. Load + validate BYO material
+    int_cert, int_key, root_cert = _load_byo_intermediate(ca_source)
+
+    # 2. Write trust bundle
+    # ca_root.crt = customer root if provided; else customer intermediate (short chain)
+    trust_anchor_cert = root_cert if root_cert is not None else int_cert
+    _write_secret(paths.root_cert, _pem_cert(trust_anchor_cert), _FILE_MODE_CERT)
+    logger.info(
+        "internal-pki: BYO trust anchor written to %s (subject=%s)",
+        paths.root_cert,
+        trust_anchor_cert.subject.rfc4514_string(),
+    )
+
+    # ca_intermediate.crt + ca_intermediate.key = customer intermediate material
+    _write_secret(paths.intermediate_cert, _pem_cert(int_cert), _FILE_MODE_CERT)
+    _write_secret(paths.intermediate_key, _pem_key(int_key), _FILE_MODE_KEY)
+    logger.info(
+        "internal-pki: BYO intermediate cert + key written to %s / %s",
+        paths.intermediate_cert,
+        paths.intermediate_key,
+    )
+
+    # 3. Leaves + bootstrap tokens
+    manifest = load_manifest(str(paths.manifest_path))
+    hashes_by_service: dict[str, str] = {}
+    for service in manifest.live_services():
+        _extra_dns = caddy_extra_dns_sans if service.name == "caddy" else None
+        _extra_ip = caddy_extra_ip_sans if service.name == "caddy" else None
+        leaf_cert, leaf_key = build_leaf(
+            service, int_cert, int_key, policy, leaf_lifetime_days,
+            extra_dns_sans=_extra_dns, extra_ip_sans=_extra_ip,
+        )
+        _write_leaf(paths, service, leaf_cert, leaf_key, int_cert)
+        hashes_by_service[service.name] = _ensure_bootstrap_token(paths, service.name)
+        logger.info(
+            "internal-pki: BYO leaf issued for %s (signed by customer intermediate), "
+            "valid until %s",
             service.name,
             leaf_cert.not_valid_after_utc,
         )
