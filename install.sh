@@ -7577,6 +7577,7 @@ _pki_chown_client_keys() {
   local _pp_path="${_secrets_dir}/postgres_password"
   local _rp_path="${_secrets_dir}/redis_password"
   local _ib_path="${_secrets_dir}/yashigani_internal_bearer"
+  local _pgba_path="${_secrets_dir}/pgbouncer_authenticator_password"
   if [[ -f "$_pp_path" ]]; then
     _do_chown "1001:999" "$_pp_path" "postgres_password" || return 1
     _do_chmod_0640 "$_pp_path" "postgres_password" || return 1
@@ -7589,7 +7590,27 @@ _pki_chown_client_keys() {
     _do_chown "0:2002" "$_ib_path" "yashigani_internal_bearer" || return 1
     _do_chmod_0640 "$_ib_path" "yashigani_internal_bearer" || return 1
   fi
-  log_info "Per-consumer ownership set: postgres_password+redis_password → 1001:999 0640; yashigani_internal_bearer → 0:2002 0640 (YSG-SECRETS-DIST-002 REWORK — Iris rework + Laura A1)"
+  # pgbouncer_authenticator_password — re-chown to 70:999 0640 AFTER the PKI issuer's
+  # :U mount-remap clobbers it. The issuer container runs as USER yashigani (UID 1001)
+  # with -v secrets:/secrets:rw,Z,U which recursively remaps ownership to 1001. The
+  # generate_secrets() call at L5981/L6226 sets 70:999 correctly, but the issuer's
+  # :U remap (which runs later, during PKI bootstrapping) overwrites it to 1001:1001.
+  # This block is the post-:U recovery point — same role as postgres_password and
+  # redis_password re-chowns above.
+  #
+  # pgbouncer (UID 70) reads as owner; postgres (UID 999, GID 999) reads as group at
+  # init time via 10-pgbouncer-auth.sh.
+  #
+  # NOT added to _uid1001_secrets array — that would chown to 1001 not 70.
+  # NOT added to *_bootstrap_token find-glob — name does not match the pattern.
+  # Compose mount is :ro (no :U) — runtime does not remap, post-install chown sticks.
+  # Cross-ref: install.sh L5981/L6226 (initial ownership, pre-PKI-issuer);
+  # feedback_brief_cue_adjacent_abstractions.md (:U mount-remap clobbers pattern).
+  if [[ -f "$_pgba_path" ]]; then
+    _do_chown "70:999" "$_pgba_path" "pgbouncer_authenticator_password" || return 1
+    _do_chmod_0640 "$_pgba_path" "pgbouncer_authenticator_password" || return 1
+  fi
+  log_info "Per-consumer ownership set: postgres_password+redis_password → 1001:999 0640; yashigani_internal_bearer → 0:2002 0640; pgbouncer_authenticator_password → 70:999 0640 (YSG-SECRETS-DIST-002 REWORK + Bug #8 fix — Iris rework + Laura A1)"
 
   # Chown all *_bootstrap_token files to UID 1001. Each service reads its own
   # bootstrap token at startup to verify identity; all services run as UID 1001
