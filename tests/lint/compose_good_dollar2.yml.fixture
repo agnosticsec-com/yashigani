@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  test-service:
+    image: busybox
+    # Correct pattern: $$ collapses to $ at compose parse time, shell expands at runtime
+    command:
+      - |
+        set -e
+        PASS=$(cat /run/secrets/pgbouncer_authenticator_password)
+        export DATABASE_URL="postgresql://user:$$PASS@postgres:5432/db"
+        exec /entrypoint.sh

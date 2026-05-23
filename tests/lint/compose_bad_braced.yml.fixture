@@ -1,0 +1,10 @@
+version: "3.9"
+services:
+  test-service:
+    image: busybox
+    command:
+      - |
+        set -e
+        PASS=$(cat /run/secrets/pgbouncer_authenticator_password)
+        export DATABASE_URL="postgresql://user:${PASS}@postgres:5432/db"
+        exec /entrypoint.sh

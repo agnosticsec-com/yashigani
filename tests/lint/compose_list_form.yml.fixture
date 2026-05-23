@@ -1,0 +1,12 @@
+version: "3.9"
+services:
+  test-service:
+    image: busybox
+    # List-form command — not a block scalar; compose passes each element verbatim.
+    # ${VAR} here is K8s/exec-array style and is SAFE (no compose preprocessing).
+    command: ["sh", "-c", "export FOO=${BAR} && exec my-service"]
+  other-service:
+    image: busybox
+    # Flow-sequence form — also safe (not a block scalar)
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["echo ${MY_VAR}"]

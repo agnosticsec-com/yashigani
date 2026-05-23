@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  test-service:
+    image: busybox:${BUSYBOX_VERSION:-1.36}
+    environment:
+      # These ${VAR:-default} forms are intentional compose-level substitution — correct.
+      YASHIGANI_DB_DSN: "postgresql://app:${POSTGRES_PASSWORD_URLENC}@db:5432/yashigani"
+      MY_SETTING: "${SOME_VAR:-default_value}"
+      REQUIRED_SETTING: "${REQUIRED_VAR:?REQUIRED_VAR must be set}"
+    command:
+      - |
+        # Only $${VAR} and $$VAR inside block scalars — no bare ${VAR} or $VAR here
+        echo "Starting with $$REQUIRED_SETTING"
+        exec my-service

@@ -139,6 +139,22 @@ jobs:
       - name: Check for host-filesystem /tmp/ paths
         run: bash scripts/lint_tmp_paths.sh .
 
+  lint-compose-command-vars:
+    name: Lint compose command/args ${VAR} sanitization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # VEB-Compose class gate: fail if any compose command/args/entrypoint block
+    # scalar contains a bare ${VAR} or $VAR reference that would be consumed by
+    # Docker Compose YAML preprocessing at parse time (before the shell sees it).
+    # Scans ONLY docker/docker-compose*.yml (5 files). Helm templates are
+    # intentionally excluded — K8s args: semantics differ; ${VAR} there is safe.
+    # See scripts/lint_compose_command_vars.sh + docs/shell-interpolation-discipline.md
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Run compose command vars lint
+        run: bash scripts/lint_compose_command_vars.sh
+
   lint-safe-error-envelope:
     runs-on: ubuntu-latest
     # V232-CSCAN-01e: fail if any route or gateway file inlines str(exc) directly
