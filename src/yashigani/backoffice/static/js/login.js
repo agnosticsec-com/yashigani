@@ -1,4 +1,4 @@
-// Last updated: 2026-05-09
+// Last updated: 2026-05-24
 document.addEventListener('DOMContentLoaded', function() {
     var savedPassword = '';
 
@@ -93,7 +93,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     var params = new URLSearchParams(window.location.search);
                     var next = params.get('next');
-                    window.location.href = (next && safeNext(next)) || '/admin/';
+                    // Defence-in-depth: JS guard (safeNext) runs first as a
+                    // client-side pre-flight.  The server-side validator at
+                    // /auth/post-login-redirect is the trust-boundary enforcement
+                    // point (drift audit finding #6 — ASVS V5.1.5 / CWE-601).
+                    var clientValidated = (next && safeNext(next)) || '/admin/';
+                    window.location.href = '/auth/post-login-redirect?next=' + encodeURIComponent(clientValidated);
                 }
             } else {
                 showMsg('error', parseError(data));

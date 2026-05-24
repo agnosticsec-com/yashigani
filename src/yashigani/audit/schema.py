@@ -191,6 +191,15 @@ class EventType(str, Enum):
     # backend is unreachable/erroring during a pool-managed agent dispatch.
     # Request is returned as HTTP 502 (fail-closed per SOP 1).
     POOL_BACKEND_UNAVAILABLE = "POOL_BACKEND_UNAVAILABLE"
+    # v2.24.1 — drift audit finding #6: server-side next= redirect validator.
+    # OPEN_REDIRECT_ATTEMPT_BLOCKED: emitted when the server-side validator
+    # rejects a next= redirect target that fails the backslash / protocol-relative
+    # / @ / length checks.  CWE-601 / ASVS V5.1.5 / OWASP A01:2021.
+    OPEN_REDIRECT_ATTEMPT_BLOCKED = "OPEN_REDIRECT_ATTEMPT_BLOCKED"
+    # v2.24.1 — admin-surfaces-all-runtime-settings rule.
+    # RUNTIME_SETTING_CHANGED: emitted on every PUT /admin/runtime-settings/{key}.
+    # CMMC AU.L2-3.3.1 / SOC 2 CC6.2 / ISO 27001 A.5.15.
+    RUNTIME_SETTING_CHANGED = "RUNTIME_SETTING_CHANGED"
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +230,34 @@ class AuditEvent:
 # ---------------------------------------------------------------------------
 # Security events
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class OpenRedirectAttemptBlockedEvent(AuditEvent):
+    """
+    Emitted when the server-side next= redirect validator rejects a redirect
+    target that fails the backslash / protocol-relative / @ / length checks.
+
+    Security invariants:
+    - attempted_next is truncated to 128 chars and the raw value is SHA-256
+      hashed before being stored (client_ip_hash).  No raw IP or raw next=
+      value is stored in the audit record.
+    - masking_applied is always True.
+    - reason identifies which guard fired (backslash | double_slash |
+      absolute_url | userinfo_at | too_long | empty | not_relative).
+
+    CWE-601 / ASVS V5.1.5 / OWASP A01:2021 / drift audit finding #6.
+    """
+
+    event_type: str = EventType.OPEN_REDIRECT_ATTEMPT_BLOCKED
+    account_tier: str = AccountTier.SYSTEM
+    masking_applied: bool = True  # immutable floor — always True
+    # SHA-256 hex of the source IP (first 16 chars for log brevity)
+    client_ip_hash: str = ""
+    # Truncated + sanitised attempted next= value (max 128 chars, no raw PII)
+    attempted_next_truncated: str = ""
+    # Which validation rule fired
+    reason: str = ""  # backslash | double_slash | absolute_url | userinfo_at | too_long | empty | not_relative
 
 
 @dataclass
@@ -1661,3 +1698,37 @@ class ManifestCeremonyEvent(AuditEvent):
     signer_spiffe_id: str = ""                # SPIFFE ID of the signing entity
     signature_hex_prefix: str = ""            # first 16 hex chars of the HMAC sig
     manifest_registration_id: Optional[int] = None  # FK to manifest_registrations.id
+
+
+# ---------------------------------------------------------------------------
+# v2.24.1 — Runtime settings audit events
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RuntimeSettingChangedEvent(AuditEvent):
+    """
+    Emitted on every PUT /admin/runtime-settings/{key}.
+
+    Records the old and new value, the operator identity, and how the change
+    was made ('ui' | 'api') for full audit traceability.
+
+    Security invariants:
+    - masking_applied is always True.
+    - old_value / new_value are JSON-serialised primitives (int/float/bool/str).
+      They are stored as strings to avoid accidental PII capture for future
+      settings that might contain sensitive strings.  Current settings are
+      all numeric, so this is defence-in-depth.
+
+    CMMC AU.L2-3.3.1 / SOC 2 CC6.2 / ISO 27001 A.5.15.
+    admin-surfaces-all-runtime-settings rule / v2.24.1.
+    """
+
+    event_type: str = EventType.RUNTIME_SETTING_CHANGED
+    account_tier: str = AccountTier.ADMIN
+    masking_applied: bool = True          # immutable floor
+    setting_key: str = ""                 # e.g. 'gateway.ddos.per_ip_limit'
+    old_value: str = ""                   # JSON string of the previous value
+    new_value: str = ""                   # JSON string of the new value
+    changed_by: str = ""                  # admin account_id
+    source: str = ""                      # 'ui' | 'api'

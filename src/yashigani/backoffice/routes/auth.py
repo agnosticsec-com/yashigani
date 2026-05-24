@@ -1,23 +1,26 @@
 """
 Yashigani Backoffice — Authentication routes.
-POST /auth/login            — username + password + TOTP
-POST /auth/logout           — invalidate session
-GET  /auth/status           — check session validity
-POST /auth/password/change  — forced change on first login
-POST /auth/totp/provision   — TOTP + recovery codes provisioning
-POST /auth/stepup           — V6.8.4 step-up TOTP verification for high-value flows
+POST /auth/login                   — username + password + TOTP
+POST /auth/logout                  — invalidate session
+GET  /auth/status                  — check session validity
+POST /auth/password/change         — forced change on first login
+POST /auth/totp/provision          — TOTP + recovery codes provisioning
+POST /auth/stepup                  — V6.8.4 step-up TOTP verification for high-value flows
+GET  /auth/post-login-redirect     — server-side next= validator + redirect (drift audit #6)
 
-Last updated: 2026-05-17T23:00:00+01:00
+Last updated: 2026-05-24T00:00:00+00:00
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import RedirectResponse as _RedirectResponse
 from pydantic import BaseModel, Field
 
 from yashigani.backoffice.middleware import AdminSession, AnySession, get_session_store, _SESSION_COOKIE
@@ -1363,6 +1366,137 @@ async def remove_allowed_ip(ip_or_cidr: str, session: AdminSession):
         _log.info("Admin %s removed IP from allowlist: %s", session.account_id, ip_or_cidr)
         return {"status": "ok", "removed": ip_or_cidr}
     raise HTTPException(status_code=404, detail={"error": "entry_not_found"})
+
+
+# ---------------------------------------------------------------------------
+# drift audit finding #6 — server-side next= redirect validator
+#
+# The JS guard in login.js (safeNext()) runs at the client trust boundary;
+# this server-side validator enforces the same rules at the HTTP trust boundary
+# so that a browser with JS disabled, a headless client, or a browser quirk
+# that bypasses the JS cannot exploit a reflected open redirect.
+#
+# Rules mirror the JS Layer 1 regex precisely (same source of truth):
+#   1. Must not be empty.
+#   2. Must start with exactly one `/` NOT followed by `/` or `\`.
+#   3. Must not contain any `\` character (IE/Edge normalise `/\` → `//`).
+#   4. Must not contain `//` after the leading `/` (protocol-relative).
+#   5. Must not start with an absolute URL scheme (http:, https:, ftp:, etc.).
+#   6. Must not contain `@` (URL-userinfo trick: /foo@evil.com → evil.com host).
+#   7. Must not exceed 2 048 characters.
+#
+# On rejection: redirect to `/` + emit OPEN_REDIRECT_ATTEMPT_BLOCKED audit event.
+# On acceptance: redirect to the validated path (302).
+#
+# References: CWE-601 / ASVS V5.1.5 / OWASP A01:2021.
+# ---------------------------------------------------------------------------
+
+# Absolute URL scheme pattern — catches http:, https:, ftp:, javascript:, etc.
+_ABSOLUTE_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+\-.]*:", re.ASCII)
+
+_NEXT_MAX_LENGTH = 2048
+
+
+def _validate_next(raw: str) -> tuple[bool, str]:
+    """
+    Validate a next= redirect target.
+
+    Returns (True, sanitised_path) when the value is safe to redirect to, or
+    (False, reason) when the value must be rejected.
+
+    Rules — in check order:
+      empty            : empty / falsy string
+      too_long         : exceeds _NEXT_MAX_LENGTH characters
+      not_relative     : does not start with `/`
+      double_slash     : starts with `//` or `/\\` (protocol-relative bypass)
+      backslash        : contains any backslash anywhere in the string
+      absolute_url     : matches an absolute URL scheme (http:, javascript:, …)
+      userinfo_at      : contains `@` (URL-userinfo open redirect trick)
+    """
+    if not raw:
+        return False, "empty"
+    if len(raw) > _NEXT_MAX_LENGTH:
+        return False, "too_long"
+    if not raw.startswith("/"):
+        # Catches https://evil.com, //evil.com without starting slash check
+        if _ABSOLUTE_SCHEME_RE.match(raw):
+            return False, "absolute_url"
+        return False, "not_relative"
+    # Starts with `/` — check for double-slash / backslash as second char.
+    if len(raw) >= 2 and raw[1] in ("/", "\\"):
+        return False, "double_slash"
+    # Full-string backslash check (catches /path\..\ traversal attempts).
+    if "\\" in raw:
+        return False, "backslash"
+    # Absolute-URL check (catches edge cases where the leading / was spoofed).
+    if _ABSOLUTE_SCHEME_RE.match(raw):
+        return False, "absolute_url"
+    # @-userinfo trick: /user@evil.com is parsed as authority=user@evil.com.
+    if "@" in raw:
+        return False, "userinfo_at"
+    return True, raw
+
+
+def _hash_ip(ip: str) -> str:
+    """Return SHA-256 hex digest of an IP address, first 16 chars for brevity."""
+    return hashlib.sha256(ip.encode()).hexdigest()[:16]
+
+
+def _sanitise_for_audit(raw: str) -> str:
+    """Truncate and replace non-printable/non-ASCII chars for safe audit logging."""
+    truncated = raw[:128]
+    # Replace any char outside printable ASCII with '?'
+    return "".join(c if 0x20 <= ord(c) < 0x7F else "?" for c in truncated)
+
+
+@router.get("/post-login-redirect")
+async def post_login_redirect(
+    request: Request,
+    next: str = Query(default="", alias="next"),
+):
+    """
+    Server-side next= redirect validator — drift audit finding #6.
+
+    Called by the login.js after a successful /auth/login response.
+    Validates the next= parameter against the same rules as the JS safeNext()
+    guard and issues a server-side 302 redirect.
+
+    Security:
+      - No session required: the browser calls this endpoint immediately after
+        /auth/login sets the session cookie; the redirect itself does not require
+        an existing session.  The cookie will be present on the follow-up
+        navigation because it was just set.
+      - On rejection: redirects to '/' and emits OPEN_REDIRECT_ATTEMPT_BLOCKED.
+      - The raw `next` value is NEVER logged — only a truncated sanitised form.
+      - Client IP is SHA-256 hashed (first 16 chars) in the audit record.
+
+    ASVS V5.1.5 / CWE-601 / OWASP A01:2021.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    ok, result = _validate_next(next)
+
+    if not ok:
+        # Emit audit event before redirecting.
+        state = backoffice_state
+        if state.audit_writer is not None:
+            from yashigani.audit.schema import OpenRedirectAttemptBlockedEvent
+
+            state.audit_writer.write(
+                OpenRedirectAttemptBlockedEvent(
+                    client_ip_hash=_hash_ip(client_ip),
+                    attempted_next_truncated=_sanitise_for_audit(next),
+                    reason=result,
+                )
+            )
+        _log.warning(
+            "OPEN_REDIRECT_BLOCKED: ip_hash=%s reason=%s attempted=%r",
+            _hash_ip(client_ip),
+            result,
+            _sanitise_for_audit(next)[:64],
+        )
+        return _RedirectResponse(url="/", status_code=302)
+
+    return _RedirectResponse(url=result, status_code=302)
 
 
 async def _get_record_by_id(account_id: str):

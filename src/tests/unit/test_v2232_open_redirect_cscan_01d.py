@@ -373,7 +373,7 @@ class TestSourceGuardPresent:
         user_login.js was last touched 2026-05-03 (V232-CSCAN-01d original fix).
         """
         src = js_path.read_text(encoding="utf-8")
-        expected = "2026-05-09" if js_path.name == "login.js" else "2026-05-03"
+        expected = "2026-05-24" if js_path.name == "login.js" else "2026-05-03"
         assert f"Last updated: {expected}" in src, (
             f"CLAUDE.md §6 FAIL ({js_path.name}): missing 'Last updated: {expected}' comment"
         )
