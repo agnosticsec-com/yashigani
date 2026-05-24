@@ -13,6 +13,13 @@ from yashigani.audit.scope import MaskingScopeConfig
 from yashigani.audit.writer import AuditLogWriter, AuditWriteError, SiemTarget
 from yashigani.audit.export import AuditLogExporter
 from yashigani.audit.config import AuditConfig
+# v2.24.1 LU-AMEND-01 — tamper-evident audit log hash chain
+from yashigani.audit.chain import (
+    AuditChainService,
+    compute_event_hash,
+    compute_prev_hash,
+    day_anchor,
+)
 
 __all__ = [
     "AuditEvent",
@@ -32,4 +39,9 @@ __all__ = [
     "SiemTarget",
     "AuditLogExporter",
     "AuditConfig",
+    # v2.24.1 LU-AMEND-01
+    "AuditChainService",
+    "compute_event_hash",
+    "compute_prev_hash",
+    "day_anchor",
 ]
