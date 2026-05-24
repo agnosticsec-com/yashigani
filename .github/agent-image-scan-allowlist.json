@@ -1,0 +1,49 @@
+{
+  "_comment": "Allowlist for agent-image-component-scan.yml (N1 built-in component scan). Managed by Captain.",
+  "_schema": {
+    "image-key": {
+      "bandit": {
+        "RULE_ID_OR_TEST_ID": {
+          "severity": "HIGH|MEDIUM",
+          "reason": "human-readable justification",
+          "reviewer": "team-member",
+          "expiry_date": "YYYY-MM-DD",
+          "upstream_issue": "URL or 'none'"
+        }
+      },
+      "opengrep": {
+        "rule.id": {
+          "severity": "HIGH|CRITICAL",
+          "reason": "human-readable justification",
+          "reviewer": "captain",
+          "expiry_date": "YYYY-MM-DD"
+        }
+      }
+    }
+  },
+  "_image_pins": {
+    "langflow":  "docker.io/langflowai/langflow:1.9.2@sha256:45238e614ce42bf93fea36a56316d3ebafdaf70c4df4425aeb2c90b035ec4a14",
+    "letta":     "docker.io/letta/letta:0.16.7@sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c",
+    "openclaw":  "ghcr.io/openclaw/openclaw:2026.5.6@sha256:2ca86d6296fe2ae7111dac14843551340a4c5099e01566253b62c4d3e0a337fc"
+  },
+  "langflow": {
+    "bandit": {},
+    "opengrep": {}
+  },
+  "letta": {
+    "bandit": {
+      "B324": {
+        "severity": "HIGH",
+        "reason": "Three MD5 usages in letta 0.16.7 (memfs_client_base.py:148, local_sandbox.py:271, utils.py:1042). All are non-cryptographic uses: UUID derivation from agent_id+label, IPC message framing checksum, and deterministic string-to-UUID conversion. None are used for authentication, password hashing, or digital signatures. The Python hashlib flag usedforsecurity=False is missing but the intent is clearly non-security. Upstream code quality issue — bandit B324 fires because the flag is absent. Risk: LOW (no auth or secret-handling context). Tracked for next letta version bump.",
+        "reviewer": "captain",
+        "expiry_date": "2026-08-24",
+        "upstream_issue": "https://github.com/letta-ai/letta/issues — pending upstream report at next image bump review"
+      }
+    },
+    "opengrep": {}
+  },
+  "openclaw": {
+    "bandit": {},
+    "opengrep": {}
+  }
+}

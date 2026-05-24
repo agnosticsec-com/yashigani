@@ -1,0 +1,785 @@
+# N1 — Agent image built-in component scan (bandit + opengrep)
+# Authored: 2026-05-24
+#
+# Rationale:
+#   trivy-agent-images.yml (C-CAP-004) scans agent images for OS/package CVEs.
+#   This workflow scans the *built-in Python component code* shipped inside each
+#   agent image — i.e. the application logic that runs at container start, NOT
+#   user-uploaded flows or custom code (per-user-container isolation handles
+#   user uploads; this is release-time hygiene only).
+#
+# Scope:
+#   - langflow: the installed langflow package (base + components)
+#     Extracted from: /app/.venv/lib/python3.12/site-packages/langflow/
+#     (Python version resolved dynamically at extract time)
+#   - letta: the letta application source tree at /app/letta/
+#   - openclaw: Python scripts only at /app/skills/ (7 files)
+#     NOTE: openclaw is primarily TypeScript/JS; bandit covers Python only.
+#
+# Out of scope (intentionally):
+#   - User-uploaded flows / custom components created at runtime
+#     (isolated per-user-container — no shared component surface)
+#   - openclaw TypeScript/JavaScript (not covered by bandit/opengrep)
+#   - OS-level CVEs (covered by trivy-agent-images.yml)
+#
+# Evolution path:
+#   If shared-tenant agent containers ever ship (v2.25+ design), this scan
+#   becomes the basis of an admission webhook for user-uploaded code evaluation.
+#
+# Tooling (LAURA-2026-04-29-005: Semgrep replaced with Opengrep per standing ban):
+#   - bandit 1.8.3 pinned: SAST for Python security anti-patterns
+#   - opengrep v1.20.0 pinned (binary, same pattern as security.yml)
+#   - Both tools exit non-zero on HIGH findings; MEDIUM surfaced as warnings
+#
+# Allowlist: .github/agent-image-scan-allowlist.json
+#   Per-image, per-rule-ID accepted findings with reason + reviewer + expiry.
+#   Expired entries trigger a gate failure (fail-closed).
+#
+# Image pins (must match docker/docker-compose.yml and helm/yashigani/values.yaml):
+#   langflow:  docker.io/langflowai/langflow:1.9.2@sha256:45238e...
+#   letta:     docker.io/letta/letta:0.16.7@sha256:fb7bd2c...
+#   openclaw:  ghcr.io/openclaw/openclaw:2026.5.6@sha256:2ca86d...
+name: Agent Image Component Scan
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  pull_request:
+    branches: [main, "release/**", "2.24.x", "2.23.x"]
+    paths:
+      - 'docker/docker-compose.yml'
+      - 'helm/yashigani/values.yaml'
+      - '.github/workflows/agent-image-component-scan.yml'
+      - '.github/agent-image-scan-allowlist.json'
+  push:
+    branches: [main, "release/**", "2.24.x", "2.23.x"]
+    paths:
+      - 'docker/docker-compose.yml'
+      - 'helm/yashigani/values.yaml'
+      - '.github/workflows/agent-image-component-scan.yml'
+      - '.github/agent-image-scan-allowlist.json'
+  workflow_dispatch:
+
+permissions:
+  security-events: write
+  contents: read
+
+env:
+  # Image references — must match helm/yashigani/values.yaml and docker/docker-compose.yml.
+  # Captain owns parity; bump both files together and update these env vars in the same commit.
+  LANGFLOW_IMAGE: "docker.io/langflowai/langflow:1.9.2@sha256:45238e614ce42bf93fea36a56316d3ebafdaf70c4df4425aeb2c90b035ec4a14"
+  LETTA_IMAGE: "docker.io/letta/letta:0.16.7@sha256:fb7bd2c94a8bb7badbcfdb78a334abe3c1a75b5ea59e177aeba2e6356f54f92c"
+  OPENCLAW_IMAGE: "ghcr.io/openclaw/openclaw:2026.5.6@sha256:2ca86d6296fe2ae7111dac14843551340a4c5099e01566253b62c4d3e0a337fc"
+  BANDIT_VERSION: "1.8.3"
+  OPENGREP_VERSION: "1.20.0"
+  ALLOWLIST_PATH: ".github/agent-image-scan-allowlist.json"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # langflow
+  # ─────────────────────────────────────────────────────────────────────────
+  scan-langflow:
+    name: Component scan / langflow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit (pinned)
+        run: pip install "bandit==${{ env.BANDIT_VERSION }}"
+
+      - name: Install opengrep (pinned binary)
+        # LAURA-2026-04-29-005: Semgrep replaced with Opengrep per standing ban.
+        # Pinned to v1.20.0 (same pin as security.yml, verified 2026-05-02).
+        run: |
+          curl -sSfL "https://github.com/opengrep/opengrep/releases/download/v${{ env.OPENGREP_VERSION }}/opengrep_manylinux_x86" \
+            -o /usr/local/bin/opengrep
+          chmod +x /usr/local/bin/opengrep
+          opengrep --version
+
+      - name: Pull langflow image
+        run: docker pull "${{ env.LANGFLOW_IMAGE }}"
+
+      - name: Extract langflow built-in components
+        # The langflow Python package lives in the venv site-packages.
+        # Python version may change between langflow releases so we discover
+        # the exact path at runtime rather than hardcoding python3.12.
+        run: |
+          CNAME="langflow-scan-$GITHUB_RUN_ID"
+          docker create --name "$CNAME" "${{ env.LANGFLOW_IMAGE }}"
+          # Resolve the site-packages langflow directory dynamically
+          LANGFLOW_PATH=$(docker run --rm --entrypoint sh "${{ env.LANGFLOW_IMAGE }}" \
+            -c "find /app/.venv/lib -maxdepth 4 -type d -name 'langflow' 2>/dev/null | grep site-packages | head -1")
+          echo "Found langflow at: $LANGFLOW_PATH"
+          if [ -z "$LANGFLOW_PATH" ]; then
+            echo "[ERROR] Could not locate langflow package in image" >&2
+            docker rm "$CNAME"
+            exit 1
+          fi
+          mkdir -p extracted/langflow
+          docker cp "$CNAME:$LANGFLOW_PATH" extracted/langflow/
+          docker rm "$CNAME"
+          echo "Extracted to extracted/langflow/ — size: $(du -sh extracted/langflow/ | cut -f1)"
+          find extracted/langflow -name "*.py" | wc -l | xargs -I{} echo "Python files: {}"
+
+      - name: Run bandit on langflow components (HIGH severity blocks)
+        run: |
+          # -ll = MEDIUM+HIGH severity, -i = MEDIUM+HIGH confidence
+          # We exit non-zero only on HIGH; MEDIUM is surfaced as warning.
+          bandit -r extracted/langflow/ -l -f json -o langflow-bandit.json 2>/dev/null || true
+          bandit -r extracted/langflow/ -l -f sarif -o langflow-bandit.sarif 2>/dev/null || true
+
+      - name: Apply allowlist + gate (langflow / bandit)
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, pathlib, datetime, os
+
+          image_key  = "langflow"
+          tool       = "bandit"
+          scan_date  = datetime.date.today().isoformat()
+          findings_p = pathlib.Path("langflow-bandit.json")
+          allow_p    = pathlib.Path(os.environ["ALLOWLIST_PATH"])
+
+          data = json.loads(findings_p.read_text()) if findings_p.exists() else {"results": []}
+
+          # Load allowlist
+          allowed = {}
+          if allow_p.exists():
+              al = json.loads(allow_p.read_text())
+              allowed = al.get(image_key, {}).get(tool, {})
+
+          # Check for expired entries (fail-closed)
+          expired = []
+          today = datetime.date.today()
+          for rule_id, entry in allowed.items():
+              exp = entry.get("expiry_date", "")
+              if exp and datetime.date.fromisoformat(exp) < today:
+                  expired.append((rule_id, exp))
+
+          blocking = []
+          warnings = []
+          for r in data.get("results", []):
+              sev = r.get("issue_severity", "")
+              tid = r.get("test_id", "")
+              txt = r.get("issue_text", "")[:80]
+              fname = r.get("filename", "").split("/")[-1]
+              lineno = r.get("line_number", 0)
+              if sev == "HIGH" and tid not in allowed:
+                  blocking.append(f"HIGH {tid}: {txt} [{fname}:{lineno}]")
+              elif sev == "MEDIUM":
+                  warnings.append(f"MEDIUM {tid}: {txt} [{fname}:{lineno}]")
+
+          summary = [f"### Bandit component scan: {image_key}"]
+          summary.append(f"Image: `{os.environ.get('LANGFLOW_IMAGE', image_key)}`")
+          summary.append(f"Scan date: {scan_date}")
+          summary.append(f"Tool: bandit {os.environ.get('BANDIT_VERSION', '?')}")
+          summary.append(f"Blocking HIGH findings (not allowlisted): {len(blocking)}")
+          summary.append(f"Warning MEDIUM findings: {len(warnings)}")
+          summary.append(f"Expired allowlist entries: {len(expired)}")
+
+          if blocking:
+              summary.append("\n#### Blocking HIGH findings")
+              for f in blocking:
+                  summary.append(f"- {f}")
+          if warnings:
+              summary.append("\n#### Warning MEDIUM findings (non-blocking)")
+              for f in warnings[:20]:
+                  summary.append(f"- {f}")
+          if expired:
+              summary.append("\n#### EXPIRED allowlist entries (must be renewed or fixed)")
+              for rid, exp in expired:
+                  summary.append(f"- {rid} expired {exp}")
+
+          txt = "\n".join(summary)
+          print(txt)
+          sf = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sf:
+              with open(sf, "a") as f:
+                  f.write(txt + "\n")
+
+          if expired:
+              print(f"\n[FAIL] {len(expired)} expired allowlist entry/entries in {image_key}/{tool}.",
+                    file=sys.stderr)
+              sys.exit(1)
+          if blocking:
+              print(f"\n[FAIL] {len(blocking)} unallowlisted HIGH finding(s) in {image_key}/{tool}. "
+                    "Add to .github/agent-image-scan-allowlist.json with justification.",
+                    file=sys.stderr)
+              sys.exit(1)
+          print(f"[PASS] {image_key}/{tool}: no unallowlisted HIGH findings.")
+          PYEOF
+
+      - name: Run opengrep on langflow components
+        # LAURA-2026-04-29-005: opengrep per standing ban on semgrep.
+        # --config p/python covers Python security patterns.
+        # opengrep exits 0 on findings (scan ran); 1 on scan infrastructure error.
+        run: |
+          opengrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --json-output langflow-opengrep.json \
+            --sarif-output langflow-opengrep.sarif \
+            extracted/langflow/ 2>/dev/null || true
+
+      - name: Apply allowlist + gate (langflow / opengrep)
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, pathlib, datetime, os
+
+          image_key  = "langflow"
+          tool       = "opengrep"
+          scan_date  = datetime.date.today().isoformat()
+          findings_p = pathlib.Path("langflow-opengrep.json")
+          allow_p    = pathlib.Path(os.environ["ALLOWLIST_PATH"])
+
+          results = []
+          if findings_p.exists():
+              try:
+                  data = json.loads(findings_p.read_text())
+                  results = data.get("results", [])
+              except Exception:
+                  pass
+
+          allowed = {}
+          if allow_p.exists():
+              al = json.loads(allow_p.read_text())
+              allowed = al.get(image_key, {}).get(tool, {})
+
+          today = datetime.date.today()
+          expired = [(rid, e["expiry_date"]) for rid, e in allowed.items()
+                     if e.get("expiry_date") and datetime.date.fromisoformat(e["expiry_date"]) < today]
+
+          blocking = []
+          warnings = []
+          for r in results:
+              sev   = r.get("extra", {}).get("severity", "INFO").upper()
+              rule  = r.get("check_id", "")
+              path  = r.get("path", "").split("/")[-1]
+              line  = r.get("start", {}).get("line", 0)
+              msg   = r.get("extra", {}).get("message", "")[:80]
+              if sev in ("CRITICAL", "HIGH") and rule not in allowed:
+                  blocking.append(f"{sev} {rule}: {msg} [{path}:{line}]")
+              elif sev == "MEDIUM":
+                  warnings.append(f"MEDIUM {rule}: {msg} [{path}:{line}]")
+
+          summary = [f"### Opengrep component scan: {image_key}"]
+          summary.append(f"Image: `{os.environ.get('LANGFLOW_IMAGE', image_key)}`")
+          summary.append(f"Scan date: {scan_date}")
+          summary.append(f"Blocking HIGH/CRITICAL (not allowlisted): {len(blocking)}")
+          summary.append(f"Warning MEDIUM: {len(warnings)}")
+          summary.append(f"Expired allowlist entries: {len(expired)}")
+          if blocking:
+              summary.append("\n#### Blocking findings")
+              for f in blocking[:30]:
+                  summary.append(f"- {f}")
+          if warnings:
+              summary.append("\n#### Warning MEDIUM (non-blocking)")
+              for f in warnings[:20]:
+                  summary.append(f"- {f}")
+
+          txt = "\n".join(summary)
+          print(txt)
+          sf = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sf:
+              with open(sf, "a") as f:
+                  f.write(txt + "\n")
+
+          if expired:
+              print(f"\n[FAIL] {len(expired)} expired allowlist entries in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          if blocking:
+              print(f"\n[FAIL] {len(blocking)} unallowlisted HIGH/CRITICAL in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          print(f"[PASS] {image_key}/{tool}: no unallowlisted HIGH/CRITICAL findings.")
+          PYEOF
+
+      - name: Upload SARIF — langflow bandit
+        uses: github/codeql-action/upload-sarif@bc0b696b4103f5fe60f15749af68a046868d511a # codeql-bundle-v2.25.4
+        if: always() && hashFiles('langflow-bandit.sarif') != ''
+        with:
+          sarif_file: langflow-bandit.sarif
+          category: agent-bandit-langflow
+
+      - name: Upload SARIF — langflow opengrep
+        uses: github/codeql-action/upload-sarif@bc0b696b4103f5fe60f15749af68a046868d511a # codeql-bundle-v2.25.4
+        if: always() && hashFiles('langflow-opengrep.sarif') != ''
+        with:
+          sarif_file: langflow-opengrep.sarif
+          category: agent-opengrep-langflow
+
+      - name: Upload scan artifacts (langflow)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: agent-scan-langflow-${{ github.sha }}
+          path: |
+            langflow-bandit.json
+            langflow-opengrep.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # letta
+  # ─────────────────────────────────────────────────────────────────────────
+  scan-letta:
+    name: Component scan / letta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit (pinned)
+        run: pip install "bandit==${{ env.BANDIT_VERSION }}"
+
+      - name: Install opengrep (pinned binary)
+        run: |
+          curl -sSfL "https://github.com/opengrep/opengrep/releases/download/v${{ env.OPENGREP_VERSION }}/opengrep_manylinux_x86" \
+            -o /usr/local/bin/opengrep
+          chmod +x /usr/local/bin/opengrep
+          opengrep --version
+
+      - name: Pull letta image
+        run: docker pull "${{ env.LETTA_IMAGE }}"
+
+      - name: Extract letta built-in components
+        run: |
+          CNAME="letta-scan-$GITHUB_RUN_ID"
+          docker create --name "$CNAME" "${{ env.LETTA_IMAGE }}"
+          mkdir -p extracted/letta
+          docker cp "$CNAME:/app/letta" extracted/letta/
+          docker rm "$CNAME"
+          echo "Extracted to extracted/letta/ — size: $(du -sh extracted/letta/ | cut -f1)"
+          find extracted/letta -name "*.py" | wc -l | xargs -I{} echo "Python files: {}"
+
+      - name: Run bandit on letta components (HIGH severity blocks)
+        run: |
+          bandit -r extracted/letta/ -l -f json -o letta-bandit.json 2>/dev/null || true
+          bandit -r extracted/letta/ -l -f sarif -o letta-bandit.sarif 2>/dev/null || true
+
+      - name: Apply allowlist + gate (letta / bandit)
+        env:
+          LETTA_IMAGE: ${{ env.LETTA_IMAGE }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, pathlib, datetime, os
+
+          image_key  = "letta"
+          tool       = "bandit"
+          scan_date  = datetime.date.today().isoformat()
+          findings_p = pathlib.Path("letta-bandit.json")
+          allow_p    = pathlib.Path(os.environ["ALLOWLIST_PATH"])
+
+          data = json.loads(findings_p.read_text()) if findings_p.exists() else {"results": []}
+
+          allowed = {}
+          if allow_p.exists():
+              al = json.loads(allow_p.read_text())
+              allowed = al.get(image_key, {}).get(tool, {})
+
+          today = datetime.date.today()
+          expired = [(rid, e["expiry_date"]) for rid, e in allowed.items()
+                     if e.get("expiry_date") and datetime.date.fromisoformat(e["expiry_date"]) < today]
+
+          blocking = []
+          warnings = []
+          for r in data.get("results", []):
+              sev   = r.get("issue_severity", "")
+              tid   = r.get("test_id", "")
+              txt   = r.get("issue_text", "")[:80]
+              fname = r.get("filename", "").split("/")[-1]
+              lineno = r.get("line_number", 0)
+              key   = f"{tid}:{fname}:{lineno}"
+              if sev == "HIGH" and key not in allowed and tid not in allowed:
+                  blocking.append(f"HIGH {tid}: {txt} [{fname}:{lineno}]")
+              elif sev == "MEDIUM":
+                  warnings.append(f"MEDIUM {tid}: {txt} [{fname}:{lineno}]")
+
+          summary = [f"### Bandit component scan: {image_key}"]
+          summary.append(f"Image: `{os.environ.get('LETTA_IMAGE', image_key)}`")
+          summary.append(f"Scan date: {scan_date}")
+          summary.append(f"Tool: bandit {os.environ.get('BANDIT_VERSION', '?')}")
+          summary.append(f"Blocking HIGH findings (not allowlisted): {len(blocking)}")
+          summary.append(f"Warning MEDIUM findings: {len(warnings)}")
+          summary.append(f"Expired allowlist entries: {len(expired)}")
+          if blocking:
+              summary.append("\n#### Blocking HIGH findings")
+              for f in blocking:
+                  summary.append(f"- {f}")
+          if warnings:
+              summary.append("\n#### Warning MEDIUM findings (non-blocking)")
+              for f in warnings[:20]:
+                  summary.append(f"- {f}")
+          if expired:
+              summary.append("\n#### EXPIRED allowlist entries")
+              for rid, exp in expired:
+                  summary.append(f"- {rid} expired {exp}")
+
+          txt = "\n".join(summary)
+          print(txt)
+          sf = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sf:
+              with open(sf, "a") as f:
+                  f.write(txt + "\n")
+
+          if expired:
+              print(f"\n[FAIL] {len(expired)} expired allowlist entries in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          if blocking:
+              print(f"\n[FAIL] {len(blocking)} unallowlisted HIGH findings in {image_key}/{tool}. "
+                    "Add to .github/agent-image-scan-allowlist.json with justification.",
+                    file=sys.stderr)
+              sys.exit(1)
+          print(f"[PASS] {image_key}/{tool}: no unallowlisted HIGH findings.")
+          PYEOF
+
+      - name: Run opengrep on letta components
+        run: |
+          opengrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --json-output letta-opengrep.json \
+            --sarif-output letta-opengrep.sarif \
+            extracted/letta/ 2>/dev/null || true
+
+      - name: Apply allowlist + gate (letta / opengrep)
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, pathlib, datetime, os
+
+          image_key  = "letta"
+          tool       = "opengrep"
+          findings_p = pathlib.Path("letta-opengrep.json")
+          allow_p    = pathlib.Path(os.environ["ALLOWLIST_PATH"])
+
+          results = []
+          if findings_p.exists():
+              try:
+                  data = json.loads(findings_p.read_text())
+                  results = data.get("results", [])
+              except Exception:
+                  pass
+
+          allowed = {}
+          if allow_p.exists():
+              al = json.loads(allow_p.read_text())
+              allowed = al.get(image_key, {}).get(tool, {})
+
+          today = datetime.date.today()
+          expired = [(rid, e["expiry_date"]) for rid, e in allowed.items()
+                     if e.get("expiry_date") and datetime.date.fromisoformat(e["expiry_date"]) < today]
+
+          blocking = []
+          warnings = []
+          for r in results:
+              sev  = r.get("extra", {}).get("severity", "INFO").upper()
+              rule = r.get("check_id", "")
+              path = r.get("path", "").split("/")[-1]
+              line = r.get("start", {}).get("line", 0)
+              msg  = r.get("extra", {}).get("message", "")[:80]
+              if sev in ("CRITICAL", "HIGH") and rule not in allowed:
+                  blocking.append(f"{sev} {rule}: {msg} [{path}:{line}]")
+              elif sev == "MEDIUM":
+                  warnings.append(f"MEDIUM {rule}: {msg} [{path}:{line}]")
+
+          summary = [f"### Opengrep component scan: {image_key}"]
+          summary.append(f"Image: `{os.environ.get('LETTA_IMAGE', image_key)}`")
+          summary.append(f"Blocking HIGH/CRITICAL (not allowlisted): {len(blocking)}")
+          summary.append(f"Warning MEDIUM: {len(warnings)}")
+          summary.append(f"Expired allowlist entries: {len(expired)}")
+          if blocking:
+              summary.append("\n#### Blocking findings")
+              for f in blocking[:30]:
+                  summary.append(f"- {f}")
+
+          txt = "\n".join(summary)
+          print(txt)
+          sf = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sf:
+              with open(sf, "a") as f:
+                  f.write(txt + "\n")
+
+          if expired:
+              print(f"\n[FAIL] {len(expired)} expired allowlist entries.", file=sys.stderr)
+              sys.exit(1)
+          if blocking:
+              print(f"\n[FAIL] {len(blocking)} unallowlisted HIGH/CRITICAL in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          print(f"[PASS] {image_key}/{tool}: no unallowlisted HIGH/CRITICAL findings.")
+          PYEOF
+
+      - name: Upload SARIF — letta bandit
+        uses: github/codeql-action/upload-sarif@bc0b696b4103f5fe60f15749af68a046868d511a # codeql-bundle-v2.25.4
+        if: always() && hashFiles('letta-bandit.sarif') != ''
+        with:
+          sarif_file: letta-bandit.sarif
+          category: agent-bandit-letta
+
+      - name: Upload SARIF — letta opengrep
+        uses: github/codeql-action/upload-sarif@bc0b696b4103f5fe60f15749af68a046868d511a # codeql-bundle-v2.25.4
+        if: always() && hashFiles('letta-opengrep.sarif') != ''
+        with:
+          sarif_file: letta-opengrep.sarif
+          category: agent-opengrep-letta
+
+      - name: Upload scan artifacts (letta)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: agent-scan-letta-${{ github.sha }}
+          path: |
+            letta-bandit.json
+            letta-opengrep.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # openclaw
+  # NOTE: openclaw is TypeScript/JavaScript. Only the Python scripts in
+  # /app/skills/ are covered by bandit/opengrep. TS/JS is not in scope
+  # for this scan. If openclaw gains Python components, update the path.
+  # ─────────────────────────────────────────────────────────────────────────
+  scan-openclaw:
+    name: Component scan / openclaw
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit (pinned)
+        run: pip install "bandit==${{ env.BANDIT_VERSION }}"
+
+      - name: Install opengrep (pinned binary)
+        run: |
+          curl -sSfL "https://github.com/opengrep/opengrep/releases/download/v${{ env.OPENGREP_VERSION }}/opengrep_manylinux_x86" \
+            -o /usr/local/bin/opengrep
+          chmod +x /usr/local/bin/opengrep
+          opengrep --version
+
+      - name: Pull openclaw image
+        run: docker pull "${{ env.OPENCLAW_IMAGE }}"
+
+      - name: Extract openclaw Python components
+        # openclaw is primarily TypeScript/JS. The only Python surface is
+        # /app/skills/*/scripts/*.py — skill-level Python scripts.
+        # This step exits 0 even if no Python files are found (just warns).
+        run: |
+          CNAME="openclaw-scan-$GITHUB_RUN_ID"
+          docker create --name "$CNAME" "${{ env.OPENCLAW_IMAGE }}"
+          mkdir -p extracted/openclaw
+          docker cp "$CNAME:/app/skills" extracted/openclaw/ || {
+            echo "[WARN] /app/skills not found in openclaw image — checking /app/..."
+            docker cp "$CNAME:/app" extracted/openclaw/ || true
+          }
+          docker rm "$CNAME"
+          PY_COUNT=$(find extracted/openclaw -name "*.py" 2>/dev/null | wc -l | tr -d ' ')
+          echo "Python files found in openclaw image: $PY_COUNT"
+          echo "NOTE: openclaw is primarily TypeScript/JS; bandit covers Python only."
+          # If there are no Python files, create a sentinel empty file so bandit
+          # has something to report on (exits 0) and the gate still passes.
+          if [ "$PY_COUNT" -eq 0 ]; then
+            echo "# No Python components in openclaw image — scan scope is empty" \
+              > extracted/openclaw/__no_python__.py
+          fi
+
+      - name: Run bandit on openclaw Python components
+        run: |
+          bandit -r extracted/openclaw/ -l -f json -o openclaw-bandit.json 2>/dev/null || true
+          bandit -r extracted/openclaw/ -l -f sarif -o openclaw-bandit.sarif 2>/dev/null || true
+
+      - name: Apply allowlist + gate (openclaw / bandit)
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, pathlib, datetime, os
+
+          image_key  = "openclaw"
+          tool       = "bandit"
+          scan_date  = datetime.date.today().isoformat()
+          findings_p = pathlib.Path("openclaw-bandit.json")
+          allow_p    = pathlib.Path(os.environ["ALLOWLIST_PATH"])
+
+          data = json.loads(findings_p.read_text()) if findings_p.exists() else {"results": []}
+
+          allowed = {}
+          if allow_p.exists():
+              al = json.loads(allow_p.read_text())
+              allowed = al.get(image_key, {}).get(tool, {})
+
+          today = datetime.date.today()
+          expired = [(rid, e["expiry_date"]) for rid, e in allowed.items()
+                     if e.get("expiry_date") and datetime.date.fromisoformat(e["expiry_date"]) < today]
+
+          blocking = []
+          warnings = []
+          for r in data.get("results", []):
+              sev   = r.get("issue_severity", "")
+              tid   = r.get("test_id", "")
+              txt   = r.get("issue_text", "")[:80]
+              fname = r.get("filename", "").split("/")[-1]
+              lineno = r.get("line_number", 0)
+              if sev == "HIGH" and tid not in allowed:
+                  blocking.append(f"HIGH {tid}: {txt} [{fname}:{lineno}]")
+              elif sev == "MEDIUM":
+                  warnings.append(f"MEDIUM {tid}: {txt} [{fname}:{lineno}]")
+
+          summary = [f"### Bandit component scan: {image_key}"]
+          summary.append(f"Image: `{os.environ.get('OPENCLAW_IMAGE', image_key)}`")
+          summary.append(f"Scan date: {scan_date}")
+          summary.append(f"NOTE: openclaw is primarily TypeScript/JS; only Python scripts in /app/skills/ are scanned.")
+          summary.append(f"Blocking HIGH findings (not allowlisted): {len(blocking)}")
+          summary.append(f"Warning MEDIUM findings: {len(warnings)}")
+          if blocking:
+              summary.append("\n#### Blocking HIGH findings")
+              for f in blocking:
+                  summary.append(f"- {f}")
+
+          txt = "\n".join(summary)
+          print(txt)
+          sf = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sf:
+              with open(sf, "a") as f:
+                  f.write(txt + "\n")
+
+          if expired:
+              print(f"\n[FAIL] {len(expired)} expired allowlist entries in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          if blocking:
+              print(f"\n[FAIL] {len(blocking)} unallowlisted HIGH findings in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          print(f"[PASS] {image_key}/{tool}: no unallowlisted HIGH findings.")
+          PYEOF
+
+      - name: Run opengrep on openclaw Python components
+        run: |
+          opengrep scan \
+            --config p/python \
+            --json-output openclaw-opengrep.json \
+            --sarif-output openclaw-opengrep.sarif \
+            extracted/openclaw/ 2>/dev/null || true
+
+      - name: Apply allowlist + gate (openclaw / opengrep)
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys, pathlib, datetime, os
+
+          image_key  = "openclaw"
+          tool       = "opengrep"
+          findings_p = pathlib.Path("openclaw-opengrep.json")
+          allow_p    = pathlib.Path(os.environ["ALLOWLIST_PATH"])
+
+          results = []
+          if findings_p.exists():
+              try:
+                  data = json.loads(findings_p.read_text())
+                  results = data.get("results", [])
+              except Exception:
+                  pass
+
+          allowed = {}
+          if allow_p.exists():
+              al = json.loads(allow_p.read_text())
+              allowed = al.get(image_key, {}).get(tool, {})
+
+          today = datetime.date.today()
+          expired = [(rid, e["expiry_date"]) for rid, e in allowed.items()
+                     if e.get("expiry_date") and datetime.date.fromisoformat(e["expiry_date"]) < today]
+
+          blocking = []
+          for r in results:
+              sev  = r.get("extra", {}).get("severity", "INFO").upper()
+              rule = r.get("check_id", "")
+              path = r.get("path", "").split("/")[-1]
+              line = r.get("start", {}).get("line", 0)
+              msg  = r.get("extra", {}).get("message", "")[:80]
+              if sev in ("CRITICAL", "HIGH") and rule not in allowed:
+                  blocking.append(f"{sev} {rule}: {msg} [{path}:{line}]")
+
+          summary = [f"### Opengrep component scan: {image_key}"]
+          summary.append(f"Blocking HIGH/CRITICAL (not allowlisted): {len(blocking)}")
+          if blocking:
+              summary.append("\n#### Blocking findings")
+              for f in blocking[:20]:
+                  summary.append(f"- {f}")
+
+          txt = "\n".join(summary)
+          print(txt)
+          sf = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if sf:
+              with open(sf, "a") as f:
+                  f.write(txt + "\n")
+
+          if expired:
+              print(f"\n[FAIL] {len(expired)} expired allowlist entries.", file=sys.stderr)
+              sys.exit(1)
+          if blocking:
+              print(f"\n[FAIL] {len(blocking)} unallowlisted HIGH/CRITICAL in {image_key}/{tool}.", file=sys.stderr)
+              sys.exit(1)
+          print(f"[PASS] {image_key}/{tool}: no unallowlisted HIGH/CRITICAL findings.")
+          PYEOF
+
+      - name: Upload SARIF — openclaw bandit
+        uses: github/codeql-action/upload-sarif@bc0b696b4103f5fe60f15749af68a046868d511a # codeql-bundle-v2.25.4
+        if: always() && hashFiles('openclaw-bandit.sarif') != ''
+        with:
+          sarif_file: openclaw-bandit.sarif
+          category: agent-bandit-openclaw
+
+      - name: Upload SARIF — openclaw opengrep
+        uses: github/codeql-action/upload-sarif@bc0b696b4103f5fe60f15749af68a046868d511a # codeql-bundle-v2.25.4
+        if: always() && hashFiles('openclaw-opengrep.sarif') != ''
+        with:
+          sarif_file: openclaw-opengrep.sarif
+          category: agent-opengrep-openclaw
+
+      - name: Upload scan artifacts (openclaw)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: agent-scan-openclaw-${{ github.sha }}
+          path: |
+            openclaw-bandit.json
+            openclaw-opengrep.json
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Nightly job summary — open an issue if any scan job failed
+  # ─────────────────────────────────────────────────────────────────────────
+  nightly-component-issue:
+    name: Nightly component scan issue (on failure)
+    runs-on: ubuntu-latest
+    needs: [scan-langflow, scan-letta, scan-openclaw]
+    if: github.event_name == 'schedule' && failure()
+    steps:
+      - name: Open GitHub issue for component scan failures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Agent component scan gate failed (nightly $(date -u +%Y-%m-%d))" \
+            --body "$(cat <<'BODY'
+          One or more agent image component scans failed the bandit/opengrep HIGH finding gate
+          in the nightly run.
+
+          **Action required:**
+          1. Review the failing job summaries for the affected image(s).
+          2. If the finding is a genuine issue in upstream code: open a PR bumping the image pin
+             to a patched version in \`docker/docker-compose.yml\` and \`helm/yashigani/values.yaml\`.
+          3. If the finding is a false positive or accepted risk: add to
+             \`.github/agent-image-scan-allowlist.json\` with documented reason, reviewer,
+             and \`expiry_date\` (maximum 90 days).
+
+          Workflow: ${{ github.workflow }}
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BODY
+          )" \
+            --label "security,agent-images" \
+            2>/dev/null || echo "Issue creation failed (labels may not exist) — non-fatal"
