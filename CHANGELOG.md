@@ -2,6 +2,7 @@
 <!-- last-updated: 2026-05-17T00:00:00+01:00 (v2.23.4: openapi-reenable — auth-gated Swagger UI + API reference docs) -->
 <!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: per-user 100 RPS rate limit + admin alert via Prometheus + audit event USER_RATE_LIMIT_EXCEEDED) -->
 <!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: DDoSProtector wire-up + license-scaled per-IP defaults) -->
+<!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: BUG-V241-LANGFLOW-LETTA-BASE-URL: langflow+letta OPENAI_API_BASE :8080→:8081 in compose+helm) -->
 <!-- last-updated: 2026-05-16T18:30:00+01:00 (v2.23.4: draft [Unreleased] entry covering 62 commits since v2.23.3) -->
 <!-- last-updated: 2026-05-15T16:10:00+01:00 (docs: remove docs/release-notes/ cross-references — internal release-engineering tree moved out of repo — v2.23.4) -->
 <!-- last-updated: 2026-05-15T11:30:00+01:00 (docs: remove unimplemented bare-metal claim from v0.6.0 entry — v2.23.4) -->
@@ -64,6 +65,29 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
   ASVS V5.1.5 / CWE-601 / OWASP A01:2021.
 
 ### Fixed
+- **fix(agents): langflow + letta OPENAI_API_BASE port corrected :8080→:8081**
+  (BUG-V241-LANGFLOW-LETTA-BASE-URL — confirmed broken by Maxine + Iris fresh audits,
+  Tiago directive 2026-05-24):
+
+  **Bug:** `OPENAI_API_BASE: http://gateway:8080/v1` was set for both langflow and letta in
+  `docker/docker-compose.yml` and `helm/yashigani/values.yaml`. Port 8080 is the gateway's
+  mTLS listener (`ssl.CERT_REQUIRED`) — langflow and letta carry no client certificate, so
+  every LLM dispatch attempt hit an mTLS handshake failure and returned a connection error.
+
+  **Fix:** Changed to `http://gateway:8081/v1` (Compose) and
+  `http://yashigani-gateway:8081/v1` (Helm). Port 8081 is the gateway's internal mesh
+  listener (plain HTTP, data-network-only). Network isolation on the `data` bridge (Compose)
+  and K8s NetworkPolicy (Helm) are the transport guards; `AgentAuthMiddleware` enforces
+  token auth at the application layer on all requests arriving at `:8081`.
+
+  **Historical context:** open-webui received the identical fix at v2.23.4 BUG-2
+  (`docker-compose.yml` line 528-532, `values.yaml` line 1172-1175). Langflow and letta
+  were added after v2.23.4 and inherited `http://gateway:8080/v1` from the pre-fix pattern.
+
+  **Files changed:** `docker/docker-compose.yml` (langflow env line ~1581, letta env line
+  ~1772), `helm/yashigani/values.yaml` (langflow.env.OPENAI_API_BASE, letta.env.OPENAI_API_BASE),
+  `docs/risk-register.yml` (stale compensating-control note updated).
+
 - **fix(pgbouncer): restore compose-Helm auth_query parity** (CHANGELOG drift audit finding #8):
   `docker/pgbouncer/pgbouncer.ini` had an explicit `auth_file = /etc/pgbouncer/userlist.txt`
   directive that `helm/yashigani/files/pgbouncer.ini` did not (Iris §5 removed it in v2.24.0).

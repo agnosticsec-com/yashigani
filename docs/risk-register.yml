@@ -540,7 +540,7 @@ risks:
   compensating_controls:
   - OPA agent_call_allowed enforced at gateway intercept (gateway/proxy.py:364-368)
   - policy/agents.rego principal.type=='agent' + target_agent.allowed_caller_groups + allowed_paths
-  - Both langflow + letta have OPENAI_API_BASE=http://gateway:8080/v1 (calls go via gateway)
+  - Both langflow + letta have OPENAI_API_BASE=http://gateway:8081/v1 (calls go via gateway mesh port — BUG-V241-LANGFLOW-LETTA-BASE-URL fixed :8080→:8081)
   - cap_drop:ALL + read_only:true on agent containers (post-RCE pivot harder)
   - Caddy is the auth perimeter (feedback_caddy_is_the_auth_perimeter)
   status: mitigated
