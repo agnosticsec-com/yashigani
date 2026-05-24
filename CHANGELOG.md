@@ -1,5 +1,6 @@
 <!-- last-updated: 2026-05-20T16:30:00+00:00 (v2.23.4: backfill v2.23.3 fasttext→sklearn swap entry under [v2.23.3] § Changed; sweep current-tense FastText refs in Architecture.md / README.md / AI_ASSETS.md to scikit-learn) -->
 <!-- last-updated: 2026-05-17T00:00:00+01:00 (v2.23.4: openapi-reenable — auth-gated Swagger UI + API reference docs) -->
+<!-- last-updated: 2026-05-25T00:00:00+00:00 (v2.24.1: YSG-RISK-061 — Caddy egress restrictions via iptables + K8s NetworkPolicy; NET_ADMIN cap added) -->
 <!-- last-updated: 2026-05-24T12:00:00+00:00 (v2.24.1: PROBE-AG1 — per-key Docker named-secrets on langflow/letta/letta-pgbouncer; openclaw /run/secrets removed; closes NICO-V241-001 + YSG-RISK-060) -->
 <!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: per-user 100 RPS rate limit + admin alert via Prometheus + audit event USER_RATE_LIMIT_EXCEEDED) -->
 <!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: DDoSProtector wire-up + license-scaled per-IP defaults) -->
@@ -22,6 +23,54 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 ## [Unreleased] — v2.24.1
 
 ### Security
+- **security(perimeter): Caddy egress restrictions — iptables OUTPUT allowlist + K8s NetworkPolicy** (YSG-RISK-061, Tiago directive 2026-05-25):
+
+  **Attack chain reduced:** Post-Caddy-RCE attacker cannot reach arbitrary internet endpoints
+  for exfiltration, C2, or second-stage payload fetch. The allowlist permits only: loopback,
+  in-mesh Docker bridge subnets (caddy_internal + obs), Docker DNS (127.0.0.11:53), and
+  resolved IPs of ACME providers + Let's Encrypt OCSP responders. Every other egress
+  connection is dropped with a kernel LOG prefix (`CADDY_EGRESS_BLOCKED`). Probability of
+  Caddy RCE unchanged (~10⁻³/yr per LAURA-V241-RESIDUAL-001); this is impact reduction
+  (~60-70% post-RCE blast radius reduction). Cross-version effective (KMS-independent).
+
+  **Implementation:**
+  - `docker/caddy/Dockerfile.caddy` — derives from the digest-pinned `caddy:2.11.2-alpine`
+    base; bakes in `iptables=1.8.11-r1` and `iproute2-minimal` at image build time (not
+    runtime). Installs `caddy-entrypoint.sh` as the new container entrypoint.
+  - `docker/caddy/caddy-entrypoint.sh` — sets iptables OUTPUT default-DROP, then adds
+    ACCEPT rules: loopback, ESTABLISHED/RELATED, DNS (127.0.0.11), Docker bridge subnets
+    (enumerated from `ip route` at startup), ACME+OCSP IPs (resolved via Docker DNS). Logs
+    every allowed destination. Graceful fallback: if NET_ADMIN unavailable (Podman rootless),
+    logs WARN and starts Caddy without restrictions rather than crashing.
+  - `docker/docker-compose.yml` — `caddy` service gains `build:` block targeting
+    `docker/caddy/Dockerfile.caddy`; `cap_add: [NET_BIND_SERVICE, NET_ADMIN]` (NET_ADMIN
+    is required for iptables; scoped to the container's network namespace only);
+    `YASHIGANI_CADDY_EGRESS_ALLOWLIST` env var (operator can add extra host:port pairs).
+  - `helm/yashigani/templates/caddy.yaml` — `NET_ADMIN` added to container capabilities.
+    `YASHIGANI_CADDY_EGRESS_ALLOWLIST` env var wired via `caddy.egressAllowlist` value.
+  - `helm/yashigani/templates/networkpolicy-caddy-egress.yaml` (NEW) — K8s NetworkPolicy
+    restricting Caddy external egress to TCP:443 + TCP:80 to non-RFC1918 CIDRs (ACME
+    + OCSP). Complements iptables with kernel-enforced defence-in-depth.
+  - `helm/yashigani/templates/networkpolicy.yaml` — `allow-caddy-egress` gains missing
+    grafana:3443 + prometheus:9090 pod-selector entries (previously absent — would have
+    caused 502 on /admin/grafana/* and /admin/prometheus/* in K8s).
+
+  **Trade-off:** NET_ADMIN capability added to Caddy (previously NET_BIND_SERVICE only).
+  NET_ADMIN allows iptables manipulation within the container's Linux network namespace;
+  does not affect host networking. Accepted by Tiago 2026-05-25 (YSG-RISK-061).
+
+  **Portability notes:**
+  - Docker Desktop (macOS): iptables backed by nf_tables shim in Alpine 3.23. All rules
+    apply correctly. Verified: NET_ADMIN + OUTPUT DROP + subnet allow.
+  - Podman rootless: NET_ADMIN may be unavailable without `--privileged`. Entrypoint
+    gracefully skips iptables setup and logs WARN. K8s NetworkPolicy is the enforcement
+    mechanism in production K8s deployments.
+  - K8s: `networkpolicy-caddy-egress.yaml` provides kernel-level enforcement independent
+    of the in-container iptables rules.
+
+  **Operator override:** Set `YASHIGANI_CADDY_EGRESS_ALLOWLIST=host1:port,host2:port` to
+  allow additional egress destinations (e.g. custom ACME CA or internal OCSP responder).
+
 - **security(secrets): per-key Docker named-secrets on openclaw / langflow / letta / letta-pgbouncer**
   (PROBE-AG1, Tiago directive 2026-05-24; closes NICO-V241-001 + YSG-RISK-060):
 

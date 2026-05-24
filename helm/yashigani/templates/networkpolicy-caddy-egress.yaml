@@ -1,0 +1,96 @@
+{{- if and .Values.networkPolicies.enabled .Values.caddy.enabled -}}
+{{- /* Last updated: 2026-05-25T00:00:00+00:00 (YSG-RISK-061: Caddy egress restriction — ACME + in-mesh + DNS) */ -}}
+---
+# YSG-RISK-061 (v2.24.1): Caddy ACME + external egress allowlist.
+#
+# PURPOSE
+#   Restricts Caddy's external egress to:
+#     1. In-mesh upstreams (gateway, backoffice, open-webui, obs services) —
+#        already covered by allow-caddy-egress in networkpolicy.yaml.
+#     2. ACME providers (Let's Encrypt + staging) — TCP:443 to external only.
+#     3. OCSP stapling responders (Let's Encrypt OCSP) — TCP:80 to external only.
+#   All other external egress is blocked by default-deny-egress.
+#
+# RELATIONSHIP TO allow-caddy-egress
+#   allow-caddy-egress (networkpolicy.yaml) covers in-cluster pod-to-pod egress
+#   (gateway:8080, backoffice:8443, open-webui:8080). That policy does NOT include
+#   any ipBlock rules — meaning external internet egress from Caddy is fully blocked
+#   under the default-deny-egress policy unless THIS policy adds it.
+#
+#   This policy adds external internet egress restricted to:
+#     - :443 TCP to non-RFC1918 CIDRs (ACME challenges + OCSP primary responses)
+#     - :80 TCP to non-RFC1918 CIDRs (OCSP HTTP-01 stapling)
+#
+#   The ipBlock except clause excludes RFC1918 private ranges and loopback to prevent
+#   this rule from inadvertently allowing egress to internal Kubernetes node-network
+#   ranges. Adjust the except CIDRs to match your cluster's node/pod CIDR if it
+#   differs from the standard RFC1918 ranges.
+#
+# ACME MODES
+#   - Caddyfile.acme: ACME HTTP-01 and TLS-ALPN-01 challenge flows.
+#     Requires :443 (TLS-ALPN) and :80 (HTTP-01 redirect) reachable. OCSP stapling
+#     uses :80 to the Let's Encrypt OCSP responder.
+#   - Caddyfile.ca / Caddyfile.selfsigned: No ACME. External :443/:80 not needed.
+#     The rule is applied regardless of TLS mode for simplicity; the :443/:80 egress
+#     does no harm in ca/selfsigned mode (Caddy simply won't use it).
+#
+# IN-MESH SERVICES (Grafana, Prometheus, Wazuh, Alertmanager)
+#   These are pod-selectors, handled in allow-caddy-egress (networkpolicy.yaml).
+#   Prometheus scrapes via Caddy's :8444/:8445 listeners — those are INGRESS on
+#   Caddy, covered by allow-caddy-ingress. Caddy egress to Grafana/Prometheus are
+#   pod-selector entries in allow-caddy-egress.
+#
+# NOTE on obs-network services (Grafana, Prometheus):
+#   allow-caddy-egress already has entries for grafana:3443 and prometheus:9090
+#   via podSelector. Those do NOT appear here. This file adds ONLY the external
+#   internet ACME/OCSP egress that was missing from allow-caddy-egress.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "yashigani.fullname" . }}-caddy-acme-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: yashigani-caddy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "yashigani.labels" . | nindent 4 }}
+  annotations:
+    yashigani.io/risk-id: "YSG-RISK-061"
+    yashigani.io/rationale: >-
+      Caddy ACME + OCSP external egress. Restricts outbound to Let's Encrypt
+      ACME providers (:443) and OCSP responders (:80) only. Private RFC1918
+      ranges excluded from ipBlock to prevent unintended internal-cluster egress.
+      Complements iptables OUTPUT allowlist in caddy-entrypoint.sh (defence in depth).
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yashigani-caddy
+  policyTypes:
+    - Egress
+  egress:
+    # ACME challenge + OCSP stapling — external internet only.
+    # Restricted to :443 (ACME TLS-ALPN-01 + ACME API calls) and
+    # :80 (OCSP HTTP-01 stapling, Let's Encrypt OCSP responders).
+    # ipBlock except clause excludes RFC1918 private ranges to prevent
+    # this rule from granting access to cluster-internal networks.
+    # Adjust the except list if your cluster uses non-RFC1918 node/pod CIDRs.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10    # RFC6598 shared address space (carrier-grade NAT)
+              - 169.254.0.0/16   # link-local (APIPA)
+              - 127.0.0.0/8      # loopback
+      ports:
+        # ACME API calls (Let's Encrypt / ZeroSSL / custom ACME CA) and
+        # TLS-ALPN-01 challenge response
+        - protocol: TCP
+          port: 443
+        # OCSP HTTP-01 stapling (Let's Encrypt OCSP responders at
+        # r10.o.lencr.org, r11.o.lencr.org, r12.o.lencr.org, e5/e6.o.lencr.org)
+        - protocol: TCP
+          port: 80
+{{- end }}

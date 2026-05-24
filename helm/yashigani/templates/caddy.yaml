@@ -53,7 +53,16 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-              add: ["NET_BIND_SERVICE"]
+              add:
+                - NET_BIND_SERVICE
+                # YSG-RISK-061 (v2.24.1): NET_ADMIN required for iptables
+                # egress restriction in caddy-entrypoint.sh. Scoped to the
+                # container's network namespace — does not affect the host.
+                # K8s NetworkPolicy (networkpolicy-caddy-egress.yaml) provides
+                # an equivalent kernel-enforced egress allowlist. Both controls
+                # are complementary: iptables = in-process depth; NetworkPolicy
+                # = infra-layer enforcement. Accepted by Tiago 2026-05-25.
+                - NET_ADMIN
           ports:
             - name: http
               containerPort: 80
@@ -74,6 +83,11 @@ spec:
           env:
             - name: YASHIGANI_TLS_DOMAIN
               value: {{ .Values.global.tlsDomain | quote }}
+            # YSG-RISK-061 (v2.24.1): operator ACME/egress allowlist.
+            # Comma-separated host:port pairs added to the iptables OUTPUT allowlist
+            # in caddy-entrypoint.sh. Empty string = default only (LE + OCSP).
+            - name: YASHIGANI_CADDY_EGRESS_ALLOWLIST
+              value: {{ .Values.caddy.egressAllowlist | default "" | quote }}
             {{- if .Values.mtls.enabled }}
             # EX-231-10 Layer B: CADDY_INTERNAL_HMAC is read from the same
             # pki-certs Secret that carries the mTLS leaf certs. Caddy injects

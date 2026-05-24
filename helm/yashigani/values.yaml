@@ -756,6 +756,12 @@ caddy:
   internalMetricsListenerBackoffice:
     enabled: true
     port: 8445
+  # YSG-RISK-061 (v2.24.1): operator ACME / external egress allowlist.
+  # Comma-separated list of additional host:port pairs to allow in the
+  # caddy-entrypoint.sh iptables OUTPUT rules. Default is empty (only the
+  # built-in defaults — LE ACME + OCSP — are applied by the entrypoint).
+  # Example: "acme.corp.example:443,ocsp.corp.example:80"
+  egressAllowlist: ""
 
 # ---------------------------------------------------------------------------
 # Optional Agent Bundles (v0.8.0)

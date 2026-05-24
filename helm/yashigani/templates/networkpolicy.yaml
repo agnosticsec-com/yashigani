@@ -1128,6 +1128,28 @@ spec:
         - protocol: TCP
           port: 8080
     {{- end }}
+    # Observability services — Caddy proxies /admin/grafana/* and /admin/prometheus/*
+    # via handle_path blocks (Caddyfile obs-network upstreams).
+    # These were absent from the original allow-caddy-egress, causing 502s when
+    # Caddy tried to proxy to Grafana/Prometheus/Wazuh in K8s. YSG-RISK-061 audit.
+    {{- if .Values.grafana.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-grafana
+      ports:
+        - protocol: TCP
+          port: 3443
+    {{- end }}
+    {{- if .Values.prometheus.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: yashigani-prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    {{- end }}
 
 {{- if .Values.mtls.enabled }}
 ---

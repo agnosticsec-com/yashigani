@@ -1,0 +1,37 @@
+# Yashigani Caddy — hardened TLS edge with egress restriction support
+#
+# Base: official caddy:2.11.2-alpine (digest-pinned in docker-compose.yml).
+# Adds: iptables (baked in at build time — not installed at runtime).
+#
+# YSG-RISK-061: iptables is required by caddy-entrypoint.sh to enforce the
+# OUTPUT egress allowlist. The package adds ~2MB and requires no extra
+# capabilities at build time. NET_ADMIN is added to the running container
+# (compose cap_add) to allow the entrypoint to manipulate the container's
+# network namespace iptables rules.
+#
+# NOTE: Alpine 3.21 ships iptables backed by nf_tables (xtables-nft shim).
+# This is semantically equivalent to legacy iptables for our use case —
+# OUTPUT table rules, state matching, LOG target — all work correctly.
+#
+# Build context: docker/
+# Build command (automated via docker-compose.yml build block):
+#   docker compose build caddy
+
+FROM docker.io/library/caddy:2.11.2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
+
+# Add iptables (and getent/nss_dns for hostname resolution in the entrypoint).
+# iproute2-minimal provides `ip route` for bridge subnet enumeration.
+RUN apk add --no-cache \
+    iptables=1.8.11-r1 \
+    iproute2-minimal \
+    && rm -rf /var/cache/apk/*
+
+# Install the egress-restriction entrypoint shim.
+# The script must be executable — caddy image uses UID 0 for the initial
+# process, then drops (or we can override entrypoint as root, exec caddy as 1000).
+# Caddy 2.x Docker image uses USER 0 at startup to bind :80/:443 with
+# NET_BIND_SERVICE, then drops privileges internally. Entrypoint runs as root.
+COPY caddy/caddy-entrypoint.sh /usr/local/bin/caddy-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/caddy-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/caddy-entrypoint.sh"]
