@@ -1,0 +1,152 @@
+# Last updated: 2026-05-24T00:00:00+00:00
+#
+# agent-dispatch-e2e.yml — Agent dispatch contract gate + nightly live E2E
+#
+# TWO jobs in this workflow:
+#
+# Job 1: agent-dispatch-contract (fast, required, no Docker)
+#   Runs tests/contracts/test_agent_base_url_port.py on every PR and push.
+#   These are STATIC tests — no running stack needed.
+#   They assert that OPENAI_API_BASE values in docker-compose.yml and
+#   helm/values.yaml point at port 8081 (plain-HTTP mesh), not 8080 (mTLS).
+#   This is the regression gate for BUG-V241-LANGFLOW-LETTA-BASE-URL.
+#
+#   Rationale: the bug class (agent base URL using wrong port) is a compose/helm
+#   config error that passes all container-health and route-existence checks.
+#   Static analysis of the config value is the correct gate — no runtime needed.
+#
+# Job 2: agent-dispatch-live (nightly, optional, requires Docker stack)
+#   Runs src/tests/e2e/test_agent_dispatch_e2e.py nightly on a self-hosted
+#   runner with a full Yashigani stack.
+#   These tests exercise the actual dispatch data path:
+#     gateway -> langflow/letta -> OPENAI_API_BASE -> gateway -> ollama
+#   They SKIP if the stack is not running (not a blocking failure for PRs).
+#
+# Triggers:
+#   - Every push + PR touching agent-related files (compose, helm, agent_bundles,
+#     gateway, langflow_client.py, letta_client.py, docker-compose*.yml)
+#   - Nightly at 02:00 UTC for the live dispatch job
+#
+# YSG-RISK-059 / A1 amendment principle.
+# OWASP ASVS v5 V11.1 / feedback_e2e_minimalism.md (no stack needed for contract job).
+
+name: Agent Dispatch E2E Gate
+
+on:
+  push:
+    branches: [main, "release/**", "v2.24.*", "2.24.x"]
+    paths:
+      - "docker/docker-compose.yml"
+      - "docker/docker-compose.podman-override.yml"
+      - "helm/yashigani/values.yaml"
+      - "helm/yashigani/templates/agent-bundles.yaml"
+      - "src/yashigani/gateway/langflow_client.py"
+      - "src/yashigani/gateway/letta_client.py"
+      - "src/yashigani/gateway/openai_router.py"
+      - "tests/contracts/test_agent_base_url_port.py"
+      - "src/tests/e2e/test_agent_dispatch_e2e.py"
+      - ".github/workflows/agent-dispatch-e2e.yml"
+  pull_request:
+    branches: [main, "release/**", "v2.24.*", "2.24.x"]
+    paths:
+      - "docker/docker-compose.yml"
+      - "docker/docker-compose.podman-override.yml"
+      - "helm/yashigani/values.yaml"
+      - "helm/yashigani/templates/agent-bundles.yaml"
+      - "src/yashigani/gateway/langflow_client.py"
+      - "src/yashigani/gateway/letta_client.py"
+      - "src/yashigani/gateway/openai_router.py"
+      - "tests/contracts/test_agent_base_url_port.py"
+      - "src/tests/e2e/test_agent_dispatch_e2e.py"
+      - ".github/workflows/agent-dispatch-e2e.yml"
+  schedule:
+    # Nightly at 02:00 UTC — catches config drift even without a code change
+    - cron: "0 2 * * *"
+
+concurrency:
+  group: agent-dispatch-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Static contract gate (fast, required, no stack)
+  # ---------------------------------------------------------------------------
+  agent-dispatch-contract:
+    name: Agent dispatch contract gate (static)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install --no-deps pytest==8.4.2
+
+      - name: Run agent base URL port contract tests
+        # These tests are STATIC — no running stack needed.
+        # They assert compose/helm OPENAI_API_BASE values use port 8081 (mesh),
+        # not 8080 (mTLS). Regression gate for BUG-V241-LANGFLOW-LETTA-BASE-URL.
+        run: |
+          python -m pytest tests/contracts/test_agent_base_url_port.py \
+            -v --tb=short \
+            --junitxml=agent-dispatch-contract-results.xml
+
+      - name: Upload contract test results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: agent-dispatch-contract-${{ github.sha }}
+          path: agent-dispatch-contract-results.xml
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Live dispatch gate (nightly, self-hosted with full stack)
+  # ---------------------------------------------------------------------------
+  agent-dispatch-live:
+    name: Agent dispatch live E2E (nightly, requires stack)
+    # Only run nightly (scheduled) — this job requires a self-hosted runner
+    # with a running Yashigani stack (compose up with langflow/letta profiles).
+    # It is NOT required for PR merges (no stack available on GH-hosted runners).
+    if: github.event_name == 'schedule'
+    runs-on: [self-hosted, macos, arm64, m-chip]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run live agent dispatch E2E
+        # Tests SKIP if no stack is running — not a blocking failure.
+        # When stack is running: FAIL = dispatch broken, PASS = dispatch works.
+        # The contract tests (job 1) already block on static config errors;
+        # this job provides operational proof on a live stack.
+        run: |
+          python -m pytest src/tests/e2e/test_agent_dispatch_e2e.py \
+            -v --tb=short \
+            --junitxml=agent-dispatch-live-results.xml \
+            -x
+        env:
+          YASHIGANI_RUNTIME: docker
+
+      - name: Upload live test results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: agent-dispatch-live-${{ github.sha }}
+          path: agent-dispatch-live-results.xml
+          retention-days: 90

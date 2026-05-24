@@ -42,6 +42,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).parents[2]
 _COMPOSE_FILE = _REPO_ROOT / "docker" / "docker-compose.yml"
+_HELM_VALUES_FILE = _REPO_ROOT / "helm" / "yashigani" / "values.yaml"
 
 # Canonical ports (see docker-compose.yml comments + mesh_entrypoint.py)
 _MESH_PORT = 8081   # plain-HTTP internal mesh — agents MUST target this
@@ -128,6 +129,11 @@ class TestAgentBaseUrlPort:
         Same rationale as langflow. Letta also has cap_drop:[ALL] and no
         client cert mount for the gateway mTLS listener.
 
+        Note: letta-pgbouncer appears before letta in the compose services
+        block.  _extract_service_section matches on '^  letta:' which is
+        the standalone service name (not letta-pgbouncer:), so extraction
+        is unambiguous.
+
         FAILS pre-Su-fix: OPENAI_API_BASE: http://gateway:8080/v1
         PASSES post-Su-fix: OPENAI_API_BASE: http://gateway:8081/v1
 
@@ -135,18 +141,10 @@ class TestAgentBaseUrlPort:
         """
         text = _compose_text()
         section = _extract_service_section(text, "letta")
-        # Strip letta-pgbouncer from the section (starts before letta)
-        # We want only the 'letta:' service block
-        if "letta-pgbouncer" in section[:50]:
-            # Fell into letta-pgbouncer — skip forward to letta proper
-            section = _extract_service_section(text, "  letta\n")
         assert section, "letta service section not found in docker-compose.yml"
 
         match = re.search(r'OPENAI_API_BASE:\s*(\S+)', section)
-        assert match, (
-            f"OPENAI_API_BASE not found in letta service section.\n"
-            f"  Section (first 500 chars): {section[:500]}"
-        )
+        assert match, f"OPENAI_API_BASE not found in letta service section. Section: {section[:300]}"
 
         url = match.group(1)
         assert f":{_MESH_PORT}" in url, (
@@ -246,4 +244,59 @@ class TestAgentBaseUrlPort:
             + "\n".join(wrong_instances)
             + f"\n\nFix: change all instances to gateway:{_MESH_PORT}/v1\n"
             f"BUG-V241-LANGFLOW-LETTA-BASE-URL / YSG-RISK-059"
+        )
+
+
+class TestHelmAgentBaseUrlPort:
+    """
+    Helm values.yaml parity: same port assertion as compose.
+
+    The CHANGELOG entry for BUG-V241-LANGFLOW-LETTA-BASE-URL documents that
+    both docker-compose.yml AND helm/yashigani/values.yaml were affected.
+    This class guards both surfaces.
+    """
+
+    def _helm_text(self) -> str:
+        assert _HELM_VALUES_FILE.exists(), f"Helm values.yaml not found: {_HELM_VALUES_FILE}"
+        return _HELM_VALUES_FILE.read_text()
+
+    def test_helm_langflow_openai_api_base_uses_mesh_port(self):
+        """
+        Helm values: langflow OPENAI_API_BASE must use yashigani-gateway:8081, not :8080.
+        """
+        text = self._helm_text()
+        # Find all OPENAI_API_BASE values in Helm values.yaml
+        # Helm uses yashigani-gateway (service name) instead of gateway
+        matches = list(re.finditer(r'OPENAI_API_BASE:\s*"?(http://[^"\s]+)"?', text))
+        assert matches, "No OPENAI_API_BASE found in Helm values.yaml"
+
+        for match in matches:
+            url = match.group(1).strip('"')
+            assert f":{_MTLS_PORT}" not in url, (
+                f"Helm values.yaml OPENAI_API_BASE uses mTLS port {_MTLS_PORT}: {url}\n"
+                f"  Fix: change to http://yashigani-gateway:{_MESH_PORT}/v1\n"
+                f"  BUG-V241-LANGFLOW-LETTA-BASE-URL / YSG-RISK-059"
+            )
+            assert f":{_MESH_PORT}" in url, (
+                f"Helm values.yaml OPENAI_API_BASE uses unexpected port: {url}\n"
+                f"  Expected port {_MESH_PORT} (plain-HTTP mesh)."
+            )
+
+    def test_helm_no_agent_uses_mtls_port_as_base_url(self):
+        """
+        Exhaustive scan of Helm values.yaml: no OPENAI_API_BASE should reference
+        the mTLS port (8080). Catches new agent bundles added without the mesh-port
+        requirement in the Helm chart.
+        """
+        text = self._helm_text()
+        wrong = []
+        for match in re.finditer(r'OPENAI_API_BASE:\s*"?(http://[^"\s]+)"?', text):
+            url = match.group(1).strip('"')
+            if f":{_MTLS_PORT}" in url:
+                wrong.append(url)
+
+        assert not wrong, (
+            f"Helm values.yaml has OPENAI_API_BASE using mTLS port {_MTLS_PORT}:\n"
+            + "\n".join(f"  {u}" for u in wrong)
+            + f"\n  Fix: change to port {_MESH_PORT}. BUG-V241-LANGFLOW-LETTA-BASE-URL."
         )

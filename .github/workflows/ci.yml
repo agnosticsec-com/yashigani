@@ -340,6 +340,14 @@ jobs:
         # Internal re-audit YCS-20260502-v2.23.1-CWE89-reaudit-001 follow-up #3.
         run: python3 tools/check_partition_helm_parity.py
 
+      - name: Agent dispatch base-URL port contract tests
+        # Regression gate for BUG-V241-LANGFLOW-LETTA-BASE-URL / YSG-RISK-059.
+        # Asserts that langflow + letta OPENAI_API_BASE in compose + Helm values
+        # uses port 8081 (plain-HTTP mesh), not 8080 (mTLS-only).
+        # Static tests — no running stack needed. 7 tests, all PASS post-fix.
+        # A1 amendment principle: absence of dispatch-working test = SKIP, not PASS.
+        run: python3 -m pytest tests/contracts/test_agent_base_url_port.py -v --tb=short
+
   api-docs-drift:
     # v2.23.4: fail if committed docs/api/ markdown has drifted from the live
     # OpenAPI schema.  Regenerates the three markdown files and checks git diff.

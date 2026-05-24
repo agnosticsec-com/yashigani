@@ -1038,3 +1038,61 @@ risks:
     Prometheus/Grafana (always available) and Wazuh audit-event route (for customers
     with configured SIEM alerting). Complements DDoSProtector per-IP layer
     (YSG-RISK-056) — these are two distinct layers addressing different threat vectors.
+
+
+- id: YSG-RISK-059
+  description: >-
+    E2E test process gap — container-healthy checks accepted as proof of dispatch-working.
+    Prior Yashigani E2E sweeps (Tier 1 MAX, 5 platforms) verified container health,
+    agent registration in Redis, and /healthz reachability from inside the gateway
+    container — but did NOT exercise the actual agent dispatch data path
+    (POST /v1/chat/completions -> agent -> OPENAI_API_BASE -> gateway -> Ollama).
+    This gap allowed BUG-V241-LANGFLOW-LETTA-BASE-URL to ship undetected: langflow
+    and letta were configured with OPENAI_API_BASE: http://gateway:8080/v1 (mTLS-only
+    port, ssl.CERT_REQUIRED) instead of http://gateway:8081/v1 (plain-HTTP mesh port).
+    Every langflow and letta inference call failed at TLS handshake; all health/
+    registration/reachability checks still passed. The blast radius of this class
+    is any agent whose data path includes a callback to the gateway — a wrong port
+    number, wrong bearer token, or wrong protocol in OPENAI_API_BASE will cause
+    silent inference failure across the full lifetime of the agent bundle.
+  severity: medium
+  controls_impacted:
+  - ASVS V11.1 (Application Logic — process gap allows functional regression)
+  - OWASP API5:2023 (Broken Function-Level Auth — dispatch failure not surfaced)
+  - SOC 2 CC4.1 (monitoring controls — functional gap not caught by health monitoring)
+  - A1 amendment principle (absence of dispatch evidence = SKIP, not PASS)
+  compensating_controls:
+  - >-
+    tests/contracts/test_agent_base_url_port.py (7 tests, static, run on every PR/push):
+    asserts compose + Helm OPENAI_API_BASE values use port 8081 (mesh) not 8080 (mTLS).
+    Regression gate for BUG-V241-LANGFLOW-LETTA-BASE-URL and the config-class of this bug.
+  - >-
+    src/tests/e2e/test_agent_dispatch_e2e.py (6 live tests, stack required):
+    sends real POST /v1/chat/completions through each agent and asserts non-empty
+    choices[0].message.content. Also verifies callback leg from inside agent container.
+    Runs nightly via .github/workflows/agent-dispatch-e2e.yml.
+  - >-
+    docs/testing/e2e-coverage-guarantees.md: documents container-healthy vs dispatch-working
+    distinction, A1 amendment principle, and instructions for adding coverage when new
+    agent bundles are included.
+  status: mitigated
+  accepted_by: Ava
+  accepted_at: 2026-05-24
+  review_by: 2026-08-22
+  closure_evidence:
+  - commit: pending (this commit)
+    rationale: >-
+      tests/contracts/test_agent_base_url_port.py (7 tests, all PASS post-fix) +
+      src/tests/e2e/test_agent_dispatch_e2e.py (6 live tests, SKIP without stack,
+      PASS against fixed compose) + .github/workflows/agent-dispatch-e2e.yml CI gate +
+      docs/testing/e2e-coverage-guarantees.md coverage doc.
+  last_threat_model_review: 2026-05-24
+  root_cause: >-
+    New agent bundles (langflow, letta) added in v2.24.0 without dispatch-working
+    E2E test. Per feedback_laura_review_new_third_party_components.md, new third-party
+    components require a Laura threat model at inclusion time — this was absent.
+    The inclusion brief did not cue the OPENAI_API_BASE port requirement (the
+    feedback_brief_cue_adjacent_abstractions.md pattern). Result: both langflow and
+    letta inherited the pre-BUG-2 port 8080 pattern from the compose template.
+  fix_in_version: v2.24.1
+  bug_reference: BUG-V241-LANGFLOW-LETTA-BASE-URL
