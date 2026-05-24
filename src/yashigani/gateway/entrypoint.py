@@ -31,6 +31,7 @@ from yashigani.gateway.agent_auth import AgentAuthMiddleware
 from yashigani.gateway.openai_router import router as openai_router, configure as configure_openai_router
 from yashigani.gateway.spiffe_middleware import SpiffePeerCertMiddleware
 from yashigani.gateway._ratelimit_env import resolve_rate_limit_fail_mode
+from yashigani.gateway.ddos import DDoSProtector, ENV_PER_IP_LIMIT, ENV_WINDOW_SECONDS, ENV_EXEMPT_PATHS, _EXEMPT_PATHS
 from yashigani.auth.caddy_verified import CaddyVerifiedMiddleware
 from yashigani.licensing.grace_period import LicenseEnforcementMiddleware
 
@@ -386,6 +387,41 @@ def _build_app(mesh_mode: bool = False):
     except Exception as exc:
         logger.warning("Pool Manager unavailable (%s) — pool-managed dispatch disabled", exc)
 
+    # DDoS protector — Redis DB 5 (free, separate namespace from rl: and ddos: siblings).
+    # Defaults: 5000 req/IP/60s — permissive so shared-NAT / corporate-proxy / load-test
+    # traffic stays under the threshold (YSG-RISK-056).  Caddy timeouts are the primary
+    # flood defence; this is a second-line per-IP extreme-volume gate only.
+    # Override via YASHIGANI_DDOS_PER_IP_LIMIT / YASHIGANI_DDOS_WINDOW_SECONDS /
+    # YASHIGANI_DDOS_EXEMPT_PATHS (comma-separated).
+    ddos_protector = None
+    try:
+        import redis as _redis
+        _ddos_per_ip = int(os.getenv(ENV_PER_IP_LIMIT, "5000"))
+        _ddos_window = int(os.getenv(ENV_WINDOW_SECONDS, "60"))
+        # Extra exempt paths from env (comma-separated), merged with class defaults.
+        _ddos_extra_exempt_raw = os.getenv(ENV_EXEMPT_PATHS, "")
+        _ddos_extra_exempt: frozenset[str] = frozenset(
+            p.strip() for p in _ddos_extra_exempt_raw.split(",") if p.strip()
+        )
+        redis_client_ddos = _redis.from_url(_gw_redis_url(5), decode_responses=False)
+        redis_client_ddos.ping()
+        ddos_protector = DDoSProtector(
+            redis_client=redis_client_ddos,
+            max_connections_per_ip=_ddos_per_ip,
+            window_seconds=_ddos_window,
+        )
+        # Patch in any operator-supplied extra exempt paths at runtime.
+        if _ddos_extra_exempt:
+            import yashigani.gateway.ddos as _ddos_mod
+            _ddos_mod._EXEMPT_PATHS = _EXEMPT_PATHS | _ddos_extra_exempt
+        logger.info(
+            "DDoSProtector ready (Redis DB 5, per_ip_limit=%d, window=%ds)",
+            _ddos_per_ip,
+            _ddos_window,
+        )
+    except Exception as exc:
+        logger.warning("DDoSProtector unavailable (%s) — DDoS throttle disabled", exc)
+
     # Configure and prepare the /v1 router BEFORE creating the gateway app
     # (it must be registered before the catch-all proxy route)
     configure_openai_router(
@@ -405,6 +441,7 @@ def _build_app(mesh_mode: bool = False):
         opa_url=opa_url,
         content_relay_detector=content_relay_detector,
         pool_manager=pool_manager,
+        ddos_protector=ddos_protector,
     )
 
     gateway_app = create_gateway_app(
@@ -424,6 +461,7 @@ def _build_app(mesh_mode: bool = False):
         response_inspection_pipeline=response_pipeline,
         extra_routers=[openai_router],
         pii_detector=pii_detector,
+        ddos_protector=ddos_protector,
     )
     logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
 
@@ -479,6 +517,11 @@ def _build_app(mesh_mode: bool = False):
         poll_interval_seconds=15,
     )
     collector.start()
+
+    # ── v2.4.1: DDoSProtector — attach to app state ──────────────────────────
+    # Attach so tests and health tooling can verify instantiation via
+    # app.state.ddos_protector (None when Redis DB 5 is unavailable).
+    gateway_app.state.ddos_protector = ddos_protector
 
     # ── v2.4.1: Pool Manager — attach to app state + start health monitor ──
     # pool_manager was created above (before configure_openai_router).

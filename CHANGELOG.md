@@ -1,5 +1,6 @@
 <!-- last-updated: 2026-05-20T16:30:00+00:00 (v2.23.4: backfill v2.23.3 fasttext→sklearn swap entry under [v2.23.3] § Changed; sweep current-tense FastText refs in Architecture.md / README.md / AI_ASSETS.md to scikit-learn) -->
 <!-- last-updated: 2026-05-17T00:00:00+01:00 (v2.23.4: openapi-reenable — auth-gated Swagger UI + API reference docs) -->
+<!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: DDoSProtector wire-up — permissive defaults, Redis DB 5, env-var overrides) -->
 <!-- last-updated: 2026-05-16T18:30:00+01:00 (v2.23.4: draft [Unreleased] entry covering 62 commits since v2.23.3) -->
 <!-- last-updated: 2026-05-15T16:10:00+01:00 (docs: remove docs/release-notes/ cross-references — internal release-engineering tree moved out of repo — v2.23.4) -->
 <!-- last-updated: 2026-05-15T11:30:00+01:00 (docs: remove unimplemented bare-metal claim from v0.6.0 entry — v2.23.4) -->
@@ -12,6 +13,29 @@ All notable changes to Yashigani are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For full release narratives, design rationale, and per-feature detail, see [`README.md`](README.md) section 4 (Security Features by Version).
+
+---
+
+## [Unreleased] — v2.24.1
+
+### Fixed
+- **DDoSProtector wire-up** (CHANGELOG drift audit finding #2): `DDoSProtector` was
+  instantiated in `entrypoint.py` and wired into both `configure_openai_router()` and
+  `create_gateway_app()`. Previously the class existed but was never instantiated, making
+  the v2.20 CHANGELOG entry ("per-IP `DDoSProtector` Redis-backed, 429 + `Retry-After`")
+  dead code. That claim is now true.
+
+### Changed
+- **Permissive DDoS defaults** (YSG-RISK-056): default threshold raised from 50 to
+  **5000 requests/IP/60s**. Caddy timeouts remain the first-line flood defence; this
+  second-line gate fires only on extreme volume. Shared-NAT / corporate-proxy /
+  load-test traffic stays under the threshold. Override via:
+  - `YASHIGANI_DDOS_PER_IP_LIMIT` — integer, requests per window per IP
+  - `YASHIGANI_DDOS_WINDOW_SECONDS` — integer, window length in seconds
+  - `YASHIGANI_DDOS_EXEMPT_PATHS` — comma-separated extra paths to exempt
+- **Redis DB 5** dedicated to DDoS counters (DB 2 = rate-limit/anomaly,
+  DB 3 = RBAC/agents/identity, DB 4 = response-cache; DB 5 was free).
+- `/_yashigani/healthz` added to `_EXEMPT_PATHS` (was missing from class defaults).
 
 ---
 

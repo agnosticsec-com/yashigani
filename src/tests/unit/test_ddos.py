@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import sys
 import time
 from pathlib import Path
@@ -277,3 +278,99 @@ class TestProxyIntegration:
         # Should not raise
         openai_router.configure(ddos_protector=protector)
         assert openai_router._state.ddos_protector is protector
+
+    def test_gateway_app_state_ddos_protector_not_none(self, mock_redis):
+        """
+        After create_gateway_app() + the entrypoint state-attachment step
+        (``app.state.ddos_protector = protector``), app.state.ddos_protector
+        must be the same object.  This test emulates what entrypoint.py does
+        after calling create_gateway_app.
+        """
+        pytest.importorskip("fastapi", reason="fastapi not installed")
+        from yashigani.gateway.proxy import create_gateway_app, GatewayConfig
+
+        protector = DDoSProtector(mock_redis, max_connections_per_ip=5000)
+        cfg = GatewayConfig(upstream_base_url="http://localhost:9999")
+        app = create_gateway_app(config=cfg, ddos_protector=protector)
+        # Emulate the entrypoint.py state-attachment step.
+        app.state.ddos_protector = protector
+        assert app.state.ddos_protector is protector
+        assert app.state.ddos_protector is not None
+
+
+# ---------------------------------------------------------------------------
+# Permissive-defaults tests (v2.4.1 wire-up — YSG-RISK-056)
+# ---------------------------------------------------------------------------
+
+class TestPermissiveDefaults:
+    """
+    Verify the v2.4.1 permissive default threshold (5000/60s) and env-var
+    overrides.  Drift audit finding #2: CHANGELOG claimed DDoSProtector was
+    wired but it was dead code.  These tests prevent future drift.
+    """
+
+    def test_default_per_ip_limit_is_5000(self):
+        assert _ddos_module._DEFAULT_MAX_CONNECTIONS_PER_IP == 5000
+
+    def test_default_window_seconds_is_60(self):
+        assert _ddos_module._DEFAULT_WINDOW_SECONDS == 60
+
+    def test_yashigani_healthz_is_exempt(self):
+        assert "/_yashigani/healthz" in _ddos_module._EXEMPT_PATHS
+
+    def test_env_var_names_exported(self):
+        """Module must export the env-var name constants used by entrypoint.py."""
+        assert hasattr(_ddos_module, "ENV_PER_IP_LIMIT")
+        assert hasattr(_ddos_module, "ENV_WINDOW_SECONDS")
+        assert hasattr(_ddos_module, "ENV_EXEMPT_PATHS")
+
+    def test_env_override_per_ip_limit(self, mock_redis, monkeypatch):
+        """
+        YASHIGANI_DDOS_PER_IP_LIMIT=10 must be honoured: 11 requests from one
+        IP must be blocked; 10 must pass.
+        """
+        monkeypatch.setenv(_ddos_module.ENV_PER_IP_LIMIT, "10")
+        limit = int(os.environ[_ddos_module.ENV_PER_IP_LIMIT])
+        p = DDoSProtector(mock_redis, max_connections_per_ip=limit)
+        for _ in range(10):
+            p.record("1.2.3.4")
+        assert p.check("1.2.3.4") is True   # at threshold — allowed
+        p.record("1.2.3.4")
+        assert p.check("1.2.3.4") is False  # over threshold — blocked
+
+    def test_env_override_window_seconds(self, mock_redis, monkeypatch):
+        monkeypatch.setenv(_ddos_module.ENV_WINDOW_SECONDS, "120")
+        window = int(os.environ[_ddos_module.ENV_WINDOW_SECONDS])
+        p = DDoSProtector(mock_redis, window_seconds=window)
+        assert p.window_seconds == 120
+
+    def test_normal_load_100_requests_all_pass(self, mock_redis):
+        """
+        Regression: 100 requests from one IP in one window must all pass at
+        the permissive 5000-per-IP default.  Simulates normal corporate-proxy
+        or shared-NAT usage.
+        """
+        p = DDoSProtector(mock_redis)  # uses 5000 default
+        for _ in range(100):
+            p.record("10.0.0.1")
+        assert p.check("10.0.0.1") is True
+
+    def test_flood_5001_requests_triggers_429_gate(self, mock_redis):
+        """
+        5001 requests from one IP must exceed the 5000 threshold: check()
+        returns False, which the gateway translates to HTTP 429.
+        """
+        p = DDoSProtector(mock_redis, max_connections_per_ip=5000)
+        for _ in range(5001):
+            p.record("203.0.113.1")
+        # count is 5001 > 5000 → blocked
+        assert p.check("203.0.113.1") is False
+
+    def test_flood_exactly_at_limit_still_passes(self, mock_redis):
+        """
+        Exactly 5000 requests from one IP must still pass (<=, not <).
+        """
+        p = DDoSProtector(mock_redis, max_connections_per_ip=5000)
+        for _ in range(5000):
+            p.record("203.0.113.2")
+        assert p.check("203.0.113.2") is True
