@@ -659,17 +659,18 @@ class TestByoIntermediateValidation:
         with pytest.raises(RuntimeError, match="root cert not found"):
             bootstrap(paths)
 
-    def test_rsa_key_rejected(self, tmp_path, customer_pki):
-        """Yashigani's issuer only supports EC keys for leaf signing; RSA intermediate must be rejected."""
+    def test_rsa_key_accepted_v241(self, tmp_path, customer_pki):
+        """v2.24.1 RSA broadening: RSA ≥ 2048-bit intermediate keys are now accepted.
+        Previously this was rejected; this test documents the new behaviour.
+        Leaf keys remain EC P-256 — only the signing key changes."""
         root_key = customer_pki["root_key"]
         root_cert = customer_pki["root_cert"]
 
-        # Build an intermediate with an RSA key using a raw builder (not our helper, which uses EC)
         rsa_key = _gen_rsa_key(3072)
         now = _dt.datetime.now(_dt.timezone.utc)
         rsa_int_cert = (
             x509.CertificateBuilder()
-            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "RSA Intermediate")]))
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "RSA Intermediate CA")]))
             .issuer_name(root_cert.subject)
             .public_key(rsa_key.public_key())
             .serial_number(_serial())
@@ -693,6 +694,193 @@ class TestByoIntermediateValidation:
         cert_path.write_bytes(_pem_cert(rsa_int_cert))
         key_path.write_bytes(_pem_key(rsa_key))
 
-        paths = self._paths_for(tmp_path, cert_path, key_path)
-        with pytest.raises(RuntimeError, match="EC private key"):
+        paths = self._paths_for(
+            tmp_path, cert_path, key_path,
+            root_cert=customer_pki["root_cert_path"],
+        )
+        # Must NOT raise — RSA 3072 is accepted in v2.24.1+
+        result = bootstrap(paths)
+        assert set(result.keys()) == {"gateway", "backoffice"}
+
+        # Leaf must still be EC (leaf key generation unchanged)
+        leaf_bundle = paths.leaf_cert("gateway").read_bytes()
+        leaf = x509.load_pem_x509_certificates(leaf_bundle)[0]
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        assert isinstance(leaf.public_key(), _ec.EllipticCurvePublicKey), (
+            "Leaf key must remain EC even when intermediate is RSA"
+        )
+
+
+# ---------------------------------------------------------------------------
+# v2.24.1 — RSA BYO intermediate key tests (Iris BYO CA design memo #20)
+# ---------------------------------------------------------------------------
+
+class _RsaIntermediateFixtures:
+    """Shared helpers for RSA intermediate tests."""
+
+    @staticmethod
+    def _make_rsa_intermediate(
+        root_cert: x509.Certificate,
+        root_key,
+        rsa_key: rsa.RSAPrivateKey,
+        cn: str = "Customer RSA Intermediate CA",
+    ) -> x509.Certificate:
+        now = _dt.datetime.now(_dt.timezone.utc)
+        return (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
+            .issuer_name(root_cert.subject)
+            .public_key(rsa_key.public_key())
+            .serial_number(_serial())
+            .not_valid_before(now - _dt.timedelta(minutes=5))
+            .not_valid_after(now + _dt.timedelta(days=365))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True, content_commitment=False,
+                    key_encipherment=False, data_encipherment=False,
+                    key_agreement=False, key_cert_sign=True, crl_sign=True,
+                    encipher_only=False, decipher_only=False,
+                ),
+                critical=True,
+            )
+            .sign(root_key, hashes.SHA256())
+        )
+
+
+class TestByoRsaIntermediateAccepted(_RsaIntermediateFixtures):
+    """v2.24.1: RSA BYO intermediate keys (≥ 2048-bit) must be accepted."""
+
+    def test_rsa_2048_accepted(self, tmp_path, customer_pki):
+        """RSA 2048-bit — minimum acceptable key size — must succeed."""
+        rsa_key = _gen_rsa_key(2048)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa2048_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa2048_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        result = bootstrap(paths)
+        assert set(result.keys()) == {"gateway", "backoffice"}
+
+    def test_rsa_4096_accepted(self, tmp_path, customer_pki):
+        """RSA 4096-bit — enterprise-grade — must succeed."""
+        rsa_key = _gen_rsa_key(4096)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa4096_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa4096_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        result = bootstrap(paths)
+        assert "gateway" in result
+
+    def test_rsa_intermediate_leaf_still_ec(self, tmp_path, customer_pki):
+        """Leaf keys must remain EC P-256 even when the signing intermediate is RSA."""
+        rsa_key = _gen_rsa_key(3072)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        bootstrap(paths)
+
+        leaf_bundle = paths.leaf_cert("gateway").read_bytes()
+        leaf = x509.load_pem_x509_certificates(leaf_bundle)[0]
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        assert isinstance(leaf.public_key(), _ec.EllipticCurvePublicKey), (
+            "Leaf public key must be EC P-256 even when intermediate signing key is RSA"
+        )
+
+    def test_rsa_leaf_signed_by_rsa_intermediate(self, tmp_path, customer_pki):
+        """Leaf signature must cryptographically verify against the RSA intermediate."""
+        rsa_key = _gen_rsa_key(3072)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        bootstrap(paths)
+
+        leaf_bundle = paths.leaf_cert("gateway").read_bytes()
+        leaf = x509.load_pem_x509_certificates(leaf_bundle)[0]
+        leaf.verify_directly_issued_by(rsa_int_cert)  # raises on failure
+
+    def test_rsa_intermediate_rotate_leaves(self, tmp_path, customer_pki):
+        """rotate_leaves() must work after BYO bootstrap with an RSA intermediate."""
+        rsa_key = _gen_rsa_key(3072)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        bootstrap(paths)
+
+        leaf_before = paths.leaf_cert("gateway").read_bytes()
+        rotated = rotate_leaves(paths)
+        assert set(rotated) == {"gateway", "backoffice"}
+        leaf_after = paths.leaf_cert("gateway").read_bytes()
+        assert leaf_after != leaf_before
+
+        # New leaf still signed by RSA intermediate
+        new_leaf = x509.load_pem_x509_certificates(leaf_after)[0]
+        new_leaf.verify_directly_issued_by(rsa_int_cert)
+
+
+class TestByoRsaIntermediateRejected(_RsaIntermediateFixtures):
+    """v2.24.1: RSA keys below 2048-bit must be rejected."""
+
+    def test_rsa_1024_rejected(self, tmp_path, customer_pki):
+        """RSA 1024-bit is below the 2048-bit minimum and must be rejected."""
+        rsa_key = _gen_rsa_key(1024)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa1024_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa1024_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        with pytest.raises(RuntimeError, match="2048"):
+            bootstrap(paths)
+
+    def test_rsa_rejection_error_mentions_nist(self, tmp_path, customer_pki):
+        """Error message must reference NIST SP 800-57 for GRC traceability."""
+        rsa_key = _gen_rsa_key(1024)
+        rsa_int_cert = self._make_rsa_intermediate(
+            customer_pki["root_cert"], customer_pki["root_key"], rsa_key,
+        )
+        cert_path = _write(tmp_path / "rsa1024b_int.crt", _pem_cert(rsa_int_cert))
+        key_path = _write(tmp_path / "rsa1024b_int.key", _pem_key(rsa_key))
+
+        paths = _paths_from_manifest(
+            tmp_path,
+            _make_byo_manifest(cert_path, key_path, customer_pki["root_cert_path"]),
+        )
+        with pytest.raises(RuntimeError, match="NIST"):
             bootstrap(paths)

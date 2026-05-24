@@ -1,7 +1,7 @@
 """
 Yashigani internal PKI issuer — generates root, intermediate, and leaf certs.
 
-Last updated: 2026-05-23T00:00:00+01:00
+Last updated: 2026-05-24T00:00:00+01:00
 
 Invoked by:
   * install.sh bootstrap_internal_pki()  — first-install cert generation
@@ -52,7 +52,10 @@ from typing import Optional
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
+from cryptography.hazmat.primitives.asymmetric.types import (
+    CertificateIssuerPrivateKeyTypes,
+)
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 
 from yashigani.pki.identity import (
@@ -173,7 +176,8 @@ def _pem_cert(cert: x509.Certificate) -> bytes:
     return cert.public_bytes(serialization.Encoding.PEM)
 
 
-def _pem_key(key: ec.EllipticCurvePrivateKey) -> bytes:
+def _pem_key(key: "CertificateIssuerPrivateKeyTypes | ec.EllipticCurvePrivateKey") -> bytes:
+    """Serialise an EC or RSA private key to PKCS#8 PEM (unencrypted)."""
     return key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -181,11 +185,16 @@ def _pem_key(key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
-def _load_key(path: Path) -> ec.EllipticCurvePrivateKey:
+def _load_key(path: Path) -> CertificateIssuerPrivateKeyTypes:
+    """Load a PEM private key. Accepts EC or RSA keys (v2.24.1+ BYO RSA broadening).
+    Yashigani-generated intermediates are always EC; BYO intermediates may be RSA."""
     key = serialization.load_pem_private_key(path.read_bytes(), password=None)
-    if not isinstance(key, ec.EllipticCurvePrivateKey):
-        raise RuntimeError(f"{path} is not an EC private key")
-    return key
+    if not isinstance(key, (ec.EllipticCurvePrivateKey, rsa.RSAPrivateKey)):
+        raise RuntimeError(
+            f"{path} is not an EC or RSA private key — got {type(key).__name__!r}. "
+            "Only EC (P-256 / P-384 / P-521) and RSA (≥ 2048-bit) keys are supported."
+        )
+    return key  # type: ignore[return-value]
 
 
 def _load_cert(path: Path) -> x509.Certificate:
@@ -198,7 +207,7 @@ def _load_cert(path: Path) -> x509.Certificate:
 
 def _load_byo_intermediate(
     ca_source: "CASource",
-) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey, Optional[x509.Certificate]]:
+) -> tuple[x509.Certificate, CertificateIssuerPrivateKeyTypes, Optional[x509.Certificate]]:
     """Load and validate customer-supplied BYO intermediate CA material.
 
     Returns:
@@ -213,7 +222,8 @@ def _load_byo_intermediate(
       - All required paths must exist and be non-empty
       - Intermediate cert must carry basicConstraints CA:TRUE + keyUsage keyCertSign
       - Intermediate cert must be within its validity window (not expired, not future)
-      - Intermediate private key must be parseable as an EC key
+      - Intermediate private key must be parseable as an EC or RSA key (v2.24.1+: RSA ≥ 2048
+        accepted; EC P-256/P-384/P-521 accepted; other types rejected)
       - Key/cert must form a matching pair (verified via public-key comparison)
       - If root cert provided: root must carry basicConstraints CA:TRUE and intermediate
         must be directly issued by the root (cryptographic chain check)
@@ -303,13 +313,31 @@ def _load_byo_intermediate(
         raise RuntimeError(
             f"Cannot parse BYO intermediate key at {int_key_path}: {exc}"
         ) from exc
-    if not isinstance(raw_key, ec.EllipticCurvePrivateKey):
+    # v2.24.1 RSA broadening (Iris BYO CA design memo §3 + #20):
+    # Accept RSA keys with ≥ 2048-bit modulus in addition to EC keys.
+    # EC keys (P-256 / P-384 / P-521) are still preferred for new deployments.
+    # RSA acceptance is required for enterprise customers whose org PKI
+    # is RSA-based and whose root CA policy prohibits re-issuance of EC intermediates.
+    if isinstance(raw_key, ec.EllipticCurvePrivateKey):
+        # EC: any SECP curve is accepted (P-256 minimum by default in enterprise PKI).
+        int_key: CertificateIssuerPrivateKeyTypes = raw_key
+    elif isinstance(raw_key, rsa.RSAPrivateKey):
+        # RSA: require ≥ 2048-bit to meet minimum security requirement (NIST SP 800-57).
+        key_size = raw_key.key_size
+        if key_size < 2048:
+            raise RuntimeError(
+                f"BYO intermediate RSA key at {int_key_path} has a {key_size}-bit modulus. "
+                "A minimum of 2048 bits is required (NIST SP 800-57 / ASVS V6.2.5). "
+                "Provide a 2048-bit, 3072-bit, or 4096-bit RSA key."
+            )
+        int_key = raw_key
+    else:
+        key_type = type(raw_key).__name__
         raise RuntimeError(
-            f"BYO intermediate key at {int_key_path} is not an EC private key. "
-            "Yashigani requires EC keys for internal PKI leaf issuance. "
-            "Provide an EC P-256, P-384, or P-521 key."
+            f"BYO intermediate key at {int_key_path} is a {key_type!r} — "
+            "only EC (P-256 / P-384 / P-521) and RSA (≥ 2048-bit) keys are accepted. "
+            "Provide an EC or RSA private key in PKCS#8 PEM format."
         )
-    int_key: ec.EllipticCurvePrivateKey = raw_key
 
     # --- Key/cert pair match (public-key comparison) ---
     cert_pub = int_cert.public_key().public_bytes(
@@ -483,13 +511,15 @@ def build_intermediate(
 def build_leaf(
     service: ServiceIdentity,
     intermediate_cert: x509.Certificate,
-    intermediate_key: ec.EllipticCurvePrivateKey,
+    intermediate_key: "CertificateIssuerPrivateKeyTypes | ec.EllipticCurvePrivateKey",
     policy: CertPolicy,
     lifetime_days: Optional[int] = None,
     *,
     extra_dns_sans: Optional[list[str]] = None,
     extra_ip_sans: Optional[list[str]] = None,
 ) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
+    """Build a leaf cert. Leaf keys are always EC P-256; the intermediate signing
+    key may be EC or RSA (v2.24.1+ BYO RSA broadening)."""
     """Build a leaf cert.
 
     extra_dns_sans / extra_ip_sans — operator-supplied SANs injected for the
@@ -933,9 +963,12 @@ def rotate_intermediate(
         raise RuntimeError("Root CA missing — run bootstrap first.")
     manifest = load_manifest(str(paths.manifest_path))
     root_cert = _load_cert(paths.root_cert)
-    root_key = _load_key(paths.root_key)
+    # Yashigani-generated root keys are always EC — the broader return type of
+    # _load_key() covers BYO intermediates, but rotate_intermediate only runs
+    # when ca_root.key exists (written only in yashigani_generated mode).
+    root_key = _load_key(paths.root_key)  # type: ignore[assignment]
     int_cert, int_key = build_intermediate(
-        root_cert, root_key, manifest.cert_policy, intermediate_lifetime_days
+        root_cert, root_key, manifest.cert_policy, intermediate_lifetime_days  # type: ignore[arg-type]
     )
     _write_secret(paths.intermediate_cert, _pem_cert(int_cert), _FILE_MODE_CERT)
     _write_secret(paths.intermediate_key, _pem_key(int_key), _FILE_MODE_KEY)
