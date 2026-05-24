@@ -1,0 +1,13 @@
+apiVersion: 1
+# Grafana Unified Alerting provisioning — Yashigani alert rules.
+# Alert JSON files are mounted at /var/lib/grafana/alerts/.
+# YSG-RISK-058: per-user rate limit burst alert.
+
+contactPoints: []   # configured by operator (email/Slack/webhook via Grafana UI)
+muteTimes: []
+
+policies: []        # operator configures notification routing via Grafana UI
+
+# Alert rule files are picked up from the path below.
+# Each JSON file follows the Grafana provisioning format (apiVersion: 1 / groups[]).
+# See config/grafana/alerts/user-rate-limit-burst.json for the per-user alert.

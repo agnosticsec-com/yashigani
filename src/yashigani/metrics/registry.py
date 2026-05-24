@@ -116,7 +116,16 @@ inspection_model = _G(
 ratelimit_violations_total = _C(
     "yashigani_ratelimit_violations_total",
     "Rate limit violations by dimension.",
-    ["dimension"],  # global | ip | agent | session
+    ["dimension"],  # global | ip | agent | session | user
+)
+
+# Per-user rate limit violations — separate metric so Grafana alert rules can
+# target individual users without scanning the full violations_total series.
+# user_id_hash is SHA-256[:16] of the raw user identifier — never raw PII.
+user_ratelimit_violations_total = _C(
+    "yashigani_user_rate_limit_violations_total",
+    "Per-user rate limit violations. user_id_hash is SHA-256[:16] of the user identifier.",
+    ["user_id_hash"],
 )
 
 ratelimit_multiplier = _G(

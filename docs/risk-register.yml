@@ -1003,3 +1003,37 @@ risks:
     a risk needing compensating controls.
   documentation_pointer: docs/operator-guide.md (opt-in pairing recipe)
   source: changelog-vs-reality-drift-audit-20260524.md finding #4
+
+
+- id: YSG-RISK-058
+  description: >-
+    Per-user request rate limited at 100 RPS (200 burst) by default. On breach:
+    HTTP 429 + Retry-After header + audit event USER_RATE_LIMIT_EXCEEDED +
+    Prometheus metric yashigani_user_rate_limit_violations_total{user_id_hash="..."}
+    + Grafana alert rule (config/grafana/alerts/user-rate-limit-burst.json) +
+    Wazuh-routable admin alert via audit chain. Configurable via
+    YASHIGANI_RATE_LIMIT_PER_USER_RPS env var. Distinct from DDoSProtector (per-IP
+    coarse layer, YSG-RISK-056) — this is the per-authenticated-identity layer for
+    finer-grained throttling and operator observability. user_id hashed (SHA-256[:16])
+    in all metric labels and external-facing surfaces; full identifier stays in
+    admin-only audit chain.
+  severity: informational
+  controls_impacted:
+  - ASVS V11.1 (rate limiting)
+  - OWASP API4:2023 (Unrestricted Resource Consumption)
+  - SOC 2 CC6.1 (logical access security)
+  compensating_controls: []
+  status: accepted
+  accepted_by: Tiago
+  accepted_at: 2026-05-24
+  review_by: 2026-08-22
+  closure_evidence: null
+  last_threat_model_review: 2026-05-24
+  rationale: >-
+    Tiago 2026-05-24 — "put 100 requests per second per user that is reasonable
+    even for user with many agents" + "more than that throttle them down and alert
+    the admins". 100 RPS chosen so users operating many agents simultaneously stay
+    under threshold; sustained burst above triggers operator visibility via both
+    Prometheus/Grafana (always available) and Wazuh audit-event route (for customers
+    with configured SIEM alerting). Complements DDoSProtector per-IP layer
+    (YSG-RISK-056) — these are two distinct layers addressing different threat vectors.

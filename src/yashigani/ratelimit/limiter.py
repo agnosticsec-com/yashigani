@@ -1,7 +1,7 @@
 """
 Yashigani Rate Limiter — Adaptive token bucket, Redis-backed.
 
-Algorithm: token bucket per dimension (global / IP / agent / session).
+Algorithm: token bucket per dimension (global / IP / agent / session / user).
 Each bucket has capacity=burst and refills at rps tokens/second.
 Effective rps is multiplied by the RPI adaptive factor before each check.
 
@@ -10,6 +10,7 @@ Redis key schema:
     yashigani:rl:ip:<hashed_ip>
     yashigani:rl:agent:<agent_id>
     yashigani:rl:session:<session_id_prefix>
+    yashigani:rl:user:<hashed_user_id>
 
 Lua script executes atomically — no TOCTOU race between read and write.
 Returns HTTP 429 with Retry-After on violation.
@@ -21,7 +22,15 @@ Fail mode is controlled by the ``fail_mode`` field on RateLimitConfig
   open   (default) — Redis errors allow the request through.
   closed — Redis errors reject with a synthetic "redis_unavailable" result.
 
-Last updated: 2026-05-02T00:00:00+00:00
+Per-user rate limit:
+  Default 100 RPS / 200 burst (configurable via YASHIGANI_RATE_LIMIT_PER_USER_RPS).
+  Distinct from DDoSProtector (per-IP coarse layer) — this is the
+  per-authenticated-identity layer for finer-grained throttling + operator
+  observability.  Admin alert on breach via Prometheus metric
+  yashigani_user_rate_limit_violations_total{user_id_hash="..."} + audit
+  event USER_RATE_LIMIT_EXCEEDED (Wazuh-routable for push alerts).
+
+Last updated: 2026-05-24T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -116,10 +125,16 @@ class RateLimiter:
         client_ip: str,
         agent_id: str,
         session_id: str,
+        user_id: str = "",
     ) -> RateLimitResult:
         """
         Check all applicable dimensions. Returns the first violation found,
-        or an allowed result if all pass. Checks in order: global → IP → agent → session.
+        or an allowed result if all pass.
+        Checks in order: global → IP → agent → session → user.
+
+        The user dimension (per-authenticated-identity) runs last so the coarser
+        global/IP/agent/session gates catch flood first without burning user-bucket
+        tokens on shared infrastructure traffic.
         """
         if not self._config.enabled:
             return RateLimitResult(allowed=True, dimension="disabled", remaining=0, retry_after_ms=0)
@@ -142,11 +157,15 @@ class RateLimiter:
              cfg.per_agent_rps, cfg.per_agent_burst),
             ("session", f"yashigani:rl:session:{session_key}",
              session_rps, session_burst),
+            ("user",    f"yashigani:rl:user:{_hash(user_id)}",
+             cfg.per_user_rps, cfg.per_user_burst),
         ]
 
         for dimension, key, rps, burst in checks:
             # Skip unknown/anonymous dimensions — they fall through to global
             if dimension in ("agent", "session") and (not agent_id or not session_id):
+                continue
+            if dimension == "user" and not user_id:
                 continue
             result = self._consume(key, rps * multiplier, burst)
             if not result.allowed:

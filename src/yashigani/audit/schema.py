@@ -80,6 +80,10 @@ class EventType(str, Enum):
     # Gateway
     GATEWAY_REQUEST = "GATEWAY_REQUEST"
     RATE_LIMIT_VIOLATION = "RATE_LIMIT_VIOLATION"
+    # Per-user rate limit breach — emitted when the user dimension is violated.
+    # Distinct from RATE_LIMIT_VIOLATION (which covers global/IP/agent/session).
+    # Wazuh-routable admin alert via customer-configured ruleset.
+    USER_RATE_LIMIT_EXCEEDED = "USER_RATE_LIMIT_EXCEEDED"
     # RBAC
     RBAC_GROUP_CREATED = "RBAC_GROUP_CREATED"
     RBAC_GROUP_UPDATED = "RBAC_GROUP_UPDATED"
@@ -560,6 +564,35 @@ class RateLimitViolationEvent(AuditEvent):
     retry_after_ms: int = 0
     rpi_at_time: float = 0.0
     rpi_multiplier: float = 1.0
+
+
+@dataclass
+class UserRateLimitExceededEvent(AuditEvent):
+    """
+    Written when the per-user token bucket is exhausted.
+
+    Distinct from RateLimitViolationEvent — this event carries the
+    (hashed) user_id so it can be routed to admin alert channels via
+    Wazuh or equivalent SIEM.  user_id is SHA-256 truncated to 16 hex
+    chars — enough to correlate breaches without exposing PII in the
+    audit chain.
+
+    Admin alert path:
+      Wazuh rule matches event_type == USER_RATE_LIMIT_EXCEEDED → fires
+      configured alert (email/Slack/webhook) so operators see which
+      user is hammering the gateway.
+    """
+
+    event_type: str = EventType.USER_RATE_LIMIT_EXCEEDED
+    account_tier: str = AccountTier.SYSTEM
+    masking_applied: bool = True
+    request_id: str = ""
+    user_id_hash: str = ""           # SHA-256[:16] of raw user_id
+    rps_observed: float = 0.0        # approximate burst rate that triggered the limit
+    limit_rps: float = 0.0           # configured per_user_rps at time of breach
+    retry_after_ms: int = 0
+    agent_id: str = ""
+    session_id_prefix: str = ""
 
 
 @dataclass

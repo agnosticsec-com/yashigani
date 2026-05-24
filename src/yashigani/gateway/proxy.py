@@ -433,7 +433,7 @@ async def _proxy_request_body(
             except Exception as exc:
                 logger.debug("RBAC rate limit override lookup failed: %s", exc)
 
-        rl_result = rate_limiter.check(client_ip, agent_id_rl, session_id_rl)
+        rl_result = rate_limiter.check(client_ip, agent_id_rl, session_id_rl, user_email_rl)
         if not rl_result.allowed:
             retry_sec = max(1, rl_result.retry_after_ms // 1000)
             try:
@@ -441,6 +441,17 @@ async def _proxy_request_body(
                 ratelimit_violations_total.labels(dimension=rl_result.dimension).inc()
             except Exception:
                 logger.debug("proxy: metric increment failed for ratelimit_violations_total", exc_info=True)
+            # Per-user breach: increment dedicated metric + emit admin-alert audit event.
+            if rl_result.dimension == "user" and user_email_rl:
+                _admin_alert_user_rate_limit(
+                    audit_writer=state["audit_writer"],
+                    request_id=request_id,
+                    result=rl_result,
+                    user_id=user_email_rl,
+                    agent_id=agent_id_rl,
+                    session_id=session_id_rl,
+                    rate_limiter=rate_limiter,
+                )
             _audit_rate_limit(
                 audit_writer=state["audit_writer"],
                 request_id=request_id,
@@ -1075,6 +1086,56 @@ def _error_response(request_id: str, status_code: int, error_code: str) -> JSONR
         content={"error": error_code, "request_id": request_id},
         headers={"X-Yashigani-Request-Id": request_id},
     )
+
+
+def _admin_alert_user_rate_limit(
+    audit_writer,
+    request_id: str,
+    result,
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+    rate_limiter,
+) -> None:
+    """
+    Emit per-user rate limit breach signals:
+      1. Prometheus metric yashigani_user_rate_limit_violations_total{user_id_hash=...}
+         — in-stack monitoring; Grafana alert fires when this exceeds threshold.
+      2. Audit event USER_RATE_LIMIT_EXCEEDED — Wazuh-routable push alert for
+         customers with SIEM configured for outbound notification.
+
+    user_id is hashed (SHA-256[:16]) before appearing in any metric label or
+    external-facing surface.  The full user_id is included only in the audit
+    event body which is admin-only.
+    """
+    user_id_hash = hashlib.sha256(user_id.encode()).hexdigest()[:16]
+    # 1. Prometheus — hashed label, safe for public metric scrape
+    try:
+        from yashigani.metrics.registry import user_ratelimit_violations_total
+        user_ratelimit_violations_total.labels(user_id_hash=user_id_hash).inc()
+    except Exception:
+        logger.debug("proxy: metric increment failed for user_ratelimit_violations_total", exc_info=True)
+
+    # 2. Audit event — full user_id stays in admin-only audit chain
+    if audit_writer is None:
+        return
+    try:
+        from yashigani.audit.schema import UserRateLimitExceededEvent
+        cfg = rate_limiter.current_config() if rate_limiter is not None else None
+        limit_rps = cfg.per_user_rps if cfg is not None else 0.0
+        event = UserRateLimitExceededEvent(
+            request_id=request_id,
+            user_id_hash=user_id_hash,
+            rps_observed=0.0,   # token bucket does not expose instantaneous rate;
+                                # 0.0 signals "bucket exhausted" without a precise reading
+            limit_rps=limit_rps,
+            retry_after_ms=result.retry_after_ms,
+            agent_id=agent_id,
+            session_id_prefix=session_id[:8] if session_id else "",
+        )
+        audit_writer.write(event)
+    except Exception as exc:
+        logger.error("Failed to write user rate limit admin alert audit event: %s", exc)
 
 
 def _audit_rate_limit(

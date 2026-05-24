@@ -123,6 +123,28 @@ def _build_app(mesh_mode: bool = False):
     # Rate limiter — Redis DB 2
     _rl_fail_mode = cast(Literal["open", "closed"], resolve_rate_limit_fail_mode())
     logger.info("Rate limiter fail mode: %s", _rl_fail_mode)
+    # Per-user rate limit — configurable via YASHIGANI_RATE_LIMIT_PER_USER_RPS.
+    # Default 100 RPS / 200 burst (generous for a user running many agents).
+    _per_user_rps_raw = os.environ.get("YASHIGANI_RATE_LIMIT_PER_USER_RPS", "")
+    _per_user_rps: float = 100.0
+    if _per_user_rps_raw.strip():
+        try:
+            _per_user_rps = float(_per_user_rps_raw.strip())
+            if _per_user_rps <= 0:
+                raise ValueError("must be positive")
+        except ValueError:
+            logger.warning(
+                "YASHIGANI_RATE_LIMIT_PER_USER_RPS=%r is invalid; defaulting to 100.0",
+                _per_user_rps_raw,
+            )
+            _per_user_rps = 100.0
+    _per_user_burst: int = max(1, int(_per_user_rps * 2))  # burst = 2× rps
+    logger.info(
+        "Per-user rate limit: %.1f RPS / %d burst (source=%s)",
+        _per_user_rps,
+        _per_user_burst,
+        "env" if _per_user_rps_raw.strip() else "default",
+    )
     rate_limiter = None
     try:
         import redis as _redis
@@ -130,7 +152,11 @@ def _build_app(mesh_mode: bool = False):
         redis_client_rl.ping()
         rate_limiter = RateLimiter(
             redis_client=redis_client_rl,
-            config=RateLimitConfig(fail_mode=_rl_fail_mode),
+            config=RateLimitConfig(
+                fail_mode=_rl_fail_mode,
+                per_user_rps=_per_user_rps,
+                per_user_burst=_per_user_burst,
+            ),
             resource_monitor=resource_monitor,
         )
     except Exception as exc:

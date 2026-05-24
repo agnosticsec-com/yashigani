@@ -1,5 +1,6 @@
 <!-- last-updated: 2026-05-20T16:30:00+00:00 (v2.23.4: backfill v2.23.3 fasttext→sklearn swap entry under [v2.23.3] § Changed; sweep current-tense FastText refs in Architecture.md / README.md / AI_ASSETS.md to scikit-learn) -->
 <!-- last-updated: 2026-05-17T00:00:00+01:00 (v2.23.4: openapi-reenable — auth-gated Swagger UI + API reference docs) -->
+<!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: per-user 100 RPS rate limit + admin alert via Prometheus + audit event USER_RATE_LIMIT_EXCEEDED) -->
 <!-- last-updated: 2026-05-24T00:00:00+00:00 (v2.24.1: DDoSProtector wire-up + license-scaled per-IP defaults) -->
 <!-- last-updated: 2026-05-16T18:30:00+01:00 (v2.23.4: draft [Unreleased] entry covering 62 commits since v2.23.3) -->
 <!-- last-updated: 2026-05-15T16:10:00+01:00 (docs: remove docs/release-notes/ cross-references — internal release-engineering tree moved out of repo — v2.23.4) -->
@@ -17,6 +18,32 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 ---
 
 ## [Unreleased] — v2.24.1
+
+### Added
+- **Per-user rate limit — 100 RPS / 200 burst** (YSG-RISK-058, Tiago 2026-05-24):
+  new `user` dimension added to `RateLimiter.check()`. When an authenticated user
+  (identified via `x-yashigani-user-id` header set by Caddy `forward_auth`) exceeds
+  100 requests/second (burst 200), the gateway returns HTTP 429 + `Retry-After`
+  header. Configurable via `YASHIGANI_RATE_LIMIT_PER_USER_RPS` env var; burst is
+  automatically 2× the configured RPS.
+
+  On breach, two admin alert signals fire simultaneously:
+  1. **Prometheus metric** `yashigani_user_rate_limit_violations_total{user_id_hash="<sha256[:16]>"}`
+     — in-stack monitoring. Grafana alert rule at
+     `config/grafana/alerts/user-rate-limit-burst.json` fires when a user accumulates
+     more than 5 breaches in a 5-minute window (2-minute `for:` period).
+  2. **Audit event** `USER_RATE_LIMIT_EXCEEDED` — emitted to the audit chain with
+     the full (admin-only) user identifier. Wazuh customers can route this event type
+     to email/Slack/webhook via their configured ruleset.
+
+  `user_id` is hashed (SHA-256, 16-char hex prefix) in ALL metric labels and
+  external-facing surfaces. Full identifier only in the admin-only audit chain.
+
+  Distinct from DDoSProtector per-IP layer (YSG-RISK-056) — these are two
+  complementary mechanisms: DDoS = coarse flood protection at IP layer;
+  per-user = per-authenticated-identity throttle + operator observability.
+
+  Redis key: `yashigani:rl:user:<hashed_user_id>` (DB 2, same namespace as other RL buckets).
 
 ### Fixed
 - **DDoSProtector wire-up** (CHANGELOG drift audit finding #2): `DDoSProtector` was

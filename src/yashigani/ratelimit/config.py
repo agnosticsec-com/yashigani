@@ -3,7 +3,7 @@ Yashigani Rate Limit — Configuration dataclass.
 All limits are admin-configurable at runtime via the backoffice API.
 Defaults are conservative enough for a single-node deployment.
 
-Last updated: 2026-05-02T00:00:00+00:00
+Last updated: 2026-05-24T00:00:00+00:00
 """
 from __future__ import annotations
 
@@ -58,6 +58,13 @@ class RateLimitConfig:
     # ── Per session token (hashed) ───────────────────────────────────────────
     per_session_rps: float = 20.0
     per_session_burst: int = 10
+
+    # ── Per authenticated user (hashed user_id / email) ──────────────────────
+    # 100 RPS is generous enough for a user running many agents simultaneously.
+    # Configurable via YASHIGANI_RATE_LIMIT_PER_USER_RPS.
+    # Burst of 200 allows short spikes; average is capped at 100/sec.
+    per_user_rps: float = 100.0
+    per_user_burst: int = 200
 
     # ── Adaptive RPI multiplier thresholds ───────────────────────────────────
     rpi_scale_medium: float = 0.80    # RPI 0.30–0.60
