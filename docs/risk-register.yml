@@ -557,7 +557,7 @@ risks:
       + data (documented exception: TLS sidecar only, cannot resolve langflow/openclaw).
       Chained-agent feature (@Scout→@Julietta→@qwen per CHANGELOG:735) preserved:
       calls route openclaw→gateway→letta via OPENAI_API_BASE, not direct bridge."
-    commit: PENDING_SHA
+    commit: 4d19647
     test: testing_runs/captain_ua10_isolation_20260524/
   - rationale: "K8s NetworkPolicy (Helm): per-agent ingress policies (allow-langflow-ingress,
       allow-letta-ingress, allow-openclaw-ingress) restrict inbound to gateway-only
@@ -566,7 +566,7 @@ risks:
       policy extended with agent dispatch ports (7860/8283/18789). Agent-to-agent
       egress hits default-deny-egress. helm lint PASS, helm template renders all 6
       new NetworkPolicy objects."
-    commit: PENDING_SHA
+    commit: 4d19647
     test: testing_runs/captain_ua10_isolation_20260524/helm-lint.log
   last_threat_model_review: 2026-05-24
   source_grep: internal-docs/yashigani/synthesis-v241-agent-infrastructure-council.md:36-47
