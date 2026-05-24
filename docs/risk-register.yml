@@ -1192,7 +1192,7 @@ risks:
         NetworkPolicy restricting Caddy external egress to :443/:80 for ACME/OCSP.
         allow-caddy-egress gains grafana:3443 and prometheus:9090 entries (previously
         missing — would have caused 502 on obs-plane proxying in K8s).
-      commit: TBD
+      commit: c838004
       evidence_dir: /Users/max/Documents/Claude/testing_runs/captain_caddy_egress_20260525/
   last_threat_model_review: 2026-05-25
   trade_off_note: >-
