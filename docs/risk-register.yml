@@ -1483,3 +1483,44 @@ risks:
       Full suite 2896 passed / 0 failed.
   fix_in_version: v2.24.3
   last_threat_model_review: '2026-05-25'
+
+- id: YSG-RISK-072
+  description: >-
+    BUG-C838004-CADDY-COPY: docker/caddy/Dockerfile.caddy contained a COPY
+    directive with the path 'caddy/caddy-entrypoint.sh'. The docker-compose.yml
+    caddy service sets build.context: .. (repo root, parent of docker/). COPY
+    paths resolve relative to the build context, so the correct path is
+    'docker/caddy/caddy-entrypoint.sh'. The file does not exist at
+    <repo-root>/caddy/caddy-entrypoint.sh. This caused ALL Podman-based
+    installs (Mac/Podman + Linux/VM/Podman) to fail at the Caddy build step
+    with "no such file or directory". No containers started. Full release gate
+    was blocked. Bug introduced in commit c838004 (Caddy egress restrictions,
+    v2.24.1). Detected by Ava release gate v2.24.3. Not a security issue —
+    correctness/availability bug (100% install failure on Podman).
+  severity: low
+  controls_impacted:
+  - Availability — all Podman installs broken from c838004 introduction
+  compensating_controls:
+  - Docker Engine and K8s/Helm installs were not affected (different build
+    toolchain path; Docker Engine on the same compose file would surface the
+    same error but Docker Desktop was not accessible in the Ava gate run).
+  - The existing test_caddy_egress_hardening.py (43 tests) covered YAML/entrypoint
+    content but not Dockerfile build path correctness — a gap now closed by
+    tests/contracts/test_caddy_dockerfile_build_paths.py (9 tests, YSG-RISK-072).
+  status: mitigated
+  closure_evidence:
+  - commit: TBD_BUG_C838004_FIX
+    rationale: >-
+      COPY path corrected from 'caddy/caddy-entrypoint.sh' to
+      'docker/caddy/caddy-entrypoint.sh' in docker/caddy/Dockerfile.caddy.
+      Build comment updated to clarify build.context is repo root (not docker/).
+      Contract test suite tests/contracts/test_caddy_dockerfile_build_paths.py
+      added (9 tests): asserts all COPY sources exist relative to repo root,
+      entrypoint uses docker/caddy/ prefix, compose context is .., compose
+      dockerfile key matches, entrypoint file exists, and broken path does not
+      exist (regression proof). Tests PASS against fix, FAIL against broken
+      path (2 failures confirmed). podman build succeeds against fixed file;
+      podman build with broken path exits 125 with identical "no such file"
+      error to Ava gate evidence. Full static suite clean.
+  fix_in_version: v2.24.3
+  last_threat_model_review: '2026-05-25'

@@ -13,7 +13,8 @@
 # This is semantically equivalent to legacy iptables for our use case —
 # OUTPUT table rules, state matching, LOG target — all work correctly.
 #
-# Build context: docker/
+# Build context: .. (repo root — docker-compose.yml caddy service sets context: ..)
+# COPY paths in this Dockerfile are relative to the repo root, NOT to docker/.
 # Build command (automated via docker-compose.yml build block):
 #   docker compose build caddy
 
@@ -31,7 +32,7 @@ RUN apk add --no-cache \
 # process, then drops (or we can override entrypoint as root, exec caddy as 1000).
 # Caddy 2.x Docker image uses USER 0 at startup to bind :80/:443 with
 # NET_BIND_SERVICE, then drops privileges internally. Entrypoint runs as root.
-COPY caddy/caddy-entrypoint.sh /usr/local/bin/caddy-entrypoint.sh
+COPY docker/caddy/caddy-entrypoint.sh /usr/local/bin/caddy-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/caddy-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/caddy-entrypoint.sh"]
