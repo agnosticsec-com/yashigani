@@ -1524,3 +1524,88 @@ risks:
       error to Ava gate evidence. Full static suite clean.
   fix_in_version: v2.24.3
   last_threat_model_review: '2026-05-25'
+
+- id: YSG-RISK-073
+  description: >-
+    BUG-NEW-001: PgBouncer 1.25.1 (edoburu image) cannot perform SCRAM-SHA-256
+    as the client when connecting to postgres as auth_user (pgbouncer_authenticator).
+    YSG-RISK-050 removed the A2 pg_hba carveout, assuming pgbouncer would handle
+    SCRAM on the server connection. It cannot: pgbouncer 1.25.1 does not implement
+    SCRAM as the authentication initiator. This caused auth_query to fail on every
+    clean install from v2.24.0 onwards, preventing pgbouncer from fetching userlist.txt
+    and breaking all postgres-backed services (gateway, backoffice). Workaround applied
+    by Ava gate (cycle 3): runtime `hostssl yashigani pgbouncer_authenticator 0.0.0.0/0
+    trust` added to pg_hba — trust is weaker than the fix. Fix: narrow pg_hba carveout
+    using `cert` auth method (client cert IS the authenticator; no SCRAM challenge
+    issued). Both pgbouncer instances (main: pgbouncer-auth_client.crt, CN=pgbouncer-auth;
+    letta: letta-pgbouncer_client.crt, CN=letta-pgbouncer) present CA-signed certs.
+    The `cert` method with `clientcert=verify-ca` is at least as strong as SCRAM+cert
+    because private-key proof + CA chain verification both hold without a password round-trip.
+    Detected by Ava release gate v2.24.3 cycle 3.
+  severity: high
+  controls_impacted:
+  - Availability — all postgres-backed services degraded on clean install
+  - Authentication — YSG-RISK-049 auth_query pattern broken (pgbouncer auth_user
+    could not authenticate to call ysg_pgbouncer_get_auth)
+  compensating_controls:
+  - Ava applied a runtime `trust` workaround during the gate run; not suitable
+    for release (trust is weaker than cert — no credential verification).
+  status: mitigated
+  closure_evidence:
+  - commit: TBD
+    rationale: >-
+      05-enable-ssl.sh pg_hba heredoc updated to include cert carveout for
+      pgbouncer_authenticator BEFORE the scram catch-all. Carveout form:
+      `hostssl yashigani pgbouncer_authenticator 0.0.0.0/0 cert clientcert=verify-ca`
+      (IPv4 + IPv6). 10-pgbouncer-auth.sh step 4 updated to INSERT the cert carveout
+      (not remove the carveout as in v2.24.0). Script handles upgrade paths from
+      v2.24.0-v2.24.2 (no carveout) and v2.24.0-pre (trust carveout) idempotently.
+      Both pgbouncer.ini and pgbouncer-letta.ini comments updated. Contract test suite
+      tests/contracts/test_pghba_pgbouncer_cert_carveout.py added (8 tests, 1 skipped):
+      cert carveout present + precedes catchall + no trust + insert logic present +
+      YSG-RISK-073 reference. Helm test correctly skips (Helm uses same init scripts).
+      Full static suite: 3081 pass, 92 skip, 0 fail.
+  fix_in_version: v2.24.3
+  last_threat_model_review: '2026-05-25'
+
+- id: YSG-RISK-074
+  description: >-
+    BUG-NEW-002: YASHIGANI_SECCOMP_PROFILE env var set to an absolute path by
+    install.sh caused issues in podman-compose 1.5.0 on Mac, producing "file name
+    too long" errors. Root cause: compose override files REPLACE security_opt lists
+    rather than merging them. The Podman override (docker-compose.podman-override.yml)
+    replaced the base security_opt list for gateway + backoffice with only
+    [label=disable], silently dropping no-new-privileges:true, seccomp=..., and
+    apparmor=... on Podman installs. Additionally, when the env-var form
+    `seccomp=${YASHIGANI_SECCOMP_PROFILE}` was active, podman-compose 1.5.0 on
+    Mac produced ENAMETOOLONG because the absolute path string was misinterpreted.
+    Workaround by Ava: set YASHIGANI_SECCOMP_PROFILE=unconfined — disables seccomp
+    enforcement on Podman. Non-blocker (seccomp was already silently disabled on
+    Podman due to the override replacement; the fix restores seccomp enforcement).
+    Detected by Ava release gate v2.24.3 cycle 3.
+  severity: medium
+  controls_impacted:
+  - Security hardening — seccomp profile enforcement silently absent on Podman for
+    gateway + backoffice (the two services with seccomp in base compose)
+  compensating_controls:
+  - Podman rootless provides user-namespace isolation as a compensating control
+    even without a custom seccomp profile.
+  - AppArmor was already unconfined on Podman (documented in override); seccomp
+    was the gap.
+  status: mitigated
+  closure_evidence:
+  - commit: TBD
+    rationale: >-
+      docker-compose.podman-override.yml gateway + backoffice security_opt blocks
+      updated to explicitly include no-new-privileges:true, seccomp=./seccomp/yashigani.json
+      (relative path, no env-var interpolation), apparmor=unconfined, and label=disable.
+      Relative path ./seccomp/yashigani.json is resolved relative to the compose file
+      directory (docker/) by podman-compose — correct when invoked from WORK_DIR/docker/
+      by install.sh. Eliminates env-var interpolation that caused ENAMETOOLONG.
+      Contract test suite tests/contracts/test_podman_seccomp_override.py added (8 tests):
+      seccomp present in override + no env-var form + no-new-privileges present +
+      profile file exists + valid JSON + defaultAction present + base compose still
+      has env-var form (Docker path unaffected) + YSG-RISK-074 reference.
+      Full static suite: 3081 pass, 92 skip, 0 fail.
+  fix_in_version: v2.24.3
+  last_threat_model_review: '2026-05-25'

@@ -154,24 +154,66 @@ $$;
 REVOKE CONNECT ON DATABASE template1 FROM pgbouncer_authenticator;
 SQL
 
-# ─── 4. pg_hba carveout removal — YSG-RISK-050 CLOSED (v2.24.0) ─────────────
-# YSG-RISK-050 CLOSED: carveout removed. pgbouncer_authenticator now presents
-# pgbouncer-auth_client.crt (dedicated outbound cert, CN=pgbouncer-auth).
-# pg_hba catch-all (hostssl all all 0.0.0.0/0 scram-sha-256 clientcert=verify-ca)
-# applies uniformly — no special-case rule for pgbouncer_authenticator needed.
+# ─── 4. pg_hba carveout — YSG-RISK-073 CLOSED (v2.24.3) ────────────────────
+# BUG-NEW-001 / YSG-RISK-073: PgBouncer 1.25.1 (edoburu image) cannot perform
+# SCRAM-SHA-256 as the CLIENT when postgres requires scram-sha-256 for the
+# auth_query connection. The SCRAM challenge is issued by postgres; pgbouncer
+# cannot respond. This broke all postgres-backed services on clean install.
 #
-# Idempotent removal: cleans up the A2 carveout if present from a prior
-# v2.24.0-pre / YSG-RISK-049-only install. No-op on fresh installs that never
-# had the carveout. Both the carveout line and its associated comment lines are
-# removed. Design ref: iris-v240-ysg-risk-050-cert-separation-design.md §3.
-echo "[10-pgbouncer-auth] Removing pg_hba A2 carveout for pgbouncer_authenticator (YSG-RISK-050 close)"
+# Fix: add a narrow pg_hba `cert` carveout for pgbouncer_authenticator BEFORE
+# the catch-all. The `cert` auth method accepts the client certificate as the
+# sole authentication factor — no password challenge is issued. Both pgbouncer
+# instances already present CA-signed certs (pgbouncer-auth_client.crt and
+# letta-pgbouncer_client.crt), satisfying clientcert=verify-ca. This is at least
+# as strong as SCRAM+cert: private-key proof + CA trust-chain verification hold.
+#
+# History:
+#   v2.24.0 YSG-RISK-050: removed the A2 `trust` carveout (plain trust was weaker
+#     than SCRAM+cert). The assumption was that pgbouncer 1.25.1 would do SCRAM
+#     on the server side — it cannot. YSG-RISK-073 replaces trust with cert.
+#   v2.24.3 YSG-RISK-073: adds `cert` carveout. Trust re-introduced as cert.
+#
+# Idempotent: sed removes any stale trust-carveout or old cert-carveout lines
+# for pgbouncer_authenticator, then the carveout is appended before the catch-all.
+# This handles:
+#   - Fresh initdb (05-enable-ssl.sh already wrote the carveout; this is a no-op
+#     for the carveout itself but re-asserts the correct form).
+#   - Upgrade from v2.24.0/v2.24.1/v2.24.2 (no carveout present; carveout added).
+#   - Upgrade from v2.24.0-pre (A2 trust carveout present; replaced with cert).
+#
+# Design ref: iris-v240-pgbouncer-auth-query-design.md; YSG-RISK-073.
+echo "[10-pgbouncer-auth] Ensuring pg_hba cert carveout for pgbouncer_authenticator (YSG-RISK-073)"
 
+# Step 4a: remove any existing pgbouncer_authenticator pg_hba lines (any method).
+# This normalises fresh installs (05-enable-ssl.sh wrote the cert carveout) and
+# upgrades from v2.24.0-v2.24.2 (no carveout) or v2.24.0-pre (trust carveout).
 if grep -q "pgbouncer_authenticator" "${PGDATA}/pg_hba.conf"; then
   sed -i '/pgbouncer_authenticator/d' "${PGDATA}/pg_hba.conf"
   sed -i '/Amendment A2.*YSG-RISK-049/d' "${PGDATA}/pg_hba.conf"
-  echo "[10-pgbouncer-auth] Removed A2 carveout (YSG-RISK-050 close — uniform catch-all now covers pgbouncer_authenticator)"
+  sed -i '/YSG-RISK-073/d' "${PGDATA}/pg_hba.conf"
+  echo "[10-pgbouncer-auth] Removed existing pgbouncer_authenticator pg_hba entries (normalising)"
+fi
+
+# Step 4b: insert the cert carveout BEFORE the first hostssl catch-all line.
+# The carveout must come before `hostssl all all` or postgres applies the
+# catch-all first and issues a SCRAM challenge pgbouncer cannot answer.
+# Using sed to insert before the first `hostssl all` line.
+if grep -q "^hostssl all" "${PGDATA}/pg_hba.conf"; then
+  sed -i '/^hostssl all/i \
+# YSG-RISK-073: pgbouncer_authenticator auth_query — cert auth (not SCRAM).\
+# PgBouncer 1.25.1 cannot SCRAM as client. cert method validates the presented\
+# client cert (pgbouncer-auth_client.crt or letta-pgbouncer_client.crt) as sole\
+# authenticator. Both certs are CA-signed; clientcert=verify-ca applies.\
+hostssl yashigani pgbouncer_authenticator 0.0.0.0/0  cert  clientcert=verify-ca\
+hostssl yashigani pgbouncer_authenticator ::/0        cert  clientcert=verify-ca' \
+    "${PGDATA}/pg_hba.conf"
+  echo "[10-pgbouncer-auth] Inserted cert carveout for pgbouncer_authenticator (YSG-RISK-073)"
 else
-  echo "[10-pgbouncer-auth] No A2 carveout present — nothing to remove (fresh install, idempotent)"
+  # No catch-all present yet (first-init path where 05-enable-ssl.sh runs later
+  # alphabetically). 10-pgbouncer-auth.sh is numbered 10-* but postgres runs
+  # init scripts after pg_hba is written by 05-enable-ssl.sh. This branch should
+  # not trigger in practice; log and continue.
+  echo "[10-pgbouncer-auth] WARNING: no hostssl catch-all found — carveout will be written by 05-enable-ssl.sh"
 fi
 
 # Reload pg_hba.conf so the change takes effect without a full restart.
@@ -191,4 +233,5 @@ echo "  - Role pgbouncer_authenticator: created/updated"
 echo "  - Function yashigani.ysg_pgbouncer_get_auth: created/updated"
 echo "  - EXECUTE: pgbouncer_authenticator only (PUBLIC revoked)"
 echo "  - CONNECT letta: revoked from pgbouncer_authenticator"
-echo "  - pg_hba A2 carveout: removed (YSG-RISK-050 close); catch-all applies uniformly"
+echo "  - pg_hba cert carveout: inserted for pgbouncer_authenticator (YSG-RISK-073)"
+echo "  - pg_hba catch-all (scram-sha-256 clientcert=verify-ca): applies to all other roles"

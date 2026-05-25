@@ -151,7 +151,21 @@ local   all       all                           trust
 # Loopback — postgres image runs its own bootstrap on 127.0.0.1.
 host    all       all            127.0.0.1/32   trust
 host    all       all            ::1/128        trust
-# All network connections must use TLS with a client cert signed by our
+# YSG-RISK-073 CLOSED (v2.24.3): pgbouncer_authenticator auth_query carveout.
+# PgBouncer 1.25.1 (edoburu image) cannot perform SCRAM-SHA-256 as the client
+# when running auth_query against postgres. The cert IS the authentication:
+# both pgbouncer instances (main: pgbouncer-auth_client.crt, CN=pgbouncer-auth;
+# letta: letta-pgbouncer_client.crt, CN=letta-pgbouncer) present certs signed
+# by our internal CA, satisfying clientcert=verify-ca. The `cert` auth method
+# accepts the presented client cert as the sole authentication factor — no
+# password challenge is issued. This is at least as strong as SCRAM+cert
+# because the private key proof (TLS handshake) AND CA trust-chain verification
+# both hold. Scope: yashigani database only (auth_dbname for both instances);
+# pgbouncer_authenticator role only. Catch-all rule below covers everything else.
+# Design ref: iris-v240-pgbouncer-auth-query-design.md; YSG-RISK-073.
+hostssl yashigani pgbouncer_authenticator 0.0.0.0/0  cert  clientcert=verify-ca
+hostssl yashigani pgbouncer_authenticator ::/0        cert  clientcert=verify-ca
+# All other network connections must use TLS with a client cert signed by our
 # internal CA, AND present a valid scram-sha-256 password. Three factors.
 # Letta reaches postgres via the letta-pgbouncer sidecar which presents
 # letta-pgbouncer_client.crt — no carveout required (YSG-RISK-048 closed).

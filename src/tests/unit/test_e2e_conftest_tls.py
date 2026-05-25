@@ -52,9 +52,15 @@ class TestResolveCaCert:
     def test_docker_secrets_path_used_when_exists(self, tmp_path, monkeypatch):
         """docker/secrets/ca_root.crt is used when it exists."""
         monkeypatch.delenv("YASHIGANI_CA_CERT", raising=False)
-        # Create a fake ca_root.crt at the expected repo-relative location
-        # We patch Path.exists to return True only for the docker/secrets path
-        docker_secrets_path = Path(__file__).parents[4] / "docker" / "secrets" / "ca_root.crt"
+        # Create a fake ca_root.crt at the expected repo-relative location.
+        # parents[3] = repo root (BUG-FIX-001, Ava cycle 3: conftest.py corrected
+        # from parents[4] to parents[3]; this unit test mirrors that correction).
+        # Path: src/tests/unit/test_e2e_conftest_tls.py
+        #   parents[0] = unit/
+        #   parents[1] = tests/
+        #   parents[2] = src/
+        #   parents[3] = repo root
+        docker_secrets_path = Path(__file__).parents[3] / "docker" / "secrets" / "ca_root.crt"
 
         def _exists(self) -> bool:
             return str(self) == str(docker_secrets_path)
