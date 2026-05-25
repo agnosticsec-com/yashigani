@@ -1532,7 +1532,7 @@ risks:
     rationale: 'Cycle 4 (BROKEN): 05-enable-ssl.sh heredoc added `cert clientcert=verify-ca` carveout for pgbouncer_authenticator.
       Broken by BUG-C4-001 (PG16 syntax: cert method only accepts verify-full; postgres crash-loops) and BUG-C4-002
       (duplicate carveout: 05-enable-ssl.sh + 10-pgbouncer-auth.sh both wrote it). This commit is the broken state.'
-  - commit: PENDING-CYCLE5
+  - commit: 9b606ec
     rationale: 'Cycle 5 (CLOSED): BUG-C4-001/BUG-C4-002 fixed. Carveout form changed from cert to trust+clientcert:
       `hostssl yashigani pgbouncer_authenticator 0.0.0.0/0 trust clientcert=verify-ca` (IPv4 + IPv6). Single source
       of truth: 10-pgbouncer-auth.sh only (05-enable-ssl.sh no longer writes carveout — BUG-C4-002 fix). awk
