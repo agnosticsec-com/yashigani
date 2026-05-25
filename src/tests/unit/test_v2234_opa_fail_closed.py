@@ -409,3 +409,118 @@ class TestAnonymousCallerRejected:
         assert identity is not None
         assert identity["identity_id"] == "internal"
         assert identity["kind"] == "service"
+
+
+# ---------------------------------------------------------------------------
+# LAURA-V243-001 — OPA undefined result (empty {"result": {}}) → fail-closed
+# ---------------------------------------------------------------------------
+
+class TestOpaUndefinedResultFailClosed:
+    """
+    LAURA-V243-001 (YSG-RISK-071): If OPA returns HTTP 200 with body
+    {"result": {}} (undefined rule — bundle mismatch or partially-loaded
+    bundle), the absent "allow" key must default to False (DENY), not True
+    (ALLOW).
+
+    Scenario: OPA is reachable and returns 200, but the response_decision
+    package rule is undefined (e.g. bundle not fully loaded for this path).
+    Before the fix both `result.get("allow", True)` sites in
+    openai_router.py resolved to allow=True, silently letting the response
+    through regardless of sensitivity ceiling.
+
+    Closes LAURA-V243-001 / YSG-RISK-071.
+    """
+
+    def _make_async_client_mock(self, post_return=None):
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=post_return)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_client)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    @pytest.mark.asyncio
+    async def test_opa_response_undefined_result_fails_closed(self):
+        """
+        OPA returns HTTP 200 with body {"result": {}} (undefined rule).
+        _opa_response_check must return allow=False (fail-closed).
+
+        LAURA-V243-001 regression guard: before the fix this returned
+        allow=True because result.get("allow", True) defaulted to True.
+        """
+        from yashigani.gateway import openai_router as _mod
+        _reset_router_state()
+        _mod._state.opa_url = "https://policy:8181"
+
+        # OPA returns 200 but result dict is empty — undefined rule
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"result": {}}
+        cm = self._make_async_client_mock(post_return=mock_resp)
+
+        with patch("yashigani.gateway.openai_router.internal_httpx_client", return_value=cm):
+            result = await _mod._opa_response_check(
+                identity={"identity_id": "alice", "sensitivity_ceiling": "PUBLIC"},
+                response_sensitivity="RESTRICTED",
+                response_verdict="clean",
+                pii_detected=False,
+            )
+
+        assert result["allow"] is False, (
+            "LAURA-V243-001 regression: OPA undefined result must default to DENY. "
+            "Got allow=True — the True→False default fix in openai_router.py is missing."
+        )
+
+    @pytest.mark.asyncio
+    async def test_opa_response_no_result_key_fails_closed(self):
+        """
+        OPA returns HTTP 200 with body {} (result key entirely absent).
+        _opa_response_check must return allow=False (fail-closed).
+        """
+        from yashigani.gateway import openai_router as _mod
+        _reset_router_state()
+        _mod._state.opa_url = "https://policy:8181"
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {}
+        cm = self._make_async_client_mock(post_return=mock_resp)
+
+        with patch("yashigani.gateway.openai_router.internal_httpx_client", return_value=cm):
+            result = await _mod._opa_response_check(
+                identity={"identity_id": "alice", "sensitivity_ceiling": "PUBLIC"},
+                response_sensitivity="RESTRICTED",
+                response_verdict="clean",
+                pii_detected=False,
+            )
+
+        assert result["allow"] is False, (
+            "LAURA-V243-001 regression: absent result key must default to DENY."
+        )
+
+    @pytest.mark.asyncio
+    async def test_opa_response_explicit_allow_true_still_passes(self):
+        """
+        OPA returns HTTP 200 with explicit allow: True — must still pass.
+        Regression guard: the True→False default fix must not break normal operation.
+        """
+        from yashigani.gateway import openai_router as _mod
+        _reset_router_state()
+        _mod._state.opa_url = "https://policy:8181"
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"result": {"allow": True, "reason": "ok"}}
+        cm = self._make_async_client_mock(post_return=mock_resp)
+
+        with patch("yashigani.gateway.openai_router.internal_httpx_client", return_value=cm):
+            result = await _mod._opa_response_check(
+                identity={"identity_id": "alice", "sensitivity_ceiling": "PUBLIC"},
+                response_sensitivity="PUBLIC",
+                response_verdict="clean",
+                pii_detected=False,
+            )
+
+        assert result["allow"] is True, (
+            "Normal OPA allow=True must still pass after the True→False default fix."
+        )

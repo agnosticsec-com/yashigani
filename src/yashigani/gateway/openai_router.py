@@ -1271,7 +1271,10 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             response_verdict=response_verdict,
             pii_detected=pii_detected_on_response,
         )
-        if not resp_opa.get("allow", True):
+        # Fail-closed (False default): an absent "allow" key means OPA returned an
+        # undefined result (e.g. bundle partially loaded). Treat as DENY per
+        # v2.23.4 fail-closed posture — closes LAURA-V243-001 / YSG-RISK-071.
+        if not resp_opa.get("allow", False):
             resp_opa_reason = resp_opa.get("reason", "response_policy_denied")
             logger.warning(
                 "OPA BLOCKED response delivery: identity=%s sensitivity=%s reason=%s",
@@ -1801,7 +1804,12 @@ async def _opa_response_check(
             resp.raise_for_status()
             result = resp.json().get("result", {})
             return {
-                "allow": bool(result.get("allow", True)),
+                # Fail-closed (False default): if OPA returns HTTP 200 with body
+                # {"result": {}} (undefined rule — bundle mismatch or partial load),
+                # the absent "allow" key must resolve to DENY, not ALLOW. The Rego
+                # rule always sets allow explicitly in normal operation so this has
+                # no impact when OPA is healthy. Closes LAURA-V243-001 / YSG-RISK-071.
+                "allow": bool(result.get("allow", False)),
                 "reason": result.get("reason", "ok"),
             }
     except Exception as exc:

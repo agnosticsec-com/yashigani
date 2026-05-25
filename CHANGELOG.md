@@ -30,7 +30,9 @@ For full release narratives, design rationale, and per-feature detail, see [`REA
 
 ## [Unreleased] — v2.24.3
 
-(Entries accrue here as in-flight work lands post-v2.24.2.)
+### Fixed
+- **fix(opa): default OPA response_decision result to False (fail-closed) — closes Laura release-gate finding LAURA-V243-001 / YSG-RISK-071.** Two call sites in `openai_router.py` (lines 1274, 1804) had `result.get("allow", True)` — an absent "allow" key (OPA bundle mismatch / partial load returning `{"result": {}}`) resolved to ALLOW. Both defaults flipped to `False` (DENY). No operational impact when OPA is healthy; Rego always sets `allow` explicitly. Three unit tests added to `TestOpaUndefinedResultFailClosed` in `src/tests/unit/test_v2234_opa_fail_closed.py`. Aligns with v2.23.4 fail-closed posture (ASVS V14.5 / NIST SP 800-53 SC-7).
+- **fix(tests): correct comment-line parser bug in `test_uninstall_volume_cleanup.py::test_no_phantom_volumes_in_canonical_list` — closes Laura release-gate finding LAURA-V243-002.** The `_parse_canonical_volumes` helper split the `_CANONICAL_VOLUMES` bash array on whitespace before filtering `#` tokens, causing words from inline bash comments (e.g. `# docker-compose.wazuh.yml volumes — missing from original list`) to be mistakenly added as volume names and trigger a false-positive phantom-volume failure. Fix: process line-by-line, dropping whole-line comments before token extraction. No production impact; test now correctly PASS.
 
 ---
 

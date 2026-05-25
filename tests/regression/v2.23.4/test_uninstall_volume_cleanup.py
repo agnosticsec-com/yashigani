@@ -101,14 +101,27 @@ def _parse_canonical_volumes(text: str) -> list[str]:
         "Could not find _CANONICAL_VOLUMES=(...) array in uninstall.sh — "
         "the UNINSTALL-LEAVES-VOLUMES (#8) fix is missing."
     )
-    # Items are whitespace-separated bare words (one per line, possibly with
-    # leading/trailing whitespace or comments)
+    # Items are one bare word per line, possibly with leading whitespace and
+    # whole-line or inline comments.
+    #
+    # LAURA-V243-002 fix: process line-by-line FIRST so that whole-line bash
+    # comments (e.g. "  # docker-compose.wazuh.yml volumes — …") are dropped
+    # before any token splitting.  The naïve re.split(r'[\s\n]+') approach
+    # splits "# docker-compose.wazuh.yml volumes …" into multiple tokens of
+    # which only "#" starts with "#"; the subsequent words were incorrectly
+    # added as volume names.
     raw = m.group(1)
     items: list[str] = []
-    for token in re.split(r"[\s\n]+", raw.strip()):
-        token = token.strip()
-        if token and not token.startswith("#"):
-            items.append(token)
+    for line in raw.splitlines():
+        stripped = line.strip()
+        # Skip blank lines and whole-line comments.
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Inline comment: keep only the part before the first "#".
+        if "#" in stripped:
+            stripped = stripped[:stripped.index("#")].strip()
+        if stripped:
+            items.append(stripped)
     return items
 
 

@@ -1449,3 +1449,35 @@ risks:
       regression.'
   fix_in_version: v2.24.1
   last_threat_model_review: '2026-05-25'
+
+- id: YSG-RISK-071
+  description: >-
+    OPA response_decision result default was True (allow) — contradicted
+    fail-closed posture established v2.23.4. Two locations in openai_router.py
+    (lines 1274, 1804): result.get("allow", True) resolved to allow=True when
+    OPA returned HTTP 200 with body {"result": {}} (undefined rule — bundle
+    mismatch or partially-loaded bundle). Exploitable only under OPA bundle
+    degradation; not reachable in normal operation because Rego always sets
+    allow explicitly. Fixed by flipping both defaults to False. Closes
+    Laura release-gate v2.24.3 finding LAURA-V243-001.
+  severity: low
+  controls_impacted:
+  - ASVS V14.5 (gateway authorisation fail-closed)
+  - NIST SP 800-53 SC-7 (boundary protection fail-closed)
+  compensating_controls:
+  - The Rego rule response_decision under package yashigani.v1 has
+    "default response_allowed := true" and always produces a non-empty result
+    in normal operation. The undefined-result path only occurs if the OPA
+    bundle is in a degraded or partially-loaded state.
+  - OPA exception path (timeout, connection refused, 5xx) was already
+    fail-closed as of v2.23.4. This fix closes the softer degraded-bundle gap.
+  status: mitigated
+  closure_evidence:
+  - commit: TBD
+    rationale: >-
+      Default flipped True → False at both call sites in openai_router.py.
+      Three unit tests added to TestOpaUndefinedResultFailClosed in
+      src/tests/unit/test_v2234_opa_fail_closed.py: undefined-result DENY,
+      absent-result-key DENY, explicit-allow-True still passes.
+  fix_in_version: v2.24.3
+  last_threat_model_review: '2026-05-25'
