@@ -1599,7 +1599,7 @@ risks:
   - langflow and letta unaffected (e4f38f8 fixed those; they use env vars not JSON config).
   status: mitigated
   closure_evidence:
-  - commit: TBD
+  - commit: 2ec90d1
     rationale: 'docker/openclaw/openclaw.json baseUrl changed from http://gateway:8080/v1 to http://gateway:8081/v1.
       helm/yashigani/values.yaml OPENCLAW_UPSTREAM_URL changed from http://yashigani-gateway:8080 to
       http://yashigani-gateway:8081. Contract test extended: TestOpenclawJsonConfig (4 tests) +
