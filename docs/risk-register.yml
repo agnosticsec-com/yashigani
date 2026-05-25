@@ -455,8 +455,8 @@ risks:
   closure_evidence:
   - rationale: 'pgbouncer-auth gains dedicated cert; pg_hba A2 carveout removed; catch-all clientcert=verify-ca
       uniform across the cluster. EXCEPTION: cert+pg_ident carveout for pgbouncer_authenticator role (YSG-RISK-073
-      cycle 7) — see YSG-RISK-073. pg_hba `cert map=pgb-auth-map` BEFORE catch-all; role+database+CN scoped.
-      cert method: verify-full (chain + CN) via pg_ident pgb-auth-map. Stronger than original trust+clientcert.'
+      cycle 7) — see YSG-RISK-073. pg_hba `cert map=pgb-auth-map` BEFORE catch-all; role+database+CN scoped. cert
+      method: verify-full (chain + CN) via pg_ident pgb-auth-map. Stronger than original trust+clientcert.'
     commits:
     - af9fdcd
     - f6a3bbf
@@ -1508,15 +1508,15 @@ risks:
   description: 'BUG-NEW-001: PgBouncer 1.25.1 (edoburu image) auth_user→postgres authentication failure — multi-cycle
     fix history. Root cause: YSG-RISK-050 removed the A2 pg_hba carveout for pgbouncer_authenticator assuming pgbouncer
     would SCRAM. Cycle 3: `cert clientcert=verify-ca` — broken (PG16 syntax + CN mismatch). Cycle 4: cert committed,
-    still broken. Cycle 5: `trust clientcert=verify-ca` — PG16-valid but SINGLE-FACTOR (Laura cycle 5 confirmed full
-    attack chain: any CA-cert holder on `data` network → pgbouncer_authenticator → ysg_pgbouncer_get_auth → full DB;
-    see YSG-RISK-075). Cycle 6: `scram-sha-256 clientcert=verify-ca` — TWO-FACTOR RESTORED but broken on ARM64/Mac
-    Podman due to pgbouncer 1.25.1 SCRAM client-side computation bug (YSG-RISK-077). Cycle 7: `cert map=pgb-auth-map`
+    still broken. Cycle 5: `trust clientcert=verify-ca` — PG16-valid but SINGLE-FACTOR (Laura cycle 5 confirmed
+    full attack chain: any CA-cert holder on `data` network → pgbouncer_authenticator → ysg_pgbouncer_get_auth →
+    full DB; see YSG-RISK-075). Cycle 6: `scram-sha-256 clientcert=verify-ca` — TWO-FACTOR RESTORED but broken on
+    ARM64/Mac Podman due to pgbouncer 1.25.1 SCRAM client-side computation bug (YSG-RISK-077). Cycle 7: `cert map=pgb-auth-map`
     — FINAL CLOSE. PG16 cert method (implies verify-full) + pg_ident CN mapping. Avoids SCRAM computation entirely.
     Stronger than cycle 5 (verify-full + CN-specific vs verify-ca only) and cycle 6 (no SCRAM bug, platform-independent).
-    Live test on Mac/Podman ARM64: postgres log "connection authenticated: identity=CN=pgbouncer-auth,O=Agnostic Security
-    method=cert". YSG-RISK-075 CLOSED via CN-specific pg_ident map (only CN=pgbouncer-auth and CN=letta-pgbouncer map
-    to pgbouncer_authenticator — 11 other data-network cert holders cannot impersonate).'
+    Live test on Mac/Podman ARM64: postgres log "connection authenticated: identity=CN=pgbouncer-auth,O=Agnostic
+    Security method=cert". YSG-RISK-075 CLOSED via CN-specific pg_ident map (only CN=pgbouncer-auth and CN=letta-pgbouncer
+    map to pgbouncer_authenticator — 11 other data-network cert holders cannot impersonate).'
   severity: high
   controls_impacted:
   - Availability — all postgres-backed services degraded on clean install (original bug)
@@ -1524,8 +1524,8 @@ risks:
   - Authentication — one-factor degradation under cycle 5 trust carveout (YSG-RISK-075)
   compensating_controls:
   - Ava applied a runtime `trust` workaround during the gate run (cycle 3); not suitable for release.
-  - pgbouncer_authenticator role is NOSUPERUSER NOINHERIT with EXECUTE only on ysg_pgbouncer_get_auth —
-    limits blast radius (but does not close the lateral-pivot; YSG-RISK-075).
+  - pgbouncer_authenticator role is NOSUPERUSER NOINHERIT with EXECUTE only on ysg_pgbouncer_get_auth — limits blast
+    radius (but does not close the lateral-pivot; YSG-RISK-075).
   status: closed
   closure_evidence:
   - commit: 7f296a1
@@ -1538,20 +1538,25 @@ risks:
       Cycle 5 is NOT the closed state — superseded by cycle 6.'
   - commit: 4729d8d
     rationale: 'Cycle 6 (INTERMEDIATE — platform-specific SCRAM bug): Carveout changed to `scram-sha-256 clientcert=verify-ca`.
-      Broke on Mac/Podman ARM64 due to pgbouncer 1.25.1 SCRAM client-side computation bug (YSG-RISK-077). The cycle 6
-      live test was on Linux VM only (10.89.7.x Podman network) — not Mac Podman (10.89.0.x). Platform gap confirmed
+      Broke on Mac/Podman ARM64 due to pgbouncer 1.25.1 SCRAM client-side computation bug (YSG-RISK-077). The cycle
+      6 live test was on Linux VM only (10.89.7.x Podman network) — not Mac Podman (10.89.0.x). Platform gap confirmed
       by Ava release gate cycle 7 FATAL error. Superseded by cycle 7.'
   - rationale: 'Cycle 7 (CLOSED): BUG-C7-001 fix. Carveout changed to `cert map=pgb-auth-map` in docker/postgres/10-pgbouncer-auth.sh
       and helm/yashigani/files/10-pgbouncer-auth.sh. cert method: PG16 implies verify-full. pg_ident map pgb-auth-map
       maps CN=pgbouncer-auth → pgbouncer_authenticator (main pgbouncer) and CN=letta-pgbouncer → pgbouncer_authenticator
-      (letta sidecar). No SCRAM computation — avoids YSG-RISK-077 platform bug. Security analysis: stronger than cycle 6
-      (verify-full + CN-specific pg_ident vs verify-ca + password-that-was-broken). Live test on Mac/Podman ARM64
-      (FULL PRODUCTION install, 13/13 complete): postgres log "connection authenticated: identity=CN=pgbouncer-auth,O=Agnostic
-      Security method=cert (/var/lib/postgresql/data/pg_hba.conf:16)". Backoffice /login 200 OK via Caddy.
-      yashigani_app: method=scram-sha-256 (catch-all, unaffected). No FATAL errors. YSG-RISK-075 CLOSED (CN-specific
-      pg_ident map; only the two named CNs can impersonate). Evidence: testing_runs/captain_bug_c7_001_scram_fix_20260525/.'
+      (letta sidecar). No SCRAM computation — avoids YSG-RISK-077 platform bug. Security analysis: stronger than
+      cycle 6 (verify-full + CN-specific pg_ident vs verify-ca + password-that-was-broken). Live test on Mac/Podman
+      ARM64 (FULL PRODUCTION install, 13/13 complete): postgres log "connection authenticated: identity=CN=pgbouncer-auth,O=Agnostic
+      Security method=cert (/var/lib/postgresql/data/pg_hba.conf:16)". Backoffice /login 200 OK via Caddy. yashigani_app:
+      method=scram-sha-256 (catch-all, unaffected). No FATAL errors. YSG-RISK-075 CLOSED (CN-specific pg_ident map;
+      only the two named CNs can impersonate). Evidence: testing_runs/captain_bug_c7_001_scram_fix_20260525/.'
+  - commit: 542e800
+    rationale: Cycle 8 — Captain pivoted SCRAM → cert+pg_ident.conf map (option β per Laura cycle 5 brief) after
+      edoburu pgbouncer 1.25.1 ARM64 SASL client bug surfaced on Mac/Podman (YSG-RISK-077). Cross-platform; Mac/Podman
+      ARM64 full production install 13/13 PASS. Lateral-pivot from compromised CA-cert holder still blocked via
+      CN map.
   fix_in_version: v2.24.3
-  last_threat_model_review: '2026-05-25'
+  last_threat_model_review: 2026-05-25
 - id: YSG-RISK-074
   description: 'BUG-NEW-002: YASHIGANI_SECCOMP_PROFILE env var set to an absolute path by install.sh caused issues
     in podman-compose 1.5.0 on Mac, producing "file name too long" errors. Root cause: compose override files REPLACE
@@ -1588,15 +1593,15 @@ risks:
 - id: YSG-RISK-076
   description: 'openclaw.json baseUrl and Helm OPENCLAW_UPSTREAM_URL referenced gateway:8080 (mTLS-only port) instead
     of gateway:8081 (plain-HTTP mesh port). openclaw runs with cap_drop:[ALL] and no client-cert mount (PROBE-AG1
-    hardening, 2026-05-24). Every LLM inference call via the @openclaw dispatch path silently fails with a TLS
-    handshake error — the mTLS listener requires a mutual-TLS client cert that openclaw cannot present. The bug is
-    the same class as BUG-V241-LANGFLOW-LETTA-BASE-URL (e4f38f8) but was missed by the original sweep because the
-    BUG-V241 fix only grepped env vars; openclaw stores its gateway URL in a JSON config file
-    (docker/openclaw/openclaw.json), not an env var. Two fix sites: (1) docker/openclaw/openclaw.json baseUrl field
-    — compose path; (2) helm/yashigani/values.yaml OPENCLAW_UPSTREAM_URL — K8s path. No security boundary crossed
-    (openclaw is still ring-fenced behind Caddy); the impact is availability: all openclaw agent dispatch is broken
-    until corrected. Regression guard: TestOpenclawJsonConfig + test_helm_openclaw_upstream_url_uses_mesh_port
-    (tests/contracts/test_agent_base_url_port.py) assert all gateway URLs in JSON config and Helm env vars use :8081.'
+    hardening, 2026-05-24). Every LLM inference call via the @openclaw dispatch path silently fails with a TLS handshake
+    error — the mTLS listener requires a mutual-TLS client cert that openclaw cannot present. The bug is the same
+    class as BUG-V241-LANGFLOW-LETTA-BASE-URL (e4f38f8) but was missed by the original sweep because the BUG-V241
+    fix only grepped env vars; openclaw stores its gateway URL in a JSON config file (docker/openclaw/openclaw.json),
+    not an env var. Two fix sites: (1) docker/openclaw/openclaw.json baseUrl field — compose path; (2) helm/yashigani/values.yaml
+    OPENCLAW_UPSTREAM_URL — K8s path. No security boundary crossed (openclaw is still ring-fenced behind Caddy);
+    the impact is availability: all openclaw agent dispatch is broken until corrected. Regression guard: TestOpenclawJsonConfig
+    + test_helm_openclaw_upstream_url_uses_mesh_port (tests/contracts/test_agent_base_url_port.py) assert all gateway
+    URLs in JSON config and Helm env vars use :8081.'
   severity: medium
   controls_impacted:
   - Availability — all openclaw LLM inference silently fails (TLS handshake error on :8080 with no client cert)
@@ -1608,14 +1613,12 @@ risks:
   closure_evidence:
   - commit: 2ec90d1
     rationale: 'docker/openclaw/openclaw.json baseUrl changed from http://gateway:8080/v1 to http://gateway:8081/v1.
-      helm/yashigani/values.yaml OPENCLAW_UPSTREAM_URL changed from http://yashigani-gateway:8080 to
-      http://yashigani-gateway:8081. Contract test extended: TestOpenclawJsonConfig (4 tests) +
-      test_helm_openclaw_upstream_url_uses_mesh_port — 12 tests total PASS. Pre-fix simulation confirmed
-      test_openclaw_json_base_url_port and test_openclaw_json_no_gateway_mtls_port_anywhere FAIL against
-      original gateway:8080 value. Detected by Ava cycle 5 (kill-signal mid-flight finding).'
+      helm/yashigani/values.yaml OPENCLAW_UPSTREAM_URL changed from http://yashigani-gateway:8080 to http://yashigani-gateway:8081.
+      Contract test extended: TestOpenclawJsonConfig (4 tests) + test_helm_openclaw_upstream_url_uses_mesh_port
+      — 12 tests total PASS. Pre-fix simulation confirmed test_openclaw_json_base_url_port and test_openclaw_json_no_gateway_mtls_port_anywhere
+      FAIL against original gateway:8080 value. Detected by Ava cycle 5 (kill-signal mid-flight finding).'
   fix_in_version: v2.24.3
   last_threat_model_review: '2026-05-25'
-
 - id: YSG-RISK-075
   description: 'Trust auth without CN binding is insufficient when multiple containers hold valid CA-signed certs.
     `trust clientcert=verify-ca` for pgbouncer_authenticator is a confirmed HIGH security gap. With `trust`, postgres
@@ -1635,37 +1638,37 @@ risks:
   - Confidentiality — full yashigani DB accessible (all tenant data, audit logs, RBAC)
   - Integrity — attacker with yashigani_app credentials can modify/erase audit log
   compensating_controls:
-  - pgbouncer_authenticator role is NOSUPERUSER NOINHERIT with EXECUTE only on ysg_pgbouncer_get_auth
-    and CONNECT only to yashigani DB. Blast radius limited to reading pg_shadow entries via
-    the auth function — does not grant general superuser or direct table access.
-  - SCRAM verifier retrieval requires a further SCRAM replay attack or offline dictionary attack to
-    become usable credentials — adds cost but does not block a motivated attacker.
+  - pgbouncer_authenticator role is NOSUPERUSER NOINHERIT with EXECUTE only on ysg_pgbouncer_get_auth and CONNECT
+    only to yashigani DB. Blast radius limited to reading pg_shadow entries via the auth function — does not grant
+    general superuser or direct table access.
+  - SCRAM verifier retrieval requires a further SCRAM replay attack or offline dictionary attack to become usable
+    credentials — adds cost but does not block a motivated attacker.
   status: closed
   closure_evidence:
   - commit: 4729d8d
-    rationale: 'Cycle 6 (INTERMEDIATE): pg_hba carveout changed to `scram-sha-256 clientcert=verify-ca`. Two-factor auth
-      (cert + password) breaks the lateral-pivot for cert-only attackers. However, cycle 6 broke on ARM64/Mac Podman
-      due to YSG-RISK-077 SCRAM computation bug — superseded by cycle 7.'
+    rationale: 'Cycle 6 (INTERMEDIATE): pg_hba carveout changed to `scram-sha-256 clientcert=verify-ca`. Two-factor
+      auth (cert + password) breaks the lateral-pivot for cert-only attackers. However, cycle 6 broke on ARM64/Mac
+      Podman due to YSG-RISK-077 SCRAM computation bug — superseded by cycle 7.'
   - rationale: 'Cycle 7 (STRONGER CLOSE — BUG-C7-001 fix): cert method + pg_ident CN map. Attack chain analysis:
-      cert method implies verify-full — CN must match pg_ident map exactly. pg_ident map restricts to ONLY
-      CN=pgbouncer-auth (main pgbouncer) and CN=letta-pgbouncer (letta sidecar). All 11 other data-network cert
-      holders (gateway, backoffice, open-webui, otel-collector, etc.) have DIFFERENT CNs — none can impersonate
-      pgbouncer_authenticator. The cycle 5 attack chain (any CA-cert holder asserts role pgbouncer_authenticator
-      and postgres trusts it) is definitively closed: postgres checks CN via pg_ident before granting access.
-      An attacker needs the PRIVATE KEY of pgbouncer-auth_client.crt or letta-pgbouncer_client.crt specifically
-      (not just any CA-signed cert). These private keys are mounted EXCLUSIVELY to their respective pgbouncer
-      containers — not shared with any other service. Evidence: testing_runs/captain_bug_c7_001_scram_fix_20260525/.'
+      cert method implies verify-full — CN must match pg_ident map exactly. pg_ident map restricts to ONLY CN=pgbouncer-auth
+      (main pgbouncer) and CN=letta-pgbouncer (letta sidecar). All 11 other data-network cert holders (gateway,
+      backoffice, open-webui, otel-collector, etc.) have DIFFERENT CNs — none can impersonate pgbouncer_authenticator.
+      The cycle 5 attack chain (any CA-cert holder asserts role pgbouncer_authenticator and postgres trusts it)
+      is definitively closed: postgres checks CN via pg_ident before granting access. An attacker needs the PRIVATE
+      KEY of pgbouncer-auth_client.crt or letta-pgbouncer_client.crt specifically (not just any CA-signed cert).
+      These private keys are mounted EXCLUSIVELY to their respective pgbouncer containers — not shared with any
+      other service. Evidence: testing_runs/captain_bug_c7_001_scram_fix_20260525/.'
   fix_in_version: v2.24.3
   last_threat_model_review: '2026-05-25'
 - id: YSG-RISK-077
-  description: 'BUG-C7-001: pgbouncer 1.25.1 (edoburu image) has a SCRAM-SHA-256 client-side computation bug on ARM64
-    Linux. When acting as SASL client (auth_user authenticating to postgres), it computes incorrect SCRAM proofs —
-    confirmed by verbose debug logging: pgbouncer sends c-proof that does not match the expected RFC 5802 SCRAM-SHA-256
-    computation from the correct cleartext password. Affects all ARM64 container runtimes: Mac Podman (ARM64 Lima/QEMU
-    VM), K8s ARM64 nodes. Cycle 6 live test "PASS" was on Linux VM Podman (10.89.7.x network) — confirmed by IP
-    addresses in postgres logs. Mac Podman uses 10.89.0.x network. The cycle 6 test environment did not match the
-    production environment for ARM64 platforms. Root cause is likely a byte-ordering issue in pgbouncer 1.25.1 ARM64
-    SCRAM HMAC computation. Not reported upstream as of 2026-05-25.'
+  description: 'BUG-C7-001: pgbouncer 1.25.1 (edoburu image) has a SCRAM-SHA-256 client-side computation bug on
+    ARM64 Linux. When acting as SASL client (auth_user authenticating to postgres), it computes incorrect SCRAM
+    proofs — confirmed by verbose debug logging: pgbouncer sends c-proof that does not match the expected RFC 5802
+    SCRAM-SHA-256 computation from the correct cleartext password. Affects all ARM64 container runtimes: Mac Podman
+    (ARM64 Lima/QEMU VM), K8s ARM64 nodes. Cycle 6 live test "PASS" was on Linux VM Podman (10.89.7.x network) —
+    confirmed by IP addresses in postgres logs. Mac Podman uses 10.89.0.x network. The cycle 6 test environment
+    did not match the production environment for ARM64 platforms. Root cause is likely a byte-ordering issue in
+    pgbouncer 1.25.1 ARM64 SCRAM HMAC computation. Not reported upstream as of 2026-05-25.'
   severity: medium
   controls_impacted:
   - Availability — pgbouncer_authenticator cannot authenticate to postgres on ARM64; all services fail to start
@@ -1677,10 +1680,10 @@ risks:
   closure_evidence:
   - rationale: 'BUG-C7-001 fix (cycle 7): changed auth_user auth method from scram-sha-256+clientcert to cert+pg_ident.
       cert method requires pgbouncer to present its TLS client cert (pgbouncer-auth_client.crt, CN=pgbouncer-auth)
-      during the TLS handshake — no SCRAM computation required. postgres verifies chain via ca_root.crt + maps
-      CN to pgbouncer_authenticator via pg_ident pgb-auth-map. Platform-independent: TLS handshake is handled
-      by OpenSSL (libssl), not pgbouncer SCRAM code. Live test on Mac Podman ARM64 (FULL PRODUCTION install, 13/13
-      complete): postgres log "connection authenticated: identity=CN=pgbouncer-auth,O=Agnostic Security method=cert".
-      Backoffice /login 200 OK. No FATAL errors. Evidence: testing_runs/captain_bug_c7_001_scram_fix_20260525/.'
+      during the TLS handshake — no SCRAM computation required. postgres verifies chain via ca_root.crt + maps CN
+      to pgbouncer_authenticator via pg_ident pgb-auth-map. Platform-independent: TLS handshake is handled by OpenSSL
+      (libssl), not pgbouncer SCRAM code. Live test on Mac Podman ARM64 (FULL PRODUCTION install, 13/13 complete):
+      postgres log "connection authenticated: identity=CN=pgbouncer-auth,O=Agnostic Security method=cert". Backoffice
+      /login 200 OK. No FATAL errors. Evidence: testing_runs/captain_bug_c7_001_scram_fix_20260525/.'
   fix_in_version: v2.24.3
   last_threat_model_review: '2026-05-25'
