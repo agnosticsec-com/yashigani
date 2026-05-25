@@ -1439,7 +1439,7 @@ risks:
   accepted_at: '2026-05-25'
   review_by: '2026-11-25'
   closure_evidence:
-  - commit: TBD
+  - commit: 7f296a1
     rationale: 'KubernetesBackend implemented in src/yashigani/pool/backend.py. RBAC: helm/yashigani/templates/rbac-pool-manager.yaml
       (Role + RoleBinding, pods CRUD only, namespace-scoped, guarded by poolManager.k8sBackend.enabled). NetworkPolicy:
       three new rules in networkpolicy.yaml within the poolManager.k8sBackend.enabled guard: allow-pool-managed-pod-ingress
@@ -1552,7 +1552,7 @@ risks:
     for release (trust is weaker than cert — no credential verification).
   status: mitigated
   closure_evidence:
-  - commit: TBD
+  - commit: 7f296a1
     rationale: >-
       05-enable-ssl.sh pg_hba heredoc updated to include cert carveout for
       pgbouncer_authenticator BEFORE the scram catch-all. Carveout form:
@@ -1594,7 +1594,7 @@ risks:
     was the gap.
   status: mitigated
   closure_evidence:
-  - commit: TBD
+  - commit: 7f296a1
     rationale: >-
       docker-compose.podman-override.yml gateway + backoffice security_opt blocks
       updated to explicitly include no-new-privileges:true, seccomp=./seccomp/yashigani.json
