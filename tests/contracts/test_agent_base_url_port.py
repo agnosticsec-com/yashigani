@@ -2,22 +2,23 @@
 Agent OPENAI_API_BASE port contract (BUG-V241-LANGFLOW-LETTA-BASE-URL regression gate).
 
 Static contract: asserts that every agent bundle that calls back to the gateway
-(langflow, letta) routes through the plain-HTTP mesh port (8081), NOT the
-mTLS-only port (8080).
+(langflow, letta, openclaw) routes through the plain-HTTP mesh port (8081), NOT
+the mTLS-only port (8080).
 
 Background
 ----------
 Gateway exposes two listeners:
   :8080 — full mTLS (ssl.CERT_REQUIRED); requires client cert on every connection.
   :8081 — plain HTTP; protected by network isolation (langflow_isolated /
-           letta_isolated bridges, Docker internal networks).
+           letta_isolated / openclaw_isolated bridges, Docker internal networks).
 
-Langflow and letta run with cap_drop:[ALL] and mount no client certs — they
-cannot complete a TLS handshake with :8080.  They MUST use :8081.
+Langflow, letta, and openclaw run with cap_drop:[ALL] and mount no client certs
+— they cannot complete a TLS handshake with :8080.  They MUST use :8081.
 
-Open WebUI was fixed to use :8081 in v2.23.4.  Langflow and letta still had
-:8080 in the compose file at the time BUG-V241-LANGFLOW-LETTA-BASE-URL was
-discovered (2026-05-24).
+Open WebUI was fixed to use :8081 in v2.23.4.  Langflow and letta were fixed
+by e4f38f8.  Openclaw was missed because its gateway URL is in a JSON config
+file (openclaw.json), not an env var — Ava cycle 5 discovered it (BUG-V241-
+OPENCLAW-EXTENDED, 2026-05-25).
 
 These tests:
   - FAIL against docker-compose.yml pre-Su-fix (8080 values present)
@@ -25,16 +26,23 @@ These tests:
   - Are added to the CI gate (ci.yml unit-test run) so they catch regression
     before any compose change ships
 
+Extended (BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076): cover JSON config files
+(openclaw.json baseUrl) and Helm env vars (OPENCLAW_UPSTREAM_URL) per
+[[feedback_brief_cue_adjacent_abstractions]] — assertion scope is now
+"every gateway-URL reference in any agent config (env var, JSON, YAML) uses
+:8081, never :8080".
+
 A1 amendment principle: absence of a dispatch test = SKIP, not PASS.
 Prior E2E sweeps proved container-healthy and route-existence but NOT the
 OPENAI_API_BASE callback leg.  This gate closes that assumption gap.
 
-YSG-RISK-059 / OWASP ASVS v5 V11.1 / A1 amendment.
+YSG-RISK-059 / YSG-RISK-076 / OWASP ASVS v5 V11.1 / A1 amendment.
 
-Last updated: 2026-05-24T00:00:00+00:00
+Last updated: 2026-05-25T00:00:00+00:00
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -299,4 +307,138 @@ class TestHelmAgentBaseUrlPort:
             f"Helm values.yaml has OPENAI_API_BASE using mTLS port {_MTLS_PORT}:\n"
             + "\n".join(f"  {u}" for u in wrong)
             + f"\n  Fix: change to port {_MESH_PORT}. BUG-V241-LANGFLOW-LETTA-BASE-URL."
+        )
+
+    def test_helm_openclaw_upstream_url_uses_mesh_port(self):
+        """
+        Helm values: OPENCLAW_UPSTREAM_URL must use yashigani-gateway:8081, not :8080.
+
+        openclaw has cap_drop:[ALL] and mounts no client cert — it cannot complete
+        the mTLS handshake on :8080. OPENCLAW_UPSTREAM_URL is the Helm-side
+        equivalent of openclaw.json baseUrl; both must target :8081.
+
+        BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076.
+        """
+        text = self._helm_text()
+        match = re.search(r'OPENCLAW_UPSTREAM_URL:\s*"?(http://[^"\s]+)"?', text)
+        if match is None:
+            pytest.skip("OPENCLAW_UPSTREAM_URL not found in Helm values.yaml")
+
+        url = match.group(1).strip('"')
+        assert f":{_MTLS_PORT}" not in url, (
+            f"Helm OPENCLAW_UPSTREAM_URL uses mTLS port {_MTLS_PORT}: {url}\n"
+            f"  Fix: change to http://yashigani-gateway:{_MESH_PORT}\n"
+            f"  BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076"
+        )
+        assert f":{_MESH_PORT}" in url, (
+            f"Helm OPENCLAW_UPSTREAM_URL uses unexpected port: {url}\n"
+            f"  Expected port {_MESH_PORT} (plain-HTTP mesh). BUG-V241-OPENCLAW-EXTENDED."
+        )
+
+
+class TestOpenclawJsonConfig:
+    """
+    Regression gate for BUG-V241-OPENCLAW-EXTENDED.
+
+    openclaw reads its gateway URL from docker/openclaw/openclaw.json (the
+    baseUrl field in the providers.yashigani block). This file is mounted
+    read-only into the openclaw container at /etc/openclaw/openclaw.json.
+
+    Prior contract tests only checked env vars (OPENAI_API_BASE*). openclaw's
+    JSON config was missed — Ava cycle 5 caught it at runtime.
+
+    Per [[feedback_brief_cue_adjacent_abstractions]]: any assertion about
+    agent gateway-URL routing MUST cover ALL config surfaces — env var,
+    JSON, YAML — not just the one format tested first.
+
+    YSG-RISK-076.
+    """
+
+    _OPENCLAW_JSON = _REPO_ROOT / "docker" / "openclaw" / "openclaw.json"
+
+    def test_openclaw_json_exists(self):
+        """openclaw.json must exist — it is the authoritative config for compose installs."""
+        assert self._OPENCLAW_JSON.exists(), (
+            f"docker/openclaw/openclaw.json not found at {self._OPENCLAW_JSON}.\n"
+            f"  This file is required: openclaw reads baseUrl from it at startup."
+        )
+
+    def test_openclaw_json_base_url_port(self):
+        """
+        openclaw.json baseUrl must use gateway:8081 (plain-HTTP mesh), not :8080 (mTLS).
+
+        Port 8080 requires mutual TLS; openclaw presents no client cert (cap_drop:[ALL],
+        no cert mount per PROBE-AG1 fix). Every openclaw inference call fails with a
+        TLS handshake error when baseUrl points at :8080.
+
+        FAILS pre-Su-fix: "baseUrl": "http://gateway:8080/v1"
+        PASSES post-Su-fix: "baseUrl": "http://gateway:8081/v1"
+
+        BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076.
+        """
+        if not self._OPENCLAW_JSON.exists():
+            pytest.skip("openclaw.json not found")
+
+        data = json.loads(self._OPENCLAW_JSON.read_text())
+        providers = data.get("models", {}).get("providers", {})
+        assert "yashigani" in providers, (
+            f"openclaw.json: models.providers.yashigani block not found.\n"
+            f"  Keys present: {list(providers.keys())}"
+        )
+
+        base_url = providers["yashigani"].get("baseUrl", "")
+        assert base_url, "openclaw.json: models.providers.yashigani.baseUrl is missing or empty"
+        assert f":{_MESH_PORT}" in base_url, (
+            f"openclaw.json baseUrl must use port {_MESH_PORT} (plain-HTTP mesh).\n"
+            f"  Current value: {base_url!r}\n"
+            f"  Required:      http://gateway:{_MESH_PORT}/v1\n"
+            f"  Bug:           port {_MTLS_PORT} is mTLS-only (ssl.CERT_REQUIRED).\n"
+            f"                 openclaw has no client cert — every LLM call fails.\n"
+            f"  Fix:           change baseUrl to http://gateway:{_MESH_PORT}/v1\n"
+            f"  BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076"
+        )
+        assert f":{_MTLS_PORT}" not in base_url, (
+            f"openclaw.json baseUrl uses mTLS port {_MTLS_PORT}: {base_url!r}\n"
+            f"  BUG-V241-OPENCLAW-EXTENDED — fix: http://gateway:{_MESH_PORT}/v1"
+        )
+
+    def test_openclaw_json_base_url_scheme(self):
+        """
+        openclaw.json baseUrl must use http:// (not https://).
+
+        The mesh port :8081 is plain HTTP protected by network isolation
+        (openclaw_isolated internal bridge). Using https:// would cause TLS
+        negotiation against a plain-HTTP listener — connection reset.
+        """
+        if not self._OPENCLAW_JSON.exists():
+            pytest.skip("openclaw.json not found")
+
+        data = json.loads(self._OPENCLAW_JSON.read_text())
+        base_url = data.get("models", {}).get("providers", {}).get("yashigani", {}).get("baseUrl", "")
+        if not base_url:
+            pytest.skip("baseUrl not found in openclaw.json")
+
+        assert base_url.startswith("http://"), (
+            f"openclaw.json baseUrl must use http:// (plain, not TLS).\n"
+            f"  Current: {base_url!r}\n"
+            f"  The mesh port {_MESH_PORT} is plain HTTP — https:// would fail."
+        )
+
+    def test_openclaw_json_no_gateway_mtls_port_anywhere(self):
+        """
+        Exhaustive scan: no field in openclaw.json should reference gateway:8080.
+
+        Catches future additions of new provider blocks or endpoint overrides that
+        inadvertently point at the mTLS-only port.
+
+        BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076 — class-level assertion.
+        """
+        if not self._OPENCLAW_JSON.exists():
+            pytest.skip("openclaw.json not found")
+
+        raw = self._OPENCLAW_JSON.read_text()
+        assert f"gateway:{_MTLS_PORT}" not in raw, (
+            f"openclaw.json contains gateway:{_MTLS_PORT} reference.\n"
+            f"  All gateway URLs must use port {_MESH_PORT} (plain-HTTP mesh).\n"
+            f"  BUG-V241-OPENCLAW-EXTENDED / YSG-RISK-076"
         )

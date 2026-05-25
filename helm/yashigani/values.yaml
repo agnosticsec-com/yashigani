@@ -821,7 +821,9 @@ agentBundles:
       pullPolicy: IfNotPresent
     replicaCount: 1
     env:
-      OPENCLAW_UPSTREAM_URL: "http://yashigani-gateway:8080"
+      # BUG-V241-OPENCLAW-EXTENDED: gateway:8080 is mTLS-only — openclaw has no
+      # client cert; route to plain-HTTP mesh port :8081. Same class as e4f38f8.
+      OPENCLAW_UPSTREAM_URL: "http://yashigani-gateway:8081"
       OPENCLAW_SERVER_MODE: "true"
       OPENCLAW_DISABLE_AUDIO: "true"
       OPENCLAW_DISABLE_CAMERA: "true"

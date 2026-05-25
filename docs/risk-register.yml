@@ -1578,6 +1578,37 @@ risks:
       state; c659647 reverts override to label=disable only, no duplicate seccomp).
   fix_in_version: v2.24.3
   last_threat_model_review: 2026-05-25
+- id: YSG-RISK-076
+  description: 'openclaw.json baseUrl and Helm OPENCLAW_UPSTREAM_URL referenced gateway:8080 (mTLS-only port) instead
+    of gateway:8081 (plain-HTTP mesh port). openclaw runs with cap_drop:[ALL] and no client-cert mount (PROBE-AG1
+    hardening, 2026-05-24). Every LLM inference call via the @openclaw dispatch path silently fails with a TLS
+    handshake error — the mTLS listener requires a mutual-TLS client cert that openclaw cannot present. The bug is
+    the same class as BUG-V241-LANGFLOW-LETTA-BASE-URL (e4f38f8) but was missed by the original sweep because the
+    BUG-V241 fix only grepped env vars; openclaw stores its gateway URL in a JSON config file
+    (docker/openclaw/openclaw.json), not an env var. Two fix sites: (1) docker/openclaw/openclaw.json baseUrl field
+    — compose path; (2) helm/yashigani/values.yaml OPENCLAW_UPSTREAM_URL — K8s path. No security boundary crossed
+    (openclaw is still ring-fenced behind Caddy); the impact is availability: all openclaw agent dispatch is broken
+    until corrected. Regression guard: TestOpenclawJsonConfig + test_helm_openclaw_upstream_url_uses_mesh_port
+    (tests/contracts/test_agent_base_url_port.py) assert all gateway URLs in JSON config and Helm env vars use :8081.'
+  severity: medium
+  controls_impacted:
+  - Availability — all openclaw LLM inference silently fails (TLS handshake error on :8080 with no client cert)
+  - Agent dispatch — @openclaw routing broken end-to-end on compose and Helm installs
+  compensating_controls:
+  - Caddy perimeter remains intact — no auth bypass. Availability-only impact.
+  - langflow and letta unaffected (e4f38f8 fixed those; they use env vars not JSON config).
+  status: mitigated
+  closure_evidence:
+  - commit: TBD
+    rationale: 'docker/openclaw/openclaw.json baseUrl changed from http://gateway:8080/v1 to http://gateway:8081/v1.
+      helm/yashigani/values.yaml OPENCLAW_UPSTREAM_URL changed from http://yashigani-gateway:8080 to
+      http://yashigani-gateway:8081. Contract test extended: TestOpenclawJsonConfig (4 tests) +
+      test_helm_openclaw_upstream_url_uses_mesh_port — 12 tests total PASS. Pre-fix simulation confirmed
+      test_openclaw_json_base_url_port and test_openclaw_json_no_gateway_mtls_port_anywhere FAIL against
+      original gateway:8080 value. Detected by Ava cycle 5 (kill-signal mid-flight finding).'
+  fix_in_version: v2.24.3
+  last_threat_model_review: '2026-05-25'
+
 - id: YSG-RISK-075
   description: 'Trust auth without CN binding is insufficient when multiple containers hold valid CA-signed certs.
     `trust clientcert=verify-ca` for pgbouncer_authenticator is a confirmed HIGH security gap. With `trust`, postgres
