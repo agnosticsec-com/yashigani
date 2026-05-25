@@ -1446,7 +1446,7 @@ risks:
     - Audit trail emits all auth events
   status: mitigated
   closure_evidence:
-    - commit: TBD-sod-commit
+    - commit: e9758d1
       rationale: >-
         SoD-001: accounts.py create_admin checks identity_registry + user_accounts
         for existing user-tier record before creating admin. Emits
