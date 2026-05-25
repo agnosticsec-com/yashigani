@@ -24,12 +24,13 @@
 #     (clientcert=verify-ca)
 #   * Password auth (scram-sha-256) still required on top of the cert for all
 #     roles (defence in depth — three factors: TLS + cert + password).
-#     EXCEPTION: pgbouncer_authenticator uses md5 clientcert=verify-ca (two-factor:
-#     CA chain verified + md5 password). The carveout is written by 10-pgbouncer-auth.sh
+#     EXCEPTION: pgbouncer_authenticator uses `cert map=pgb-auth-map` (YSG-RISK-073
+#     cycle 7). cert method: PG16 implies verify-full (CN verified via pg_ident map
+#     pgb-auth-map). NO password. The carveout is written by 10-pgbouncer-auth.sh
 #     (single source of truth — not written here to prevent duplicate entries).
-#     Rationale: cert auth (PG16 `cert` method) requires clientcert=verify-full which
-#     in turn requires CN==role-name; CN=pgbouncer-auth does not match role
-#     pgbouncer_authenticator. md5+clientcert=verify-ca is PG16-valid + two-factor.
+#     Rationale: pgbouncer 1.25.1 ARM64 has a SCRAM computation bug (YSG-RISK-077).
+#     cert+pg_ident avoids SCRAM entirely and is stronger than trust+clientcert
+#     (verify-full + CN-specific mapping vs verify-ca only).
 #
 # PKI design: root → intermediate → leaf (two-tier).
 # ssl_ca_file (root.crt) must contain BOTH ca_root.crt and ca_intermediate.crt

@@ -1180,37 +1180,40 @@ services:
     # the full rationale now that every service inherits the same setting.
     dns_search: ["."]
     environment:
-      # YSG-RISK-049 INIT-003 fix (v2.24.0): DATABASE_URL IS required even under
-      # scram-sha-256 + auth_query. The edoburu/pgbouncer entrypoint does NOT
-      # implement PGBOUNCER_AUTH_PASSWORD_FILE — that env var is a no-op.
-      # The entrypoint reads DATABASE_URL to write the pgbouncer_authenticator
-      # userlist.txt entry (SCRAM verifier computed from cleartext). This entry
-      # is the auth_user credential pgbouncer presents to postgres when running
-      # the auth_query for each connecting client.
-      # DATABASE_URL is constructed at runtime by the wrapper command below,
-      # reading the password from /run/secrets/pgbouncer_authenticator_password.
-      # Option C dedicated secret mount — NOT GID-2002 bind-mount.
-      # YSG-SECRETS-DIST-002 blast radius unchanged (pgbouncer not in GID 2002).
+      # YSG-RISK-073 cycle 7 / YSG-RISK-077 (BUG-C7-001): cert auth + pg_ident.
+      # pgbouncer authenticates to postgres as auth_user via TLS client cert
+      # (pgbouncer-auth_client.crt, CN=pgbouncer-auth) — no password exchange.
+      # pg_hba carveout: `hostssl yashigani pgbouncer_authenticator 0.0.0.0/0 cert map=pgb-auth-map`
+      # pg_ident map pgb-auth-map maps CN=pgbouncer-auth → pgbouncer_authenticator.
+      # NO password needed in DATABASE_URL — cert is the sole credential for auth_user.
+      # DATABASE_URL still required: edoburu entrypoint writes userlist.txt from it;
+      # without DATABASE_URL the entrypoint exits before exec. userlist.txt is used
+      # only for incoming client SCRAM challenges (auth_query path), NOT for auth_user.
+      # Userlist entry written without password: "pgbouncer_authenticator" "" — harmless.
+      # YSG-RISK-049 INIT-003 fix preserved: DATABASE_URL still exported at startup.
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "100"
       DEFAULT_POOL_SIZE: "20"
-    # INIT-003 fix: wrapper reads pgbouncer_authenticator_password secret at
-    # runtime, exports DATABASE_URL so edoburu writes userlist.txt with the
-    # cleartext password for pgbouncer_authenticator (AUTH_TYPE=scram-sha-256
-    # causes edoburu to write cleartext; pgbouncer uses it to perform the SCRAM
-    # handshake with postgres). auth_query in pgbouncer.ini handles client auth.
+    # Cycle 7 fix (YSG-RISK-073): DATABASE_URL exported without password.
+    # No secret read required — cert auth replaces password auth for auth_user.
+    # edoburu entrypoint still needs DATABASE_URL to start; password component omitted.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        PASS=$(cat /run/secrets/pgbouncer_authenticator_password)
+        # YSG-RISK-073 cycle 7: cert auth — no password in DATABASE_URL.
+        # pgbouncer_authenticator auth_user authenticates to postgres via cert
+        # (pgbouncer-auth_client.crt, CN=pgbouncer-auth, mapped via pg_ident).
+        # YSG-RISK-077: avoids pgbouncer 1.25.1 ARM64 SCRAM computation bug.
         export AUTH_TYPE=scram-sha-256
-        export DATABASE_URL="postgresql://pgbouncer_authenticator:$$PASS@postgres:5432/yashigani"
+        export DATABASE_URL="postgresql://pgbouncer_authenticator@postgres:5432/yashigani"
         exec /entrypoint.sh pgbouncer /etc/pgbouncer/pgbouncer.ini
     volumes:
       - ./secrets:/run/secrets:ro
       - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
-      - ./secrets/pgbouncer_authenticator_password:/run/secrets/pgbouncer_authenticator_password:ro
+      # YSG-RISK-073 cycle 7: pgbouncer_authenticator_password redundant mount removed.
+      # ./secrets:/run/secrets:ro bulk mount above provides all needed certs.
+      # Password secret no longer read (cert auth replaces SCRAM for auth_user).
     healthcheck:
       # Internal integration review finding: pg_isready can't negotiate TLS with
       # client_tls_sslmode=verify-ca (it has no --sslcert flag).
@@ -1700,46 +1703,43 @@ services:
     mem_limit: 64m
     cpus: 0.2
     environment:
-      # YSG-RISK-049 INIT-003 fix (v2.24.0): same fix as main pgbouncer service.
-      # DATABASE_URL IS required — PGBOUNCER_AUTH_PASSWORD_FILE is a no-op in
-      # the edoburu image. The wrapper command below reads the password secret
-      # at runtime and exports DATABASE_URL so edoburu writes the
-      # pgbouncer_authenticator userlist.txt entry (SCRAM verifier).
+      # YSG-RISK-073 cycle 7 / YSG-RISK-077 (BUG-C7-001): cert auth + pg_ident.
+      # Same fix as main pgbouncer service. letta-pgbouncer authenticates to postgres
+      # as auth_user via TLS client cert (letta-pgbouncer_client.crt, CN=letta-pgbouncer).
+      # pg_ident map pgb-auth-map maps CN=letta-pgbouncer → pgbouncer_authenticator.
+      # NO password needed — cert is the sole credential. DATABASE_URL still required
+      # for edoburu entrypoint (writes userlist.txt without password — harmless).
       # auth_dbname = yashigani in pgbouncer-letta.ini (Amendment C6) — the
-      # auth_query function lives in yashigani DB; DATABASE_URL also uses yashigani
-      # so edoburu writes the correct SCRAM hash for pgbouncer_authenticator.
-      # Option C dedicated secret mount — NOT GID-2002 bind-mount.
+      # auth_query function lives in yashigani DB; DATABASE_URL uses yashigani.
+      # YSG-RISK-049 INIT-003 fix preserved: DATABASE_URL still exported at startup.
       POOL_MODE: session
       MAX_CLIENT_CONN: "50"
       DEFAULT_POOL_SIZE: "20"
-    # INIT-003 fix: wrapper reads pgbouncer_authenticator_password secret at
-    # runtime, exports DATABASE_URL so edoburu writes userlist.txt with the
-    # cleartext password for pgbouncer_authenticator (AUTH_TYPE=scram-sha-256
-    # causes edoburu to write cleartext; pgbouncer uses it to perform the SCRAM
-    # handshake with postgres). auth_query in pgbouncer-letta.ini handles
-    # client auth; userlist.txt entry is only for the auth_user → postgres leg.
+    # Cycle 7 fix (YSG-RISK-073): DATABASE_URL exported without password.
+    # No secret read required — cert auth replaces password auth for auth_user.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        PASS=$(cat /run/secrets/pgbouncer_authenticator_password)
+        # YSG-RISK-073 cycle 7: cert auth — no password in DATABASE_URL.
+        # letta-pgbouncer auth_user authenticates to postgres via cert
+        # (letta-pgbouncer_client.crt, CN=letta-pgbouncer, mapped via pg_ident).
+        # YSG-RISK-077: avoids pgbouncer 1.25.1 ARM64 SCRAM computation bug.
         export AUTH_TYPE=scram-sha-256
-        export DATABASE_URL="postgresql://pgbouncer_authenticator:$$PASS@postgres:5432/yashigani"
+        export DATABASE_URL="postgresql://pgbouncer_authenticator@postgres:5432/yashigani"
         exec /entrypoint.sh pgbouncer /etc/pgbouncer/pgbouncer.ini
     volumes:
       - ./pgbouncer/pgbouncer-letta.ini:/etc/pgbouncer/pgbouncer.ini:ro
     # PROBE-AG1 fix: per-key Docker named-secrets — replaces wholesale ./secrets mount.
-    # letta-pgbouncer needs exactly 4 secrets:
-    #   pgbouncer_authenticator_password — read by wrapper command (cat /run/secrets/...)
+    # YSG-RISK-073 cycle 7: pgbouncer_authenticator_password no longer mounted.
+    # cert auth means no password is read — least-privilege: drop the secret from scope.
+    # letta-pgbouncer needs exactly 3 secrets:
     #   ca_root.crt                      — server_tls_ca_file in pgbouncer-letta.ini
     #   letta-pgbouncer_client.crt       — server_tls_cert_file in pgbouncer-letta.ini
     #   letta-pgbouncer_client.key       — server_tls_key_file in pgbouncer-letta.ini
     # caddy_internal_hmac, yashigani_internal_bearer, gateway/backoffice certs, postgres/redis
-    # passwords are NOT exposed to letta-pgbouncer.
+    # passwords, pgbouncer_authenticator_password are NOT exposed to letta-pgbouncer.
     secrets:
-      - source: pgbouncer_authenticator_password
-        target: pgbouncer_authenticator_password
-        mode: 0440
       - source: ca_root_crt
         target: ca_root.crt
         mode: 0444
