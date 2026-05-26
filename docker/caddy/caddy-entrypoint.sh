@@ -189,12 +189,36 @@ apply_egress_rules() {
     # This is the BUG-V243-CADDY-IPV6-IPTABLES fix: before the fix, the loop
     # fed AAAA records to iptables (IPv4-only) which crashed under set -e.
 
+    # LAURA-V243-002 (2026-05-26): ACME destinations gated on TLS_MODE=acme.
+    # Previously DEFAULT_ACME_HOSTS was added to the allowlist unconditionally,
+    # making Cloudflare IPs (172.65.32.248:443, 172.65.46.172:443) reachable from
+    # the Caddy container even in selfsigned/ca modes that never use ACME. That
+    # widens post-RCE exfil surface beyond the documented intent. Operator-
+    # supplied YASHIGANI_CADDY_EGRESS_ALLOWLIST is still honoured in any mode
+    # (explicit operator opt-in is the boundary).
     DEFAULT_ACME_HOSTS="acme-v02.api.letsencrypt.org:443 acme-staging-v02.api.letsencrypt.org:443 r10.o.lencr.org:80 r11.o.lencr.org:80 r12.o.lencr.org:80 e5.o.lencr.org:80 e6.o.lencr.org:80"
     OPERATOR_EXTRA="${YASHIGANI_CADDY_EGRESS_ALLOWLIST:-}"
-    full_allowlist="${DEFAULT_ACME_HOSTS}"
+    _tls_mode="${YASHIGANI_TLS_MODE:-acme}"
+    if [ "$_tls_mode" = "acme" ]; then
+        full_allowlist="${DEFAULT_ACME_HOSTS}"
+        log "TLS mode: acme — ACME/OCSP hosts WILL be added to egress allowlist."
+    else
+        full_allowlist=""
+        log "TLS mode: ${_tls_mode} (non-acme) — ACME/OCSP hosts SKIPPED from egress allowlist (LAURA-V243-002)."
+    fi
     if [ -n "$OPERATOR_EXTRA" ]; then
         extra_space=$(printf '%s' "$OPERATOR_EXTRA" | tr ',' ' ')
-        full_allowlist="${full_allowlist} ${extra_space}"
+        # Trim leading space if full_allowlist is empty
+        if [ -z "$full_allowlist" ]; then
+            full_allowlist="${extra_space}"
+        else
+            full_allowlist="${full_allowlist} ${extra_space}"
+        fi
+    fi
+    # If nothing to allowlist (non-acme + no operator extras), skip the loop —
+    # iptables policy DROP is already in effect (LOG + DROP appended below).
+    if [ -z "$full_allowlist" ]; then
+        log "No upstream destinations to allowlist (TLS mode is non-acme, no operator extras)."
     fi
 
     resolved_v4=0

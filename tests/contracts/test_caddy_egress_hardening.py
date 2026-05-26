@@ -527,3 +527,48 @@ class TestEntrypointIpv6Blocked:
             "not allowlisted. Found:\n"
             + "\n".join(f"  '{p}'" for p in found_banned)
         )
+
+
+# ── 9. LAURA-V243-002 — ACME egress gated on TLS_MODE=acme ──────────────────
+
+class TestEntrypointAcmeTlsModeGate:
+    """LAURA-V243-002 (MEDIUM) — Laura's adversarial probe 2026-05-26.
+
+    Before this fix: DEFAULT_ACME_HOSTS (Let's Encrypt prod + staging + OCSP
+    responders) was added to the egress allowlist unconditionally, regardless
+    of YASHIGANI_TLS_MODE. In selfsigned/ca modes, Cloudflare IPs (172.65.32.248
+    + 172.65.46.172 + AAAA equivalents) remained reachable from inside the
+    Caddy container — widening post-RCE exfil surface beyond the documented
+    intent (the script's header comment claims ACME hosts are only allowed in
+    acme mode, but the code didn't gate).
+
+    Fix: read YASHIGANI_TLS_MODE; only seed full_allowlist from
+    DEFAULT_ACME_HOSTS when the value is "acme" (or absent, defaulting to
+    acme for backward compat). Operator-supplied YASHIGANI_CADDY_EGRESS_ALLOWLIST
+    is still honoured in any mode (operator opt-in is the boundary).
+    """
+
+    def test_acme_hosts_gated_on_tls_mode(self, entrypoint_text):
+        """ACME default hosts must only seed allowlist when TLS_MODE=acme."""
+        assert "YASHIGANI_TLS_MODE" in entrypoint_text, (
+            "LAURA-V243-002 regression: caddy-entrypoint.sh must read "
+            "YASHIGANI_TLS_MODE to decide whether to include ACME hosts in "
+            "the egress allowlist."
+        )
+        # Specifically the seed must be conditional on _tls_mode = "acme".
+        assert '"$_tls_mode" = "acme"' in entrypoint_text or \
+               '$_tls_mode = "acme"' in entrypoint_text or \
+               '"${_tls_mode}" = "acme"' in entrypoint_text, (
+            "LAURA-V243-002 regression: caddy-entrypoint.sh must gate "
+            "full_allowlist=$DEFAULT_ACME_HOSTS behind a check that "
+            "$_tls_mode = \"acme\". Without the gate, selfsigned/ca modes "
+            "still allowlist Cloudflare ACME IPs."
+        )
+
+    def test_laura_v243_002_referenced(self, entrypoint_text):
+        """The fix must reference LAURA-V243-002 so future readers can trace."""
+        assert "LAURA-V243-002" in entrypoint_text, (
+            "LAURA-V243-002 regression: caddy-entrypoint.sh must reference "
+            "LAURA-V243-002 in the comment near the TLS_MODE gate. Provides "
+            "traceability if a future refactor removes the gate."
+        )
