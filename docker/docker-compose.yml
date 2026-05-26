@@ -2315,21 +2315,37 @@ secrets:
 #   NetworkPolicy enforces this at the kernel level (no residual).
 #
 networks:
+  # ── Address-family posture ────────────────────────────────────────────────
+  # Yashigani is IPv4-only by design (Tiago directive 2026-05-26 in response
+  # to BUG-V243-CADDY-IPV6-IPTABLES — "do not implement ipv inside of the
+  # yashigani network ... block it"). Every bridge below sets
+  # `enable_ipv6: false` explicitly to prevent Docker / Podman from creating
+  # dual-stack bridges that would route IPv6 traffic around the Caddy
+  # iptables OUTPUT allowlist (the iptables allowlist is IPv4-only by
+  # definition; IPv6 traffic would bypass it).
+  # ip6tables OUTPUT policy = DROP is set inside the Caddy container by
+  # docker/caddy/caddy-entrypoint.sh as a second layer; this network-level
+  # enable_ipv6: false is the first layer.
+  # ─────────────────────────────────────────────────────────────────────────
   edge:
     driver: bridge
-    # external: true — Caddy needs internet access for ACME challenges
+    enable_ipv6: false
+    # external: true — Caddy needs internet access for ACME challenges (IPv4)
   caddy_internal:
     driver: bridge
+    enable_ipv6: false
     internal: true
     # Only Caddy, backoffice, gateway are members.
     # Caddy → backoffice:8443 and Caddy → gateway:8080 happen here.
   data:
     driver: bridge
+    enable_ipv6: false
     internal: true
     # Core data-plane: backoffice + gateway (outbound) + their deps.
     # No obs services; no edge services.
   obs:
     driver: bridge
+    enable_ipv6: false
     internal: true
     # Observability-plane: prometheus, grafana, loki, alertmanager,
     # otel-collector, jaeger. Caddy joins to proxy /admin/grafana etc.
@@ -2345,10 +2361,13 @@ networks:
   # of the `data` bridge under this design).
   langflow_isolated:
     driver: bridge
+    enable_ipv6: false
     internal: true
   letta_isolated:
     driver: bridge
+    enable_ipv6: false
     internal: true
   openclaw_isolated:
     driver: bridge
+    enable_ipv6: false
     internal: true

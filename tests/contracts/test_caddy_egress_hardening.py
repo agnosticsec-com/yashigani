@@ -378,103 +378,133 @@ class TestValuesEgressAllowlist:
         )
 
 
-# ── 8. BUG-V243-CADDY-IPV6-IPTABLES — IPv4/IPv6 egress parity ────────────────
+# ── 8. BUG-V243-CADDY-IPV6-IPTABLES — IPv6 BLOCKED (Yashigani is IPv4-only) ──
 
-class TestEntrypointIpv6Parity:
-    """BUG-V243-CADDY-IPV6-IPTABLES — verified fresh-install 2026-05-26.
+class TestEntrypointIpv6Blocked:
+    """BUG-V243-CADDY-IPV6-IPTABLES — Yashigani is IPv4-only by design.
 
-    Original bug: the egress allowlist loop resolved hosts via `getent ahosts`
-    (returns A + AAAA) and fed every result to `iptables` (IPv4-only).
-    iptables rejected IPv6 with `host/network not found`; under `set -e` this
-    crashed the entrypoint → restart loop (393 restarts/3min on UTM VM).
+    History:
+      e129cbc (partial): filtered IPv6 OUT of the iptables loop — stopped
+        the crash but left IPv6 egress unfiltered (kernel default ACCEPT).
+      64fd5c4 (parity, REJECTED): added IPv6 ACCEPT rules in parallel with
+        IPv4 — adds attack surface without product value.
+      This commit (BLOCK): ip6tables OUTPUT policy = DROP with ZERO ACCEPT
+        rules. IPv6 is not a supported address family in Yashigani.
 
-    Fix (Tiago directive 2026-05-26 *"both need to work out of the box"*):
-    apply parity OUTPUT allowlists on BOTH iptables (IPv4) and ip6tables
-    (IPv6). Resolution returns all families; loop routes each address to its
-    correct table by detecting `:` (IPv6) vs `.` (IPv4). Graceful degradation
-    if ip6tables is unavailable (kernel CONFIG_IP6_NF_IPTABLES absent, etc.).
+    Rationale (Tiago directive 2026-05-26):
+      *"as we are moving towards ipv7 and ipv6 never had much traction"*
+      *"do not implement ipv inside of the yashigani network"*
+      *"block it"*
+
+    Yashigani is IPv4-only by design. Supporting IPv6 inside the ring-fence
+    adds a parallel egress path (= attack surface) without proportional
+    deployment-ecosystem value.
     """
 
-    # ── Parity: ip6tables must be invoked the same as iptables ──────────────
+    # ── Policy: IPv6 OUTPUT must be DROP ────────────────────────────────────
 
     def test_ip6tables_sets_output_drop(self, entrypoint_text):
-        """ip6tables OUTPUT policy must be DROP (parity with iptables IPv4)."""
+        """ip6tables OUTPUT policy MUST be DROP."""
         assert "ip6tables -P OUTPUT DROP" in entrypoint_text, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must call "
-            "`ip6tables -P OUTPUT DROP` (parallel to the existing iptables "
-            "call) — Tiago 2026-05-26 directive: 'both need to work out "
-            "of the box'."
+            "BUG-V243 BLOCK regression: caddy-entrypoint.sh must set "
+            "`ip6tables -P OUTPUT DROP` policy. Yashigani is IPv4-only "
+            "(Tiago 2026-05-26: 'block it')."
         )
 
-    def test_ip6tables_allows_loopback(self, entrypoint_text):
-        """ip6tables must accept loopback (parity with iptables IPv4)."""
-        assert "ip6tables -A OUTPUT -o lo -j ACCEPT" in entrypoint_text, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must allow "
-            "loopback via ip6tables (parallel to the existing iptables call)."
+    # ── NO IPv6 ACCEPT rules anywhere (BLOCK posture, not allowlist) ────────
+
+    def test_ip6tables_has_no_accept_rules(self, entrypoint_text):
+        """No ip6tables -A ACCEPT rules allowed — block posture, no allowlist."""
+        # Reject any `ip6tables -A OUTPUT ... -j ACCEPT` pattern. The shell
+        # script can still call ip6tables for non-ACCEPT verbs (P, F, L) and
+        # the LOG target is OK.
+        import re
+        lines = entrypoint_text.splitlines()
+        accept_lines = [
+            (i + 1, ln) for i, ln in enumerate(lines)
+            if re.search(r"ip6tables\b.*-A\s+OUTPUT.*-j\s+ACCEPT", ln)
+        ]
+        assert not accept_lines, (
+            "BUG-V243 BLOCK regression: caddy-entrypoint.sh must NOT add "
+            "any `ip6tables -A OUTPUT ... -j ACCEPT` rules. IPv6 is blocked "
+            "at the policy level (DROP) — no per-host allowlist, no loopback "
+            "exception, no ESTABLISHED exception, no ACME path. Found:\n"
+            + "\n".join(f"  line {n}: {ln.strip()}" for n, ln in accept_lines)
         )
 
-    def test_ip6tables_allows_established_related(self, entrypoint_text):
-        """ip6tables must accept ESTABLISHED/RELATED (response packets)."""
-        assert "ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED" in entrypoint_text, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must allow "
-            "ESTABLISHED,RELATED via ip6tables — without this, inbound "
-            "IPv6 connections cannot receive response packets."
-        )
+    # ── Resolution loop: IPv6 results skipped, NOT routed to ip6tables ──────
 
-    def test_ip6tables_has_final_drop(self, entrypoint_text):
-        """ip6tables OUTPUT must end with DROP (after allowlist + LOG)."""
-        assert "ip6tables -A OUTPUT -j DROP" in entrypoint_text, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must terminate "
-            "the ip6tables OUTPUT chain with -j DROP (parallel to iptables)."
-        )
-
-    def test_ip6tables_logs_blocked_v6(self, entrypoint_text):
-        """ip6tables LOG rule for blocked IPv6 egress (debug aid)."""
-        assert "CADDY_EGRESS_BLOCKED_V6" in entrypoint_text, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must install "
-            "an ip6tables LOG rule with prefix CADDY_EGRESS_BLOCKED_V6 "
-            "(parallel to CADDY_EGRESS_BLOCKED_V4 for IPv4 debugging)."
-        )
-
-    # ── Resolution loop: dual-family routing ────────────────────────────────
-
-    def test_resolution_loop_routes_by_family(self, entrypoint_text):
-        """The host resolution loop must split addresses by family."""
-        # Acceptable patterns:
-        # 1. case statement matching `*:*` for IPv6 + `*.*` for IPv4
-        # 2. awk filter splitting into two lists (less idiomatic)
+    def test_resolution_loop_skips_ipv6_silently(self, entrypoint_text):
+        """The host resolution loop must SKIP IPv6 results (no ip6tables call)."""
+        # Acceptable pattern: case `*:*` branch that does NOT call ip6tables -A.
+        # We verify by looking for the case statement and ensuring the v6
+        # branch does NOT contain `ip6tables -A OUTPUT`.
         has_case_match = ("*:*)" in entrypoint_text and "*.*)" in entrypoint_text)
-        has_dual_lists = (
-            "getent ahostsv4" in entrypoint_text and "getent ahostsv6" in entrypoint_text
-        )
-        assert has_case_match or has_dual_lists, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must route "
-            "resolved addresses to the correct iptables/ip6tables binary "
-            "by address family. Either via a case statement matching `*:*` "
-            "(IPv6) and `*.*` (IPv4), or via dual getent calls "
-            "(ahostsv4 + ahostsv6)."
+        assert has_case_match, (
+            "BUG-V243 BLOCK regression: caddy-entrypoint.sh must use a case "
+            "statement matching `*:*` (IPv6) and `*.*` (IPv4) in the host "
+            "resolution loop. The IPv6 branch must skip silently without "
+            "calling ip6tables (since IPv6 is blocked at the policy level)."
         )
 
-    def test_graceful_v6_degradation(self, entrypoint_text):
-        """If ip6tables fails at probe, IPv4 still applies; warn but continue."""
-        # The script must guard ip6tables invocations behind IPV6_ENABLED.
-        assert "IPV6_ENABLED" in entrypoint_text, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must guard "
-            "ip6tables calls behind an IPV6_ENABLED flag (set by probing "
-            "`ip6tables -P OUTPUT DROP` at script start) so the IPv4 path "
-            "still works when ip6tables is unavailable (kernel lacks "
-            "CONFIG_IP6_NF_IPTABLES, IPv6 disabled, etc)."
+    def test_resolution_loop_no_ip6tables_accept_in_loop(self, entrypoint_text):
+        """The resolution loop must not feed IPv6 addresses into ip6tables."""
+        # Stronger test: scan the loop for any ip6tables ACCEPT call. There
+        # should be ZERO ip6tables ACCEPT calls in the whole script (covered
+        # by test_ip6tables_has_no_accept_rules above) — this just re-asserts
+        # specifically for the resolution loop with an extra readable error.
+        import re
+        # Look for any ip6tables -A line that adds an ACCEPT for a destination
+        # — this would mean we're allowlisting IPv6 destinations.
+        accept_dest_pattern = re.search(
+            r"ip6tables\s+-A\s+OUTPUT.*-d\s+\S+.*-j\s+ACCEPT", entrypoint_text
+        )
+        assert accept_dest_pattern is None, (
+            "BUG-V243 BLOCK regression: the resolution loop must NOT add "
+            "ip6tables ACCEPT rules for any IPv6 destination. IPv6 is "
+            "BLOCKED, not allowlisted. Yashigani is IPv4-only."
+        )
+
+    # ── LOG rule for IPv6 bypass attempts (observability for canary) ────────
+
+    def test_ip6tables_logs_blocked_v6_attempts(self, entrypoint_text):
+        """ip6tables LOG rule must fire for IPv6 egress attempts (canary)."""
+        assert "CADDY_EGRESS_BLOCKED_V6" in entrypoint_text, (
+            "BUG-V243 BLOCK regression: caddy-entrypoint.sh must install an "
+            "ip6tables LOG rule with prefix CADDY_EGRESS_BLOCKED_V6. In a "
+            "healthy install this never fires; when it does, it's a canary "
+            "for an IPv6-bypass attempt (compromised service, misconfigured "
+            "agent) that must be investigated."
         )
 
     # ── Documentation: invariant comments ───────────────────────────────────
 
-    def test_docs_ipv4_ipv6_parity_intent(self, entrypoint_text):
-        """The script header must document the IPv4+IPv6 parity intent."""
-        v6_doc_signals = ["IPv4 + IPv6", "parity", "BUG-V243", "ip6tables"]
-        has_doc = sum(1 for sig in v6_doc_signals if sig in entrypoint_text) >= 2
+    def test_docs_ipv4_only_design_intent(self, entrypoint_text):
+        """The script must document Yashigani's IPv4-only-by-design posture."""
+        v4_only_signals = [
+            "IPv4-only",
+            "IPv4 only",
+            "IPv6 is blocked",
+            "Yashigani is IPv4-only",
+            "BUG-V243",
+        ]
+        has_doc = sum(1 for sig in v4_only_signals if sig in entrypoint_text) >= 3
         assert has_doc, (
-            "BUG-V243 parity regression: caddy-entrypoint.sh must document "
-            "the IPv4+IPv6 parity posture in the header or near the chain "
-            "setup. At least 2 of these signals must appear: 'IPv4 + IPv6', "
-            "'parity', 'BUG-V243', 'ip6tables'."
+            "BUG-V243 BLOCK regression: caddy-entrypoint.sh must document "
+            "the IPv4-only-by-design posture clearly. At least 3 of these "
+            "signals must appear: 'IPv4-only', 'IPv4 only', 'IPv6 is "
+            "blocked', 'Yashigani is IPv4-only', 'BUG-V243'."
+        )
+
+    def test_no_parity_language_carryover(self, entrypoint_text):
+        """No 'parity' language should remain — that was the rejected approach."""
+        # Reject the rejected-approach language to prevent regression.
+        banned_phrases = ["IPv6 OUTPUT allowlist", "allowlist (IPv6"]
+        found_banned = [p for p in banned_phrases if p in entrypoint_text]
+        assert not found_banned, (
+            "BUG-V243 BLOCK regression: caddy-entrypoint.sh must not "
+            "describe the IPv6 chain as an 'allowlist' — the rejected "
+            "64fd5c4 parity approach used that language. IPv6 is blocked, "
+            "not allowlisted. Found:\n"
+            + "\n".join(f"  '{p}'" for p in found_banned)
         )
