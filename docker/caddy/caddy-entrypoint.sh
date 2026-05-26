@@ -103,6 +103,34 @@ apply_egress_rules() {
     fi
     log "NET_ADMIN available — applying iptables OUTPUT allowlist (IPv4)."
 
+    # LAURA-V243-004 (MED): canary observability check.
+    # The ip6tables LOG target (CADDY_EGRESS_BLOCKED_V6) uses kernel printk,
+    # which is per-network-namespace by default on modern kernels. Container-
+    # namespace printk messages do NOT reach the host's journald unless the
+    # host sysctl `net.netfilter.nf_log_all_netns=1`. If it's 0 (default on
+    # Ubuntu 24.04 + most distros), the LOG canary fires inside the container
+    # but is invisible to the operator running `journalctl -k` on the host.
+    # DROP enforcement is unaffected (this is observability, not enforcement).
+    #
+    # We can READ /proc/sys/net/netfilter/nf_log_all_netns from inside the
+    # container (read-only host sysctl exposure) without any extra privileges.
+    # If 0, surface a clear WARN with the exact remediation command the
+    # operator needs to run on the host.
+    _nf_log_all_netns_path="/proc/sys/net/netfilter/nf_log_all_netns"
+    if [ -r "$_nf_log_all_netns_path" ]; then
+        _nf_log_val="$(cat "$_nf_log_all_netns_path" 2>/dev/null || echo "?")"
+        if [ "$_nf_log_val" = "0" ]; then
+            warn "Host sysctl nf_log_all_netns=0 — ip6tables LOG (CADDY_EGRESS_BLOCKED_V6)"
+            warn "  will fire inside this container but will NOT reach host journald."
+            warn "  Enforcement (DROP) is unaffected; only the canary observability is lost."
+            warn "  Operator remediation on the HOST (one-shot + persistent):"
+            warn "    sudo sysctl -w net.netfilter.nf_log_all_netns=1"
+            warn "    echo 'net.netfilter.nf_log_all_netns=1' | sudo tee /etc/sysctl.d/90-yashigani-nflog.conf"
+        elif [ "$_nf_log_val" = "1" ]; then
+            log "nf_log_all_netns=1 — ip6tables LOG canary WILL reach host journald."
+        fi
+    fi
+
     # ── Step 1b: IPv6 OUTPUT — DROP all NEW outbound; allow only ESTABLISHED ─
     # Tiago directives 2026-05-26:
     #   "do not implement ipv inside of the yashigani network ... block it"
@@ -221,8 +249,31 @@ apply_egress_rules() {
         log "No upstream destinations to allowlist (TLS mode is non-acme, no operator extras)."
     fi
 
+    # LAURA-V243-005 (MED): defensive iptables ADD wrapper.
+    # Under `set -eu`, a bare `iptables -A OUTPUT ... -j ACCEPT` that fails
+    # mid-loop (e.g. crafted operator EGRESS_ALLOWLIST with invalid port,
+    # ephemeral kernel/netfilter glitch) aborts the entrypoint before the
+    # LOG/DROP sentinel is appended. Caddy then never starts — restart loop
+    # with NO clear error message in container logs. Fail-closed (no bypass)
+    # per Laura's live test, but operationally opaque.
+    # Fix: catch ADD failures, warn loudly with the offending rule, count
+    # the failure, and continue. Policy DROP is already in effect — partial
+    # allowlist is fail-safe (more drops, not fewer). Final exit code is
+    # non-zero IF any ADD failed, so operator sees the rule count + failures.
+    _iptables_add_or_warn() {
+        # $@ = arguments to iptables (e.g. -A OUTPUT -p tcp -d 1.2.3.4 ...)
+        if iptables "$@" 2>&1; then
+            return 0
+        fi
+        warn "iptables ADD failed: iptables $*"
+        warn "  (allowlist now partial; OUTPUT policy DROP still applies — fail-safe)"
+        _add_failures=$(( _add_failures + 1 ))
+        return 1
+    }
+
     resolved_v4=0
     skipped_v6=0
+    _add_failures=0
     for host_port in $full_allowlist; do
         host="${host_port%:*}"
         port="${host_port##*:}"
@@ -242,9 +293,10 @@ apply_egress_rules() {
                     skipped_v6=$((skipped_v6 + 1))
                     ;;
                 *.*)
-                    iptables -A OUTPUT -p tcp -d "$ip" --dport "$port" -j ACCEPT
-                    log "egress allow: $host ($ip) :$port (IPv4)"
-                    resolved_v4=$((resolved_v4 + 1))
+                    if _iptables_add_or_warn -A OUTPUT -p tcp -d "$ip" --dport "$port" -j ACCEPT; then
+                        log "egress allow: $host ($ip) :$port (IPv4)"
+                        resolved_v4=$((resolved_v4 + 1))
+                    fi
                     ;;
                 *)
                     warn "Unrecognised address family for $host: $ip — skipping."
@@ -252,6 +304,9 @@ apply_egress_rules() {
             esac
         done
     done
+    if [ "$_add_failures" -gt 0 ]; then
+        warn "iptables ADD failures: $_add_failures (allowlist partial — see warnings above)."
+    fi
     log "ACME/OCSP/operator egress: $resolved_v4 IPv4 rules added; $skipped_v6 IPv6 destinations BLOCKED by policy."
 
     # ── Step 7: LOG then DROP (both tables) ──────────────────────────────

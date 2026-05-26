@@ -572,3 +572,73 @@ class TestEntrypointAcmeTlsModeGate:
             "LAURA-V243-002 in the comment near the TLS_MODE gate. Provides "
             "traceability if a future refactor removes the gate."
         )
+
+
+# ── 10. LAURA-V243-005 — iptables ADD failure resilience ────────────────────
+
+class TestEntrypointIptablesAddResilience:
+    """LAURA-V243-005 (MED) — Laura adversarial probe 2026-05-26.
+
+    Before this fix: bare `iptables -A OUTPUT ... -j ACCEPT` calls under
+    `set -eu` aborted the entrypoint mid-loop on any failure. Caddy then
+    never started — restart loop with no clear error in container logs.
+    Fail-closed per Laura's live test (no bypass), but operationally opaque.
+
+    Fix: `_iptables_add_or_warn` wrapper catches non-zero, logs the rule
+    that failed, increments a counter, lets the loop continue. The OUTPUT
+    policy is already DROP, so a partial allowlist remains fail-safe.
+    """
+
+    def test_has_iptables_add_wrapper(self, entrypoint_text):
+        assert "_iptables_add_or_warn" in entrypoint_text, (
+            "LAURA-V243-005 regression: caddy-entrypoint.sh must define a "
+            "wrapper function `_iptables_add_or_warn` so iptables ADD "
+            "failures don't crash the entrypoint under `set -eu`."
+        )
+
+    def test_wrapper_used_in_resolution_loop(self, entrypoint_text):
+        assert "_iptables_add_or_warn -A OUTPUT -p tcp -d" in entrypoint_text, (
+            "LAURA-V243-005 regression: resolution-loop v4 branch must call "
+            "_iptables_add_or_warn, not bare `iptables -A OUTPUT -p tcp -d`."
+        )
+
+    def test_laura_v243_005_referenced(self, entrypoint_text):
+        assert "LAURA-V243-005" in entrypoint_text, (
+            "LAURA-V243-005 regression: caddy-entrypoint.sh must reference "
+            "LAURA-V243-005 in the comment near the wrapper definition."
+        )
+
+
+# ── 11. LAURA-V243-004 — nf_log_all_netns observability canary ──────────────
+
+class TestEntrypointNflogObservabilityCheck:
+    """LAURA-V243-004 (MED) — Laura adversarial probe 2026-05-26.
+
+    ip6tables LOG uses kernel printk, per-netns on modern kernels. Without
+    host sysctl `net.netfilter.nf_log_all_netns=1`, the IPv6 bypass canary
+    (CADDY_EGRESS_BLOCKED_V6) fires inside the container but is invisible
+    to operators running `journalctl -k`. Enforcement (DROP) unaffected;
+    observability is the gap.
+
+    Fix: read /proc/sys/net/netfilter/nf_log_all_netns at startup (read-only
+    host sysctl exposure, no extra privileges); if 0, warn with the exact
+    `sysctl -w` remediation command.
+    """
+
+    def test_reads_nf_log_all_netns(self, entrypoint_text):
+        assert "nf_log_all_netns" in entrypoint_text, (
+            "LAURA-V243-004 regression: caddy-entrypoint.sh must read "
+            "/proc/sys/net/netfilter/nf_log_all_netns and warn if 0."
+        )
+
+    def test_warns_with_remediation_command(self, entrypoint_text):
+        assert "sysctl -w net.netfilter.nf_log_all_netns=1" in entrypoint_text, (
+            "LAURA-V243-004 regression: warn must include the exact "
+            "`sysctl -w net.netfilter.nf_log_all_netns=1` remediation."
+        )
+
+    def test_laura_v243_004_referenced(self, entrypoint_text):
+        assert "LAURA-V243-004" in entrypoint_text, (
+            "LAURA-V243-004 regression: caddy-entrypoint.sh must reference "
+            "LAURA-V243-004 in the comment near the sysctl-check block."
+        )
