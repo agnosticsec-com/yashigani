@@ -7300,6 +7300,18 @@ k8s_helm_install() {
     log_warn "Helm values file not found ($helm_values) — using chart defaults"
   fi
 
+  # Iris drift gate finding Q1 (v2.24.4 close): translate --fips-mode to
+  # the helm chart's fips.mode value. Captain's chart accepts --set
+  # fips.mode=true; without this translation `install.sh --mode k8s
+  # --fips-mode 1` silently produces FIPS=off in every k8s container
+  # because compose's docker/.env path is irrelevant in k8s mode.
+  # Closes the install.sh side of B8 for k8s — parallel to the compose-
+  # path _env_set "FIPS_MODE" writes that this branch already added.
+  if [[ "${FIPS_MODE:-0}" == "1" ]]; then
+    helm_args+=(--set fips.mode=true)
+    log_info "FIPS_MODE=1 — passing --set fips.mode=true to helm"
+  fi
+
   helm "${helm_args[@]}"
   log_success "Helm release deployed"
 
