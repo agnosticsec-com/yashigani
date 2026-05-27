@@ -9212,6 +9212,31 @@ main() {
     # Step 10: Access instructions
     k8s_print_access
 
+    # Step 11: Write install state file (B1 — GAP 1: k8s path never wrote this
+    # file, causing uninstall.sh to fall through to auto-detect which tried
+    # podman/docker and never reached the k8s teardown path. Operator ran
+    # uninstall.sh, got clean exit 0, Helm release + PKI Secrets all survived.)
+    #
+    # Mode 0644: intentional — uninstall.sh may run as a different OS user
+    # (cross-UID clean-slate scenario). Contents are not sensitive (Laura TM-1
+    # verdict: runtime name + namespace are not credentials).
+    # git-ignored via docker/.yashigani-install-state entry in .gitignore.
+    if [[ "$DRY_RUN" != "true" ]]; then
+      mkdir -p "${WORK_DIR}/docker"
+      {
+        printf 'RUNTIME=%s\n'            "k8s"
+        printf 'NAMESPACE=%s\n'          "${NAMESPACE}"
+        printf 'HELM_RELEASE=%s\n'       "yashigani"
+        printf 'INSTALL_UID=%s\n'        "$(id -u)"
+        printf 'INSTALL_USER=%s\n'       "$(id -un)"
+        printf 'INSTALL_TIMESTAMP=%s\n'  "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'YASHIGANI_VERSION=%s\n'  "${YASHIGANI_VERSION:-unknown}"
+      } > "${WORK_DIR}/docker/.yashigani-install-state"
+      chmod 0644 "${WORK_DIR}/docker/.yashigani-install-state"
+      log_info "Install state written: ${WORK_DIR}/docker/.yashigani-install-state"
+      log_info "  RUNTIME=k8s  NAMESPACE=${NAMESPACE}  HELM_RELEASE=yashigani"
+    fi
+
   else
     # ------------------------------------------------------------------
     # Docker Compose deployment path (Demo + Production)

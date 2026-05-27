@@ -652,6 +652,11 @@ done
 # ===========================================================================
 
 # Source 2: state-file runtime detection (Iris IRIS-ARCH-001 / Laura LAURA-TM-CLEANUP-001).
+# B1-fix (GAP 1+10+11): also read NAMESPACE and HELM_RELEASE so _teardown_k8s
+# uses the namespace the operator originally installed into, not the env-var
+# default. Without this, custom-namespace k8s installs used the wrong namespace
+# on uninstall (YASHIGANI_NAMESPACE defaulted to "yashigani" while the actual
+# namespace was e.g. "prod-yashigani").
 _STATE_FILE="${SCRIPT_DIR}/docker/.yashigani-install-state"
 _INSTALL_UID=""
 _INSTALL_USER=""
@@ -660,10 +665,24 @@ if [ -f "$_STATE_FILE" ] && [ -r "$_STATE_FILE" ]; then
     _state_runtime="$(grep -E '^RUNTIME=' "$_STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r\n[:space:]')"
     _INSTALL_UID="$(grep -E '^INSTALL_UID=' "$_STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r\n[:space:]')"
     _INSTALL_USER="$(grep -E '^INSTALL_USER=' "$_STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r\n[:space:]')"
+    _state_namespace="$(grep -E '^NAMESPACE=' "$_STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r\n[:space:]')"
+    _state_helm_release="$(grep -E '^HELM_RELEASE=' "$_STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -d '\r\n[:space:]')"
     if [ -z "$RUNTIME" ] && { [ "$_state_runtime" = "docker" ] || [ "$_state_runtime" = "podman" ] || [ "$_state_runtime" = "k8s" ]; }; then
         RUNTIME="$_state_runtime"
         log_info "Using runtime from install state file: $RUNTIME"
         [ -n "$_INSTALL_USER" ] && log_info "Install was performed by user: ${_INSTALL_USER} (UID: ${_INSTALL_UID:-unknown})"
+    fi
+    # Propagate k8s-specific values — only when state file was written by a k8s install
+    # and the operator has not overridden via env var (honour explicit env over state file).
+    if [ "$_state_runtime" = "k8s" ]; then
+        if [ -n "$_state_namespace" ] && [ -z "${YASHIGANI_NAMESPACE:-}" ]; then
+            YASHIGANI_NAMESPACE="$_state_namespace"
+            log_info "Using namespace from install state file: $YASHIGANI_NAMESPACE"
+        fi
+        if [ -n "$_state_helm_release" ] && [ -z "${YASHIGANI_HELM_RELEASE:-}" ]; then
+            YASHIGANI_HELM_RELEASE="$_state_helm_release"
+            log_info "Using Helm release from install state file: $YASHIGANI_HELM_RELEASE"
+        fi
     fi
 fi
 
