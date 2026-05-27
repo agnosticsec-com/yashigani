@@ -2433,15 +2433,28 @@ _backup_existing_data() {
         # container. "--" before the volume name prevents injection if the name
         # ever starts with "-". The volume name is a hardcoded constant but
         # defensive quoting costs nothing.
-        if $_runtime_cmd run --rm \
+        # Iris SU-FIX2-IRIS-001: pin alpine digest matching install.sh codebase norm.
+        # Prefer cached alpine:3 tag (--pull=never); fall back to digest-pinned pull
+        # if not cached. Same pattern as lines 4277-4281 / 5942/5980 / 6076/6158 / 6248/6269.
+        local _agent_vol_alpine="alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+        if $_runtime_cmd run --rm --pull=never \
              --read-only \
              -v "${_vol_name}:/data:ro" \
              --entrypoint "" \
-             docker.io/library/alpine:3.20 \
+             "alpine:3" \
              tar -C /data -cf - -- . \
            > "$_vol_tar" 2>/dev/null; then
           chmod 0600 "$_vol_tar"
           log_info "  agent-volumes/${_vol_label}.tar backed up (volume: ${_vol_name})"
+        elif $_runtime_cmd run --rm \
+               --read-only \
+               -v "${_vol_name}:/data:ro" \
+               --entrypoint "" \
+               "$_agent_vol_alpine" \
+               tar -C /data -cf - -- . \
+             > "$_vol_tar" 2>/dev/null; then
+          chmod 0600 "$_vol_tar"
+          log_info "  agent-volumes/${_vol_label}.tar backed up (volume: ${_vol_name}, digest-pinned)"
         else
           log_warn "  agent-volumes/${_vol_label}.tar: tar from volume ${_vol_name} failed — removing partial"
           rm -f "$_vol_tar"

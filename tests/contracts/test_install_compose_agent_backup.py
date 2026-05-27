@@ -252,3 +252,24 @@ class TestComposeAgentBackupVolumes:
             "_backup_existing_data(). Tarballs must be written to "
             "${backup_dir}/agent-volumes/<bundle>.tar for clean manifest structure."
         )
+
+
+def test_agent_vol_alpine_digest_pinned():
+    """Iris SU-FIX2-IRIS-001: agent-volume tar must use the digest-pinned alpine image,
+    matching the install.sh codebase norm. Regression-guards against floating-tag drift."""
+    from pathlib import Path
+
+    text = Path("install.sh").read_text()
+    # The pinned digest used codebase-wide.
+    pinned = "alpine:3@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11"
+    assert pinned in text, "pinned alpine digest must be present"
+
+    # Agent-volume block must reference the local digest var (not a floating tag).
+    assert '_agent_vol_alpine="alpine:3@sha256:' in text, (
+        "agent-volume block must declare _agent_vol_alpine with digest pin"
+    )
+
+    # Floating tag must NOT appear in the agent-volume block.
+    assert "docker.io/library/alpine:3.20" not in text, (
+        "floating alpine:3.20 tag must not appear; use the pinned digest fallback"
+    )
