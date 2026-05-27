@@ -179,6 +179,15 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.internalBearer.existingSecretName | default "yashigani-agent-bearer" }}
                   key: yashigani_internal_bearer
+            {{- if .Values.fips.mode }}
+            # Nico N-001 (v2.24.4): FIPS_MODE propagation.
+            # Routes openssl dgst calls through the OpenSSL FIPS Provider.
+            # REQUIRES a FIPS-configured base image (CMVP #4985) — default
+            # python:3.14.0-slim does NOT contain the FIPS Provider. Do NOT
+            # set fips.mode=true without swapping to a FIPS-configured image.
+            - name: FIPS_MODE
+              value: "1"
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.gateway.existingSecretName | default "yashigani-gateway-secrets" }}

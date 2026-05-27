@@ -1421,6 +1421,40 @@ poolManager:
     podReadyTimeoutSeconds: 120
 
 # ---------------------------------------------------------------------------
+# FIPS mode — Nico N-001 (v2.24.4)
+# ---------------------------------------------------------------------------
+# lib/yashigani-fips.sh defines FIPS_MODE and routes openssl dgst calls through
+# the OpenSSL FIPS Provider when FIPS_MODE=1. install.sh sources it for
+# host-side backup MANIFEST hashing + air-gap bundle integrity. Prior to v2.24.4
+# NO container env block passed FIPS_MODE to gateway / backoffice / caddy —
+# the in-container FIPS code path existed but never activated.
+#
+# CRITICAL HONESTY NOTE (Nico N-001):
+#   Setting fips.mode: true injects FIPS_MODE=1 into gateway, backoffice, and
+#   caddy containers so that openssl dgst calls (hash verification) run in
+#   FIPS mode IF a FIPS-configured base image is present.
+#
+#   The DEFAULT base images (python:3.14.0-slim, caddy:2.11.2-alpine) DO NOT
+#   contain the CMVP #4985-validated OpenSSL FIPS Provider. Setting fips.mode=true
+#   without swapping to a FIPS-configured base image does NOT produce FIPS-validated
+#   cryptography — it only activates code paths that call openssl via subprocess.
+#
+#   To achieve FIPS-validated crypto operators MUST:
+#     1. Use a base image that ships the CMVP #4985-validated OpenSSL FIPS Provider,
+#        e.g. a RHEL/UBI-based image with openssl-fips, or an AWS BoringCrypto image.
+#     2. Set fips.mode: true in this chart.
+#
+#   "FIPS-capable" (code path exists) vs "FIPS-validated" (CMVP module loaded) are
+#   NOT the same. Do not claim FIPS compliance without a FIPS-configured base image.
+#   Ref: CMVP certificate #4985 (ACTIVE, FIPS 140-3, sunset 2030-03-10).
+#
+# Set to true ONLY if you have deployed a FIPS-configured base image.
+# Default false: FIPS_MODE env is not injected; containers use standard OpenSSL.
+# ---------------------------------------------------------------------------
+fips:
+  mode: false
+
+# ---------------------------------------------------------------------------
 # Licensing — Petra P0-1 (v2.24.4)
 # ---------------------------------------------------------------------------
 # The license loader (src/yashigani/licensing/loader.py) resolves /run/secrets/
