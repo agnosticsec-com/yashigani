@@ -21,12 +21,29 @@
   Reference: https://kubernetes.io/docs/concepts/security/pod-security-standards/
   YSG-RISK-008: B13 / Laura F-002.
 */ -}}
-{{- if .Release.IsInstall }}
 ---
+# LIVE-B13-001 fix (Maxine, end-of-P2 live-verify): IsInstall guard removed.
+# Previously gated on .Release.IsInstall to avoid conflicting with externally-
+# managed namespaces on upgrade. That guard combined with `--create-namespace`
+# produced a silent-failure mode: helm created the ns WITHOUT PSA labels, the
+# IsInstall=true manifest was emitted into the release, but the labels never
+# got applied to the live namespace. Operator-silent posture failure.
+#
+# New approach: always render the Namespace; let helm apply / patch labels on
+# both install and upgrade. helm.sh/resource-policy: keep ensures the ns is
+# NOT deleted on `helm uninstall` so operator-managed namespaces remain safe.
+# helm.sh/hook: pre-install,pre-upgrade pre-stages the labels before any
+# Deployment manifest is admitted, so PSA enforce baseline takes effect for
+# the very first scheduled pod.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-100"
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/resource-policy: keep
   labels:
     {{- include "yashigani.labels" . | nindent 4 }}
     # B13: PSA baseline enforcement — defence-in-depth regardless of Kyverno posture.
@@ -36,4 +53,4 @@ metadata:
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: baseline
     pod-security.kubernetes.io/audit-version: latest
-{{- end }}
+

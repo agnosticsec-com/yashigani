@@ -1527,7 +1527,7 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
-{{- end }}{{- /* mtls.enabled */ -}}
+{{- end }}
 
 ---
 # YSG-RISK-055 UA-10: per-agent isolation NetworkPolicies (v2.24.1).
