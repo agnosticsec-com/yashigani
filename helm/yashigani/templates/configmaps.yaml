@@ -1,4 +1,4 @@
-{{- /* Last updated: 2026-05-19T00:00:00+01:00 — fix(helm): inject X-SPIFFE-ID on /admin/* Caddy handle — close SIDE-001 — Helm parity for 8a1dbf5 */ -}}
+{{- /* Last updated: 2026-05-27T00:00:00+01:00 — fix(helm): add /api/v1/admin/* route — B4 — helm parity for /api/v1/admin/* backoffice route absent since v2.23.3 */ -}}
 {{/* ConfigMaps for services that need mounted config files */}}
 
 {{- if .Values.policy.enabled }}
@@ -492,6 +492,26 @@ data:
         # The hardcoded "spiffe://yashigani.internal/caddy" matches the ACL
         # entry in service_identities.yaml endpoint_acls["/admin/agents"].
         # Parity with docker/Caddyfile.{selfsigned,ca,acme} (commit 8a1dbf5).
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID "spiffe://yashigani.internal/caddy"
+        {{- end }}
+        reverse_proxy https://yashigani-backoffice:8443 {
+          {{- if .Values.mtls.enabled }}
+          import internal-mtls-backoffice
+          {{- end }}
+          import inject-caddy-verified
+        }
+      }
+      # ── Admin API — /api/v1/admin/* (PKI, HIBP, secrets, WebAuthn) ─────────
+      # B4 (v2.25.0 P2): absent from Helm Caddyfile since v2.23.3 when this
+      # route was added to the compose Caddyfiles (Ava SWEEP-16 / ASVS V9.1 /
+      # API5 BFLA). Without this block, Caddy returns 404 on all /api/v1/admin/*
+      # requests on K8s; the open-webui catch-all cannot route API calls.
+      # Parity with docker/Caddyfile.{selfsigned,ca,acme} line ~319/297/266.
+      # SPIFFE injection: same pattern as /admin/* — Caddy injects its own
+      # identity so require_spiffe_id() on backoffice can verify the caller.
+      handle /api/v1/admin/* {
+        {{- if .Values.mtls.enabled }}
         request_header -X-SPIFFE-ID
         request_header X-SPIFFE-ID "spiffe://yashigani.internal/caddy"
         {{- end }}
@@ -997,15 +1017,18 @@ data:
     #!/usr/bin/env bash
     # Yashigani backup.sh — age-encrypted backup (MP.L2-3.8.9 / CMMC L2)
     # Helm-embedded copy of scripts/backup.sh.
-    # Last updated: 2026-05-09T00:00:00+01:00
+    # Last updated: 2026-05-27T00:00:00+01:00 (B5: include agent bundle state dirs)
     set -euo pipefail
     umask 077
     RECIPIENT_KEY_FILE="${YASHIGANI_BACKUP_RECIPIENT:-/etc/yashigani/backup-recipient.age.pub}"
     OUTPUT_DIR="${YASHIGANI_BACKUP_OUTPUT_DIR:-/var/lib/yashigani/backups}"
     SOURCE_DIR="${YASHIGANI_BACKUP_SOURCE_DIR:-/var/lib/yashigani}"
+    # B5: colon-separated list of extra agent bundle dirs to include in tarball.
+    EXTRA_DIRS="${YASHIGANI_BACKUP_EXTRA_DIRS:-}"
     log_info()    { printf "    --> %s\n" "$*"; }
     log_success() { printf "    ok  %s\n" "$*"; }
     log_error()   { printf "    !!  ERROR: %s\n" "$*" >&2; }
+    log_warn()    { printf "    !!  WARNING: %s\n" "$*"; }
     if ! command -v age >/dev/null 2>&1; then
       log_error "age binary not found. Install: apt-get install -y age (or apk add age)"
       exit 1
@@ -1027,17 +1050,53 @@ data:
       log_error "Source directory not found: ${SOURCE_DIR}"
       exit 1
     fi
+    # B5: parse extra dirs (warn-only for missing paths).
+    EXTRA_DIRS_ARRAY=()
+    if [[ -n "${EXTRA_DIRS}" ]]; then
+      IFS=':' read -ra _raw_dirs <<< "${EXTRA_DIRS}"
+      for _d in "${_raw_dirs[@]}"; do
+        _d="${_d#"${_d%%[![:space:]]*}"}"
+        _d="${_d%"${_d##*[![:space:]]}"}"
+        [[ -z "${_d}" ]] && continue
+        if [[ -d "${_d}" ]]; then
+          EXTRA_DIRS_ARRAY+=("${_d}")
+          log_info "Extra dir included: ${_d}"
+        else
+          log_warn "Extra dir not found (skipping — agent bundle may be disabled): ${_d}"
+        fi
+      done
+    fi
+    if [[ ${#EXTRA_DIRS_ARRAY[@]} -eq 0 ]]; then
+      log_warn "No extra dirs — agent bundle state excluded from backup (B5)."
+      log_warn "Set YASHIGANI_BACKUP_EXTRA_DIRS to include langflow/letta/openclaw state."
+    fi
     mkdir -p "${OUTPUT_DIR}"
     chmod 0700 "${OUTPUT_DIR}"
     TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
     OUTPUT_FILE="${OUTPUT_DIR}/${TIMESTAMP}.tar.gz.age"
     TMP_OUTPUT="${OUTPUT_DIR}/.tmp-${TIMESTAMP}-$$.tar.gz.age"
-    trap 'rm -f "${TMP_OUTPUT}" 2>/dev/null; exit 1' INT TERM
+    TAR_STATUS_FILE="${OUTPUT_DIR}/.tmp-tar-status-${TIMESTAMP}-$$"
+    trap 'rm -f "${TMP_OUTPUT}" "${TAR_STATUS_FILE}" 2>/dev/null; exit 1' INT TERM
+    # Build extra tar args: --directory parent basename for each extra dir.
+    TAR_EXTRA_ARGS=()
+    for _extra in "${EXTRA_DIRS_ARRAY[@]}"; do
+      TAR_EXTRA_ARGS+=( "--directory" "$(dirname "${_extra}")" "$(basename "${_extra}")" )
+    done
     TAR_STATUS=0
     ENCRYPT_STATUS=0
-    { tar --create --gzip --directory "$(dirname "${SOURCE_DIR}")" "$(basename "${SOURCE_DIR}")" 2>/dev/null; TAR_STATUS=$?; } \
-      | age --encrypt --recipient "${RECIPIENT_KEY}" --output "${TMP_OUTPUT}" 2>/dev/null
+    (
+      tar --create --gzip \
+          --directory "$(dirname "${SOURCE_DIR}")" \
+          "$(basename "${SOURCE_DIR}")" \
+          "${TAR_EXTRA_ARGS[@]}" \
+          2>/dev/null
+      printf '%d' $? > "${TAR_STATUS_FILE}"
+    ) | age --encrypt --recipient "${RECIPIENT_KEY}" --output "${TMP_OUTPUT}" 2>/dev/null
     ENCRYPT_STATUS=$?
+    if [[ -f "${TAR_STATUS_FILE}" ]]; then
+      TAR_STATUS=$(cat "${TAR_STATUS_FILE}")
+      rm -f "${TAR_STATUS_FILE}"
+    fi
     if [[ "${TAR_STATUS}" -ne 0 ]]; then
       rm -f "${TMP_OUTPUT}" 2>/dev/null || true; trap - INT TERM
       log_error "tar failed (exit ${TAR_STATUS})"
