@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-28T00:00:00+01:00 (fix(backup): DRIFT-B5-COMPOSE-AGENT-BACKUP — snapshot langflow_data/letta_data/openclaw_data named volumes in _backup_existing_data; warn-only on absent volume; Docker+Podman parity via alpine tar pattern; 0600 tarballs; K8s-gated)
 # last-updated: 2026-05-23T00:00:00+00:00 (fix(install): BYOCA-BUG-001/002/003/004 — _fp init + podman unshare BYO staging + EC key gate + podman unshare YAML update)
 # last-updated: 2026-05-19T00:00:00+01:00 (fix(install): inject X-SPIFFE-ID on POST /admin/agents — close ISSUE-019)
 # last-updated: 2026-05-17T17:00:00+00:00 (feat(install): per-install YASHIGANI_INTERNAL_BEARER token generation — close Captain Bucket-C finding)
@@ -2386,6 +2387,74 @@ _backup_existing_data() {
     fi
   fi
 
+  # DRIFT-B5-COMPOSE-AGENT-BACKUP: snapshot named Docker/Podman volumes for each
+  # agent bundle that is present on this host. These volumes carry agent-specific
+  # state (langflow flows + DB, letta memory + config, openclaw policies) and were
+  # silently excluded from every compose backup since v2.23.3.
+  #
+  # Design decisions:
+  #   - Volume names are hardcoded constants — not operator-supplied — so no
+  #     path-injection risk.
+  #   - Uses "docker/podman run --rm -v <vol>:/data:ro alpine tar" instead of
+  #     "docker volume export" because Podman lacks volume export.  The pattern
+  #     works identically on both Docker and Podman (rootful + rootless).
+  #   - Warn-only when a volume is absent: agent bundles are optional; missing
+  #     volumes simply mean the bundle is not enabled.
+  #   - Output path: ${backup_dir}/agent-volumes/<bundle>.tar (0600).
+  #     The MANIFEST sweep below covers these files automatically.
+  #   - Threat model: agent volumes may contain API keys and bearer tokens.
+  #     Tarballs are written 0600 (owner-read-only) before any content reaches
+  #     them; the backup dir itself is locked to 0700 in the chmod block below.
+  #   - Skipped on K8s: agent PVCs are handled by the Helm backup CronJob
+  #     (scripts/backup.sh --extra-dirs, B5 Helm side).  This block runs only
+  #     on compose/Podman installs.
+  if [[ "${MODE:-compose}" != "k8s" && "${YSG_RUNTIME:-}" != "k8s" ]]; then
+    # Ordered list: <volume_name>:<bundle_label>
+    local -a _agent_volumes=(
+      "langflow_data:langflow"
+      "letta_data:letta"
+      "openclaw_data:openclaw"
+    )
+    local _agent_vol_dir="${backup_dir}/agent-volumes"
+    local _agent_vol_any=false
+    for _vol_entry in "${_agent_volumes[@]}"; do
+      local _vol_name="${_vol_entry%%:*}"
+      local _vol_label="${_vol_entry##*:}"
+      # Check whether the named volume exists on this host.
+      if $_runtime_cmd volume inspect -- "$_vol_name" >/dev/null 2>&1; then
+        _agent_vol_any=true
+        mkdir -p "$_agent_vol_dir"
+        local _vol_tar="${_agent_vol_dir}/${_vol_label}.tar"
+        # Pre-create at 0600 before writing so content never touches disk at
+        # a looser mode (even briefly). umask alone is insufficient here because
+        # the tar redirect lands via the shell's open(2), not install(1).
+        ( umask 177 && : > "$_vol_tar" )
+        # Pipe volume contents through a read-only bind mount via an Alpine
+        # container. "--" before the volume name prevents injection if the name
+        # ever starts with "-". The volume name is a hardcoded constant but
+        # defensive quoting costs nothing.
+        if $_runtime_cmd run --rm \
+             --read-only \
+             -v "${_vol_name}:/data:ro" \
+             --entrypoint "" \
+             docker.io/library/alpine:3.20 \
+             tar -C /data -cf - -- . \
+           > "$_vol_tar" 2>/dev/null; then
+          chmod 0600 "$_vol_tar"
+          log_info "  agent-volumes/${_vol_label}.tar backed up (volume: ${_vol_name})"
+        else
+          log_warn "  agent-volumes/${_vol_label}.tar: tar from volume ${_vol_name} failed — removing partial"
+          rm -f "$_vol_tar"
+        fi
+      else
+        log_info "  agent bundle '${_vol_label}' volume (${_vol_name}) not present — skipping (bundle not enabled)"
+      fi
+    done
+    if [[ "$_agent_vol_any" == "true" && -d "$_agent_vol_dir" ]]; then
+      chmod 0700 "$_agent_vol_dir"
+    fi
+  fi
+
   # BUG-58B-04a (v2.23.1): do NOT use 'chmod -R 600' on the backup dir.
   # That clobbers intentionally-0644 public secret files (admin passwords,
   # bootstrap tokens, service passwords that non-root containers must read).
@@ -2399,7 +2468,7 @@ _backup_existing_data() {
   find "${backup_dir}/secrets" -maxdepth 1 -type f \
     \( -name '*.key' \) -exec chmod 0400 {} \; 2>/dev/null || true
   # Lock down the backup dir itself and non-secrets files (e.g. postgres_dump.sql,
-  # .env) to owner-read-only; the secrets sub-dir mode is controlled above.
+  # .env, agent-volumes/) to owner-read-only; the secrets sub-dir mode is above.
   chmod 0700 "$backup_dir"
   if [[ -f "${backup_dir}/.env" ]]; then
     chmod 0600 "${backup_dir}/.env"
