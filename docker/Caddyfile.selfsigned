@@ -317,6 +317,14 @@ Hiring: https://agnosticsec.com/careers
     # ASVS V9.1, API5 BFLA — fix for v2.23.3 release blocker.
     # Last updated: 2026-05-09T00:00:00+00:00 (v2.23.3)
     handle /api/v1/admin/* {
+        # SIDE-001 (Iris drift gate v2.25.0 P2 wave 3, DRIFT-B4-SPIFFE-COMPOSE-API-ADMIN):
+        # strip any inbound X-SPIFFE-ID before reverse-proxy so a client cannot
+        # spoof the identity header to backoffice on this path. Mirrors /admin/*
+        # treatment. Helm chart already does this in v2.25.0 P2 B4 closure;
+        # compose was missing SIDE-001 on this block (added v2.23.3, predates
+        # SIDE-001 hardening).
+        request_header -X-SPIFFE-ID
+        request_header X-SPIFFE-ID "spiffe://yashigani.internal/caddy"
         reverse_proxy https://backoffice:8443 {
         import internal-mtls
         import inject-caddy-verified
