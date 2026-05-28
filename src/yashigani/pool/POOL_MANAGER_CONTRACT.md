@@ -247,6 +247,54 @@ def _wait_for_ringfence_init(
     """
 ```
 
+### §5 addendum — podman-rootless behaviour (Laura + Iris gate, P1 W2)
+
+On `YSG_RUNTIME_4WAY=podman-rootless` the ringfence-init sidecar **cannot** apply
+iptables rules (iptables inside a rootless user-namespace requires SYS_ADMIN, which
+is not granted — see `docker/ringfence-init/Dockerfile` rootless-podman-gap comment).
+The init script therefore exits **non-zero** and writes only
+`/run/ringfence/l1-gap` (NOT `/run/ringfence/ready`).
+
+Tom's implementation of `_wait_for_ringfence_init()` MUST handle this as follows:
+
+**Binding contract (option A — honest L1-absent path):**
+
+1. Detect `YSG_RUNTIME_4WAY=podman-rootless` via `os.environ.get("YSG_RUNTIME_4WAY")`.
+2. When runtime is `podman-rootless`:
+   - Poll for `/run/ringfence/l1-gap` instead of `/run/ringfence/ready`.
+   - On finding `l1-gap`: return normally (do not raise `RingfenceInitTimeout`).
+   - Set `ContainerInfo.ringfence_init_ready = False` (NOT True — the full ready marker
+     was never written; the agent starts but L1 is NOT enforced).
+   - Emit a `logger.warning` at init time:
+     `"ringfence-init: L1 iptables not enforced (podman-rootless); l1-gap marker detected. L2+L3 active. Audit event emitted."`
+   - Emit an audit event (Su audit chain hook, implementation details deferred to Tom)
+     recording the L1-absent state so it is visible to the operator.
+3. When runtime is NOT `podman-rootless`:
+   - Poll for `/run/ringfence/ready` as specified above.
+   - `l1-gap` alone is NOT an acceptable substitute — raise `RingfenceInitTimeout`.
+
+**Rationale (why option A, not option B "skip the poll entirely"):**
+
+Option B (skip the ready-poll for podman-rootless entirely) would silently allow the
+agent container to start even if the init sidecar crashed for an unrelated reason.
+Option A keeps the fail-closed contract for non-L1 failures (e.g. DNS resolution
+failure, unexpected sidecar crash) while honestly acknowledging the known L1 gap.
+The l1-gap marker is only written by the init script on the explicit iptables-fail
+path — any other exit condition means no marker and the poll will timeout, which is
+the correct fail-closed behaviour.
+
+**ContainerInfo.ringfence_init_ready semantics on podman-rootless:**
+
+| State | ringfence_init_ready | Meaning |
+|---|---|---|
+| `/run/ringfence/ready` present | `True` | L1 enforced, L2+L3 enforced |
+| `/run/ringfence/l1-gap` present (podman-rootless) | `False` | L1 absent (documented gap), L2+L3 enforced |
+| Neither — timeout | raises `RingfenceInitTimeout` | Hard failure, agent must not start |
+
+The PM MUST NOT silently hang waiting for `ready` that never comes on
+podman-rootless — that would be an indefinite startup stall for every agent
+container on the most common developer runtime.
+
 ## 6. `PoolManager.cleanup_idle()` — persistent-mode skip
 
 ```python
@@ -386,12 +434,36 @@ The following bindings in the compose codegen template are DEFERRED pending Tom'
 # Captain's contract is the PM API above; codegen wires these at W3.
 
 # From manifest spec.identity.spiffe (W1 field):
+#
+# IMPORTANT — spec.identity.spiffe is a DICT, not a string.
+# Schema (agent-manifest-v1alpha1.schema.json):
+#   spec.identity.spiffe = { "override_id": "<string>" }
+#
+# The W3 codegen author MUST call Tom's resolve_spiffe_uri(parsed) helper
+# (yashigani.manifest package, added in W1) to obtain the resolved URI string.
+# Direct dict access (manifest.spec.identity.spiffe) returns the dict and will
+# produce a TypeError at CertMount.__post_init__ enforcement time.
+#
+# Correct wiring (W3):
+#   from yashigani.manifest import resolve_spiffe_uri   # Tom adds this in W1
+#   spiffe_uri = resolve_spiffe_uri(parsed)             # returns str
 #   cert_mount = CertMount(
 #       host_cert_path=f"{secrets_dir}/{agent_name}_client.crt",
 #       host_key_path=f"{secrets_dir}/{agent_name}_client.key",
 #       host_ca_path=f"{secrets_dir}/ca_root.crt",
-#       spiffe_identity=manifest.spec.identity.spiffe,
+#       spiffe_identity=spiffe_uri,                     # str, not dict
 #   )
+#
+# resolve_spiffe_uri(parsed) semantics (Tom to document in W1):
+#   - If spec.identity.spiffe.override_id is set and passes N1 linting,
+#     return override_id verbatim.
+#   - Otherwise, derive canonical form:
+#     "spiffe://yashigani.internal/agents/{tenant_id}/{name}"
+#     where tenant_id = parsed["metadata"]["tenant_id"]
+#     and   name      = parsed["metadata"]["name"]
+#
+# Cross-reference: yashigani.manifest.resolve_spiffe_uri (W1, Tom)
+#                  src/yashigani/manifest/linter.py _lint_spiffe_prefix (N1 rule)
 #
 # From manifest spec.network (W1 field):
 #   networks = [f"ringfence_{agent_name}", "caddy_internal"]

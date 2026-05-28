@@ -74,6 +74,12 @@ RUN apk add --no-cache \
     iptables=1.8.11-r1 \
     bind-tools \
     iproute2-minimal \
+    # TODO(captain,post-runtime): pin bind-tools + iproute2-minimal versions.
+    # Run `apk info bind-tools iproute2-minimal` inside a live alpine:3.21.3
+    # container to get exact versions, then replace the lines above with:
+    #   bind-tools=<version>
+    #   iproute2-minimal=<version>
+    # to match the iptables pinning already in place. Do NOT guess versions.
     && rm -rf /var/cache/apk/*
 
 # Copy and lock the entrypoint script.

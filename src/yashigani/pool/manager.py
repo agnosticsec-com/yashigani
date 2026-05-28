@@ -29,11 +29,19 @@ P1 W2 extension (v2.25.0):
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
+
+# FIX-3 (Nico gate): SPIFFE identity prefix enforced at dataclass init time.
+# Any non-empty spiffe_identity MUST start with this prefix — no caller can
+# silently flow an arbitrary SPIFFE URI into ContainerInfo.
+_SPIFFE_REQUIRED_PREFIX_RE = re.compile(
+    r"^spiffe://yashigani\.internal/agents/"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +66,30 @@ class CertMount:
     container_key_path: str = "/run/secrets/client.key"
     container_ca_path: str = "/run/secrets/ca.crt"
     spiffe_identity: str = ""
+
+    def __post_init__(self) -> None:
+        """
+        FIX-3 (Nico gate — P1 W2): enforce SPIFFE identity prefix.
+
+        A non-empty spiffe_identity MUST match
+        ``spiffe://yashigani.internal/agents/``.  Empty string is allowed for
+        non-agent pool containers (legacy behaviour, no cert issued).
+
+        Raises:
+            ValueError: if spiffe_identity is non-empty and does not start with
+                        the required ``spiffe://yashigani.internal/agents/`` prefix.
+        """
+        if self.spiffe_identity and not _SPIFFE_REQUIRED_PREFIX_RE.match(
+            self.spiffe_identity
+        ):
+            raise ValueError(
+                "CertMount.spiffe_identity %r does not match the required prefix "
+                "spiffe://yashigani.internal/agents/ — arbitrary SPIFFE identities "
+                "must not flow silently into ContainerInfo. "
+                "Use spiffe://yashigani.internal/agents/<tenant_id>/<agent_name> "
+                "or leave spiffe_identity empty for non-agent containers. "
+                "(FIX-3 / Nico gate, POOL_MANAGER_CONTRACT.md §2)"
+            )
 
 
 @dataclass
