@@ -404,30 +404,36 @@ class TestB13KyvernoPsaLabels:
     Source: Laura F-002.
     """
 
-    def test_psa_labels_on_namespace(self, namespaces):
-        """Namespace must carry PSA enforce/warn/audit baseline labels."""
-        # The namespace resource may have the release name or "default" depending
-        # on how helm template is called without --namespace flag.
-        assert namespaces, "No Namespace resource rendered — check namespace.yaml"
-        # Take the first rendered namespace (should be the only one)
-        ns = next(iter(namespaces.values()))
-        labels = ns.get("metadata", {}).get("labels", {})
-        assert labels.get("pod-security.kubernetes.io/enforce") == "baseline", (
-            f"PSA enforce=baseline label missing from namespace (B13). Got: {labels}"
-        )
-        assert labels.get("pod-security.kubernetes.io/warn") == "baseline", (
-            "PSA warn=baseline label missing from namespace"
-        )
-        assert labels.get("pod-security.kubernetes.io/audit") == "baseline", (
-            "PSA audit=baseline label missing from namespace"
+    # LIVE-B13-001..004 (end-of-P2 VM verify): the chart NO LONGER manages the
+    # Namespace. The original chart-rendered Namespace + PSA labels collided with
+    # helm --create-namespace (labels silently dropped) and enforce=baseline
+    # rejected the caddy pod (CAP_NET_ADMIN for ip6tables egress). Resolution:
+    # install.sh owns the namespace lifecycle — pre-creates it + applies PSA
+    # warn+audit baseline via `kubectl label` (enforce dropped; Kyverno does hard
+    # enforcement when admissionPolicies.enabled=true). These tests now verify the
+    # install.sh-applied posture, not a chart manifest.
+    def test_chart_does_not_manage_namespace(self, namespaces):
+        """Chart must NOT render a Namespace resource (install.sh owns it)."""
+        assert not namespaces, (
+            "Chart rendered a Namespace resource — it must not (LIVE-B13-001..004: "
+            f"namespace lifecycle moved to install.sh). Got: {list(namespaces)}"
         )
 
-    def test_psa_enforce_version_set(self, namespaces):
-        """PSA enforce-version must be set (prevents drift on K8s upgrades)."""
-        ns = next(iter(namespaces.values()))
-        labels = ns.get("metadata", {}).get("labels", {})
-        assert "pod-security.kubernetes.io/enforce-version" in labels, (
-            "pod-security.kubernetes.io/enforce-version label missing"
+    def test_psa_warn_audit_applied_by_install_sh(self):
+        """install.sh must apply PSA warn+audit baseline labels (+ versions) via
+        kubectl. enforce is intentionally NOT applied (LIVE-B13-002: enforce=baseline
+        rejects caddy's CAP_NET_ADMIN; hard enforcement is delegated to Kyverno)."""
+        install_sh = (TEMPLATES_DIR.parents[2] / "install.sh").read_text()
+        for lbl in (
+            "pod-security.kubernetes.io/warn=baseline",
+            "pod-security.kubernetes.io/warn-version=latest",
+            "pod-security.kubernetes.io/audit=baseline",
+            "pod-security.kubernetes.io/audit-version=latest",
+        ):
+            assert lbl in install_sh, f"install.sh missing PSA label application: {lbl}"
+        assert "pod-security.kubernetes.io/enforce=baseline" not in install_sh, (
+            "LIVE-B13-002: enforce=baseline must NOT be applied (breaks caddy NET_ADMIN); "
+            "warn+audit only, Kyverno for hard enforcement."
         )
 
     def test_production_kyverno_off_warn_in_validate_security(self):
