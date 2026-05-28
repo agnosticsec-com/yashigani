@@ -17,9 +17,18 @@ Rules implemented here:
   C3  — duplicate (tenant_id, name) within a single validate run (stateless
          in v1 — registry uniqueness is a runtime concern; validator flags
          exact duplicate fields in the manifest itself).
+  P2  — spec.mcp.identity_propagation == gateway-enforced-only is FORBIDDEN
+         when spec.audit.sensitivity_ceiling is CONFIDENTIAL or RESTRICTED.
+         Default sensitivity ceiling is CONFIDENTIAL (L-01), so an absent
+         ceiling also triggers this check.
 
 Error messages are human-quality (K3 — Nora launch gate):
   Every error includes: what failed, why it matters, how to fix it.
+
+W3 additions (v2.25.0 P1):
+  P2  — spec.mcp.identity_propagation == gateway-enforced-only is FORBIDDEN
+         when spec.audit.sensitivity_ceiling is CONFIDENTIAL or RESTRICTED
+         (default is CONFIDENTIAL per L-01).
 
 Last updated: 2026-05-28T00:00:00+00:00
 """
@@ -473,6 +482,51 @@ def _lint_model_egress_base_url(parsed: dict) -> list[LintError]:
 
 
 # ---------------------------------------------------------------------------
+# P2 — gateway-enforced-only forbidden for CONFIDENTIAL/RESTRICTED
+# ---------------------------------------------------------------------------
+
+# Sensitivity ceilings that require an identity-propagation stronger than
+# gateway-enforced-only.  Absent ceiling defaults to CONFIDENTIAL (L-01).
+_HIGH_SENSITIVITY_CEILINGS: frozenset[str] = frozenset({"CONFIDENTIAL", "RESTRICTED"})
+
+
+def _lint_identity_propagation_p2(parsed: dict) -> list[LintError]:
+    """
+    P2 — spec.mcp.identity_propagation == gateway-enforced-only is FORBIDDEN
+    when spec.audit.sensitivity_ceiling is CONFIDENTIAL or RESTRICTED.
+
+    L-01: the global default sensitivity ceiling is CONFIDENTIAL.
+    An absent spec.audit.sensitivity_ceiling therefore ALSO triggers this check
+    when identity_propagation is gateway-enforced-only.
+    """
+    errors: list[LintError] = []
+    mcp = (parsed.get("spec") or {}).get("mcp") or {}
+    identity_propagation = mcp.get("identity_propagation")
+    if identity_propagation != "gateway-enforced-only":
+        return errors
+
+    # Determine effective sensitivity ceiling (L-01: absent defaults to CONFIDENTIAL)
+    audit = (parsed.get("spec") or {}).get("audit") or {}
+    ceiling = audit.get("sensitivity_ceiling") or "CONFIDENTIAL"
+
+    if ceiling in _HIGH_SENSITIVITY_CEILINGS:
+        errors.append(LintError(
+            "P2_gateway_enforced_only_forbidden",
+            "spec.mcp.identity_propagation: 'gateway-enforced-only' is forbidden when "
+            "sensitivity_ceiling is '%s'. gateway-enforced-only provides no per-user "
+            "identity to downstream MCP servers, enabling privilege confusion attacks "
+            "when the agent processes %s-sensitivity data (P2)." % (ceiling, ceiling),
+            field="spec.mcp.identity_propagation",
+            fix="Change spec.mcp.identity_propagation to 'gateway-signed-jwt' (ES384 JWT "
+                "forwarding — v1 default) or 'per-user-credential'. "
+                "If you intend PUBLIC-data-only usage, set "
+                "spec.audit.sensitivity_ceiling: PUBLIC and justify with "
+                "spec.network.egress_allow[*].justification.",
+        ))
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # C3 — duplicate (tenant_id, agent_id) check within a single manifest
 # ---------------------------------------------------------------------------
 
@@ -661,6 +715,9 @@ def validate_manifest(
 
     # C3 — name/tenant_id presence
     errors.extend(_lint_name_uniqueness(parsed))
+
+    # P2 — gateway-enforced-only forbidden for CONFIDENTIAL/RESTRICTED
+    errors.extend(_lint_identity_propagation_p2(parsed))
 
     passed = len(errors) == 0
     return LintResult(errors=errors, warnings=warnings, passed=passed)
