@@ -7514,10 +7514,32 @@ k8s_helm_install() {
     log_info "No existing Helm release — using fresh-install timeout: ${_helm_timeout}"
   fi
 
+  # LIVE-B13-001/002/003/004 (end-of-P2 live-verify on kind v1.35.0):
+  # The chart used to manage the Namespace resource directly. That collided
+  # with --create-namespace in multiple ways: PSA labels silently dropped on
+  # first install, hook annotations broke release tracking, and unconditional
+  # Namespace + --atomic triggered full rollback on Namespace-already-exists.
+  # Fix: install.sh owns the namespace lifecycle. Pre-create the namespace
+  # with PSA warn+audit baseline labels here, then run helm install WITHOUT
+  # --create-namespace. PSA enforce is intentionally NOT applied (caddy needs
+  # CAP_NET_ADMIN which baseline forbids; PSA has no per-pod exception).
+  # Hard enforcement is delegated to Kyverno (admissionPolicies.enabled=true).
+  if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+    log_info "Pre-creating namespace ${NAMESPACE} with PSA warn+audit baseline labels..."
+    kubectl create namespace "$NAMESPACE"
+  fi
+  # Apply / refresh PSA labels (idempotent via --overwrite). Safe on existing ns.
+  kubectl label namespace "$NAMESPACE" --overwrite \
+    pod-security.kubernetes.io/warn=baseline \
+    pod-security.kubernetes.io/warn-version=latest \
+    pod-security.kubernetes.io/audit=baseline \
+    pod-security.kubernetes.io/audit-version=latest \
+    >/dev/null
+  log_success "PSA warn+audit baseline labels applied to namespace ${NAMESPACE}"
+
   local helm_args=(
     upgrade --install yashigani "$chart_dir"
     --namespace "$NAMESPACE"
-    --create-namespace
     --wait
     --wait-for-jobs
     --timeout "${_helm_timeout}"

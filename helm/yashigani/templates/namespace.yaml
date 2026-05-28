@@ -1,70 +1,37 @@
 {{- /*
-  B13 fix (Laura F-002): Pod Security Admission baseline enforcement labels.
-  PSA is a Kubernetes built-in admission controller (GA since K8s v1.25) that
-  enforces Pod Security Standards at the namespace level — independent of Kyverno.
-  Labelling the namespace `baseline` is defence-in-depth:
-    - Blocks the most dangerous privilege escalations (privileged pods, hostPID,
-      hostNetwork, hostPath, allowPrivilegeEscalation=true, root UID) at the
-      k8s API server layer, before the pod spec reaches any webhook.
-    - Provides a security floor even when admissionPolicies.enabled=false (Kyverno
-      not installed), which is the default.
-  warn + audit modes emit events without blocking; enforce mode hard-rejects.
-  Using warn+audit on baseline AND enforce on baseline for belt-and-suspenders:
-    - enforce baseline: hard-reject pods that fail the standard.
-    - warn baseline: surface violations in dry-run / kubectl output.
-    - audit baseline: emit audit events for detection.
-  Our workloads already meet the baseline standard (runAsNonRoot, no privileged
-  flag, no hostPath, seccompProfile set), so enforce baseline causes zero regressions.
-  Restricted standard would require additional seccompProfile constraints that
-  some upstream images (open-webui initContainer) don't yet meet — baseline is
-  the correct tier for this chart's current workload posture.
-  Reference: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+  B13 fix (Laura F-002) — namespace manifest INTENTIONALLY EMPTY here.
+  
+  History:
+    - v2.25.0 P2 wave 2 (commit 6a8406e, Captain): added Namespace manifest
+      with PSA baseline labels, gated on .Release.IsInstall
+    - Live-verify (kind v1.35.0) caught two compounding bugs:
+      - LIVE-B13-001: `--create-namespace` race silently dropped PSA labels
+      - LIVE-B13-002: enforce=baseline rejected caddy (NET_ADMIN required)
+      - and a third on the v1 fix: helm.sh/hook annotation broke release tracking
+      - and a fourth: unconditional Namespace + --create-namespace + --atomic
+        triggered full rollback on Namespace-already-exists conflict
+  
+  Resolution: chart no longer manages the Namespace resource. install.sh's
+  k8s_helm_install() pre-creates the namespace with PSA warn+audit baseline
+  labels BEFORE running `helm install` (without --create-namespace). This
+  separates concerns cleanly:
+    - install.sh owns the namespace lifecycle + PSA labels
+    - helm chart owns workload resources only
+  
+  Operators bypassing install.sh and running `helm install` directly MUST:
+    1. Pre-create the namespace with PSA labels:
+         kubectl create namespace yashigani
+         kubectl label namespace yashigani \
+           pod-security.kubernetes.io/warn=baseline \
+           pod-security.kubernetes.io/warn-version=latest \
+           pod-security.kubernetes.io/audit=baseline \
+           pod-security.kubernetes.io/audit-version=latest
+    2. Run helm install WITHOUT --create-namespace
+  
+  Hard enforcement (enforce=baseline) is NOT applied — caddy needs CAP_NET_ADMIN
+  which baseline forbids, and PSA has no per-pod exception mechanism. Operators
+  wanting hard enforcement should install Kyverno + set admissionPolicies.enabled
+  =true (which can express the caddy exemption).
+  
   YSG-RISK-008: B13 / Laura F-002.
 */ -}}
----
-# LIVE-B13-001 fix (Maxine, end-of-P2 live-verify): IsInstall guard removed.
-# Previously gated on .Release.IsInstall to avoid conflicting with externally-
-# managed namespaces on upgrade. That guard combined with `--create-namespace`
-# produced a silent-failure mode: helm created the ns WITHOUT PSA labels, the
-# IsInstall=true manifest was emitted into the release, but the labels never
-# got applied to the live namespace. Operator-silent posture failure.
-#
-# New approach: always render the Namespace; let helm apply / patch labels on
-# both install and upgrade. helm.sh/resource-policy: keep ensures the ns is
-# NOT deleted on `helm uninstall` so operator-managed namespaces remain safe.
-# helm.sh/hook: pre-install,pre-upgrade pre-stages the labels before any
-# Deployment manifest is admitted, so PSA enforce baseline takes effect for
-# the very first scheduled pod.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{ .Release.Namespace }}
-  annotations:
-    # LIVE-B13-001 (v2): hook annotations removed — they made the Namespace a
-    # hook-classified resource, which prevented the main release secret from
-    # being recorded cleanly (helm list shows no release row even after
-    # successful pod startup). resource-policy: keep retained so `helm uninstall`
-    # does NOT delete the namespace (operator-managed-namespace safety).
-    helm.sh/resource-policy: keep
-  labels:
-    {{- include "yashigani.labels" . | nindent 4 }}
-    # B13: PSA baseline labels (LIVE-B13-002 post-live-verify revision).
-    #
-    # Live-verify on kind v1.35.0 caught that enforce=baseline REJECTS the caddy
-    # pod because caddy requires CAP_NET_ADMIN for the ip6tables OUTPUT egress
-    # hardening (YSG-RISK-061, c838004). PSA baseline forbids NET_ADMIN. Result:
-    # caddy ReplicaSet sees FailedCreate for every spawn, 0 ready replicas, the
-    # auth perimeter is down. enforce=baseline + NET_ADMIN are incompatible at
-    # the namespace tier — they cannot coexist without a namespace-per-pod split.
-    #
-    # Revised posture: warn + audit baseline only. Operators get full visibility
-    # (cluster events + audit log entries) but pods admit. Hard enforcement is
-    # delegated to Kyverno (admissionPolicies.enabled=true) which CAN express
-    # the "caddy is exempt from NET_ADMIN rule" exception that PSA cannot.
-    # This is honest: we don't claim enforcement we cannot deliver chart-wide
-    # (per Tiago no-legacy-dishonest-mode-flags rule).
-    pod-security.kubernetes.io/warn: baseline
-    pod-security.kubernetes.io/warn-version: latest
-    pod-security.kubernetes.io/audit: baseline
-    pod-security.kubernetes.io/audit-version: latest
-
