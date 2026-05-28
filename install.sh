@@ -2961,13 +2961,17 @@ PYEOF
   fi
 
   # Run Python inside container. Non-secret config is passed via -e env vars.
-  # Secrets (_YSG_ADMIN_PHC, _YSG_IKM2_HEX) are passed via stdin as a JSON blob
-  # to avoid exposure in 'docker inspect' (FINDING-4: env vars to docker exec are
-  # visible in docker inspect to any user with Docker socket access; stdin is not).
-  # stdin is not in argv, env, or docker inspect output.
+  # Secrets (admin_phc, ikm2_hex) are passed to the container via stdin as a JSON
+  # blob to avoid exposure in 'docker inspect' (FINDING-5: env vars to docker exec
+  # are visible in docker inspect to any user with Docker socket access; stdin is not).
+  # NEW-ISSUE-1 (Laura re-gate, CWE-214): the host-side JSON build must NOT place
+  # the secrets in argv either (visible in ps / /proc/<pid>/cmdline to same-uid).
+  # Feed both secrets to the host python3 via stdin, NUL-separated (neither a PHC
+  # string nor a hex IKM contains a NUL byte). Not in argv, not in env.
   local _secrets_json
-  _secrets_json=$(python3 -c "import json,sys; print(json.dumps({'admin_phc': sys.argv[1], 'ikm2_hex': sys.argv[2]}))" \
-    "${_admin_phc}" "${_ikm2_hex}" 2>/dev/null)
+  _secrets_json=$(printf '%s\0%s' "${_admin_phc}" "${_ikm2_hex}" | python3 -c \
+    "import json,sys; d=sys.stdin.buffer.read().split(b'\0'); print(json.dumps({'admin_phc': d[0].decode(), 'ikm2_hex': (d[1].decode() if len(d) > 1 else '')}))" \
+    2>/dev/null)
   if [[ -z "$_secrets_json" ]]; then
     log_error "YSG-RISK-050: Failed to build secrets JSON for container stdin"
     $_runtime_cmd_local exec "$_crypto_container" rm -rf "$_container_work" 2>/dev/null || true

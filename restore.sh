@@ -453,7 +453,7 @@ META_FILE    = os.environ["_YSG_META_FILE"]
 BUNDLE_FILE  = os.environ["_YSG_BUNDLE_FILE"]
 STAGING_DIR  = os.environ["_YSG_STAGING_DIR"]
 FLOW         = os.environ["_YSG_FLOW"]         # "password" | "license" | "key"
-CREDENTIAL   = os.environ.get("_YSG_CREDENTIAL", "")  # plaintext password | hex IKM2
+CREDENTIAL   = sys.stdin.read()  # plaintext password | hex IKM2 — via stdin (NEW-ISSUE-2, CWE-214: not env, not argv)
 
 meta = json.loads(Path(META_FILE).read_text())
 bundle_ct = Path(BUNDLE_FILE).read_bytes()
@@ -665,12 +665,15 @@ PYPEOF
   chmod 0700 "$_py_tmp"
   printf '%s' "$_py_decrypt" > "$_py_tmp"
 
+  # NEW-ISSUE-2 (Laura re-gate, CWE-214): the credential (plaintext password or
+  # hex IKM2) must NOT be passed via env (visible in /proc/<pid>/environ) — feed
+  # it to the Python via stdin instead. Non-secret config stays in env vars.
   if ! _py_out=$(
+    printf '%s' "$_credential" | \
     _YSG_META_FILE="$meta_file" \
     _YSG_BUNDLE_FILE="$bundle_file" \
     _YSG_STAGING_DIR="$staging_dir" \
     _YSG_FLOW="$_flow_env" \
-    _YSG_CREDENTIAL="$_credential" \
     _YSG_FIPS_MODE="${FIPS_MODE:-0}" \
     python3 "$_py_tmp" 2>&1
   ); then
