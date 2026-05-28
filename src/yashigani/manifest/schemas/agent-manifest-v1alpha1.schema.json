@@ -1,0 +1,414 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "yashigani.io/v1alpha1/AgentIntegration",
+  "title": "AgentIntegration v1alpha1",
+  "description": "Yashigani ring-fence onboarding manifest (v2.25.0 P1). External $ref resolution is DISABLED — this schema is self-contained. Do not add external $ref entries.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "yashigani.io/v1alpha1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "AgentIntegration"
+    },
+
+    "metadata": {
+      "type": "object",
+      "required": ["name", "tenant_id"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$",
+          "description": "Agent name — lowercase alphanumeric with hyphens; min 3, max 64 chars."
+        },
+        "tenant_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$",
+          "description": "Tenant identifier — same character set as name. Must not contain NUL or newlines. The parser additionally asserts that the resolved KMS prefix equals /tenant/<tenant_id>/."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Human-readable description of this agent integration (used by DISCLOSURE.md generator — G7)."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["llm_agent", "mcp_client", "mcp_server", "inference_engine", "other"],
+          "description": "Agent category — drives codegen template selection."
+        },
+        "vendor": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "licence": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "upstream": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Upstream project URL (for GDPR sub-processor inventory)."
+        }
+      }
+    },
+
+    "spec": {
+      "type": "object",
+      "required": ["image"],
+      "additionalProperties": false,
+      "properties": {
+
+        "image": {
+          "type": "object",
+          "required": ["repository", "tag", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "repository": {"type": "string", "maxLength": 512},
+            "tag":        {"type": "string", "maxLength": 128},
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "description": "SHA-256 image digest (required — M6). Must be sha256:<64 hex chars>."
+            }
+          }
+        },
+
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "image"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string", "maxLength": 64},
+              "image": {
+                "type": "object",
+                "required": ["repository", "tag", "digest"],
+                "additionalProperties": false,
+                "properties": {
+                  "repository": {"type": "string", "maxLength": 512},
+                  "tag":        {"type": "string", "maxLength": 128},
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$",
+                    "description": "Sidecar image digest required (M6)."
+                  }
+                }
+              }
+            }
+          }
+        },
+
+        "model_egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["openai", "anthropic", "google", "azure_openai", "ollama", "custom"],
+              "description": "LLM provider. Used to populate Caddy egress routes (L2)."
+            },
+            "base_url": {
+              "type": "string",
+              "maxLength": 512,
+              "description": "Provider base URL. Codegen hardcodes this — never sourced from request headers (C1)."
+            }
+          }
+        },
+
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "posture": {
+              "type": "string",
+              "enum": ["mcp-a", "mcp-b", "mcp-c"],
+              "description": "mcp-a=consume only; mcp-b=expose only; mcp-c=both."
+            },
+            "identity_propagation": {
+              "type": "string",
+              "enum": ["gateway-signed-jwt", "gateway-enforced-only"],
+              "default": "gateway-signed-jwt",
+              "description": "Gateway-signed-jwt: ES384 JWT in _meta (Nico NICO-004). gateway-enforced-only: FORBIDDEN for CONFIDENTIAL/RESTRICTED (validator enforces). per-user-credential is v2."
+            },
+            "consumes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "servers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "transport", "pin_mode"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id":        {"type": "string", "maxLength": 64},
+                      "transport": {"type": "string", "enum": ["stdio", "streamable_http"]},
+                      "command":   {"type": "string", "maxLength": 512},
+                      "url":       {"type": "string", "maxLength": 512},
+                      "pin_mode": {
+                        "type": "string",
+                        "enum": ["cert_fingerprint", "spiffe"],
+                        "description": "Upstream pin mode (P8). cert_fingerprint is v1 default."
+                      },
+                      "cert_fingerprint": {
+                        "type": "string",
+                        "pattern": "^[a-fA-F0-9:]+$",
+                        "description": "Required when pin_mode=cert_fingerprint."
+                      }
+                    }
+                  }
+                },
+                "server_allowlist": {
+                  "type": "array",
+                  "items": {"type": "string", "maxLength": 64},
+                  "description": "Allowlist of server IDs this agent may consume. Replaces tool_allowlist (Iris L-02)."
+                }
+              }
+            },
+            "exposes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "listen_port": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 49151,
+                  "description": "Port the agent exposes for MCP (mcp-b/mcp-c only). Only port in inbound_ports range allowed (M5)."
+                },
+                "tools": {
+                  "type": "array",
+                  "items": {"type": "string", "maxLength": 128},
+                  "description": "Tool names this agent exposes (P9 per-tool OPA authz)."
+                }
+              }
+            }
+          }
+        },
+
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inbound_ports": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 49151
+              },
+              "description": "Inbound ports — only 1024-49151 allowed (M5). Non-MCP inbound is forbidden in v1; use mcp.exposes.listen_port instead."
+            },
+            "egress_allow": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["host"],
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "maxLength": 253,
+                    "description": "Egress-allowed hostname. Must not be an RFC1918/loopback/link-local address (C1 codegen rejects those). Hardcoded string — never sourced from request headers."
+                  },
+                  "ports": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+                  },
+                  "justification": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "description": "Required for CONFIDENTIAL/RESTRICTED ceiling agents (G3 covert-channel control)."
+                  }
+                }
+              }
+            }
+          }
+        },
+
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "spiffe": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "override_id": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "description": "Optional override for the SPIFFE URI suffix. Validator enforces the /agents/{tenant_id}/{name} prefix (N1)."
+                }
+              }
+            }
+          }
+        },
+
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "source"],
+            "additionalProperties": false,
+            "properties": {
+              "name":   {"type": "string", "maxLength": 128},
+              "source": {
+                "type": "string",
+                "enum": ["kms"],
+                "description": "Only KMS-sourced secrets are supported in v1."
+              },
+              "env": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Environment variable NAME pointing at the file path. Never the value itself (S9)."
+              },
+              "kms_path": {
+                "type": "string",
+                "maxLength": 512,
+                "description": "KMS logical key path. Must start with /tenant/<tenant_id>/ (M2 KMS-prefix assertion)."
+              }
+            }
+          }
+        },
+
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "volumes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                  "name":       {"type": "string", "maxLength": 64},
+                  "mount_path": {"type": "string", "maxLength": 512},
+                  "read_only":  {"type": "boolean"}
+                }
+              }
+            }
+          }
+        },
+
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":  {"type": "boolean"},
+            "database": {"type": "string", "maxLength": 64},
+            "user":     {"type": "string", "maxLength": 64}
+          }
+        },
+
+        "lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["persistent"],
+              "description": "v1 only supports persistent mode. on-demand is v2 (Nico NICO-003 — on-demand issuance blocked on PKI Issuer API)."
+            }
+          }
+        },
+
+        "session_mode": {
+          "type": "string",
+          "enum": ["stateless", "stdio"],
+          "description": "Session persistence mode. stdio = gateway runs the subprocess (L-05, Tiago-locked stdio day-1). stateless = HTTP only."
+        },
+
+        "pool": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "container_per": {
+              "type": "string",
+              "enum": ["agent", "identity"],
+              "description": "Isolation level. identity = per-user container (L11 Pool Manager)."
+            },
+            "max_idle": {"type": "integer", "minimum": 0, "maximum": 1000}
+          }
+        },
+
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "capture": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "manifest_onboard",
+                  "manifest_offboard",
+                  "manifest_validate_failed",
+                  "dynamic_cert_issued",
+                  "dynamic_cert_revoked",
+                  "mcp_call",
+                  "mcp_tool_description_fetched",
+                  "kms_secret_distributed_to_agent",
+                  "opa_decision_on_mcp",
+                  "egress_allow_used"
+                ],
+                "description": "Subset of ring-fence event types to capture for this agent. Maps to the 10 registered EventType values (W0a)."
+              }
+            },
+            "sensitivity_ceiling": {
+              "type": "string",
+              "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"],
+              "default": "CONFIDENTIAL",
+              "description": "Maximum data sensitivity this agent may process. Global default is CONFIDENTIAL (Iris L-01 removes per-agent sensitivity_ceiling from v1 spec; ceiling is set globally)."
+            }
+          }
+        },
+
+        "eu_ai_act": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "annex_iii_category": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional EU AI Act Annex III risk category (informational — Nico N8)."
+            }
+          }
+        },
+
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Manifest signature provenance (M7). Populated by the signing ceremony; present in registered manifests.",
+          "properties": {
+            "algorithm": {
+              "type": "string",
+              "enum": ["cosign-bundled-key", "rsa-pss-3072-sha384"],
+              "description": "cosign-bundled-key = non-FIPS air-gap path; rsa-pss-3072-sha384 = FIPS path (Nico NICO-005, OpenSSL FIPS Provider CMVP #4985)."
+            },
+            "signature_hex": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]+$",
+              "description": "Hex-encoded signature. For cosign path, base64url of the cosign bundle; for RSA-PSS path, hex of the DER signature."
+            },
+            "signed_at": {
+              "type": "string",
+              "description": "ISO-8601 UTC timestamp of when the manifest was signed."
+            },
+            "signer_key_id": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "Key identifier (e.g. bundled cosign pub key fingerprint, or RSA key ID from KMS)."
+            }
+          }
+        }
+      }
+    }
+  }
+}
