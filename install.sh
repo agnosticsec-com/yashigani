@@ -2595,9 +2595,8 @@ _backup_existing_data() {
   fi
 
   # Build the Python crypto script. This runs inside the container via docker/podman exec.
-  # The script receives all inputs via environment variables (no secrets in argv — CWE-214).
-  # Secrets passed via env: _YSG_ADMIN_PHC, _YSG_IKM2, _YSG_FIPS_MODE.
-  # Non-secret config passed via env: _YSG_BACKUP_DIR, _YSG_TIER, _YSG_LIC_ID, _YSG_WRAP1_PRESENT, _YSG_VERSION.
+  # Secrets (_YSG_ADMIN_PHC, _YSG_IKM2_HEX) passed via stdin JSON to avoid docker inspect
+  # exposure (FINDING-4). Non-secret config via -e env: _YSG_WRAP1_PRESENT, _YSG_TIER, etc.
   #
   # The container sees backup_dir as a bind-mount path: the host backup_dir is
   # accessible inside the container because install.sh runs on the host and
