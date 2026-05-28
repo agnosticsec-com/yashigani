@@ -5724,14 +5724,23 @@ for r in results:
     done
     log_success "Agent bundle registration complete"
 
-    # Pre-populate agents in Open WebUI's database
-    log_info "Syncing agents to Open WebUI..."
-    local init_script="${WORK_DIR}/scripts/init-openwebui-agents.py"
-    if [[ -f "$init_script" ]]; then
-      "${COMPOSE_CMD[@]}" "${compose_files[@]}" cp "$init_script" open-webui:/tmp/init-agents.py 2>/dev/null || \
-        podman cp "$init_script" docker_open-webui_1:/tmp/init-agents.py 2>/dev/null || true
-      "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T open-webui python3 /tmp/init-agents.py 2>&1 || \
-        podman exec docker_open-webui_1 python3 /tmp/init-agents.py 2>&1 || true
+    # Pre-populate agents in Open WebUI's database — ONLY when Open WebUI is
+    # actually installed. LIVE-OWUI-SYNC-001 (VM smoke 2026-05-28): this block
+    # previously gated only on the init script existing, so on an install
+    # WITHOUT --with-openwebui it ran `exec ... open-webui` against a container
+    # that does not exist and printed "no container docker_open-webui_1 found"
+    # (non-fatal via || true, but alarming noise in the install log).
+    if [[ "${INSTALL_OPENWEBUI:-false}" == "true" ]]; then
+      log_info "Syncing agents to Open WebUI..."
+      local init_script="${WORK_DIR}/scripts/init-openwebui-agents.py"
+      if [[ -f "$init_script" ]]; then
+        "${COMPOSE_CMD[@]}" "${compose_files[@]}" cp "$init_script" open-webui:/tmp/init-agents.py 2>/dev/null || \
+          podman cp "$init_script" docker_open-webui_1:/tmp/init-agents.py 2>/dev/null || true
+        "${COMPOSE_CMD[@]}" "${compose_files[@]}" exec -T open-webui python3 /tmp/init-agents.py 2>&1 || \
+          podman exec docker_open-webui_1 python3 /tmp/init-agents.py 2>&1 || true
+      fi
+    else
+      log_info "Open WebUI not installed — skipping agent sync (re-run with --with-openwebui to enable)"
     fi
   else
     log_warn "No agents were registered — register manually via /admin/agents"
