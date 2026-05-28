@@ -133,9 +133,9 @@
             },
             "identity_propagation": {
               "type": "string",
-              "enum": ["gateway-signed-jwt", "gateway-enforced-only"],
+              "enum": ["gateway-signed-jwt", "per-user-credential", "gateway-enforced-only"],
               "default": "gateway-signed-jwt",
-              "description": "Gateway-signed-jwt: ES384 JWT in _meta (Nico NICO-004). gateway-enforced-only: FORBIDDEN for CONFIDENTIAL/RESTRICTED (validator enforces). per-user-credential is v2."
+              "description": "Identity propagation mode. gateway-signed-jwt: ES384 JWT in _meta (Nico NICO-004) — v1 default. per-user-credential: per-user credential forwarding — v1. gateway-enforced-only: FORBIDDEN for CONFIDENTIAL/RESTRICTED sensitivity ceiling (linter P2 rejects). Default: gateway-signed-jwt."
             },
             "consumes": {
               "type": "object",
