@@ -16,13 +16,18 @@ Filter pipeline (per description/prompt text):
   3. Homoglyph-normalise: map common Cyrillic/Greek look-alikes for the
      targeted keywords to their ASCII equivalents so "SYSTеM" (Cyrillic е)
      and similar substitutions are caught.
-  4. 2048-char hard cap — reject anything over the cap (large blobs have no
+  4. Leet-digit normalise (detection variant only): map unambiguous digit
+     substitutions (0→o, 1→i, 3→e, 4→a, 5→s, 7→t) so "syst3m"→"system"
+     and "ov3rride"→"override" are caught.  Applied ONLY to the internal
+     detection text — the clean safe_text returned to the caller is
+     unaffected (FIX-M4-003 / LAURA-V250-M4-003).
+  5. 2048-char hard cap — reject anything over the cap (large blobs have no
      legitimate place in a tool description).
-  5. Control-char scan — reject any text containing ASCII control characters
+  6. Control-char scan — reject any text containing ASCII control characters
      outside the normal printable/whitespace range (0x00-0x1F except 0x09/
      0x0A/0x0D, and 0x7F).  These are not valid prose.
-  6. Pattern scan — case-insensitive search for prompt-injection markers.
-     Applied to BOTH the Cf-stripped+homoglyph-normalised text AND a
+  7. Pattern scan — case-insensitive search for prompt-injection markers.
+     Applied to BOTH the Cf-stripped+homoglyph+leet-normalised text AND a
      "separator-collapsed" variant (spaces/hyphens/underscores between
      individual letters stripped) to catch S-Y-S-T-E-M / o_v_e_r_r_i_d_e.
      On match: the text is REJECTED (FilterResult.rejected=True) and a
@@ -50,7 +55,8 @@ TODO [M4-v2]: replace heuristic pattern set with an LLM-classifier sidecar
 v2.25.0 / P1 Phase-2 / M4 / YSG-RISK-054 (tool-description audit) /
   LAURA-MCP-005 (injection vector in tool descriptions) /
   FIX-M4-001 (LAURA-V250-M4-001 Cf-strip + homoglyph + separator-collapse) /
-  FIX-M4-002 (LAURA-V250-M4-002 you-are false-positive narrowing).
+  FIX-M4-002 (LAURA-V250-M4-002 you-are false-positive narrowing) /
+  FIX-M4-003 (LAURA-V250-M4-003 leet-digit bypass — 0→o 1→i 3→e 4→a 5→s 7→t).
 """
 from __future__ import annotations
 
@@ -111,6 +117,53 @@ _HOMOGLYPH_TABLE: dict[int, int] = {
 def _homoglyph_normalise(text: str) -> str:
     """Map common Cyrillic/Greek homoglyphs to their ASCII equivalents."""
     return text.translate(_HOMOGLYPH_TABLE)
+
+
+# ---------------------------------------------------------------------------
+# FIX-M4-003: Leet-digit normalisation (LAURA-V250-M4-003)
+#
+# Digit substitutions are a common bypass technique: "syst3m" → "system",
+# "ov3rride" → "override".  This normalisation is applied ONLY to the
+# internal detection text — the caller's safe_text is the NFKC-normalised
+# original and is NOT de-leeted.
+#
+# Conservative map — only unambiguous substitutions whose character is
+# exclusively used as a letter stand-in in adversarial prompts:
+#   3 → e   (the only digit used this way in the target keywords)
+#   0 → o   (used in "0verride", "pr0mpt")
+#   1 → i   (used in "1gnore", "1nstruction")
+#   4 → a   (used in "4ct as", "j4ilbreak")
+#   5 → s   (used in "5ystem")
+#   7 → t   (used in "sys7em", "instruc7ion")
+#
+# Ambiguous digits (2, 6, 8, 9) are intentionally excluded — they do not
+# appear unambiguously in the target keyword set and would risk false
+# positives on numeric descriptions (e.g. "HTTP/2", "retry 6 times").
+#
+# False-positive guard: the de-leeted form is only dangerous if it matches
+# a keyword.  Purely numeric strings such as "retry up to 5 times" de-leet
+# to "retry up to s times" — "s" alone never matches a \b-anchored keyword.
+# ---------------------------------------------------------------------------
+
+_LEET_TABLE: dict[int, int] = {
+    ord("0"): ord("o"),
+    ord("1"): ord("i"),
+    ord("3"): ord("e"),
+    ord("4"): ord("a"),
+    ord("5"): ord("s"),
+    ord("7"): ord("t"),
+}
+
+
+def _leet_normalise(text: str) -> str:
+    """
+    Replace unambiguous leet digit substitutions with their ASCII letter
+    equivalents for keyword-detection purposes.
+
+    IMPORTANT: Only call this on the internal detection variant — NEVER on
+    the text that is returned to the caller (safe_text must be unmodified).
+    """
+    return text.translate(_LEET_TABLE)
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +327,10 @@ def filter_description(text: str) -> FilterResult:
       1. NFKC normalise.
       2. Strip Unicode Cf (format) chars — defeats ZWSP/ZWJ/bidi bypass.
       3. Homoglyph-normalise (Cyrillic/Greek → ASCII for targeted keywords).
-      4. 2048-char cap (applied after normalisation).
-      5. Control-char scan.
-      6. Pattern scan on prepared text AND on separator-collapsed variant.
+      4. Leet-digit normalise (detection variant only — safe_text unaffected).
+      5. 2048-char cap (applied after normalisation).
+      6. Control-char scan.
+      7. Pattern scan on detection text AND on separator-collapsed variant.
     """
     original_length = len(text)
 
@@ -294,7 +348,13 @@ def filter_description(text: str) -> FilterResult:
 
     normalised_length = len(prepared)
 
-    # Step 4: 2048-char cap (applied AFTER normalisation + Cf-strip)
+    # Step 4: leet-digit normalise — detection variant only (FIX-M4-003)
+    # "syst3m" → "system", "ov3rride" → "override" for keyword matching.
+    # 'detection' is the text used for all pattern scans; 'prepared' (without
+    # de-leet) is kept intact so safe_text is never digit-mangled.
+    detection = _leet_normalise(prepared)
+
+    # Step 5: 2048-char cap (applied AFTER normalisation + Cf-strip)
     if normalised_length > _MAX_DESCRIPTION_CHARS:
         return FilterResult(
             original_length=original_length,
@@ -304,7 +364,7 @@ def filter_description(text: str) -> FilterResult:
             safe_text=_REPLACEMENT_TEXT,
         )
 
-    # Step 5: control-char scan
+    # Step 6: control-char scan (on prepared — control chars unchanged by de-leet)
     ctrl_match = _CONTROL_CHAR_PATTERN.search(prepared)
     if ctrl_match:
         return FilterResult(
@@ -315,8 +375,10 @@ def filter_description(text: str) -> FilterResult:
             safe_text=_REPLACEMENT_TEXT,
         )
 
-    # Step 6a: injection pattern scan on prepared text
-    pattern_match = _COMPILED_PATTERN.search(prepared)
+    # Step 7a: injection pattern scan on detection text (FIX-M4-001 + FIX-M4-003)
+    # 'detection' = prepared + leet-normalised; catches homoglyphs, Cf-splits,
+    # AND leet digit substitutions (syst3m → system, ov3rride → override).
+    pattern_match = _COMPILED_PATTERN.search(detection)
     if pattern_match:
         return FilterResult(
             original_length=original_length,
@@ -327,10 +389,11 @@ def filter_description(text: str) -> FilterResult:
             matched_pattern=pattern_match.group()[:64],  # truncated for audit only
         )
 
-    # Step 6b: injection pattern scan on separator-collapsed variant (FIX-M4-001)
-    # Catches S-Y-S-T-E-M / o_v_e_r_r_i_d_e / "i g n o r e" patterns.
-    collapsed = _collapse_separators(prepared)
-    if collapsed != prepared:
+    # Step 7b: injection pattern scan on separator-collapsed variant (FIX-M4-001)
+    # Apply separator-collapse to the detection text (already leet-normalised)
+    # so "s-y-s-t-3-m" → collapse → "syst3m" → already de-leeted → "system".
+    collapsed = _collapse_separators(detection)
+    if collapsed != detection:
         collapsed_match = _COMPILED_PATTERN.search(collapsed)
         if collapsed_match:
             return FilterResult(

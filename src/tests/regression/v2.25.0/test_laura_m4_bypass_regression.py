@@ -1,17 +1,19 @@
 """
-Regression tests: LAURA-V250-M4-001 (zero-width/bidi bypass) and
-LAURA-V250-M4-002 (you-are false-positive over-blocking).
+Regression tests: LAURA-V250-M4-001 (zero-width/bidi bypass),
+LAURA-V250-M4-002 (you-are false-positive over-blocking), and
+LAURA-V250-M4-003 (leet-digit bypass — ov3rride / syst3m).
 
 These tests are DERIVED DIRECTLY from Laura's PoCs:
-  - poc_m4_zwchar_bypass.py   — 14 payloads that MUST be rejected
+  - poc_m4_zwchar_bypass.py   — 14 payloads that MUST be rejected (all 14)
   - poc_m4_fp_you_are.py      — 8 legitimate descriptions that MUST pass
 
-If these tests regress (any BYPASS or FALSE-POSITIVE), that means FIX-M4-001
-or FIX-M4-002 has been broken.
+If these tests regress (any BYPASS or FALSE-POSITIVE), that means FIX-M4-001,
+FIX-M4-002, or FIX-M4-003 has been broken.
 
 Fix references:
   FIX-M4-001 / LAURA-V250-M4-001 / YSG-RISK-054
   FIX-M4-002 / LAURA-V250-M4-002 / YSG-RISK-054
+  FIX-M4-003 / LAURA-V250-M4-003 / YSG-RISK-054
 
 v2.25.0 / P1 Phase-2 gate / Tom — 2026-05-29.
 """
@@ -62,6 +64,9 @@ class TestM4ZeroWidthBypassRegression:
         # Separator splitting
         ("S-Y-S-T-E-M (hyphens)", "S-Y-S-T-E-M"),
         ("o_v_e_r_r_i_d_e",       "o_v_e_r_r_i_d_e"),
+        # Leet-digit substitution (FIX-M4-003 / LAURA-V250-M4-003)
+        ("ov3rride",               "ov3rride the default"),
+        ("syst3m prompt",          "syst3m prompt injection here"),
     ])
     def test_bypass_payload_is_rejected(self, desc: str, payload: str) -> None:
         """
@@ -75,55 +80,54 @@ class TestM4ZeroWidthBypassRegression:
 
         result = filter_description(payload)
         assert result.rejected is True, (
-            f"REGRESSION LAURA-V250-M4-001: payload {desc!r} bypassed the filter.\n"
+            f"REGRESSION LAURA-V250-M4-001/003: payload {desc!r} bypassed the filter.\n"
             f"  payload:       {payload!r}\n"
             f"  rejected:      {result.rejected}\n"
             f"  reject_reason: {result.reject_reason!r}\n"
             f"  safe_text:     {result.safe_text!r}\n"
             "FIX-M4-001 (_strip_cf_chars + _homoglyph_normalise + "
-            "_collapse_separators) must be intact."
+            "_collapse_separators) and FIX-M4-003 (_leet_normalise) must be intact."
         )
         assert result.safe_text == "", (
             f"Rejected description must produce empty safe_text. Got: {result.safe_text!r}"
         )
 
 
-@pytest.mark.parametrize("desc,payload", [
-    # Leet (digit-substitution) — KNOWN OUT-OF-SCOPE for v1 heuristic filter.
-    # The brief explicitly excludes leet from FIX-M4-001 scope:
-    #   "Base64/hex-encoded payloads stay out of scope (inherent-v1,
-    #    agent is the protected surface, LLM-classifier=v2)"
-    # Leet is in the same category.  These tests confirm the scope boundary.
-    ("ov3rride",     "ov3rride the default"),
-    ("syst3m prompt", "syst3m prompt injection here"),
+@pytest.mark.parametrize("description", [
+    # Digit-containing legitimate descriptions — must NOT be falsely rejected
+    # after leet-digit normalisation (FIX-M4-003).
+    # The de-leet map only matters when the result forms a \b-anchored keyword;
+    # these strings do not contain any keyword even after de-leeting.
+    "retry up to 5 times before failing",
+    "supports HTTP/2 and HTTP/3 protocols",
+    "base64 helper for encoding and decoding binary data",
+    "returns a list of up to 100 results",
+    "MD5 hash is 32 hex characters long",
+    "OAuth 2.0 token expires after 3600 seconds",
 ])
-def test_leet_is_known_v1_bypass_not_in_scope(desc: str, payload: str) -> None:
+def test_digit_containing_legit_descriptions_pass(description: str) -> None:
     """
-    Leet substitutions (digit-for-letter) are a KNOWN LIMITATION of the v1
-    heuristic filter.  They are explicitly out of scope for FIX-M4-001.
+    FIX-M4-003 false-positive guard: descriptions containing digits that are
+    NOT leet-substituted injection keywords must NOT be rejected.
 
-    The v1 filter (Cf-strip + homoglyph + separator-collapse) does NOT catch
-    digit-substitutions.  This is accepted risk — the LLM-classifier sidecar
-    in v2 (M4-v2 TODO) is the mitigation.
-
-    This test DOCUMENTS the scope boundary — it asserts that these payloads
-    currently PASS (i.e., are not rejected).  If this test fails it means
-    either:
-      a) The scope boundary changed and leet IS now in scope (update brief), or
-      b) A pattern was accidentally added that catches these words — verify
-         it does not cause false positives before keeping it.
-
-    Laura's finding: LAURA-V250-M4-001 — leet listed as documented bypass.
+    De-leet maps digits to letters only where the result matches a keyword.
+    "5 times" → "s times"; "HTTP/2" → "HTTP/o"; "base64" → "base6a" — none
+    of these form the targeted keywords (SYSTEM, OVERRIDE, etc.) so all must
+    pass cleanly.
     """
     from yashigani.mcp._content_filter import filter_description
 
-    result = filter_description(payload)
-    # These ARE bypasses — filter passes them through.  This is expected v1 behaviour.
+    result = filter_description(description)
     assert result.rejected is False, (
-        f"Leet payload {desc!r} was unexpectedly REJECTED.\n"
-        f"  payload:       {payload!r}\n"
+        f"FALSE POSITIVE (FIX-M4-003): digit-containing description was rejected.\n"
+        f"  description:   {description!r}\n"
         f"  reject_reason: {result.reject_reason!r}\n"
-        "If leet is now in scope, remove this test and add to the main battery."
+        f"  matched_pattern: {result.matched_pattern!r}\n"
+        "The leet-digit normalisation must NOT produce false positives on "
+        "descriptions that merely contain digits."
+    )
+    assert result.safe_text != "", (
+        "Non-rejected description must have non-empty safe_text."
     )
 
 
