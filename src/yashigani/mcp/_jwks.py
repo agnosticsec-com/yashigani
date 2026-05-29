@@ -23,7 +23,21 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-JWKS_CACHE_CONTROL = "max-age=300, must-revalidate"
+# Nico fix (ship-blocker): cache-window alignment.
+#
+# _jwt.py JWT TTL = 60s.  Key retire window (retire_old called after JWT TTL
+# + skew = 65s).  If clients cache the JWKS for 300s, there is a ~234s window
+# after a rotation where clients may hold a stale JWKS entry that no longer
+# contains the new key — leading to verification failures.
+#
+# Fix: set max-age to 60 (== JWT TTL) so clients re-fetch the JWKS at least
+# once per JWT lifetime.  This ensures any client will see the new key before
+# the old key is retired.
+#
+# The previous value of 300 came from Nico spec §5 "short TTL for rapid rotation"
+# but was inconsistent with the actual retire window.  60s is the correct value
+# that closes the gap without changing the retire window itself.
+JWKS_CACHE_CONTROL = "max-age=60, must-revalidate"
 JWKS_PATH = "/.well-known/yashigani-mcp-jwks.json"
 
 

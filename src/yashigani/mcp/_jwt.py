@@ -103,6 +103,14 @@ class McpJwtIssuer:
         self._chain_max_depth = chain_max_depth
         self._ttl = jwt_ttl_seconds
 
+        # Nico ship-blocker: FIPS provider assertion.
+        # If FIPS_MODE=1, verify that the OpenSSL FIPS provider is actually
+        # loaded before accepting any crypto work.  Fail loudly if absent —
+        # never silently degrade to a non-FIPS OpenSSL configuration.
+        # Mirrors the shell guard _fips_assert_provider_loaded in
+        # lib/yashigani-fips.sh:60.
+        self._assert_fips_provider_if_required()
+
         if private_key is not None:
             self._key = private_key
         else:
@@ -116,6 +124,62 @@ class McpJwtIssuer:
 
         # Startup self-test (Nico FIPS checklist §7)
         self._startup_self_test()
+
+    @staticmethod
+    def _assert_fips_provider_if_required() -> None:
+        """
+        Nico ship-blocker: FIPS provider assertion.
+
+        If FIPS_MODE=1, check that the OpenSSL FIPS provider is loaded via
+        `openssl list -providers`.  Raises RuntimeError immediately if the
+        FIPS provider is absent — never silently degrades to non-FIPS crypto.
+
+        Mirrors the shell guard `_fips_assert_provider_loaded` in
+        lib/yashigani-fips.sh:60.
+
+        In non-FIPS deployments (FIPS_MODE unset or not "1") this is a no-op.
+        """
+        fips_mode = os.environ.get("FIPS_MODE", "").strip()
+        if fips_mode != "1":
+            return  # Non-FIPS deployment — skip assertion
+
+        try:
+            import subprocess as _subprocess
+            result = _subprocess.run(
+                ["openssl", "list", "-providers"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+            output = result.stdout + result.stderr
+        except FileNotFoundError:
+            raise RuntimeError(
+                "McpJwtIssuer: FIPS_MODE=1 but 'openssl' binary not found. "
+                "Cannot verify FIPS provider status. "
+                "Install openssl or disable FIPS_MODE."
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"McpJwtIssuer: FIPS_MODE=1 but 'openssl list -providers' failed: {exc}. "
+                "Cannot verify FIPS provider status."
+            ) from exc
+
+        # The FIPS provider shows as "fips" in the providers list.
+        # We check for the case-insensitive string "fips" in the output.
+        if "fips" not in output.lower():
+            raise RuntimeError(
+                "McpJwtIssuer: FIPS_MODE=1 but the OpenSSL FIPS provider is NOT loaded. "
+                "Output of 'openssl list -providers':\n"
+                f"{output.strip()}\n"
+                "Ensure the FIPS provider is installed and configured in openssl.cnf. "
+                "The gateway MUST NOT operate in FIPS mode without a validated FIPS "
+                "provider. Failing startup to prevent non-compliant operation. "
+                "See lib/yashigani-fips.sh:60 for the install procedure."
+            )
+
+        logger.info(
+            "mcp-broker: FIPS_MODE=1 — OpenSSL FIPS provider confirmed loaded"
+        )
 
     def _load_or_generate_key(self) -> EllipticCurvePrivateKey:
         """

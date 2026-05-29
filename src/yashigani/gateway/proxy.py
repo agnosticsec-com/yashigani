@@ -133,6 +133,8 @@ def create_gateway_app(
     extra_routers=None,  # v2.0 — additional routers to mount BEFORE catch-all
     ddos_protector=None,  # v2.2 — DDoSProtector | None
     pii_detector=None,   # v2.2 — PiiDetector | None
+    mcp_broker_registry=None,  # v2.25.0 P3 — McpBrokerRegistry | None
+    mcp_jwks_store=None,       # v2.25.0 P3 — JwksStore | None
 ) -> FastAPI:
     """
     Create the Yashigani gateway FastAPI application.
@@ -157,6 +159,8 @@ def create_gateway_app(
         "anomaly_detector": anomaly_detector,
         "ddos_protector": ddos_protector,  # v2.2
         "pii_detector": pii_detector,      # v2.2
+        "mcp_broker_registry": mcp_broker_registry,  # v2.25.0 P3
+        "mcp_jwks_store": mcp_jwks_store,             # v2.25.0 P3
         "http_client": None,
     }
 

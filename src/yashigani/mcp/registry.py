@@ -1,0 +1,194 @@
+"""
+MCP Broker — per-server broker registry.
+
+Holds one McpBroker + McpBrokerServerConfig per onboarded MCP server.
+Populated at gateway startup from YASHIGANI_MCP_SERVERS env var (JSON array).
+Thread-safe for reads (dict reads are atomic in CPython; writes only at startup).
+
+v2.25.0 / P3 gateway integration.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class McpBrokerServerConfig:
+    """
+    Per-server configuration held in the registry alongside the broker instance.
+
+    upstream_url:
+        URL of the stdio↔HTTP bridge inside the server container
+        (e.g. "http://filesystem-mcp:8000").
+
+    is_filesystem_agent:
+        When True, broker.enforce() runs the second OPA gate
+        (filesystem_tool_allowed) after the global mcp_decision allow.
+        Set True for agents whose manifest declares category=mcp_server.
+
+    tenant_id:
+        Tenant identifier — matches the broker's McpBrokerConfig.tenant_id.
+        Stored here so the runtime route can build McpCallContext without
+        calling back into the broker's private state.
+
+    agent_name:
+        Human-readable agent name (path param == registry key).
+    """
+
+    upstream_url: str
+    is_filesystem_agent: bool
+    tenant_id: str
+    agent_name: str
+
+
+class McpBrokerRegistry:
+    """
+    Maps agent_name → (McpBroker, McpBrokerServerConfig).
+
+    One McpBroker instance per registered MCP server.
+    Registry is built once at startup; no runtime mutations.
+    """
+
+    def __init__(self) -> None:
+        self._registry: dict[str, tuple[object, McpBrokerServerConfig]] = {}
+
+    def register(
+        self,
+        agent_name: str,
+        broker: object,  # McpBroker — typed as object to avoid circular import
+        config: McpBrokerServerConfig,
+    ) -> None:
+        """Register a broker + config for agent_name. Overwrites if already set."""
+        if agent_name in self._registry:
+            logger.warning(
+                "mcp-registry: re-registering agent_name=%r (existing entry replaced)",
+                agent_name,
+            )
+        self._registry[agent_name] = (broker, config)
+        logger.info(
+            "mcp-registry: registered agent_name=%r upstream=%r is_filesystem=%s",
+            agent_name, config.upstream_url, config.is_filesystem_agent,
+        )
+
+    def get(
+        self, agent_name: str
+    ) -> Optional[tuple[object, McpBrokerServerConfig]]:
+        """
+        Return (broker, server_config) for agent_name, or None if not registered.
+        """
+        return self._registry.get(agent_name)
+
+    def all_brokers(self) -> list[object]:
+        """Return all registered broker instances (useful for health probes)."""
+        return [broker for broker, _ in self._registry.values()]
+
+    def __len__(self) -> int:
+        return len(self._registry)
+
+    def __repr__(self) -> str:
+        return f"McpBrokerRegistry(agents={list(self._registry.keys())})"
+
+
+def build_registry_from_env(
+    opa_url: str,
+    audit_writer: Optional[object] = None,
+) -> tuple[McpBrokerRegistry, object]:  # (registry, jwks_store | None)
+    """
+    Parse YASHIGANI_MCP_SERVERS and build a McpBrokerRegistry.
+
+    YASHIGANI_MCP_SERVERS is a JSON array of objects:
+    [
+      {
+        "agent_name": "filesystem-mcp",
+        "upstream_url": "http://filesystem-mcp:8000",
+        "tenant_id": "acme",
+        "is_filesystem_agent": true
+      },
+      ...
+    ]
+
+    Returns (registry, jwks_store).  If YASHIGANI_MCP_SERVERS is unset or empty,
+    returns an empty registry and None — callers guard on len(registry) == 0.
+
+    Fail-closed: JSON parse errors or missing required fields raise RuntimeError
+    at startup so the gateway surfaces misconfiguration immediately.
+    """
+    from yashigani.mcp._jwt import McpJwtIssuer
+    from yashigani.mcp._jwks import JwksStore
+    from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+
+    raw = os.environ.get("YASHIGANI_MCP_SERVERS", "").strip()
+    if not raw:
+        logger.info("mcp-registry: YASHIGANI_MCP_SERVERS not set — no MCP servers registered")
+        return McpBrokerRegistry(), None
+
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"YASHIGANI_MCP_SERVERS is not valid JSON: {exc}"
+        ) from exc
+
+    if not isinstance(entries, list):
+        raise RuntimeError(
+            "YASHIGANI_MCP_SERVERS must be a JSON array of server descriptors"
+        )
+
+    if len(entries) == 0:
+        logger.info("mcp-registry: YASHIGANI_MCP_SERVERS is an empty array — no MCP servers")
+        return McpBrokerRegistry(), None
+
+    # Build one shared issuer + JWKS store (one key per installation)
+    # The first entry's tenant_id is used as the issuer tenant; each broker
+    # gets its own McpJwtIssuer instance with the same key material via env var.
+    # In production, the key is loaded from YASHIGANI_MCP_SIGNING_KEY_PEM or
+    # the secrets file (see _jwt.py §1 — 3-tier key lookup).
+    first_tenant = entries[0].get("tenant_id", "default")
+    shared_issuer = McpJwtIssuer(tenant_id=first_tenant)
+    jwks_store = JwksStore(primary_issuer=shared_issuer)
+
+    registry = McpBrokerRegistry()
+
+    for i, entry in enumerate(entries):
+        _required = {"agent_name", "upstream_url", "tenant_id"}
+        missing = _required - set(entry.keys())
+        if missing:
+            raise RuntimeError(
+                f"YASHIGANI_MCP_SERVERS[{i}] is missing required fields: {missing}"
+            )
+
+        agent_name = str(entry["agent_name"])
+        upstream_url = str(entry["upstream_url"])
+        tenant_id = str(entry["tenant_id"])
+        is_filesystem_agent = bool(entry.get("is_filesystem_agent", False))
+
+        broker_cfg = McpBrokerConfig(
+            opa_url=opa_url,
+            tenant_id=tenant_id,
+            issuer=McpJwtIssuer(tenant_id=tenant_id),
+            audit_writer=audit_writer,
+            is_filesystem_agent=is_filesystem_agent,
+        )
+        broker = McpBroker(config=broker_cfg)
+
+        server_cfg = McpBrokerServerConfig(
+            upstream_url=upstream_url,
+            is_filesystem_agent=is_filesystem_agent,
+            tenant_id=tenant_id,
+            agent_name=agent_name,
+        )
+
+        registry.register(agent_name, broker, server_cfg)
+
+    logger.info(
+        "mcp-registry: built registry with %d server(s): %s",
+        len(registry),
+        [e.get("agent_name") for e in entries],
+    )
+    return registry, jwks_store

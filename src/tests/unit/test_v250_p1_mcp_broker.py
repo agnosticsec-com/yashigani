@@ -1150,9 +1150,21 @@ class TestJwksStore:
         assert "y" in key
 
     def test_jwks_cache_control_constant(self):
-        """Cache-Control value is max-age=300 (Nico spec §5)."""
+        """
+        Cache-Control value must be max-age=60 (Nico ship-blocker fix).
+
+        The original value of 300s was incorrect: with a JWT TTL of 60s and a
+        retire window of ~65s, a 300s cache means clients may hold a stale JWKS
+        for up to ~234s after a rotation — causing verification failures.
+
+        Fixed in P3 gateway integration: max-age=60 == JWT TTL, ensuring clients
+        re-fetch the JWKS at least once per JWT lifetime.
+        """
         from yashigani.mcp._jwks import JWKS_CACHE_CONTROL
-        assert "max-age=300" in JWKS_CACHE_CONTROL
+        assert "max-age=60" in JWKS_CACHE_CONTROL, (
+            f"JWKS_CACHE_CONTROL must be max-age=60 (== JWT TTL); got: {JWKS_CACHE_CONTROL!r}. "
+            "Nico ship-blocker: max-age=300 opens a ~234s post-rotation verification gap."
+        )
         assert "must-revalidate" in JWKS_CACHE_CONTROL
 
     def test_rotation_overlap_two_keys(self, p384_key):

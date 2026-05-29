@@ -637,6 +637,44 @@ def _build_app(mesh_mode: bool = False):
         ddos_protector=ddos_protector,
     )
 
+    # ── MCP broker wiring (P3 — v2.25.0) ──────────────────────────────────────
+    # Build a McpBrokerRegistry + JwksStore from YASHIGANI_MCP_SERVERS env var.
+    # Guard: if env var is unset/empty, both return values are empty/None and
+    # the gateway behaves exactly as before (backward-compatible).
+    try:
+        from yashigani.mcp.registry import build_registry_from_env
+        from yashigani.mcp.router import create_mcp_router
+        from yashigani.gateway.mcp_router_runtime import create_mcp_call_router
+
+        _mcp_registry, _mcp_jwks_store = build_registry_from_env(
+            opa_url=opa_url,
+            audit_writer=audit_writer,
+        )
+        _extra_routers: list = [openai_router]
+
+        if len(_mcp_registry) > 0 and _mcp_jwks_store is not None:
+            # Pick any broker for the /mcp/health OPA probe (they all share opa_url)
+            _representative_broker = _mcp_registry.all_brokers()[0]
+            _mcp_info_router = create_mcp_router(_mcp_jwks_store, _representative_broker)
+            _mcp_call_router = create_mcp_call_router(_mcp_registry)
+            _extra_routers = [openai_router, _mcp_info_router, _mcp_call_router]
+            logger.info(
+                "MCP broker wiring: %d server(s) registered, JWKS + call routes mounted",
+                len(_mcp_registry),
+            )
+        else:
+            _mcp_registry = None
+            _mcp_jwks_store = None
+            logger.info("MCP broker wiring: no servers configured (YASHIGANI_MCP_SERVERS unset)")
+
+    except Exception as exc:
+        # Fail-closed: MCP wiring failure must not silently degrade.
+        # Log the error and raise so the gateway exits non-zero at startup.
+        logger.exception("MCP broker wiring failed at startup: %s", exc)
+        raise RuntimeError(
+            f"MCP broker wiring failed — gateway cannot start safely: {exc}"
+        ) from exc
+
     gateway_app = create_gateway_app(
         config=cfg,
         inspection_pipeline=pipeline,
@@ -652,9 +690,11 @@ def _build_app(mesh_mode: bool = False):
         inference_logger=inference_logger,
         anomaly_detector=anomaly_detector,
         response_inspection_pipeline=response_pipeline,
-        extra_routers=[openai_router],
+        extra_routers=_extra_routers,
         pii_detector=pii_detector,
         ddos_protector=ddos_protector,
+        mcp_broker_registry=_mcp_registry,
+        mcp_jwks_store=_mcp_jwks_store,
     )
     logger.info("OpenAI-compatible /v1 router mounted (before catch-all)")
 
