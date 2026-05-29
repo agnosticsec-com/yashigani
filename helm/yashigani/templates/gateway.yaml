@@ -116,6 +116,20 @@ spec:
               value: {{ $gwEnv.agentTokenMinLength | quote }}
             - name: YASHIGANI_DEPLOYMENT_STREAM
               value: {{ $gwEnv.deploymentStream | quote }}
+            {{- /*
+              Fix-6 (Captain): YASHIGANI_MCP_SERVERS — JSON array of onboarded MCP
+              servers.  Read by build_registry_from_env() at gateway startup.
+              Set gateway.mcpServers in values.yaml (default: empty list = no MCP).
+              Example values.yaml entry:
+                gateway:
+                  mcpServers:
+                    - agent_name: filesystem-mcp
+                      upstream_url: http://filesystem-mcp:8000
+                      tenant_id: acme
+                      is_filesystem_agent: true
+            */}}
+            - name: YASHIGANI_MCP_SERVERS
+              value: {{ .Values.gateway.mcpServers | default list | toJson | quote }}
             {{- if .Values.mtls.enabled }}
             # M-01 fix: mTLS OTLP endpoint (grpcs://). Gateway presents its
             # leaf cert. Python OTEL exporter goes through Python ssl —

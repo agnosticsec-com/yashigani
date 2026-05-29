@@ -53,6 +53,22 @@ _DEFAULT_SUBPROCESS_READ_TIMEOUT = 30.0   # seconds
 _MAX_RESTARTS = 3
 _RESTART_BACKOFF_BASE = 0.5              # seconds
 
+# Fix-2 (Laura ship-blocker): in-flight cap prevents the _pending dict from
+# growing unbounded under a request flood (each entry holds an asyncio.Future
+# + the raw request bytes — an attacker could exhaust gateway memory).
+# Default 64 is generous for any realistic MCP workload (MCP is inherently
+# sequential per-session; 64 is only relevant when multiple agents share a
+# bridge or concurrent HTTP calls arrive from different sessions).
+# Configurable via env for integration tests or high-throughput deployments.
+_MAX_IN_FLIGHT: int = int(os.environ.get("YASHIGANI_MCP_BRIDGE_MAX_IN_FLIGHT", "64"))
+
+# Fix-3 (Laura ship-blocker): body size cap at the bridge layer (defense in
+# depth — the gateway router layer also caps, see mcp_router_runtime.py).
+# 1 MiB is generous for any valid MCP JSON-RPC payload.
+_BRIDGE_BODY_LIMIT: int = int(
+    os.environ.get("YASHIGANI_MCP_MAX_BODY_BYTES", str(1 * 1024 * 1024))
+)
+
 
 class _BridgeProcess:
     """
@@ -79,8 +95,17 @@ class _BridgeProcess:
 
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._restart_count = 0
-        # Lock is created lazily (first async call) to avoid requiring a running
-        # event loop at __init__ time (Python 3.9 asyncio.Lock() binds at construction).
+        # Lock is created lazily (first async call).
+        # Rationale: uvicorn imports this module at startup before creating the event
+        # loop.  asyncio.Lock() is safe to construct without a running loop in Python
+        # 3.10+ (the 3.9 restriction was removed in bpo-39529), but this module is
+        # also used as a standalone bridge container entry point via:
+        #   uvicorn yashigani.mcp._bridge:app
+        # In that path the module-level `app = create_bridge_app()` call at the bottom
+        # instantiates _BridgeProcess at IMPORT time — before uvicorn starts the event
+        # loop.  Creating the lock lazily avoids any import-time loop dependency
+        # regardless of the runtime version.  The workaround is correct; the old
+        # "Python 3.9 asyncio.Lock() binds at construction" comment was inaccurate.
         self._lock: Optional[asyncio.Lock] = None
 
         # id → asyncio.Future[str] — maps in-flight request ids to their waiters
@@ -108,8 +133,11 @@ class _BridgeProcess:
         )
         logger.info("mcp-bridge: subprocess started pid=%d cmd=%s", self._proc.pid, self._command)
 
-        # Start background reader for response correlation
-        self._reader_task = asyncio.get_event_loop().create_task(
+        # Start background reader for response correlation.
+        # Use get_running_loop() — we are inside an async def (start() is awaited),
+        # so a running loop is guaranteed.  get_event_loop() is deprecated in 3.10+
+        # and raises DeprecationWarning when there is no current event loop.
+        self._reader_task = asyncio.get_running_loop().create_task(
             self._reader_loop(), name="mcp-bridge-reader"
         )
 
@@ -233,15 +261,26 @@ class _BridgeProcess:
         Waits for the matching response line (correlated by id).
         Returns the raw response JSON string.
         Raises RuntimeError on timeout or subprocess crash.
+
+        Fix-2 (Laura ship-blocker): raises RuntimeError with a 503 hint when the
+        in-flight pending dict is at capacity (_MAX_IN_FLIGHT).  Callers in the
+        HTTP handler surface this as HTTP 503 + Retry-After.
         """
         msg = json.loads(request_json)
         msg_id = msg.get("id")
 
         async with self._get_lock():
+            # Fix-2: reject at the in-flight cap BEFORE registering the future.
+            if len(self._pending) >= _MAX_IN_FLIGHT:
+                raise RuntimeError(
+                    f"mcp-bridge: in-flight cap reached ({_MAX_IN_FLIGHT} pending requests). "
+                    "Retry later. YASHIGANI_MCP_BRIDGE_MAX_IN_FLIGHT controls this limit."
+                )
             await self._ensure_running()
 
-            # Register the waiter BEFORE writing so we never miss a fast response
-            future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+            # Register the waiter BEFORE writing so we never miss a fast response.
+            # get_running_loop() — we are in an async def, running loop is guaranteed.
+            future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
             self._pending[str(msg_id)] = future
 
             try:
@@ -360,6 +399,23 @@ def create_bridge_app(
                 content={"error": "empty_body"},
             )
 
+        # Fix-3 (Laura ship-blocker): body size cap at the bridge layer.
+        # Defense in depth — the gateway router layer also caps (mcp_router_runtime.py).
+        # A request that somehow bypasses the gateway (e.g. direct bridge access in dev)
+        # is still protected here.
+        if len(body_bytes) > _BRIDGE_BODY_LIMIT:
+            logger.warning(
+                "mcp-bridge: body too large size=%d limit=%d — 413",
+                len(body_bytes), _BRIDGE_BODY_LIMIT,
+            )
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": "REQUEST_ENTITY_TOO_LARGE",
+                    "detail": f"Body exceeds {_BRIDGE_BODY_LIMIT} bytes",
+                },
+            )
+
         try:
             body_str = body_bytes.decode("utf-8")
             msg = json.loads(body_str)
@@ -398,6 +454,20 @@ def create_bridge_app(
             # Request: write to stdin, await response correlated by id
             try:
                 response_str = await bridge.send_request(body_str)
+            except RuntimeError as exc:
+                # Fix-2: in-flight cap hit → 503 with Retry-After
+                if "in-flight cap" in str(exc):
+                    logger.warning("mcp-bridge: in-flight cap reached: %s", exc)
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": "bridge_overloaded", "detail": str(exc)},
+                        headers={"Retry-After": "1"},
+                    )
+                logger.error("mcp-bridge: request failed id=%r: %s", msg.get("id"), exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={"error": "upstream_error", "detail": str(exc)},
+                )
             except Exception as exc:
                 logger.error("mcp-bridge: request failed id=%r: %s", msg.get("id"), exc)
                 return JSONResponse(

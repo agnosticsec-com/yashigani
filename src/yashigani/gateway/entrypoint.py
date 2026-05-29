@@ -644,7 +644,9 @@ def _build_app(mesh_mode: bool = False):
     try:
         from yashigani.mcp.registry import build_registry_from_env
         from yashigani.mcp.router import create_mcp_router
-        from yashigani.gateway.mcp_router_runtime import create_mcp_call_router
+        # Note: create_mcp_call_router is no longer imported here.
+        # The call router is no longer mounted as an extra_router (Fix-1).
+        # proxy.py dispatches /mcp/<agent> via dispatch_mcp_call() in the catch-all.
 
         _mcp_registry, _mcp_jwks_store = build_registry_from_env(
             opa_url=opa_url,
@@ -656,10 +658,16 @@ def _build_app(mesh_mode: bool = False):
             # Pick any broker for the /mcp/health OPA probe (they all share opa_url)
             _representative_broker = _mcp_registry.all_brokers()[0]
             _mcp_info_router = create_mcp_router(_mcp_jwks_store, _representative_broker)
-            _mcp_call_router = create_mcp_call_router(_mcp_registry)
-            _extra_routers = [openai_router, _mcp_info_router, _mcp_call_router]
+            # Fix-1 (Laura ship-blocker): do NOT mount _mcp_call_router as an
+            # extra_router — that path bypasses rate-limiter + DDoSProtector.
+            # Instead, proxy.py intercepts /mcp/<agent_name> in the catch-all
+            # dispatch path (after rate-limit + DDoS + JWT + OPA) and calls
+            # dispatch_mcp_call() directly.  The _mcp_info_router (JWKS + health)
+            # IS mounted as extra_router — those endpoints are intentionally public.
+            _extra_routers = [openai_router, _mcp_info_router]
             logger.info(
-                "MCP broker wiring: %d server(s) registered, JWKS + call routes mounted",
+                "MCP broker wiring: %d server(s) registered, JWKS info routes mounted "
+                "(call routes wired through catch-all — Fix-1)",
                 len(_mcp_registry),
             )
         else:

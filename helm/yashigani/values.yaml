@@ -313,6 +313,16 @@ gateway:
     agentTokenMinLength: "64"
     # v0.5.0
     deploymentStream: "opensource"
+    # v2.25.0 P3: MCP broker server list.  JSON-serialised into YASHIGANI_MCP_SERVERS.
+    # Default empty list = no MCP servers registered (gateway behaves as v2.24.x).
+    # Each entry: {agent_name, upstream_url, tenant_id, is_filesystem_agent (opt)}.
+    # Example:
+    #   mcpServers:
+    #     - agent_name: filesystem-mcp
+    #       upstream_url: http://filesystem-mcp:8000
+    #       tenant_id: acme
+    #       is_filesystem_agent: true
+    mcpServers: []
     # M-01 fix: overridden to grpcs:// by gateway.yaml when mtls.enabled=true.
     # This value applies only when mTLS is disabled (non-default, testing only).
     otelEndpoint: "http://otel-collector:4317"

@@ -231,10 +231,33 @@ class McpJwtIssuer:
                     f"Failed to load MCP signing key from {_DEV_KEY_PATH}: {exc}"
                 ) from exc
 
-        # 3. Ephemeral key (unit tests only)
+        # 3. Ephemeral key (unit tests only) — FAIL-CLOSED in production/staging.
+        #
+        # Fix-5 (HA-correctness): an ephemeral key is NOT acceptable in production
+        # or staging because:
+        #   - Each gateway replica generates a DIFFERENT key → JWTs from replica A
+        #     are rejected by replica B's verifier (mismatched public key in JWKS).
+        #   - A gateway restart rotates the key → upstream verifiers caching the
+        #     JWKS will reject tokens until the JWKS cache expires (up to 60s).
+        #
+        # If YASHIGANI_ENV is "production" or "staging", REFUSE to start.
+        # Point the operator at the correct setup (secrets file or env var).
+        # dev/test environments continue to allow ephemeral keys (unchanged).
+        _env = os.environ.get("YASHIGANI_ENV", "").strip().lower()
+        if _env in {"production", "staging"}:
+            raise RuntimeError(
+                f"McpJwtIssuer: YASHIGANI_ENV={_env!r} but no persistent MCP signing key "
+                "was found. An ephemeral key is NOT acceptable in production/staging "
+                "(multi-replica JWKS mismatch + restart key rotation risk). "
+                f"Set YASHIGANI_MCP_SIGNING_KEY_PEM (base64 PEM) or mount the key at "
+                f"{_DEV_KEY_PATH} (0600, PEM format). "
+                "See install.sh for key generation. "
+                "Nico spec §2: KMS-backed persistent key required in production."
+            )
+
         logger.warning(
             "mcp-broker: generating EPHEMERAL MCP signing key "
-            "(NOT PERSISTED — unit test mode only). "
+            "(NOT PERSISTED — dev/test mode only). "
             "Set YASHIGANI_MCP_SIGNING_KEY_PEM or provide %s for persistent key. "
             "Nico spec §2: KMS-backed key required in production.",
             _DEV_KEY_PATH,

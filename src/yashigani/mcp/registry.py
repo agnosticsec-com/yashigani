@@ -144,6 +144,52 @@ def build_registry_from_env(
         logger.info("mcp-registry: YASHIGANI_MCP_SERVERS is an empty array — no MCP servers")
         return McpBrokerRegistry(), None
 
+    # Fix-4 (HA-correctness): wire RedisNonceStore when REDIS_URL is configured,
+    # fall back to InMemoryNonceStore for dev.
+    #
+    # Multi-replica implication: InMemoryNonceStore is PER-PROCESS.  If the
+    # gateway runs with N>1 replicas, each replica has its own nonce store.
+    # A jti that was admitted by replica A can be replayed to replica B — the
+    # replay dedup window is only intra-process.
+    #
+    # RedisNonceStore uses a single shared Redis sorted set per tenant_id
+    # (mcp:jti:seen:{tenant_id}).  Redis ZADD NX provides atomic replay dedup
+    # across ALL gateway replicas.  REQUIRED for multi-replica deployments.
+    #
+    # When REDIS_URL is unset (dev/test), InMemoryNonceStore is used.  This is
+    # intentional: the InMemoryNonceStore constructor logs a WARNING that it is
+    # dev-mode only.  Operators must set REDIS_URL in production.
+    _nonce_store: Optional[object] = None
+    redis_url = os.environ.get("REDIS_URL", "").strip()
+    if redis_url:
+        try:
+            import redis  # type: ignore[import-untyped]
+            redis_client = redis.from_url(redis_url, decode_responses=False)
+            from yashigani.mcp._nonce import RedisNonceStore
+            _nonce_store = RedisNonceStore(redis_client)
+            logger.info(
+                "mcp-registry: RedisNonceStore wired for replay prevention "
+                "(REDIS_URL=%s) — safe for multi-replica deployments",
+                redis_url.split("@")[-1] if "@" in redis_url else redis_url,
+            )
+        except ImportError:
+            raise RuntimeError(
+                "REDIS_URL is set but the 'redis' package is not installed. "
+                "Install redis>=5.0 (already in pyproject.toml). "
+                "Cannot start without RedisNonceStore when REDIS_URL is configured."
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to construct RedisNonceStore from REDIS_URL: {exc}. "
+                "Check REDIS_URL and Redis connectivity."
+            ) from exc
+    else:
+        # Dev/test: InMemoryNonceStore — logs a warning automatically in its __init__.
+        # NOTE: InMemoryNonceStore is NOT safe for multi-replica deployments.
+        # Set REDIS_URL in production/staging to use RedisNonceStore.
+        from yashigani.mcp._nonce import InMemoryNonceStore
+        _nonce_store = InMemoryNonceStore()
+
     # Build one shared issuer + JWKS store (one key per installation)
     # The first entry's tenant_id is used as the issuer tenant; each broker
     # gets its own McpJwtIssuer instance with the same key material via env var.
@@ -174,6 +220,7 @@ def build_registry_from_env(
             issuer=McpJwtIssuer(tenant_id=tenant_id),
             audit_writer=audit_writer,
             is_filesystem_agent=is_filesystem_agent,
+            nonce_store=_nonce_store,
         )
         broker = McpBroker(config=broker_cfg)
 
