@@ -62,9 +62,18 @@ RUN npm install \
     && npm cache clean --force
 
 
+# Python base stages — same arch-selector pattern as node above.
+# Originally pinned to amd64 only; that produced the InvalidBaseImagePlatform
+# warning under arm64 builds (manifest list ended up with amd64 python + arm64
+# node, broken under emulation).  Now properly multi-arch.
+FROM python:3.14.0-slim@sha256:5af4c7f950774a1abf3fd4e8e3fc95f4d0fe684c7fdc1eb10777fc5a017371c7 AS python-amd64
+FROM python:3.14.0-slim@sha256:d4c6c639f80b11b7fb0f682bdd93c054f58e748aba354d7fbe92689e04dff2d0 AS python-arm64
+FROM python-${TARGETARCH} AS python-base
+
+
 # ── Stage 2: wheel builder (Yashigani bridge) ────────────────────────────────
-# Same base image and digest as Dockerfile.gateway (Stage 1).
-FROM python:3.14.0-slim@sha256:5af4c7f950774a1abf3fd4e8e3fc95f4d0fe684c7fdc1eb10777fc5a017371c7 AS builder
+# Inherits the arch-correct python via python-base (see selector above).
+FROM python-base AS builder
 
 WORKDIR /build
 
@@ -92,7 +101,7 @@ RUN python -m build --wheel --outdir /dist
 #     ringfence bridge (internal:true).
 #   - No dev tools, no package managers, no build tools in final image.
 #   - node binary is present (required at runtime). npm/npx are NOT copied.
-FROM python:3.14.0-slim@sha256:5af4c7f950774a1abf3fd4e8e3fc95f4d0fe684c7fdc1eb10777fc5a017371c7 AS runtime
+FROM python-base AS runtime
 
 # Non-root user — UID 10001 matches _SC_RUN_AS_USER in codegen.py:1302.
 # No home directory, no login shell. Mirrors bridge container security posture.

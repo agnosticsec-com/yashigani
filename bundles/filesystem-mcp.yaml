@@ -48,8 +48,9 @@ spec:
     # NEVER use a mutable tag without a digest — M6 requires digest pinning.
     repository: registry.yashigani.internal/bundles/mcp-filesystem
     tag: "latest"
-    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    # ^^^ REPLACE with real digest from: docker manifest inspect <image> | jq '.[0].Digest'
+    digest: "sha256:ae47d61e7e9c6be73f3e1394b66059501722f7f07aa7fe43705942f0d3b13b41"
+    # Built 2026-05-30 by scripts/build-filesystem-mcp.sh --platform linux/arm64.
+    # End-to-end smoke verified: POST /mcp initialize → stdio server → response.
 
   # Shape-C subprocess: the command the first-party bridge will exec inside the container.
   # The gateway does NOT spawn this process — the bridge (src/yashigani/mcp/_bridge.py)

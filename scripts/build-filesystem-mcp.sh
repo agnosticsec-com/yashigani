@@ -50,7 +50,29 @@ fi
 # ── Parameters ────────────────────────────────────────────────────────────────
 IMAGE_NAME="${IMAGE_NAME:-registry.yashigani.internal/bundles/mcp-filesystem}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-PLATFORM="${1:-}"
+# Argument parsing — the documented interface is `--platform <value>` (see usage above).
+# The earlier `PLATFORM="${1:-}"` left $PLATFORM set to the literal flag name.
+PLATFORM=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --platform)
+      PLATFORM="${2:-}"
+      if [[ -z "$PLATFORM" ]]; then
+        printf 'ERROR: --platform requires a value (e.g. linux/arm64)\n' >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      sed -n '2,18p' "${BASH_SOURCE[0]}"
+      exit 0
+      ;;
+    *)
+      printf 'ERROR: unknown argument: %s\n' "$1" >&2
+      exit 1
+      ;;
+  esac
+done
 DOCKERFILE="${REPO_ROOT}/docker/Dockerfile.filesystem-mcp"
 
 if [[ ! -f "$DOCKERFILE" ]]; then
