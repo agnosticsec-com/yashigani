@@ -14,12 +14,20 @@ Per-call flow:
 
 OPA healthcheck: McpBroker.opa_health() queries OPA /health.
 
-Deferred to phase-2:
-  - TODO[M4]: MCP tool-description / prompts.get prompt-injection content filter.
-  - TODO[P8]: Upstream MCP-server cert/SPIFFE pinning enforcement.
-  - TODO[P1-pool]: Per-tenant provider-key cache + per-tenant connection pools.
+Phase-2 hardening (implemented):
+  [M4] MCP tool-description / prompts.get prompt-injection content filter.
+       fetch_and_filter_tools() / fetch_and_filter_prompt() apply the filter
+       and emit McpToolDescriptionFetchedEvent on every catalogue fetch.
+  [P8] Upstream MCP-server cert/SPIFFE pinning enforcement.
+       verify_upstream_pin() is called before forwarding; mismatch aborts the
+       connection and logs/audits MCP_UPSTREAM_CERT_PIN_MISMATCH.
+  [P1-pool] Per-tenant provider-key cache + per-tenant connection pools.
+       McpBroker.pool_manager exposes a TenantPoolManager keyed by
+       (tenant_id, provider_host) — never shared across tenant_ids.
 
-v2.25.0 / P1 W3 Phase 2b-ii / YSG-RISK-054 (audit) + YSG-RISK-055 (posture).
+v2.25.0 / P1 W3 Phase 2b-ii + Phase 2 hardening /
+  YSG-RISK-054 (audit) + YSG-RISK-055 (posture) + YSG-RISK-056 (upstream pin)
+  + YSG-RISK-057 (cross-tenant isolation).
 """
 from __future__ import annotations
 
@@ -40,6 +48,18 @@ from yashigani.mcp._types import (
 from yashigani.mcp._jwt import ChainDepthExceeded, McpJwtIssuer, McpJwtVerifier
 from yashigani.mcp._nonce import NonceStore, InMemoryNonceStore
 from yashigani.mcp._opa import query_mcp_decision
+from yashigani.mcp._content_filter import (
+    FilterResult,
+    ToolCatalogueStore,
+    build_catalogue,
+    TenantCatalogue,
+)
+from yashigani.mcp._upstream_pin import (
+    UpstreamPinConfig,
+    PinVerificationResult,
+    verify_upstream_pin,
+)
+from yashigani.mcp._pool import TenantPoolManager
 
 if TYPE_CHECKING:
     pass
@@ -75,6 +95,22 @@ class McpBrokerConfig:
     audit_writer:
         AuditLogWriter instance for emitting MCP_CALL + OPA_DECISION_ON_MCP events.
         If None, audit events are logged at WARNING level only (test mode).
+
+    # Phase-2 hardening fields ---
+
+    catalogue_store:
+        [M4] ToolCatalogueStore for per-tenant tool-description catalogues.
+        If None, a new store is created at broker init.  Callers can pass a
+        shared store so multiple broker instances for the same tenant share
+        catalogue state.
+
+    upstream_pin_configs:
+        [P8] List of UpstreamPinConfig entries for upstream MCP server pinning.
+        If None or empty, no pinning is enforced (warn-only in dev, reject in prod).
+
+    pool_manager:
+        [P1-pool] TenantPoolManager for per-tenant HTTP connection pools.
+        If None, a new manager is created at broker init.
     """
 
     opa_url: str
@@ -84,6 +120,11 @@ class McpBrokerConfig:
     nonce_store: Optional[NonceStore] = None
     chain_max_depth: int = 3
     audit_writer: Optional[Any] = None   # AuditLogWriter, typed as Any to avoid circular import
+
+    # Phase-2 hardening
+    catalogue_store: Optional[ToolCatalogueStore] = None
+    upstream_pin_configs: Optional[list] = None  # list[UpstreamPinConfig]
+    pool_manager: Optional[TenantPoolManager] = None
 
 
 class McpBroker:
@@ -147,6 +188,23 @@ class McpBroker:
                 "acceptable. Provide a real AuditLogWriter instance. "
                 "YSG-RISK-054 / AU-2 / AU-12 / CC7.1."
             )
+
+        # [M4] Tool-description catalogue store (per-tenant isolation).
+        if config.catalogue_store is not None:
+            self._catalogue_store = config.catalogue_store
+        else:
+            self._catalogue_store = ToolCatalogueStore()
+
+        # [P8] Upstream cert/SPIFFE pin configs, indexed by server_id.
+        self._upstream_pin_map: dict[str, UpstreamPinConfig] = {}
+        for pin_cfg in (config.upstream_pin_configs or []):
+            self._upstream_pin_map[pin_cfg.server_id] = pin_cfg
+
+        # [P1-pool] Per-tenant connection pool manager.
+        if config.pool_manager is not None:
+            self._pool_manager = config.pool_manager
+        else:
+            self._pool_manager = TenantPoolManager()
 
     async def enforce(self, ctx: McpCallContext) -> BrokerDecision:
         """
@@ -426,6 +484,263 @@ class McpBroker:
                 "events NOT written. call_id=%s decision=%s",
                 ctx.call_id, opa_decision_label,
             )
+
+    # -----------------------------------------------------------------------
+    # [M4] Tool-description / prompt content filter + audit
+    # -----------------------------------------------------------------------
+
+    def fetch_and_filter_tools(
+        self,
+        server_id: str,
+        raw_tools: list[dict],
+        raw_prompts: Optional[list[dict]] = None,
+    ) -> TenantCatalogue:
+        """
+        Run the M4 content filter over a raw tools/list (and optionally
+        prompts/list) response.
+
+        - NFKC-normalises all descriptions.
+        - Rejects descriptions that exceed 2048 chars, contain control chars,
+          or match injection-marker patterns.
+        - Stores the filtered catalogue in the per-tenant store (keyed by
+          (self._config.tenant_id, server_id) — never shared across tenants).
+        - Emits McpToolDescriptionFetchedEvent for audit (Lu FIX-2 / M4).
+
+        Returns the TenantCatalogue with safe_description / safe_content
+        populated.  Callers MUST use ``safe_description`` / ``safe_content``
+        when forwarding tool/prompt text to downstream agents.
+        """
+        catalogue = build_catalogue(
+            tenant_id=self._config.tenant_id,
+            server_id=server_id,
+            raw_tools=raw_tools,
+            raw_prompts=raw_prompts or [],
+        )
+        self._catalogue_store.store(catalogue)
+        self._emit_tool_description_fetched_event(catalogue, fetch_type="tools_list")
+        return catalogue
+
+    def fetch_and_filter_prompt(
+        self,
+        server_id: str,
+        prompt_name: str,
+        prompt_content: str,
+    ) -> FilterResult:
+        """
+        Run the M4 content filter over a single prompts/get response.
+
+        The prompts/get path is the SECOND injection vector (separate from
+        tools/list) — both MUST be filtered.  This method handles the single-
+        prompt case.
+
+        Emits McpToolDescriptionFetchedEvent with fetch_type="prompts_get"
+        for audit (Lu FIX-2 / M4).
+
+        Returns the FilterResult.  Use ``result.safe_text`` downstream.
+        """
+        from yashigani.mcp._content_filter import filter_description
+        result = filter_description(prompt_content)
+
+        # Build a minimal catalogue entry for audit emission
+        from yashigani.mcp._content_filter import (
+            PromptDescriptor,
+            TenantCatalogue,
+        )
+        mini_catalogue = TenantCatalogue(
+            tenant_id=self._config.tenant_id,
+            server_id=server_id,
+            tools=[],
+            prompts=[PromptDescriptor(
+                prompt_name=prompt_name,
+                safe_content=result.safe_text,
+                filter_result=result,
+            )],
+        )
+        self._emit_tool_description_fetched_event(
+            mini_catalogue, fetch_type="prompts_get"
+        )
+        return result
+
+    def _emit_tool_description_fetched_event(
+        self,
+        catalogue: TenantCatalogue,
+        fetch_type: str,
+    ) -> None:
+        """
+        Emit McpToolDescriptionFetchedEvent for audit (Lu FIX-2 / M4 close).
+
+        Records tool_count, filtered_count (NFKC-altered), rejected_count,
+        and whether any prompt was rejected.  The raw text is NEVER stored.
+        """
+        from yashigani.audit.schema import McpToolDescriptionFetchedEvent, AccountTier
+
+        rejected_count = catalogue.rejected_tool_count + catalogue.rejected_prompt_count
+
+        event = McpToolDescriptionFetchedEvent(
+            account_tier=AccountTier.SYSTEM,
+            tenant_id=catalogue.tenant_id,
+            agent_name="",   # catalogue fetch is broker-level, not agent-specific
+            server_id=catalogue.server_id,
+            tool_count=catalogue.tool_count + catalogue.prompt_count,
+            filtered_count=catalogue.filtered_tool_count,
+            rejected_count=rejected_count,
+            fetch_type=fetch_type,
+        )
+
+        if self._audit_writer is not None:
+            try:
+                self._audit_writer.write(event)
+            except Exception as exc:
+                logger.error(
+                    "mcp-broker: audit write failed for McpToolDescriptionFetchedEvent "
+                    "server_id=%s: %s", catalogue.server_id, exc,
+                )
+        else:
+            logger.warning(
+                "mcp-broker: no audit_writer — McpToolDescriptionFetchedEvent NOT written "
+                "server_id=%s tenant=%s rejected=%d",
+                catalogue.server_id, catalogue.tenant_id, rejected_count,
+            )
+
+    # -----------------------------------------------------------------------
+    # [P8] Upstream MCP-server cert/SPIFFE pinning  (FIX-P8-002)
+    # -----------------------------------------------------------------------
+
+    #: Environments where a pin failure causes an immediate ConnectionError.
+    #: Dev/test environments receive a warning only.
+    _ENFORCE_PIN_ENVS: frozenset[str] = frozenset({"production", "staging"})
+
+    def verify_upstream(
+        self,
+        server_id: str,
+        timeout: float = 5.0,
+        _get_fp: Optional[Any] = None,
+        _get_spiffe: Optional[Any] = None,
+    ) -> PinVerificationResult:
+        """
+        Verify the upstream MCP server identified by server_id against the
+        pinned cert fingerprint or SPIFFE ID.
+
+        FIX-P8-002 — inline enforcement:
+        ──────────────────────────────────
+        In ``production`` and ``staging`` environments
+        (YASHIGANI_ENV=production|staging):
+
+        • If no pin config is registered for server_id, the connection is
+          REFUSED immediately (ConnectionError raised).  A structured audit
+          event ``MCP_UPSTREAM_PIN_NOT_CONFIGURED`` is emitted.
+
+        • If a pin is configured but the live cert/SPIFFE ID does NOT match,
+          the connection is REFUSED immediately (ConnectionError raised).  A
+          structured audit event ``MCP_UPSTREAM_CERT_PIN_MISMATCH`` is emitted.
+
+        In dev/test environments the same result object is returned but no
+        ConnectionError is raised — callers observe matched=False and can log.
+
+        The docstring previously claimed "reject in prod" without the code
+        actually raising.  This fix closes that gap.  YSG-RISK-056.
+        """
+        _env = os.environ.get("YASHIGANI_ENV", "").lower().strip()
+        _enforcing = _env in self._ENFORCE_PIN_ENVS
+
+        pin_cfg = self._upstream_pin_map.get(server_id)
+        if pin_cfg is None:
+            result = PinVerificationResult(
+                server_id=server_id,
+                matched=False,
+                reason="pin_not_configured",
+            )
+            self._emit_upstream_pin_event(server_id, result, env=_env)
+            if _enforcing:
+                raise ConnectionError(
+                    f"mcp-broker: [P8] upstream server {server_id!r} has no pin "
+                    f"config in {_env!r} environment — connection REFUSED. "
+                    "YSG-RISK-056. Configure pin_mode in consumes.servers[]."
+                )
+            logger.warning(
+                "mcp-broker: [P8] no pin config for server_id=%r (env=%r) — "
+                "returned pin_not_configured (non-enforcing env).",
+                server_id, _env,
+            )
+            return result
+
+        result = verify_upstream_pin(
+            config=pin_cfg,
+            timeout=timeout,
+            _get_fp=_get_fp,
+            _get_spiffe=_get_spiffe,
+        )
+        self._emit_upstream_pin_event(server_id, result, env=_env)
+
+        if not result.matched and _enforcing:
+            raise ConnectionError(
+                f"mcp-broker: [P8] upstream pin verification FAILED for "
+                f"server_id={server_id!r} reason={result.reason!r} "
+                f"(env={_env!r}) — connection REFUSED. YSG-RISK-056."
+            )
+
+        return result
+
+    def _emit_upstream_pin_event(
+        self,
+        server_id: str,
+        result: PinVerificationResult,
+        env: str,
+    ) -> None:
+        """
+        Emit a structured audit event for upstream pin verification outcome.
+
+        Emits on BOTH success (reason='ok') and failure so Lu has a complete
+        witness trail.  The event carries server_id, matched, reason, and env.
+        """
+        # Use the existing audit writer if available; fall back to WARNING log.
+        # We use a plain dict payload rather than a bespoke audit schema class
+        # so this method doesn't need a new schema migration in v2.25.0.
+        event_label = (
+            result.reason if not result.matched
+            else "MCP_UPSTREAM_PIN_OK"
+        )
+        if self._audit_writer is not None:
+            try:
+                # Structured emit: wrap in a lightweight object the writer
+                # accepts.  Writers accept any object with .event_type.
+                class _PinEvent:
+                    event_type = event_label
+                    def __init__(self, sid: str, matched: bool, reason: str, environment: str) -> None:
+                        self.server_id = sid
+                        self.matched = matched
+                        self.reason = reason
+                        self.env = environment
+
+                self._audit_writer.write(
+                    _PinEvent(server_id, result.matched, result.reason, env)
+                )
+            except Exception as exc:
+                logger.error(
+                    "mcp-broker: audit write failed for upstream-pin event "
+                    "server_id=%r: %s", server_id, exc,
+                )
+        else:
+            log_fn = logger.warning if not result.matched else logger.debug
+            log_fn(
+                "mcp-broker: [P8] upstream pin event server_id=%r matched=%s "
+                "reason=%r env=%r",
+                server_id, result.matched, result.reason, env,
+            )
+
+    # -----------------------------------------------------------------------
+    # [P1-pool] Per-tenant connection pool accessor
+    # -----------------------------------------------------------------------
+
+    @property
+    def pool_manager(self) -> TenantPoolManager:
+        """
+        [P1-pool] Return the per-tenant connection pool manager.
+
+        Use ``broker.pool_manager.get_or_create_client(tenant_id, host)``
+        to get an httpx.AsyncClient scoped to the tenant.
+        """
+        return self._pool_manager
 
     async def opa_health(self) -> bool:
         """
