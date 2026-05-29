@@ -10,12 +10,21 @@ Implements the Phase-2 M4 SHIP-BLOCKER finding:
 Filter pipeline (per description/prompt text):
   1. NFKC-normalise the input (collapses ligatures, fullwidth chars used to
      evade byte-level pattern matching).
-  2. 2048-char hard cap — reject anything over the cap (large blobs have no
+  2. Strip Unicode category Cf (format) characters — zero-width chars, bidi
+     overrides, soft-hyphens, etc. — that survive NFKC yet break \b anchors.
+     Defeats ZWSP/ZWJ/ZWNJ/RLM/RLO insertion attacks (LAURA-V250-M4-001).
+  3. Homoglyph-normalise: map common Cyrillic/Greek look-alikes for the
+     targeted keywords to their ASCII equivalents so "SYSTеM" (Cyrillic е)
+     and similar substitutions are caught.
+  4. 2048-char hard cap — reject anything over the cap (large blobs have no
      legitimate place in a tool description).
-  3. Control-char scan — reject any text containing ASCII control characters
+  5. Control-char scan — reject any text containing ASCII control characters
      outside the normal printable/whitespace range (0x00-0x1F except 0x09/
      0x0A/0x0D, and 0x7F).  These are not valid prose.
-  4. Pattern scan — case-insensitive search for prompt-injection markers.
+  6. Pattern scan — case-insensitive search for prompt-injection markers.
+     Applied to BOTH the Cf-stripped+homoglyph-normalised text AND a
+     "separator-collapsed" variant (spaces/hyphens/underscores between
+     individual letters stripped) to catch S-Y-S-T-E-M / o_v_e_r_r_i_d_e.
      On match: the text is REJECTED (FilterResult.rejected=True) and a
      sanitised replacement is substituted ("") before being offered to the
      caller.  The caller decides whether to drop the tool/prompt entirely
@@ -35,9 +44,13 @@ TODO [M4-v2]: replace heuristic pattern set with an LLM-classifier sidecar
               heuristic approach is conservative by design — it rejects
               injections that match common patterns and caps description size;
               it does NOT catch all semantic injection variants.
+              Base64/hex-encoded payloads are out of scope for v1 (inherent
+              risk; LLM-classifier sidecar is the v2 mitigation).
 
 v2.25.0 / P1 Phase-2 / M4 / YSG-RISK-054 (tool-description audit) /
-  LAURA-MCP-005 (injection vector in tool descriptions).
+  LAURA-MCP-005 (injection vector in tool descriptions) /
+  FIX-M4-001 (LAURA-V250-M4-001 Cf-strip + homoglyph + separator-collapse) /
+  FIX-M4-002 (LAURA-V250-M4-002 you-are false-positive narrowing).
 """
 from __future__ import annotations
 
@@ -51,18 +64,109 @@ _MAX_DESCRIPTION_CHARS: int = 2048
 _REPLACEMENT_TEXT: str = ""   # substituted for a rejected description
 
 # ---------------------------------------------------------------------------
+# FIX-M4-001: Unicode format-character stripping (LAURA-V250-M4-001)
+#
+# Unicode category "Cf" (Format) characters survive NFKC normalisation and
+# interrupt Python's \b word-boundary matching.  Zero-width spaces, joiners,
+# bidi overrides, and soft-hyphens are all Cf category.  An attacker inserts
+# them between keyword letters (e.g. "SY​STEM") to defeat pattern checks.
+#
+# Strategy: strip every character whose Unicode category starts with "Cf"
+# AFTER NFKC normalisation.  This is more future-proof than an enumerated
+# list — any new format character added to Unicode is automatically stripped.
+# ---------------------------------------------------------------------------
+
+def _strip_cf_chars(text: str) -> str:
+    """Remove all Unicode category Cf (format) characters from *text*."""
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
+# ---------------------------------------------------------------------------
+# FIX-M4-001: Homoglyph normalisation table
+#
+# Map common Cyrillic and Greek look-alikes for the targeted injection keywords
+# to their ASCII equivalents.  This covers the most common substitutions used
+# in adversarial prompts; it is not a complete homoglyph database.
+#
+# Keywords targeted: SYSTEM, OVERRIDE, JAILBREAK, ignore, act as, DAN.
+# Characters covered: Cyrillic а/е/о/с/р/і, Greek ο/ι.
+# ---------------------------------------------------------------------------
+
+_HOMOGLYPH_TABLE: dict[int, int] = {
+    ord("а"): ord("a"),   # Cyrillic а → Latin a
+    ord("е"): ord("e"),   # Cyrillic е → Latin e
+    ord("о"): ord("o"),   # Cyrillic о → Latin o
+    ord("с"): ord("c"),   # Cyrillic с → Latin c
+    ord("р"): ord("p"),   # Cyrillic р → Latin p
+    ord("і"): ord("i"),   # Cyrillic і → Latin i
+    ord("ο"): ord("o"),   # Greek ο → Latin o
+    ord("ι"): ord("i"),   # Greek ι → Latin i
+    ord("Α"): ord("A"),   # Greek capital Alpha → A
+    ord("Ε"): ord("E"),   # Greek capital Epsilon → E
+    ord("Ο"): ord("O"),   # Greek capital Omicron → O
+    ord("І"): ord("I"),   # Cyrillic capital І → I
+}
+
+
+def _homoglyph_normalise(text: str) -> str:
+    """Map common Cyrillic/Greek homoglyphs to their ASCII equivalents."""
+    return text.translate(_HOMOGLYPH_TABLE)
+
+
+# ---------------------------------------------------------------------------
+# FIX-M4-001: Separator-collapse for keyword evasion via interspersed chars
+#
+# Attackers insert single spaces, hyphens, or underscores between every letter
+# of a keyword to break word-boundary matching:
+#   S-Y-S-T-E-M   o_v_e_r_r_i_d_e   i g n o r e
+#
+# Strategy: build a "collapsed" variant by removing single-char separators
+# (space, hyphen, underscore, period, slash) when they appear between two
+# single non-separator characters.  This variant is checked IN ADDITION TO
+# (not instead of) the normal text — so legitimate hyphenated compound words
+# in clean descriptions are never at risk.
+#
+# The regex matches a run of the pattern: LETTER sep LETTER sep LETTER ...
+# and collapses the separators out.
+# ---------------------------------------------------------------------------
+
+# Matches a sequence of: single-char word-char, optional repeated (sep + single-word-char)
+# e.g. "S-Y-S-T-E-M", "o_v_e_r_r_i_d_e", "i g n o r e"
+_SEP_SPLIT_PATTERN = re.compile(
+    r"(?<!\w)(\w(?:[\s\-_.\/]\w)+)(?!\w)"
+)
+
+
+def _collapse_separators(text: str) -> str:
+    """
+    Remove separators between individually-spaced letters.
+
+    "S-Y-S-T-E-M" → "SYSTEM"; "o_v_e_r_r_i_d_e" → "override"
+    Only affects runs where EVERY token is a single character separated by
+    a single separator character — standard words are not collapsed.
+    """
+    def _collapse_match(m: re.Match) -> str:
+        # Strip all whitespace/hyphens/underscores/dots/slashes from the match
+        return re.sub(r"[\s\-_.\/]", "", m.group(0))
+
+    return _SEP_SPLIT_PATTERN.sub(_collapse_match, text)
+
+
+# ---------------------------------------------------------------------------
 # Pattern set — v1 heuristic
 #
 # Design notes:
-#   • Applied AFTER NFKC normalisation — collapses lookalike chars.
+#   • Applied AFTER NFKC normalisation, Cf-stripping, and homoglyph mapping.
+#   • Also applied to separator-collapsed variant (FIX-M4-001).
 #   • Case-insensitive (re.IGNORECASE).
 #   • \b word-boundary anchors avoid false-positives on mid-word occurrences
 #     (e.g. "systematic" must not match "system").
 #   • The OR list is ordered longest-first where alternatives overlap so that
 #     the more-specific variant is tried first; no correctness dependency.
-#   • This is a conservative v1 set. It is expected to have false-positives
-#     on unusual-but-legitimate tool descriptions.  Operator can whitelist
-#     specific server_ids via allow_server_ids if needed in a future version.
+#   • FIX-M4-002 (LAURA-V250-M4-002): the broad \byou\s+are\s+\S+ pattern is
+#     replaced with injection-SPECIFIC role phrases so legitimate tool
+#     descriptions containing "you are given..." / "you are able to..." pass
+#     cleanly.
 # ---------------------------------------------------------------------------
 
 _INJECTION_PATTERNS: list[str] = [
@@ -70,20 +174,24 @@ _INJECTION_PATTERNS: list[str] = [
     r"\bignore\s+(?:all\s+)?(?:previous|prior|above|earlier)\b",
     r"\bdisregard\s+(?:all\s+)?(?:previous|prior|above|earlier|the\s+above)\b",
     r"\bforget\b.{0,30}?\b(?:instructions?|context|rules?|guidelines?)\b",
-    # Role/identity injection
-    r"\byou\s+are\s+(?:now\s+)?(?:an?\s+)?(?:a\s+)?\S+",
+    # Role/identity injection — FIX-M4-002: precise role phrases only, not
+    # the broad "you are <anything>" that fires on legitimate descriptions.
+    r"\byou\s+are\s+now\b",              # "you are now [role]" — injection signal
     r"\bact\s+as\s+(?:an?\s+)?\S+",
+    r"\bpretend\s+to\s+be\b",
+    r"\bpretend\s+you\s+are\b",
     r"\bbehave\s+as\s+(?:an?\s+)?\S+",
-    r"\bpretend\s+(?:to\s+be|you\s+are)\b",
     r"\brole[\s-]?play\b",
+    r"\bignore[s]?\s+(?:your\s+)?instructions?\b",
+    r"\bignore[s]?\s+(?:all\s+)?(?:your\s+)?(?:previous\s+)?(?:safety\s+)?(?:rules?|guidelines?|constraints?|restrictions?)\b",
+    r"\bDAN\b",                          # "DAN mode" / "act as DAN" / standalone "DAN"
+    r"\bjailbreak\b",
     # System/context manipulation markers
     r"\bSYSTEM\b",
     r"\b(?:NEW\s+)?SYSTEM\s+PROMPT\b",
     r"\bSYSTEM_PROMPT\b",
     r"\bINSTRUCTION[S]?\b",
     r"\bOVERRIDE\b",
-    r"\bDAN\s+MODE\b",
-    r"\bJAILBREAK\b",
     # Prompt-structure injection (attempts to inject fake turn boundaries)
     r"\bassistant\s*:",
     r"\buser\s*:",
@@ -161,14 +269,32 @@ def filter_description(text: str) -> FilterResult:
     audit event (McpToolDescriptionFetchedEvent) — see broker.py.
 
     Thread-safe (stateless function; uses pre-compiled regex).
+
+    Pipeline:
+      1. NFKC normalise.
+      2. Strip Unicode Cf (format) chars — defeats ZWSP/ZWJ/bidi bypass.
+      3. Homoglyph-normalise (Cyrillic/Greek → ASCII for targeted keywords).
+      4. 2048-char cap (applied after normalisation).
+      5. Control-char scan.
+      6. Pattern scan on prepared text AND on separator-collapsed variant.
     """
     original_length = len(text)
 
     # Step 1: NFKC normalise
     normalised = unicodedata.normalize("NFKC", text)
-    normalised_length = len(normalised)
 
-    # Step 2: 2048-char cap (applied AFTER normalisation)
+    # Step 2: strip Unicode Cf format characters (FIX-M4-001)
+    # This defeats ZWSP/ZWJ/ZWNJ/RLM/RLO insertions that survive NFKC and
+    # break \b anchors in the pattern scanner.
+    prepared = _strip_cf_chars(normalised)
+
+    # Step 3: homoglyph normalise (FIX-M4-001)
+    # Maps Cyrillic/Greek look-alikes to ASCII for the targeted keywords.
+    prepared = _homoglyph_normalise(prepared)
+
+    normalised_length = len(prepared)
+
+    # Step 4: 2048-char cap (applied AFTER normalisation + Cf-strip)
     if normalised_length > _MAX_DESCRIPTION_CHARS:
         return FilterResult(
             original_length=original_length,
@@ -178,8 +304,8 @@ def filter_description(text: str) -> FilterResult:
             safe_text=_REPLACEMENT_TEXT,
         )
 
-    # Step 3: control-char scan
-    ctrl_match = _CONTROL_CHAR_PATTERN.search(normalised)
+    # Step 5: control-char scan
+    ctrl_match = _CONTROL_CHAR_PATTERN.search(prepared)
     if ctrl_match:
         return FilterResult(
             original_length=original_length,
@@ -189,8 +315,8 @@ def filter_description(text: str) -> FilterResult:
             safe_text=_REPLACEMENT_TEXT,
         )
 
-    # Step 4: injection pattern scan
-    pattern_match = _COMPILED_PATTERN.search(normalised)
+    # Step 6a: injection pattern scan on prepared text
+    pattern_match = _COMPILED_PATTERN.search(prepared)
     if pattern_match:
         return FilterResult(
             original_length=original_length,
@@ -201,7 +327,25 @@ def filter_description(text: str) -> FilterResult:
             matched_pattern=pattern_match.group()[:64],  # truncated for audit only
         )
 
-    # Clean — pass through NFKC-normalised text
+    # Step 6b: injection pattern scan on separator-collapsed variant (FIX-M4-001)
+    # Catches S-Y-S-T-E-M / o_v_e_r_r_i_d_e / "i g n o r e" patterns.
+    collapsed = _collapse_separators(prepared)
+    if collapsed != prepared:
+        collapsed_match = _COMPILED_PATTERN.search(collapsed)
+        if collapsed_match:
+            return FilterResult(
+                original_length=original_length,
+                normalised_length=normalised_length,
+                rejected=True,
+                reject_reason="injection_pattern:separator_split",
+                safe_text=_REPLACEMENT_TEXT,
+                matched_pattern=collapsed_match.group()[:64],
+            )
+
+    # Clean — pass through the NFKC-normalised (but NOT Cf-stripped or
+    # homoglyph-normalised) text so the downstream agent receives the
+    # original semantics.  The Cf-stripped/normalised form is an internal
+    # analysis artefact only.
     return FilterResult(
         original_length=original_length,
         normalised_length=normalised_length,

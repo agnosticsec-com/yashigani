@@ -603,8 +603,12 @@ class McpBroker:
             )
 
     # -----------------------------------------------------------------------
-    # [P8] Upstream MCP-server cert/SPIFFE pinning
+    # [P8] Upstream MCP-server cert/SPIFFE pinning  (FIX-P8-002)
     # -----------------------------------------------------------------------
+
+    #: Environments where a pin failure causes an immediate ConnectionError.
+    #: Dev/test environments receive a warning only.
+    _ENFORCE_PIN_ENVS: frozenset[str] = frozenset({"production", "staging"})
 
     def verify_upstream(
         self,
@@ -617,37 +621,112 @@ class McpBroker:
         Verify the upstream MCP server identified by server_id against the
         pinned cert fingerprint or SPIFFE ID.
 
-        If no pin config is registered for server_id, returns a fail-closed
-        result (matched=False, reason="pin_not_configured").
+        FIX-P8-002 — inline enforcement:
+        ──────────────────────────────────
+        In ``production`` and ``staging`` environments
+        (YASHIGANI_ENV=production|staging):
 
-        On mismatch, the result has matched=False and reason=
-        MCP_UPSTREAM_CERT_PIN_MISMATCH.  The caller MUST abort the connection.
+        • If no pin config is registered for server_id, the connection is
+          REFUSED immediately (ConnectionError raised).  A structured audit
+          event ``MCP_UPSTREAM_PIN_NOT_CONFIGURED`` is emitted.
 
-        The audit of pin mismatch is intentionally lightweight here: the caller
-        (transport layer) is responsible for logging/emitting the structured
-        event.  This method logs at WARNING level on mismatch.
+        • If a pin is configured but the live cert/SPIFFE ID does NOT match,
+          the connection is REFUSED immediately (ConnectionError raised).  A
+          structured audit event ``MCP_UPSTREAM_CERT_PIN_MISMATCH`` is emitted.
+
+        In dev/test environments the same result object is returned but no
+        ConnectionError is raised — callers observe matched=False and can log.
+
+        The docstring previously claimed "reject in prod" without the code
+        actually raising.  This fix closes that gap.  YSG-RISK-056.
         """
+        _env = os.environ.get("YASHIGANI_ENV", "").lower().strip()
+        _enforcing = _env in self._ENFORCE_PIN_ENVS
+
         pin_cfg = self._upstream_pin_map.get(server_id)
         if pin_cfg is None:
-            _env = os.environ.get("YASHIGANI_ENV", "").lower().strip()
-            _prod_envs = {"production", "staging"}
-            if _env in _prod_envs:
-                logger.warning(
-                    "mcp-broker: [P8] no pin config for server_id=%r in %s env — "
-                    "connection REFUSED (fail-closed). YSG-RISK-056.",
-                    server_id, _env,
-                )
-            return PinVerificationResult(
+            result = PinVerificationResult(
                 server_id=server_id,
                 matched=False,
                 reason="pin_not_configured",
             )
-        return verify_upstream_pin(
+            self._emit_upstream_pin_event(server_id, result, env=_env)
+            if _enforcing:
+                raise ConnectionError(
+                    f"mcp-broker: [P8] upstream server {server_id!r} has no pin "
+                    f"config in {_env!r} environment — connection REFUSED. "
+                    "YSG-RISK-056. Configure pin_mode in consumes.servers[]."
+                )
+            logger.warning(
+                "mcp-broker: [P8] no pin config for server_id=%r (env=%r) — "
+                "returned pin_not_configured (non-enforcing env).",
+                server_id, _env,
+            )
+            return result
+
+        result = verify_upstream_pin(
             config=pin_cfg,
             timeout=timeout,
             _get_fp=_get_fp,
             _get_spiffe=_get_spiffe,
         )
+        self._emit_upstream_pin_event(server_id, result, env=_env)
+
+        if not result.matched and _enforcing:
+            raise ConnectionError(
+                f"mcp-broker: [P8] upstream pin verification FAILED for "
+                f"server_id={server_id!r} reason={result.reason!r} "
+                f"(env={_env!r}) — connection REFUSED. YSG-RISK-056."
+            )
+
+        return result
+
+    def _emit_upstream_pin_event(
+        self,
+        server_id: str,
+        result: PinVerificationResult,
+        env: str,
+    ) -> None:
+        """
+        Emit a structured audit event for upstream pin verification outcome.
+
+        Emits on BOTH success (reason='ok') and failure so Lu has a complete
+        witness trail.  The event carries server_id, matched, reason, and env.
+        """
+        # Use the existing audit writer if available; fall back to WARNING log.
+        # We use a plain dict payload rather than a bespoke audit schema class
+        # so this method doesn't need a new schema migration in v2.25.0.
+        event_label = (
+            result.reason if not result.matched
+            else "MCP_UPSTREAM_PIN_OK"
+        )
+        if self._audit_writer is not None:
+            try:
+                # Structured emit: wrap in a lightweight object the writer
+                # accepts.  Writers accept any object with .event_type.
+                class _PinEvent:
+                    event_type = event_label
+                    def __init__(self, sid: str, matched: bool, reason: str, environment: str) -> None:
+                        self.server_id = sid
+                        self.matched = matched
+                        self.reason = reason
+                        self.env = environment
+
+                self._audit_writer.write(
+                    _PinEvent(server_id, result.matched, result.reason, env)
+                )
+            except Exception as exc:
+                logger.error(
+                    "mcp-broker: audit write failed for upstream-pin event "
+                    "server_id=%r: %s", server_id, exc,
+                )
+        else:
+            log_fn = logger.warning if not result.matched else logger.debug
+            log_fn(
+                "mcp-broker: [P8] upstream pin event server_id=%r matched=%s "
+                "reason=%r env=%r",
+                server_id, result.matched, result.reason, env,
+            )
 
     # -----------------------------------------------------------------------
     # [P1-pool] Per-tenant connection pool accessor

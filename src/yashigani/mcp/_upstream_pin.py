@@ -129,6 +129,11 @@ def _get_spiffe_id_from_san(host: str, port: int, timeout: float = 5.0) -> Optio
     upstream server's TLS leaf certificate.
 
     Returns None if no SPIFFE URI SAN is present.
+
+    SPIFFE spec (SPIFFE ID spec §2): an SVID carries exactly one SPIFFE ID
+    in a URI SAN.  We return the first URI SAN that starts with "spiffe://"
+    and stop — additional URI SANs are not SPIFFE IDs by spec.
+    See: https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE-ID.md#21-spiffe-identity
     """
     ctx = ssl.create_default_context()
     with socket.create_connection((host, port), timeout=timeout) as raw_sock:
@@ -141,7 +146,7 @@ def _get_spiffe_id_from_san(host: str, port: int, timeout: float = 5.0) -> Optio
                 san_type: str = san_entry[0]
                 san_value: str = san_entry[1]
                 if san_type == "URI" and san_value.startswith("spiffe://"):
-                    return san_value
+                    return san_value  # FIX-P8-001: first URI SAN match per SPIFFE spec
     return None
 
 
