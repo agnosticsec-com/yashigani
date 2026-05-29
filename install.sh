@@ -10794,6 +10794,15 @@ handle_pki_subcommand() {
       _pki_run_issuer rotate-leaves \
         --leaf-lifetime-days "$YASHIGANI_CERT_LIFETIME_DAYS" \
         "${_rl_san_args[@]}"
+      # Re-chown private keys to container UIDs after rotation (C-003 fix).
+      # _pki_run_issuer regenerates keys with fresh material and writes them
+      # mode 0400 owned by the installer UID. Without the chown step the
+      # container service processes (e.g. pgbouncer UID 70, backoffice UID 1000)
+      # can no longer read their own private keys → crash-loop on next restart.
+      # The inline pki_action path did not call _pki_chown_client_keys; the
+      # offboard-triggered path (install.sh --pki-action rotate-leaves) therefore
+      # left keys unreadable by their owning containers.
+      _pki_chown_client_keys || { log_error "C-003: _pki_chown_client_keys failed after rotate-leaves — keys may be unreadable by containers"; return 1; }
       log_success "Leaf certs rotated — restart services to pick up new certs"
       log_info "  docker compose restart gateway backoffice postgres pgbouncer redis budget-redis policy"
       ;;

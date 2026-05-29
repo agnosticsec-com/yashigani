@@ -335,7 +335,15 @@ def _parse_sandboxed(text: str) -> dict:
     On macOS (no RLIMIT_AS support) the subprocess still runs in a separate
     process for isolation; the resource limits silently no-op.
     """
-    ctx = multiprocessing.get_context("spawn")
+    # Use "fork" on Linux to avoid multiprocessing.spawn's requirement to
+    # re-import __main__ from a file path.  When install.sh calls the codegen
+    # as `python3 - <<'HEREDOC'`, __main__ has no importable file path
+    # (<stdin>), which causes spawn to raise FileNotFoundError.  fork() copies
+    # the process image directly without needing to reload __main__.
+    # On macOS "fork" is also available; resource-limit sandbox still applies.
+    # Resolves Bug J4-B1 found in P1 first live E2E run (2026-05-29).
+    _ctx_method = "fork" if "fork" in multiprocessing.get_all_start_methods() else "spawn"
+    ctx = multiprocessing.get_context(_ctx_method)
     q: multiprocessing.Queue = ctx.Queue()  # type: ignore[type-arg]
     proc = ctx.Process(target=_sandbox_worker_entry, args=(text, q), daemon=True)
     proc.start()
