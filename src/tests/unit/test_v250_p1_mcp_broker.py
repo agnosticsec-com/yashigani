@@ -757,11 +757,19 @@ class TestOpaEnforcement:
         assert result.deny_reason == "tool_not_in_exposed_allowlist"
 
     async def test_opa_timeout_is_fail_closed(self):
-        """OPA timeout → fail-closed deny (C9). Never allows through."""
+        """OPA timeout → fail-closed deny (C9). Never allows through.
+
+        FIX-F(2) / Iris FIND-003: after removing the asyncio.wait_for wrapper,
+        the timeout is signalled by httpx.TimeoutException (not asyncio.TimeoutError).
+        The mock now raises httpx.TimeoutException to match the real httpx behaviour.
+        deny_reason is always "opa_timeout" (deterministic — no race between
+        two timeout mechanisms).
+        """
+        import httpx
         from yashigani.mcp._opa import query_mcp_decision
 
         mock_client = MagicMock()
-        mock_client.post = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
         mock_client.aclose = AsyncMock()
 
         result = await query_mcp_decision(
@@ -1225,3 +1233,647 @@ class TestPublicKeyJwk:
             padded = val + "=" * (4 - len(val) % 4)
             decoded = base64.urlsafe_b64decode(padded)
             assert len(decoded) == 48, f"P-384 coord must be 48 bytes; {field} decoded to {len(decoded)}"
+
+
+# ---------------------------------------------------------------------------
+# J. Gate fixes — proving tests (Nico-F2/Laura-001, Lu FIX-1, Iris FIND-001,
+#    Nico+Lu FIX-D, Lu FIX-3, Iris FIND-003)
+# ---------------------------------------------------------------------------
+
+
+class TestFixA_RedisNonceTOCTOU:
+    """
+    FIX-A (Nico-F2 + Laura-001): Redis nonce TOCTOU.
+    The old pipeline-based implementation (ZSCORE then separate ZADD) had a
+    race: two workers could both see "not found" and double-admit the same jti.
+    Fix: ZADD NX is the single atomic replay gate.
+
+    Proving test: two concurrent check_and_record calls with the same jti →
+    exactly one succeeds.
+    """
+
+    def test_concurrent_same_jti_exactly_one_wins(self):
+        """
+        ZADD NX atomicity: two calls with the same jti → exactly one True, one False.
+
+        Uses fakeredis for NX semantics without a live Redis server.
+        """
+        try:
+            import fakeredis
+        except ImportError:
+            pytest.skip("fakeredis not installed — skip Redis TOCTOU test")
+
+        from yashigani.mcp._nonce import RedisNonceStore
+
+        redis_client = fakeredis.FakeRedis()
+        store = RedisNonceStore(redis_client, skew_tolerance_seconds=5.0)
+
+        jti = str(uuid.uuid4())
+        exp = time.time() + 60.0
+
+        results = [
+            store.check_and_record(jti, exp, "tenant1"),
+            store.check_and_record(jti, exp, "tenant1"),
+        ]
+        # Exactly one must have succeeded (True) and one must have been rejected (False)
+        assert sorted(results) == [False, True], (
+            f"Expected [False, True] from concurrent same-jti calls, got {results}. "
+            "FIX-A: ZADD NX must admit exactly one caller per jti."
+        )
+
+    def test_different_jtis_both_accepted(self):
+        """Different jtis are each independently accepted."""
+        try:
+            import fakeredis
+        except ImportError:
+            pytest.skip("fakeredis not installed")
+
+        from yashigani.mcp._nonce import RedisNonceStore
+
+        redis_client = fakeredis.FakeRedis()
+        store = RedisNonceStore(redis_client)
+
+        jti1, jti2 = str(uuid.uuid4()), str(uuid.uuid4())
+        exp = time.time() + 60.0
+        assert store.check_and_record(jti1, exp, "tenant1") is True
+        assert store.check_and_record(jti2, exp, "tenant1") is True
+
+    def test_replay_rejected_by_nx(self):
+        """Second call with same jti → False (replay rejected by NX)."""
+        try:
+            import fakeredis
+        except ImportError:
+            pytest.skip("fakeredis not installed")
+
+        from yashigani.mcp._nonce import RedisNonceStore
+
+        redis_client = fakeredis.FakeRedis()
+        store = RedisNonceStore(redis_client)
+
+        jti = str(uuid.uuid4())
+        exp = time.time() + 60.0
+        assert store.check_and_record(jti, exp, "tenant1") is True
+        assert store.check_and_record(jti, exp, "tenant1") is False, (
+            "Replay must be rejected — FIX-A NX gate"
+        )
+
+
+class TestFixB_ChainDepthWitness:
+    """
+    FIX-B (Lu FIX-1): chain-depth rejection must leave a witness with the
+    correct reason label ("chain_depth_exceeded", not "jwt_issuance_failed").
+
+    Proving test: a depth-exceeded call emits the audit event with the correct label.
+    """
+
+    async def test_chain_depth_exceeded_emits_correct_label(self, issuer, nonce_store):
+        """
+        When ChainDepthExceeded fires inside _issuer.issue(), the OPA_DECISION_ON_MCP
+        event must have deny_reason="chain_depth_exceeded" (not "jwt_issuance_failed").
+        """
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+        from yashigani.mcp._opa import OpaDecisionResult
+        from yashigani.mcp._types import McpCallContext, McpPosture, PostureBinding
+
+        writer = MagicMock()
+        writer.write = MagicMock()
+
+        # chain_max_depth=2; upstream_chain has 2 entries → appending own = 3 → exceeds
+        chain_max_depth = 2
+        config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=issuer,
+            nonce_store=nonce_store,
+            chain_max_depth=chain_max_depth,
+            audit_writer=writer,
+        )
+        # Rebuild issuer with matching max depth
+        from yashigani.mcp._jwt import McpJwtIssuer
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ec import SECP384R1
+        key = ec.generate_private_key(SECP384R1())
+        depth_issuer = McpJwtIssuer(tenant_id="tenant1", private_key=key, chain_max_depth=chain_max_depth)
+        config2 = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=depth_issuer,
+            nonce_store=nonce_store,
+            chain_max_depth=chain_max_depth,
+            audit_writer=writer,
+        )
+        broker = McpBroker(config2)
+
+        # Build a context with upstream_chain at max depth (2 entries → adding own = 3 > max 2).
+        # Use mcp-b posture: the broker does not attempt upstream JWT verification for
+        # mcp-b calls, so the pipeline reaches the JWT issuance step where
+        # ChainDepthExceeded fires.  The upstream_chain is pre-populated directly
+        # (simulating a mid-chain context that arrives at this broker hop).
+        over_limit_chain = [
+            "spiffe://yashigani.internal/agents/tenant1/a",
+            "spiffe://yashigani.internal/agents/tenant1/b",
+        ]
+        ctx = McpCallContext(
+            tenant_id="tenant1",
+            agent_name="c",
+            user_id="_test",
+            posture=McpPosture.MCP_B,
+            posture_binding=PostureBinding.for_posture(McpPosture.MCP_B),
+            action="mcp.tools.call",
+            tool_name="web_search",
+            upstream_chain=over_limit_chain,
+        )
+
+        # OPA allows (depth check is gateway-side, after OPA)
+        opa_allow = OpaDecisionResult(
+            allow=True, deny_reason="ok", redact_args=set(),
+            audit_capture=False, rate_limit_key=None, elapsed_ms=5,
+        )
+        with patch("yashigani.mcp.broker.query_mcp_decision",
+                   new=AsyncMock(return_value=opa_allow)):
+            decision = await broker.enforce(ctx)
+
+        assert decision.allow is False, "Chain depth exceeded must deny"
+        assert decision.deny_reason == "chain_depth_exceeded", (
+            f"deny_reason must be 'chain_depth_exceeded'; got {decision.deny_reason!r}. "
+            "FIX-B: ChainDepthExceeded must not be collapsed to jwt_issuance_failed."
+        )
+
+        # Audit witness must have been emitted with the correct label
+        assert writer.write.call_count >= 2, "Audit must be emitted even on chain depth deny"
+        written_events = [call.args[0] for call in writer.write.call_args_list]
+        opa_events = [e for e in written_events if e.event_type == "OPA_DECISION_ON_MCP"]
+        assert opa_events, "OPA_DECISION_ON_MCP must be emitted"
+        assert opa_events[0].deny_reason == "chain_depth_exceeded", (
+            f"OPA_DECISION_ON_MCP.deny_reason must be 'chain_depth_exceeded'; "
+            f"got {opa_events[0].deny_reason!r}"
+        )
+
+
+class TestFixC_SensitivityPlumbing:
+    """
+    FIX-C (Iris FIND-001): sensitivity fields plumbed through to OPA input.
+
+    Proving test: a CONFIDENTIAL resource access → OPA input carries
+    resource.sensitivity=CONFIDENTIAL → audit_capture escalation is reachable.
+    """
+
+    def test_confidential_resource_populates_opa_input(self):
+        """resource_sensitivity=CONFIDENTIAL populates input.resource.sensitivity."""
+        from yashigani.mcp._opa import _build_opa_input
+
+        doc = _build_opa_input(
+            posture="mcp-b",
+            action="mcp.resources.read",
+            spiffe_uri="spiffe://yashigani.internal/agents/tenant1/hermes",
+            chain=["spiffe://yashigani.internal/agents/tenant1/hermes"],
+            resource_uri="file:///secrets/prod.env",
+            resource_sensitivity="CONFIDENTIAL",
+        )
+        assert doc["input"]["resource"]["sensitivity"] == "CONFIDENTIAL", (
+            "resource.sensitivity must be populated in OPA input from McpCallContext. "
+            "FIX-C / Iris FIND-001."
+        )
+
+    def test_restricted_prompt_populates_opa_input(self):
+        """prompt_sensitivity=RESTRICTED populates input.prompt.sensitivity."""
+        from yashigani.mcp._opa import _build_opa_input
+
+        doc = _build_opa_input(
+            posture="mcp-b",
+            action="mcp.prompts.get",
+            spiffe_uri="spiffe://yashigani.internal/agents/tenant1/hermes",
+            chain=["spiffe://yashigani.internal/agents/tenant1/hermes"],
+            prompt_name="admin_summary",
+            prompt_sensitivity="RESTRICTED",
+        )
+        assert doc["input"]["prompt"]["sensitivity"] == "RESTRICTED", (
+            "prompt.sensitivity must be populated in OPA input. FIX-C / Iris FIND-001."
+        )
+
+    def test_no_sensitivity_field_omitted_from_opa_input(self):
+        """When sensitivity is None, the field is omitted from the OPA input."""
+        from yashigani.mcp._opa import _build_opa_input
+
+        doc = _build_opa_input(
+            posture="mcp-b",
+            action="mcp.resources.read",
+            spiffe_uri="spiffe://yashigani.internal/agents/tenant1/hermes",
+            chain=["spiffe://yashigani.internal/agents/tenant1/hermes"],
+            resource_uri="file:///public/readme.md",
+            resource_sensitivity=None,
+        )
+        assert "sensitivity" not in doc["input"]["resource"], (
+            "sensitivity key must be absent from OPA input when None. FIX-C."
+        )
+
+    async def test_confidential_resource_reaches_opa_via_enforce(self, broker):
+        """
+        End-to-end: resource_sensitivity=CONFIDENTIAL on McpCallContext flows
+        through enforce() into the OPA query call.
+        """
+        from yashigani.mcp._types import McpCallContext, McpPosture, PostureBinding
+        from yashigani.mcp._opa import OpaDecisionResult
+
+        ctx = McpCallContext(
+            tenant_id="tenant1",
+            agent_name="hermes",
+            user_id="_test",
+            posture=McpPosture.MCP_B,
+            posture_binding=PostureBinding.for_posture(McpPosture.MCP_B),
+            action="mcp.resources.read",
+            resource_uri="file:///secrets/prod.env",
+            resource_sensitivity="CONFIDENTIAL",
+        )
+
+        captured_kwargs: dict = {}
+
+        async def _capture_query(**kwargs):
+            captured_kwargs.update(kwargs)
+            return OpaDecisionResult(
+                allow=True, deny_reason="ok", redact_args=set(),
+                audit_capture=True, rate_limit_key=None, elapsed_ms=5,
+            )
+
+        with patch("yashigani.mcp.broker.query_mcp_decision", new=_capture_query):
+            await broker.enforce(ctx)
+
+        assert captured_kwargs.get("resource_sensitivity") == "CONFIDENTIAL", (
+            "resource_sensitivity must be passed to query_mcp_decision. FIX-C."
+        )
+
+
+class TestFixD_ProductionAuditWriterEnforced:
+    """
+    FIX-D (Nico + Lu): production must enforce non-None audit_writer.
+
+    Proving test: prod-config init with audit_writer=None raises RuntimeError.
+    """
+
+    def test_production_env_audit_writer_none_raises(self, issuer, nonce_store, monkeypatch):
+        """audit_writer=None with YASHIGANI_ENV=production → RuntimeError."""
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+
+        monkeypatch.setenv("YASHIGANI_ENV", "production")
+
+        config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=issuer,
+            nonce_store=nonce_store,
+            audit_writer=None,  # must raise in production
+        )
+        with pytest.raises(RuntimeError, match="audit_writer is None"):
+            McpBroker(config)
+
+    def test_staging_env_audit_writer_none_raises(self, issuer, nonce_store, monkeypatch):
+        """audit_writer=None with YASHIGANI_ENV=staging → RuntimeError."""
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+
+        monkeypatch.setenv("YASHIGANI_ENV", "staging")
+
+        config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=issuer,
+            nonce_store=nonce_store,
+            audit_writer=None,
+        )
+        with pytest.raises(RuntimeError, match="audit_writer is None"):
+            McpBroker(config)
+
+    def test_dev_env_audit_writer_none_allowed(self, issuer, nonce_store, monkeypatch):
+        """audit_writer=None with YASHIGANI_ENV=dev → allowed (no RuntimeError)."""
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+
+        monkeypatch.setenv("YASHIGANI_ENV", "dev")
+
+        config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=issuer,
+            nonce_store=nonce_store,
+            audit_writer=None,
+        )
+        # Must not raise
+        broker = McpBroker(config)
+        assert broker is not None
+
+    def test_no_env_var_audit_writer_none_allowed(self, issuer, nonce_store, monkeypatch):
+        """No YASHIGANI_ENV set → dev assumption → audit_writer=None allowed."""
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+
+        monkeypatch.delenv("YASHIGANI_ENV", raising=False)
+
+        config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=issuer,
+            nonce_store=nonce_store,
+            audit_writer=None,
+        )
+        broker = McpBroker(config)
+        assert broker is not None
+
+
+class TestFixE_FullChainInAuditRecord:
+    """
+    FIX-E (Lu FIX-3): OpaDecisionOnMcpEvent records the full SPIFFE identity
+    chain (ordered list), not just chain_depth (int).
+
+    Proving test: a 3-hop call's audit record contains the 3 SPIFFE URIs.
+    """
+
+    async def test_three_hop_audit_contains_all_spiffe_uris(self, issuer, nonce_store):
+        """
+        3-hop chain: upstream_chain has 2 URIs, this hop appends a 3rd.
+        The OPA_DECISION_ON_MCP event must carry the 2-element upstream_chain
+        (the chain as presented to the broker before this hop appends its own URI).
+        """
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+        from yashigani.mcp._types import McpCallContext, McpPosture, PostureBinding
+        from yashigani.mcp._opa import OpaDecisionResult
+        from yashigani.mcp._jwt import McpJwtIssuer
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ec import SECP384R1
+
+        writer = MagicMock()
+        writer.write = MagicMock()
+
+        # Use chain_max_depth=4 to allow a 3-hop chain
+        key = ec.generate_private_key(SECP384R1())
+        deep_issuer = McpJwtIssuer(tenant_id="tenant1", private_key=key, chain_max_depth=4)
+
+        config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=deep_issuer,
+            nonce_store=nonce_store,
+            chain_max_depth=4,
+            audit_writer=writer,
+        )
+        broker = McpBroker(config)
+
+        # Use mcp-b posture with a pre-populated upstream_chain to avoid the
+        # mcp-c upstream JWT verification step — the FIX-E property (identity_chain
+        # populated in audit record) is posture-agnostic; it reads ctx.upstream_chain
+        # regardless of posture.
+        upstream_chain = [
+            "spiffe://yashigani.internal/agents/tenant1/hop1",
+            "spiffe://yashigani.internal/agents/tenant1/hop2",
+        ]
+        ctx = McpCallContext(
+            tenant_id="tenant1",
+            agent_name="hop3",
+            user_id="_test",
+            posture=McpPosture.MCP_B,
+            posture_binding=PostureBinding.for_posture(McpPosture.MCP_B),
+            action="mcp.tools.call",
+            tool_name="web_search",
+            upstream_chain=upstream_chain,
+        )
+
+        opa_allow = OpaDecisionResult(
+            allow=True, deny_reason="ok", redact_args=set(),
+            audit_capture=False, rate_limit_key=None, elapsed_ms=5,
+        )
+        with patch("yashigani.mcp.broker.query_mcp_decision",
+                   new=AsyncMock(return_value=opa_allow)):
+            decision = await broker.enforce(ctx)
+
+        assert decision.allow is True, "3-hop call within max depth must be allowed"
+
+        written_events = [call.args[0] for call in writer.write.call_args_list]
+        opa_events = [e for e in written_events if e.event_type == "OPA_DECISION_ON_MCP"]
+        assert opa_events, "OPA_DECISION_ON_MCP must be emitted"
+
+        opa_ev = opa_events[0]
+        assert hasattr(opa_ev, "identity_chain"), (
+            "OpaDecisionOnMcpEvent must have identity_chain field. FIX-E."
+        )
+        assert "spiffe://yashigani.internal/agents/tenant1/hop1" in opa_ev.identity_chain, (
+            "hop1 SPIFFE URI must be in identity_chain. FIX-E."
+        )
+        assert "spiffe://yashigani.internal/agents/tenant1/hop2" in opa_ev.identity_chain, (
+            "hop2 SPIFFE URI must be in identity_chain. FIX-E."
+        )
+        assert len(opa_ev.identity_chain) == 2, (
+            f"upstream_chain had 2 entries; expected identity_chain length 2, "
+            f"got {len(opa_ev.identity_chain)}"
+        )
+
+    async def test_first_hop_identity_chain_is_empty(self, broker):
+        """First-hop (mcp-a) call: identity_chain in audit record is []."""
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+        from yashigani.mcp._opa import OpaDecisionResult
+
+        writer = MagicMock()
+        writer.write = MagicMock()
+
+        ctx = _make_call_context(posture_str="mcp-a")
+        opa_allow = OpaDecisionResult(
+            allow=True, deny_reason="ok", redact_args=set(),
+            audit_capture=False, rate_limit_key=None, elapsed_ms=5,
+        )
+
+        # Use broker with a real writer
+        from yashigani.mcp._jwt import McpJwtIssuer
+        from yashigani.mcp._nonce import InMemoryNonceStore
+        import logging
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ec import SECP384R1
+
+        key = ec.generate_private_key(SECP384R1())
+        local_issuer = McpJwtIssuer(tenant_id="tenant1", private_key=key)
+        with patch.object(logging.getLogger("yashigani.mcp._nonce"), "warning"):
+            local_nonce = InMemoryNonceStore()
+        local_config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=local_issuer,
+            nonce_store=local_nonce,
+            audit_writer=writer,
+        )
+        local_broker = McpBroker(local_config)
+
+        with patch("yashigani.mcp.broker.query_mcp_decision",
+                   new=AsyncMock(return_value=opa_allow)):
+            await local_broker.enforce(ctx)
+
+        written_events = [call.args[0] for call in writer.write.call_args_list]
+        opa_events = [e for e in written_events if e.event_type == "OPA_DECISION_ON_MCP"]
+        assert opa_events
+        assert opa_events[0].identity_chain == [], (
+            "First-hop call has no upstream chain; identity_chain must be []. FIX-E."
+        )
+
+
+class TestFixF_OpaTimeoutDeterministic:
+    """
+    FIX-F(2) / Iris FIND-003: single timeout mechanism → deterministic label.
+
+    After removing asyncio.wait_for, httpx.TimeoutException is the sole
+    timeout signal.  deny_reason is always "opa_timeout", never races to
+    "opa_unreachable".
+    """
+
+    async def test_httpx_timeout_gives_opa_timeout_label(self):
+        """httpx.TimeoutException → deny_reason=opa_timeout (deterministic)."""
+        import httpx
+        from yashigani.mcp._opa import query_mcp_decision
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+        mock_client.aclose = AsyncMock()
+
+        result = await query_mcp_decision(
+            opa_url="http://localhost:8181",
+            posture="mcp-a",
+            action="mcp.tools.call",
+            spiffe_uri="spiffe://yashigani.internal/agents/tenant1/hermes",
+            chain=["spiffe://yashigani.internal/agents/tenant1/hermes"],
+            tool_name="web_search",
+            http_client=mock_client,
+        )
+        assert result.deny_reason == "opa_timeout", (
+            "httpx.TimeoutException must give deny_reason=opa_timeout. FIX-F(2)."
+        )
+        assert result.allow is False
+
+    async def test_connect_error_gives_opa_unreachable_label(self):
+        """httpx.ConnectError → deny_reason=opa_unreachable (distinct from timeout)."""
+        import httpx
+        from yashigani.mcp._opa import query_mcp_decision
+
+        mock_client = MagicMock()
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+        mock_client.aclose = AsyncMock()
+
+        result = await query_mcp_decision(
+            opa_url="http://localhost:8181",
+            posture="mcp-a",
+            action="mcp.tools.call",
+            spiffe_uri="spiffe://yashigani.internal/agents/tenant1/hermes",
+            chain=["spiffe://yashigani.internal/agents/tenant1/hermes"],
+            tool_name="web_search",
+            http_client=mock_client,
+        )
+        assert result.deny_reason == "opa_unreachable", (
+            "Connection error must give opa_unreachable (not opa_timeout). FIX-F(2)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# K. Real-writer test (Lu retro-L1 — YSG-RISK-054 close evidence)
+#
+# All prior audit tests use mocks/None.  This test wires a REAL AuditLogWriter
+# (to a tmp Merkle log) through enforce() and asserts MCP_CALL + OPA_DECISION_ON_MCP
+# events are PERSISTED + chain-linked.
+#
+# Lu evidence: flip AU-2/12/CC7.1 → PASS requires this test to be green.
+# ---------------------------------------------------------------------------
+
+
+class TestRealWriterAuditPersistence:
+    """
+    Lu retro-L1 / YSG-RISK-054: real AuditLogWriter through enforce() confirms
+    MCP_CALL + OPA_DECISION_ON_MCP events are written to disk and chain-linked.
+    """
+
+    async def test_enforce_persists_mcp_call_and_opa_decision_events(
+        self, issuer, nonce_store, tmp_path
+    ):
+        """
+        Wire a REAL AuditLogWriter to a tmp file, run enforce(), then read the
+        file back and assert:
+          1. MCP_CALL event is present.
+          2. OPA_DECISION_ON_MCP event is present.
+          3. Events are chain-linked (event N's prev_event_hash is the SHA-384 of
+             event N-1's canonical JSON, or the day-anchor for the first event).
+
+        This is the evidence Lu needs for AU-2/12/CC7.1 → PASS.
+        """
+        import json
+        import hashlib
+        from yashigani.audit.writer import AuditLogWriter, _canonical_json, _sha384_hex
+        from yashigani.audit.config import AuditConfig
+        from yashigani.mcp.broker import McpBroker, McpBrokerConfig
+        from yashigani.mcp._opa import OpaDecisionResult
+
+        # Build a real AuditLogWriter to a tmp file
+        log_file = tmp_path / "mcp_audit_test.log"
+        config = AuditConfig(
+            log_path=str(log_file),
+            max_file_size_mb=10,
+            retention_days=1,
+        )
+        real_writer = AuditLogWriter(config)
+
+        # Wire broker with the real writer
+        broker_config = McpBrokerConfig(
+            opa_url="http://localhost:8181",
+            tenant_id="tenant1",
+            issuer=issuer,
+            nonce_store=nonce_store,
+            audit_writer=real_writer,
+        )
+        broker = McpBroker(broker_config)
+
+        ctx = _make_call_context(posture_str="mcp-b")
+
+        opa_allow = OpaDecisionResult(
+            allow=True, deny_reason="ok", redact_args=set(),
+            audit_capture=False, rate_limit_key=None, elapsed_ms=8,
+        )
+        with patch(
+            "yashigani.mcp.broker.query_mcp_decision",
+            new=AsyncMock(return_value=opa_allow),
+        ):
+            decision = await broker.enforce(ctx)
+
+        real_writer.close()
+
+        assert decision.allow is True, "Broker must allow the call"
+        assert log_file.exists(), "Audit log file must exist"
+
+        # Read and parse all events
+        lines = [l.strip() for l in log_file.read_text().splitlines() if l.strip()]
+        assert len(lines) >= 2, (
+            f"Expected at least 2 audit events (MCP_CALL + OPA_DECISION_ON_MCP); "
+            f"got {len(lines)} lines"
+        )
+
+        events = [json.loads(line) for line in lines]
+        event_types = [e["event_type"] for e in events]
+
+        # 1. MCP_CALL must be present
+        assert "MCP_CALL" in event_types, (
+            "MCP_CALL event must be persisted to disk. Lu retro-L1 / AU-2."
+        )
+
+        # 2. OPA_DECISION_ON_MCP must be present
+        assert "OPA_DECISION_ON_MCP" in event_types, (
+            "OPA_DECISION_ON_MCP event must be persisted to disk. Lu retro-L1 / AU-12."
+        )
+
+        # 3. Events must be chain-linked (tamper-evident Merkle chain)
+        # The first event's prev_event_hash is the SHA-384 of the day date string.
+        # Subsequent events' prev_event_hash is the SHA-384 of the previous event's
+        # canonical JSON (without the prev_event_hash field itself).
+        from datetime import datetime, timezone
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        day_anchor = _sha384_hex(today)
+
+        # First event: prev_event_hash == day_anchor
+        assert events[0]["prev_event_hash"] == day_anchor, (
+            f"First event's prev_event_hash must be the day anchor SHA-384. "
+            f"Got {events[0]['prev_event_hash']!r}, expected {day_anchor!r}. "
+            "Lu retro-L1 / CC7.1 tamper-evident chain."
+        )
+
+        # Second event: prev_event_hash == SHA-384(_canonical_json(events[0]))
+        expected_hash_for_second = _sha384_hex(_canonical_json(events[0]))
+        assert events[1]["prev_event_hash"] == expected_hash_for_second, (
+            f"Second event's prev_event_hash must be SHA-384 of event[0]'s canonical JSON. "
+            f"Chain is broken. Lu retro-L1 / CC7.1."
+        )

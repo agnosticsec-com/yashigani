@@ -435,7 +435,23 @@ class McpJwtVerifier:
 
     @classmethod
     def from_issuer(cls, issuer: "McpJwtIssuer") -> "McpJwtVerifier":
-        """Create a verifier from a co-located issuer (same-installation relay)."""
+        """Create a verifier from a co-located issuer (same-installation relay).
+
+        CAVEAT (Nico-F1 / point-in-time snapshot):
+        This captures the issuer's public key at construction time.  If the
+        issuer rotates its key after this verifier is built (key_generated_at
+        changes), the verifier will NOT see the new key and will reject JWTs
+        signed with it.
+
+        For rotation-safe verification, rebuild the verifier from a JwksStore
+        that is updated atomically during key rotation (see _jwks.py ::rotate()).
+        Cross-installation relay verification must use the JWKS endpoint
+        (/.well-known/yashigani-mcp-jwks.json) with cache-busting on kid miss,
+        not from_issuer().
+
+        Safe use: unit tests, single-issuer same-process scenarios where key
+        rotation does not occur during the verifier's lifetime.
+        """
         kid_to_key = {issuer.kid: issuer._public_key}
         return cls(
             jwks_keys=[issuer._public_key],

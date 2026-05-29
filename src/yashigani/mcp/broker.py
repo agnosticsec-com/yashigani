@@ -24,6 +24,7 @@ v2.25.0 / P1 W3 Phase 2b-ii / YSG-RISK-054 (audit) + YSG-RISK-055 (posture).
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
@@ -36,7 +37,7 @@ from yashigani.mcp._types import (
     McpPosture,
     OpaDecision,
 )
-from yashigani.mcp._jwt import McpJwtIssuer, McpJwtVerifier
+from yashigani.mcp._jwt import ChainDepthExceeded, McpJwtIssuer, McpJwtVerifier
 from yashigani.mcp._nonce import NonceStore, InMemoryNonceStore
 from yashigani.mcp._opa import query_mcp_decision
 
@@ -133,6 +134,20 @@ class McpBroker:
 
         self._audit_writer = config.audit_writer
 
+        # FIX-D (Nico + Lu): production must have a real audit_writer.
+        # A ring-fence with no witness is not acceptable in production.
+        # YASHIGANI_ENV=production or YASHIGANI_ENV=staging → fail loudly.
+        # dev/test/local pass None freely (mock writers acceptable).
+        _env = os.environ.get("YASHIGANI_ENV", "").lower().strip()
+        _prod_envs = {"production", "staging"}
+        if self._audit_writer is None and _env in _prod_envs:
+            raise RuntimeError(
+                "McpBroker: audit_writer is None in a production/staging environment "
+                f"(YASHIGANI_ENV={_env!r}). A ring-fence with no audit witness is not "
+                "acceptable. Provide a real AuditLogWriter instance. "
+                "YSG-RISK-054 / AU-2 / AU-12 / CC7.1."
+            )
+
     async def enforce(self, ctx: McpCallContext) -> BrokerDecision:
         """
         Run the full enforcement pipeline for one MCP call.
@@ -180,6 +195,8 @@ class McpBroker:
         )
         chain_for_opa = list(upstream_chain)
 
+        # FIX-C (Iris FIND-001): pass sensitivity fields so OPA audit_capture
+        # escalation for CONFIDENTIAL/RESTRICTED resources/prompts is reachable.
         opa_result = await query_mcp_decision(
             opa_url=self._opa_url,
             posture=ctx.posture.value,
@@ -190,6 +207,8 @@ class McpBroker:
             tool_args_redacted=ctx.tool_args_redacted,
             prompt_name=ctx.prompt_name,
             resource_uri=ctx.resource_uri,
+            resource_sensitivity=ctx.resource_sensitivity,
+            prompt_sensitivity=ctx.prompt_sensitivity,
         )
 
         elapsed = int((time.monotonic() - t0) * 1000)
@@ -217,6 +236,11 @@ class McpBroker:
             return decision
 
         # Step 3: issue gateway-signed JWT (only on OPA allow)
+        #
+        # FIX-B (Lu FIX-1): ChainDepthExceeded must be caught and emitted with
+        # an accurate deny_reason label ("chain_depth_exceeded"), not the generic
+        # "jwt_issuance_failed".  Split the except so the two failure modes have
+        # distinct deny_reason labels in the audit record.
         issued_jwt: Optional[str] = None
         jwt_error: Optional[str] = None
         try:
@@ -229,6 +253,24 @@ class McpBroker:
                 call_id=call_id,
                 upstream_chain=upstream_chain if upstream_chain else None,
             )
+        except ChainDepthExceeded as exc:
+            jwt_error = str(exc)
+            logger.warning(
+                "mcp-broker: chain_depth_exceeded call_id=%s chain_len=%d max=%d: %s",
+                call_id, len(chain_for_opa), self._config.chain_max_depth, exc,
+            )
+            # FIX-B: emit witness with accurate label so audit trail is clear
+            decision = BrokerDecision(
+                call_id=call_id,
+                allow=False,
+                deny_reason="chain_depth_exceeded",
+                opa_decision=opa_decision,
+                chain_depth=len(chain_for_opa),
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                error=jwt_error,
+            )
+            await self._emit_audit(ctx, decision)
+            return decision
         except Exception as exc:
             jwt_error = str(exc)
             logger.error(
@@ -358,6 +400,9 @@ class McpBroker:
             request_id=ctx.request_id,
             decision=opa_decision_label,
             deny_reason=decision.deny_reason,
+            # FIX-E (Lu FIX-3): persist full SPIFFE chain (ordered list) so
+            # auditor sees WHICH identities were in the chain, not just how many.
+            identity_chain=list(ctx.upstream_chain),
             chain_depth=decision.chain_depth,
             elapsed_ms=decision.opa_decision.elapsed_ms,
         )

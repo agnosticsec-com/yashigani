@@ -175,11 +175,23 @@ class RedisNonceStore(NonceStore):
 
     def check_and_record(self, jti: str, exp_epoch: float, tenant_id: str) -> bool:
         """
-        Atomic check-and-record using Redis pipeline.
+        Atomic check-and-record using Redis NX semantics.
 
-        1. ZREMRANGEBYSCORE (cleanup expired)
-        2. ZSCORE (check for replay)
-        3. ZADD (record if new)
+        FIX-A (Nico-F2 + Laura-001): the previous pipeline-based implementation
+        had a TOCTOU race — two concurrent workers could both see "jti not found"
+        on ZSCORE and both proceed to ZADD, double-admitting the same jti.
+
+        New approach:
+          1. ZREMRANGEBYSCORE (cleanup expired — removes stale entries before the
+             NX insert so the set stays bounded even under replay storms).
+          2. ZADD NX (insert-only-if-absent, atomic): if added=1, jti is new
+             (allow); if added=0, jti already existed (replay → reject).
+          3. EXPIRE (refresh key TTL after write).
+
+        The NX flag makes the ZADD itself the replay-detection gate, with no
+        separate read between check and write.  This is safe even under concurrent
+        goroutines/threads sharing a single Redis connection because ZADD NX is
+        a single atomic Redis command.
 
         Returns True (new jti) or False (replay).
         Raises NonceStoreError on Redis failure (broker must fail-closed).
@@ -189,23 +201,26 @@ class RedisNonceStore(NonceStore):
             now = time.time()
             cutoff = now - self._skew
 
-            pipe = self._redis.pipeline()  # type: ignore[attr-defined]
-            # Cleanup expired
-            pipe.zremrangebyscore(key, "-inf", cutoff)
-            # Check for existing jti
-            pipe.zscore(key, jti)
-            results = pipe.execute()
+            # Step 1: cleanup expired entries (bounded maintenance — safe to run
+            # before the NX insert; does not race with it because expired entries
+            # have score < cutoff and the new entry has score=exp_epoch > now).
+            self._redis.zremrangebyscore(key, "-inf", cutoff)  # type: ignore[attr-defined]
 
-            existing_score = results[1]
-            if existing_score is not None:
+            # Step 2: atomic insert-only-if-absent — this IS the replay gate.
+            # ZADD NX returns the number of NEW elements added:
+            #   1 → jti was absent → first use → allow
+            #   0 → jti already present → replay → reject
+            added = self._redis.zadd(  # type: ignore[attr-defined]
+                key, {jti: exp_epoch}, nx=True
+            )
+
+            if not added:
                 logger.warning(
-                    "mcp-broker: jti_replayed jti=%s tenant=%s (Redis)", jti, tenant_id
+                    "mcp-broker: jti_replayed jti=%s tenant=%s (Redis NX)", jti, tenant_id
                 )
                 return False  # replay
 
-            # Record the new jti
-            self._redis.zadd(key, {jti: exp_epoch})  # type: ignore[attr-defined]
-            # Set key TTL to nonce window (65s) so Redis auto-expires the key
+            # Step 3: refresh TTL so Redis auto-expires the key after the nonce window.
             self._redis.expire(key, int(_NONCE_WINDOW_SECONDS))  # type: ignore[attr-defined]
             return True
 

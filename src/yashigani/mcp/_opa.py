@@ -37,7 +37,6 @@ v2.25.0 / P1 W3 Phase 2b-ii / YSG-RISK-054.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -209,15 +208,20 @@ async def query_mcp_decision(
     url = f"{opa_url.rstrip('/')}{MCP_OPA_PATH}"
     own_client = http_client is None
 
+    # FIX-F(2) / Iris FIND-003: previously had BOTH httpx timeout (500ms) AND
+    # asyncio.wait_for (500ms).  Two concurrent timeouts mean the deny_reason
+    # label ("opa_timeout" vs "opa_unreachable") was race-dependent depending on
+    # which fired first.  Fix: rely on a SINGLE timeout mechanism — httpx's own
+    # built-in timeout — and catch httpx.TimeoutException explicitly.
+    # asyncio.wait_for wrapper removed.  Label is now deterministic: httpx always
+    # raises httpx.TimeoutException on its own timeout, giving "opa_timeout".
+
     try:
         if own_client:
             http_client = httpx.AsyncClient(timeout=OPA_TIMEOUT_SECONDS)
 
         assert http_client is not None
-        resp = await asyncio.wait_for(
-            http_client.post(url, json=input_doc),
-            timeout=OPA_TIMEOUT_SECONDS,
-        )
+        resp = await http_client.post(url, json=input_doc)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         resp.raise_for_status()
@@ -236,7 +240,7 @@ async def query_mcp_decision(
             )
         return result
 
-    except asyncio.TimeoutError:
+    except httpx.TimeoutException:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         logger.error(
             "mcp-broker: OPA timeout after %dms (limit=%dms) posture=%s action=%s — "

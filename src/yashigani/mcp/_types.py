@@ -112,6 +112,14 @@ class McpCallContext:
     # Transport metadata (for OPA input enrichment)
     server_id: str = ""     # upstream MCP server identifier
 
+    # FIX-C (Iris FIND-001): sensitivity labels for resource and prompt calls.
+    # OPA policy (mcp.rego:380-391) escalates audit_capture for CONFIDENTIAL/RESTRICTED
+    # access but the escalation was structurally unreachable because McpCallContext had
+    # no sensitivity fields.  Populate from MCP protocol metadata (wire what's available;
+    # default None).  Values: "PUBLIC" | "INTERNAL" | "CONFIDENTIAL" | "RESTRICTED" | None
+    resource_sensitivity: Optional[str] = None
+    prompt_sensitivity: Optional[str] = None
+
 
 @dataclass
 class OpaDecision:
