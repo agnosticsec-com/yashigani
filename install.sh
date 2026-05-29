@@ -9985,6 +9985,15 @@ _ysg_cosign_gate() {
   local _manifest_file="$1"
   local _sig_file="${_manifest_file}.cosign.sig"
 
+  # C-001 (Nico MED): FIPS guard — cosign uses Go crypto, NOT covered by
+  # CMVP #4985.  Under FIPS_MODE=1 the Python signatures.py path enforces
+  # its own gate using RSA-PSS-3072/SHA-384 (FIPS-validated).  We defer to
+  # that path and skip cosign entirely.
+  if [[ "${FIPS_MODE:-0}" == "1" ]]; then
+    log_info "S3: FIPS mode — cosign bypassed; manifest verification defers to signatures.py (RSA-PSS-3072/SHA-384)"
+    return 0
+  fi
+
   # Resolve enforcement level
   local _level="warn"
   local _env_val="${YSG_REQUIRE_SIGNED_MANIFEST:-}"

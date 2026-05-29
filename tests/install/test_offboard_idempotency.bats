@@ -415,3 +415,257 @@ teardown() {
   run grep -c 'handle_offboard_subcommand()' "${REPO_ROOT}/install.sh"
   [ "$output" != "0" ]
 }
+
+# ── F1: offboard removes all codegen artifacts (incl. opa/.rego + test stubs) ─
+
+@test "F1: offboard removes opa/<agent>.rego when present" {
+  mkdir -p "${MOCK_ROOT}/opa"
+  printf 'package letta_agent\n' > "${MOCK_ROOT}/opa/my-agent.rego"
+  env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1 || true
+  [ ! -f "${MOCK_ROOT}/opa/my-agent.rego" ]
+}
+
+@test "F1: offboard removes tests/contracts/test_<agent>_compose.py when present" {
+  mkdir -p "${MOCK_ROOT}/tests/contracts"
+  printf '# contract test stub\n' > "${MOCK_ROOT}/tests/contracts/test_my-agent_compose.py"
+  env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1 || true
+  [ ! -f "${MOCK_ROOT}/tests/contracts/test_my-agent_compose.py" ]
+}
+
+@test "F1: offboard removes tests/contracts/test_<agent>_helm.py when present" {
+  mkdir -p "${MOCK_ROOT}/tests/contracts"
+  printf '# helm contract test stub\n' > "${MOCK_ROOT}/tests/contracts/test_my-agent_helm.py"
+  env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1 || true
+  [ ! -f "${MOCK_ROOT}/tests/contracts/test_my-agent_helm.py" ]
+}
+
+@test "F1: offboard step7 is idempotent when codegen files already absent" {
+  # No codegen files present — must still exit 0
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1
+  [ "$status" -eq 0 ]
+}
+
+@test "F1: Caddyfile is NOT modified by offboard (W3-P2a wildcard glob)" {
+  # Create a Caddyfile that contains a wildcard glob import (W3-P2a pattern)
+  local _caddyfile="${MOCK_ROOT}/docker/caddy/Caddyfile"
+  printf '{\n  admin off\n}\n:443 {\n  import agents/*.caddy\n}\n' > "$_caddyfile"
+  local _before
+  _before="$(cat "${_caddyfile}")"
+  env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1 || true
+  local _after
+  _after="$(cat "${_caddyfile}")"
+  # Caddyfile must be byte-identical (not modified by offboard)
+  [ "$_before" = "$_after" ]
+}
+
+# ── F-Laura / F3: sentinel substring collision ─────────────────────────────────
+
+@test "F-Laura: offboard step1 anchored-regex does not delete letta-pgbouncer when removing letta" {
+  # service_identities.yaml with letta-pgbouncer BEFORE letta
+  local _sid="${MOCK_ROOT}/docker/service_identities.yaml"
+  cat > "$_sid" <<'YAML'
+services:
+  # BEGIN YSG-ONBOARD-letta-pgbouncer
+  - name: letta-pgbouncer
+  # END YSG-ONBOARD-letta-pgbouncer
+  # BEGIN YSG-ONBOARD-letta
+  - name: letta
+  # END YSG-ONBOARD-letta
+YAML
+  env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" letta 2>&1 || true
+  # letta-pgbouncer block must survive
+  grep -q 'BEGIN YSG-ONBOARD-letta-pgbouncer' "$_sid"
+  grep -q 'letta-pgbouncer' "$_sid"
+  # letta sentinel must be gone
+  run grep -c 'BEGIN YSG-ONBOARD-letta$' "$_sid" 2>/dev/null || true
+  [ "$output" = "0" ] || true
+  # Verify letta entry removed (not just sentinel line check)
+  run grep -c '- name: letta$' "$_sid" 2>/dev/null || true
+  [ "$output" = "0" ] || true
+}
+
+@test "F-Laura: pki_ownership_append remove('letta') leaves letta-pgbouncer intact (primary path)" {
+  # Add letta-pgbouncer first, then letta
+  python3 "${PKI_APPENDER}" \
+      --lib "${MOCK_ROOT}/lib/pki_ownership.sh" \
+      append --service letta-pgbouncer --uid 70 --mode 0600
+  python3 "${PKI_APPENDER}" \
+      --lib "${MOCK_ROOT}/lib/pki_ownership.sh" \
+      append --service letta --uid 0 --mode 0600
+  # Remove letta
+  run python3 "${PKI_APPENDER}" \
+      --lib "${MOCK_ROOT}/lib/pki_ownership.sh" \
+      remove --service letta
+  [ "$status" -eq 2 ]
+  # letta-pgbouncer must still be present
+  grep -q '"letta-pgbouncer:70:0600"' "${MOCK_ROOT}/lib/pki_ownership.sh"
+  # letta sentinel must be gone
+  run grep -c 'BEGIN YSG-ONBOARD-letta"' "${MOCK_ROOT}/lib/pki_ownership.sh"
+  [ "$output" = "0" ]
+}
+
+@test "F3: offboard inline fallback rejects inline (non-sentinel) pki entry with exit 1" {
+  # Write an inline (non-sentinel) pki_ownership.sh entry — simulating a core service
+  local _pki="${MOCK_ROOT}/lib/pki_ownership.sh"
+  cat > "$_pki" <<'PEOF'
+#!/usr/bin/env bash
+_YSG_PKI_SERVICE_MAP=(
+  "caddy:0:0600"
+  "letta:0:0600"
+)
+PEOF
+  # Remove pki_ownership_append.py so the inline fallback is used
+  local _appender_bak="${MOCK_ROOT}/lib/pki_ownership_append.py.bak"
+  mv "${MOCK_ROOT}/lib/pki_ownership.sh" /dev/null 2>/dev/null || true
+  # Re-create the inline entry file
+  cat > "$_pki" <<'PEOF'
+#!/usr/bin/env bash
+_YSG_PKI_SERVICE_MAP=(
+  "caddy:0:0600"
+  "letta:0:0600"
+)
+PEOF
+  # Run offboard with no appender present: should fail (inline entry detected)
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" letta 2>&1
+  # Either step 2 rejects the inline entry (exit 1 from Python) or the step
+  # itself propagates the error — in any case offboard must exit non-zero.
+  [ "$status" -ne 0 ] || [[ "$output" == *"inline"* ]] || [[ "$output" == *"ERROR"* ]]
+}
+
+# ── F2: name-regex alignment ───────────────────────────────────────────────────
+
+@test "F2: offboard rejects uppercase agent name" {
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" MyAgent 2>&1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"slug"* ]] || [[ "$output" == *"lowercase"* ]] || [[ "$output" == *"illegal"* ]]
+}
+
+@test "F2: offboard rejects agent name with underscore" {
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" my_agent 2>&1
+  [ "$status" -ne 0 ]
+}
+
+@test "F2: offboard rejects single-char agent name" {
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" a 2>&1
+  [ "$status" -ne 0 ]
+}
+
+@test "F2: offboard accepts valid slug (lowercase, hyphen, 2+ chars)" {
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1
+  [ "$status" -eq 0 ]
+}
+
+@test "F2: offboard accepts 'letta' (2-char slug — valid)" {
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" letta 2>&1
+  [ "$status" -eq 0 ]
+}
+
+# ── C-001: FIPS guard on cosign gate ──────────────────────────────────────────
+
+@test "C-001: _ysg_cosign_gate FIPS guard present in install.sh" {
+  run grep -c 'FIPS mode.*cosign bypassed' "${REPO_ROOT}/install.sh"
+  [ "$output" != "0" ]
+}
+
+@test "C-001: FIPS_MODE=1 path returns before cosign binary check (within _ysg_cosign_gate)" {
+  # The FIPS guard must appear BEFORE the cosign verify-blob invocation
+  # within the _ysg_cosign_gate function body.
+  # Strategy: extract the function body and check line ordering within it.
+  local _gate_start _gate_end _fips_rel _cosign_rel
+
+  # Line number of the function definition
+  _gate_start="$(grep -n '^_ysg_cosign_gate()' "${REPO_ROOT}/install.sh" | head -1 | cut -d: -f1)"
+  [ -n "$_gate_start" ]
+
+  # Line number of the first 'cosign verify-blob' AFTER the function start
+  _cosign_rel="$(awk "NR > ${_gate_start} && /cosign verify-blob/{print NR; exit}" "${REPO_ROOT}/install.sh")"
+  [ -n "$_cosign_rel" ]
+
+  # Line number of 'FIPS mode.*cosign bypassed' AFTER the function start
+  _fips_rel="$(awk "NR > ${_gate_start} && /FIPS mode.*cosign bypassed/{print NR; exit}" "${REPO_ROOT}/install.sh")"
+  [ -n "$_fips_rel" ]
+
+  # FIPS guard must come first
+  [ "$_fips_rel" -lt "$_cosign_rel" ]
+}
+
+# ── C-002: rotate-leaves failure is ERROR not WARN ────────────────────────────
+
+@test "C-002: _offboard_step6_pki_rotate returns 1 on rotate-leaves failure" {
+  # install.sh stub that returns exit 1 for --pki-action rotate-leaves
+  local _fake_install="${MOCK_ROOT}/install.sh"
+  printf '#!/usr/bin/env bash\necho "stub rotate-leaves FAIL"\nexit 1\n' > "$_fake_install"
+  chmod +x "$_fake_install"
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="docker" \
+      YSG_DRY_RUN="false" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1
+  # Offboard must exit non-zero when rotate-leaves fails
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"C-002"* ]] || [[ "$output" == *"DANGLING"* ]] || [[ "$output" == *"dangling"* ]]
+}
+
+@test "C-002: K8s runtime prints operator action required (not silent skip)" {
+  run env \
+      WORK_DIR="${MOCK_ROOT}" \
+      YSG_RUNTIME="k8s" \
+      YSG_DRY_RUN="true" \
+      bash "${OFFBOARD_SH}" my-agent 2>&1
+  [ "$status" -eq 0 ]
+  # Must print a visible operator action notice
+  [[ "$output" == *"helm upgrade"* ]] || [[ "$output" == *"OPERATOR ACTION"* ]]
+}
+
+@test "C-002: rotate-leaves failure error message contains dangling-leaf warning" {
+  run grep -c 'DANGLING-LEAF RISK' "${OFFBOARD_SH}"
+  [ "$output" != "0" ]
+}

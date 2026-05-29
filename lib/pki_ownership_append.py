@@ -113,19 +113,30 @@ def _find_sentinel_range(content: str, service: str) -> Optional[tuple[int, int]
     """
     Return (start, end) byte offsets for the BEGIN/END sentinel block for
     this service, or None if no sentinel block exists.
-    """
-    begin_marker = "# BEGIN YSG-ONBOARD-%s" % service
-    end_marker   = "# END YSG-ONBOARD-%s"   % service
 
-    begin_pos = content.find(begin_marker)
-    if begin_pos == -1:
+    Uses anchored line-level regex (MULTILINE) so that 'letta' does NOT
+    match 'letta-pgbouncer'.  The sentinel line must be the only non-space
+    content on its line.  (F-Laura / LAURA-P1W4-001)
+    """
+    esc = re.escape(service)
+    begin_re = re.compile(
+        r"^[ \t]*# BEGIN YSG-ONBOARD-" + esc + r"[ \t]*$",
+        re.MULTILINE,
+    )
+    end_re = re.compile(
+        r"^[ \t]*# END YSG-ONBOARD-" + esc + r"[ \t]*$",
+        re.MULTILINE,
+    )
+
+    begin_m = begin_re.search(content)
+    if begin_m is None:
         return None
 
-    # Find the start of the line containing BEGIN
-    line_start = content.rfind("\n", 0, begin_pos) + 1
+    # The range starts at the beginning of the BEGIN line.
+    line_start = begin_m.start()
 
-    end_pos = content.find(end_marker, begin_pos)
-    if end_pos == -1:
+    end_m = end_re.search(content, begin_m.start())
+    if end_m is None:
         # Malformed — sentinel BEGIN without END; log and treat as not found.
         _log.warning(
             "Malformed sentinel: BEGIN YSG-ONBOARD-%s found but no END — "
@@ -134,7 +145,7 @@ def _find_sentinel_range(content: str, service: str) -> Optional[tuple[int, int]
         return None
 
     # Include the newline after END marker line.
-    end_line_end = content.find("\n", end_pos)
+    end_line_end = content.find("\n", end_m.end())
     if end_line_end == -1:
         end_line_end = len(content)
     else:
@@ -170,7 +181,10 @@ def _build_entry_block(service: str, uid: int, mode: str, comment: Optional[str]
       "<service>:<uid>:<mode>"
       # END YSG-ONBOARD-<service>
     """
-    lines = ["  # BEGIN YSG-ONBOARD-%s" % service]
+    # Leading newline ensures the BEGIN sentinel is always on its own line
+    # when inserted after an existing entry (which ends with its own \n but
+    # _map_body_end returns the position of the \n before ')').
+    lines = ["\n  # BEGIN YSG-ONBOARD-%s" % service]
     if comment:
         for cl in comment.splitlines():
             lines.append("  # %s" % cl)

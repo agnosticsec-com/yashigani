@@ -98,12 +98,20 @@ USAGE
 }
 
 # ---------------------------------------------------------------------------
-# _validate_agent_name — reject names with shell metacharacters
+# _validate_agent_name — reject names that do not match the onboard slug.
+#
+# F2: align to the W3 onboard slug ^[a-z0-9][a-z0-9\-]{0,62}[a-z0-9]$
+# (lowercase, no underscore, min-2 chars, max-64 chars, no leading/trailing
+# hyphen).  Any name that passed onboard validation is accepted here; any
+# name that would have been rejected by onboard is also rejected here.
 # ---------------------------------------------------------------------------
 _validate_agent_name() {
   local _name="$1"
-  if ! printf '%s' "$_name" | grep -qE '^[A-Za-z0-9_-]+$'; then
-    _log_error "agent name '${_name}' contains illegal characters; only [A-Za-z0-9_-] permitted."
+  # Slug must be 2-64 chars, lowercase alphanumeric + interior hyphens only.
+  if ! printf '%s' "$_name" | grep -qE '^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$'; then
+    _log_error "agent name '${_name}' is not a valid yashigani slug."
+    _log_error "  Required: ^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$ (lowercase, no underscore,"
+    _log_error "  no leading/trailing hyphen, 2-64 characters)."
     return 1
   fi
 }
@@ -242,36 +250,37 @@ _offboard_step1_service_identity() {
   fi
 
   # Python rewriter — removes the sentinel-bracketed block
+  # F-Laura (LAURA-P1W4-001): anchored line-regex, not str.find() substring,
+  # so 'letta' does NOT match 'letta-pgbouncer'.
   python3 - "$_sid_file" "$_agent" <<'PYEOF'
 import sys, re, os, tempfile
 sid_file = sys.argv[1]
 agent    = sys.argv[2]
 content  = open(sid_file, encoding='utf-8').read()
-begin    = '# BEGIN YSG-ONBOARD-' + agent
-end      = '# END YSG-ONBOARD-'   + agent
-b_pos = content.find(begin)
-if b_pos == -1:
+esc     = re.escape(agent)
+begin_re = re.compile(r'^[ \t]*# BEGIN YSG-ONBOARD-' + esc + r'[ \t]*$', re.MULTILINE)
+end_re   = re.compile(r'^[ \t]*# END YSG-ONBOARD-'   + esc + r'[ \t]*$', re.MULTILINE)
+bm = begin_re.search(content)
+if bm is None:
     sys.exit(0)  # already absent
-# Find start of line
-line_start = content.rfind('\n', 0, b_pos) + 1
-e_pos = content.find(end, b_pos)
-if e_pos == -1:
+line_start = bm.start()
+em = end_re.search(content, bm.start())
+if em is None:
     print('[offboard] WARNING: BEGIN sentinel found but no END — removing from BEGIN to EOF', file=sys.stderr)
     new_content = content[:line_start]
 else:
-    end_line = content.find('\n', e_pos)
+    end_line = content.find('\n', em.end())
     end_line = (end_line + 1) if end_line != -1 else len(content)
     new_content = content[:line_start] + content[end_line:]
 # Atomic write
-dir_ = os.path.dirname(sid_file)
+dir_ = os.path.dirname(sid_file) or '.'
 fd, tmp = tempfile.mkstemp(dir=dir_, prefix='.ysg-offboard-tmp-', suffix='.yaml')
 try:
     os.write(fd, new_content.encode('utf-8'))
     os.close(fd); fd = -1
-    orig_mode = oct(os.stat(sid_file).st_mode & 0o777)
     os.chmod(tmp, os.stat(sid_file).st_mode & 0o777)
     os.rename(tmp, sid_file)
-except Exception as e:
+except Exception:
     if fd != -1:
         os.close(fd)
     os.unlink(tmp)
@@ -296,25 +305,37 @@ _offboard_step2_pki_ownership() {
 
   if [[ ! -f "$_appender" ]]; then
     _log_warn "  lib/pki_ownership_append.py not found — falling back to inline removal"
-    # Inline Python fallback (same logic as appender remove)
-    python3 - "$_pki_sh" "$_agent" <<'PYEOF'
+    # Inline Python fallback (same logic as appender remove).
+    # F-Laura (LAURA-P1W4-001): anchored regex, not str.find().
+    # F3: reject inline (non-sentinel) entries with exit 1, matching
+    #     the primary path's behaviour (core services must not be removed).
+    local _fallback_rc=0
+    python3 - "$_pki_sh" "$_agent" <<'PYEOF' || _fallback_rc=$?
 import sys, re, os, tempfile
 pki_file = sys.argv[1]
 agent    = sys.argv[2]
 content  = open(pki_file, encoding='utf-8').read()
-begin    = '# BEGIN YSG-ONBOARD-' + agent
-end      = '# END YSG-ONBOARD-'   + agent
-b_pos = content.find(begin)
-if b_pos == -1:
+esc      = re.escape(agent)
+begin_re = re.compile(r'^[ \t]*# BEGIN YSG-ONBOARD-' + esc + r'[ \t]*$', re.MULTILINE)
+end_re   = re.compile(r'^[ \t]*# END YSG-ONBOARD-'   + esc + r'[ \t]*$', re.MULTILINE)
+bm = begin_re.search(content)
+if bm is None:
+    # F3: check for an inline (non-sentinel) entry — refuse to remove core services.
+    inline_re = re.compile(r'"' + esc + r':\d+:0\d{3}"')
+    if inline_re.search(content):
+        print('[offboard] ERROR: service %r has an inline entry (not sentinel-managed). '
+              'Core services cannot be removed via offboard. '
+              'Remove manually if this is intentional.' % agent, file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)  # not found — idempotent
+line_start = bm.start()
+em = end_re.search(content, bm.start())
+if em is None:
     sys.exit(0)
-line_start = content.rfind('\n', 0, b_pos) + 1
-e_pos = content.find(end, b_pos)
-if e_pos == -1:
-    sys.exit(0)
-end_line = content.find('\n', e_pos)
+end_line = content.find('\n', em.end())
 end_line = (end_line + 1) if end_line != -1 else len(content)
 new_content = content[:line_start] + content[end_line:]
-dir_ = os.path.dirname(pki_file)
+dir_ = os.path.dirname(pki_file) or '.'
 fd, tmp = tempfile.mkstemp(dir=dir_, prefix='.ysg-offboard-tmp-', suffix='.sh')
 try:
     os.write(fd, new_content.encode('utf-8'))
@@ -326,6 +347,10 @@ except Exception:
     os.unlink(tmp)
     raise
 PYEOF
+    if [[ "$_fallback_rc" -ne 0 ]]; then
+      _log_error "  Inline PKI removal failed (rc=${_fallback_rc}) — see stderr above"
+      return 1
+    fi
     _log_info "  Removed pki_ownership.sh tuple for '${_agent}' (inline fallback)"
     return 0
   fi
@@ -348,66 +373,33 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Step 3: Remove Caddy include LINE
-# S4 NOTE: This removes the import line and the snippet file.
-# Sentinel-INSERT into Caddyfiles is Captain's scope (feat/p1-w3p2a-caddy-hardening).
-# We remove by exact-string match only; do NOT modify surrounding Caddyfile structure.
+# Step 3: Remove Caddy snippet FILE
+#
+# W3-P2a coordination (F1): the merged W3-P2a branch uses a single wildcard
+# glob `import /etc/caddy/agents/*.caddy` in the Caddyfiles (NOT per-agent
+# import lines).  Removing the snippet FILE is sufficient — Caddy stops
+# loading it on the next reload because the glob no longer matches.
+# Do NOT attempt to edit Caddyfile import lines; the glob handles loading
+# automatically.  Any pre-W3-P2a per-agent import lines are the Captain's
+# migration scope (feat/p1-w3p2a-caddy-hardening).
 # ---------------------------------------------------------------------------
 _offboard_step3_caddy_snippet() {
   local _agent="$1"
   local _caddy_dir="${WORK_DIR}/docker/caddy"
   local _snippet="${_caddy_dir}/agents/${_agent}.caddy"
-  _log_step "3/8 Remove Caddy snippet for '${_agent}'"
+  _log_step "3/8 Remove Caddy snippet file for '${_agent}'"
 
-  # Remove the snippet file
+  # Remove the snippet file — the W3-P2a wildcard glob stops loading it automatically.
   if [[ -f "$_snippet" ]]; then
     if _dry_print "rm ${_snippet}"; then :; else
       _three_tier_rm "$_snippet" || true
       _log_info "  Removed Caddy snippet: ${_snippet}"
+      _log_info "  (W3-P2a wildcard glob will stop loading it on next Caddy reload)"
     fi
   else
-    _log_info "  Caddy snippet not present: ${_snippet}"
+    _log_info "  Caddy snippet not present: ${_snippet} — already clean"
   fi
-
-  # Remove the import line from any Caddyfile that references agents/<agent>.caddy
-  # Exact-string match; Python file-rewrite (no sed -i).
-  # TODO(S4-Captain): if Captain adds sentinel guards around the import block,
-  #   update this to use sentinel removal instead of exact-string line removal.
-  local _import_pattern="import agents/${_agent}.caddy"
-  for _caddyfile in "${_caddy_dir}/Caddyfile" "${_caddy_dir}/Caddyfile.backoffice" "${_caddy_dir}/Caddyfile.gateway"; do
-    if [[ ! -f "$_caddyfile" ]]; then
-      continue
-    fi
-    if ! grep -qF "$_import_pattern" "$_caddyfile" 2>/dev/null; then
-      continue
-    fi
-    if _dry_print "python3: remove '${_import_pattern}' from ${_caddyfile}"; then
-      continue
-    fi
-    python3 - "$_caddyfile" "$_import_pattern" <<'PYEOF'
-import sys, os, tempfile
-caddyfile = sys.argv[1]
-pattern   = sys.argv[2]
-content   = open(caddyfile, encoding='utf-8').read()
-lines     = content.splitlines(keepends=True)
-new_lines = [l for l in lines if pattern not in l]
-new_content = ''.join(new_lines)
-if new_content == content:
-    sys.exit(0)  # nothing to remove
-dir_ = os.path.dirname(caddyfile) or '.'
-fd, tmp = tempfile.mkstemp(dir=dir_, prefix='.ysg-offboard-caddy-', suffix='.tmp')
-try:
-    os.write(fd, new_content.encode('utf-8'))
-    os.close(fd); fd = -1
-    os.chmod(tmp, os.stat(caddyfile).st_mode & 0o777)
-    os.rename(tmp, caddyfile)
-except Exception:
-    if fd != -1: os.close(fd)
-    os.unlink(tmp)
-    raise
-PYEOF
-    _log_info "  Removed '${_import_pattern}' from ${_caddyfile}"
-  done
+  # The Caddyfile itself is NOT modified — the glob import is managed by W3-P2a.
 }
 
 # ---------------------------------------------------------------------------
@@ -463,13 +455,31 @@ _offboard_step5_secrets() {
 # ---------------------------------------------------------------------------
 # Step 6: Trigger PKI rotate-leaves
 # So the remaining services get fresh leaves that no longer include the removed service.
+#
+# C-002 (Nico+Iris): rotate-leaves failure is now a distinct ERROR so operators
+# see it in alerting.  Offboard is still re-runnable (idempotent), but the
+# failure is surfaced loudly rather than silently continuing.
+#
+# K8s gap (C-002): the mtls-bootstrap-job runs on `helm install` / `helm upgrade`
+# only — it does NOT trigger automatically on offboard.  Operators must run a
+# `helm upgrade` (which triggers the job and calls rotate-leaves via the
+# upgrade-mode sentinel) after offboarding to rotate leaves on K8s.
+# This is documented here and in the step output so operators cannot miss it.
 # ---------------------------------------------------------------------------
 _offboard_step6_pki_rotate() {
   local _agent="$1"
   _log_step "6/8 PKI rotate-leaves (remove '${_agent}' from leaf issuance)"
 
   if [[ "${YSG_RUNTIME:-docker}" == "k8s" ]]; then
-    _log_info "  K8s runtime — PKI rotation is handled by mtls-bootstrap-job. Skipping."
+    _log_info "  K8s runtime detected."
+    _log_info ""
+    _log_info "  C-002 OPERATOR ACTION REQUIRED:"
+    _log_info "  The mtls-bootstrap-job does NOT trigger automatically on offboard."
+    _log_info "  You MUST run a helm upgrade to rotate leaves and close the dangling-leaf gap:"
+    _log_info "    helm upgrade yashigani helm/yashigani -n <namespace> -f <values>"
+    _log_info "  The upgrade triggers the bootstrap job in rotate-leaves mode."
+    _log_info "  Until the upgrade completes, the offboarded agent's leaf cert is still"
+    _log_info "  valid — this is a known K8s gap (no on-demand rotation without helm upgrade)."
     return 0
   fi
 
@@ -484,8 +494,7 @@ _offboard_step6_pki_rotate() {
     return 0
   fi
 
-  # Source lib/pki_ownership.sh if available so _pki_run_issuer is accessible.
-  # We call install.sh as a subprocess with --pki-action to avoid side-effects.
+  # Call install.sh as a subprocess with --pki-action to avoid side-effects.
   # YSG_RUNTIME is passed through so the right runtime is used.
   local _rc=0
   YSG_RUNTIME="${YSG_RUNTIME:-docker}" \
@@ -495,29 +504,48 @@ _offboard_step6_pki_rotate() {
       _log_info "  pki: ${_line}"
     done || _rc=$?
   if [[ "$_rc" -ne 0 ]]; then
-    _log_warn "  PKI rotate-leaves returned non-zero (rc=${_rc}) — manual rotation may be needed"
-    _log_warn "  Run: ./install.sh --pki-action=rotate-leaves"
-    return 0  # non-fatal: offboard continues; PKI rotation is advisory
+    # C-002: promote to ERROR so alerting / operators see this.
+    # The offboarded agent's identity is already removed from service_identities.yaml
+    # and pki_ownership.sh, but cert rotation failed — the deprovisioned agent's
+    # leaf cert is still technically valid until it expires.  This is a dangling-leaf
+    # risk.  Offboard is still re-runnable (steps 1-5 are idempotent); operator must
+    # re-run or run install.sh --pki-action=rotate-leaves manually.
+    _log_error "  C-002 PKI rotate-leaves FAILED (rc=${_rc})."
+    _log_error "  DANGLING-LEAF RISK: the offboarded agent's leaf cert may still be valid."
+    _log_error "  Re-run offboard or rotate manually before completing deprovisioning:"
+    _log_error "    ./install.sh --pki-action=rotate-leaves"
+    return 1  # fatal: caller must not suppress this failure
   fi
   _log_info "  PKI rotate-leaves completed"
 }
 
 # ---------------------------------------------------------------------------
-# Step 7: Remove Helm values
-# helm/yashigani/values-<agent>.yaml
-# helm/yashigani/values-<agent>-networkpolicy.yaml
-# helm/yashigani/templates/agents/<agent>-policy-exception.yaml
+# Step 7: Remove Helm values + codegen artifacts
+#
+# F1 (Iris BLOCKING): the W3 codegen emits three additional files that the
+# original step 7 did not remove:
+#   opa/<agent>.rego               — OPA policy stub (WORST omission: an
+#                                    orphaned stub means the ring-fence policy
+#                                    is NOT removed for a deprovisioned agent)
+#   tests/contracts/test_<agent>_compose.py
+#   tests/contracts/test_<agent>_helm.py
+#
+# All six artifact paths are removed here in the same idempotent rm-or-skip
+# pattern.
 # ---------------------------------------------------------------------------
 _offboard_step7_helm() {
   local _agent="$1"
   local _helm_dir="${WORK_DIR}/helm/yashigani"
-  _log_step "7/8 Remove Helm values for '${_agent}'"
+  _log_step "7/8 Remove Helm values + codegen artifacts for '${_agent}'"
 
   local _removed=0
   for _f in \
       "${_helm_dir}/values-${_agent}.yaml" \
       "${_helm_dir}/values-${_agent}-networkpolicy.yaml" \
-      "${_helm_dir}/templates/agents/${_agent}-policy-exception.yaml"; do
+      "${_helm_dir}/templates/agents/${_agent}-policy-exception.yaml" \
+      "${WORK_DIR}/opa/${_agent}.rego" \
+      "${WORK_DIR}/tests/contracts/test_${_agent}_compose.py" \
+      "${WORK_DIR}/tests/contracts/test_${_agent}_helm.py"; do
     if [[ -f "$_f" ]]; then
       if _dry_print "rm ${_f}"; then :; else
         if rm -f "$_f" 2>/dev/null; then
@@ -531,9 +559,9 @@ _offboard_step7_helm() {
   done
 
   if [[ "$_removed" -gt 0 ]]; then
-    _log_info "  Removed ${_removed} Helm artifact(s) for '${_agent}'"
+    _log_info "  Removed ${_removed} Helm/codegen artifact(s) for '${_agent}'"
   else
-    _log_info "  No Helm artifacts found for '${_agent}' — already clean"
+    _log_info "  No Helm/codegen artifacts found for '${_agent}' — already clean"
   fi
 }
 
@@ -606,7 +634,7 @@ main() {
   _offboard_step3_caddy_snippet    "$_agent"  # non-fatal: Caddy reload not required
   _offboard_step4_compose_override "$_agent"  || { _log_error "Step 4 failed"; exit 1; }
   _offboard_step5_secrets          "$_agent"  # non-fatal: best-effort cleanup
-  _offboard_step6_pki_rotate       "$_agent"  # non-fatal: advisory PKI rotation
+  _offboard_step6_pki_rotate       "$_agent"  || { _log_error "Step 6 (PKI rotate-leaves) failed — dangling-leaf risk; see above"; exit 1; }
   _offboard_step7_helm             "$_agent"  # non-fatal: Helm files may not exist
   _offboard_step8_ledger           "$_agent"  # non-fatal: ledger is advisory
 
