@@ -126,7 +126,13 @@ class TestManifestOnboardEvent:
         assert r["runtime"] == "docker"
         assert isinstance(r["artifacts_generated"], list)
         assert len(r["artifacts_generated"]) == 5
-        assert r["masking_applied"] is True
+        # FIX-01 (YCS-20260529-v250-W6-01): MANIFEST_ONBOARD is in
+        # AUDIT_INTEGRITY_EVENTS — masking does NOT run, so masking_applied
+        # must be False (not the dataclass default True).
+        assert r["masking_applied"] is False, (
+            "MANIFEST_ONBOARD is an AUDIT_INTEGRITY_EVENT — masking did not run; "
+            "masking_applied must be False (was True — labelling lie caught by Lu W6-01)"
+        )
 
         # Chain-linked: prev_event_hash must be set (non-empty string)
         assert r["prev_event_hash"] != "", (
@@ -250,7 +256,12 @@ class TestManifestOffboardEvent:
         assert r["cert_rotation_triggered"] is True
         assert isinstance(r["artifacts_removed"], list)
         assert len(r["artifacts_removed"]) == 8
-        assert r["masking_applied"] is True
+        # FIX-01 (YCS-20260529-v250-W6-01): MANIFEST_OFFBOARD is in
+        # AUDIT_INTEGRITY_EVENTS — masking did not run; masking_applied must be False.
+        assert r["masking_applied"] is False, (
+            "MANIFEST_OFFBOARD is an AUDIT_INTEGRITY_EVENT — masking did not run; "
+            "masking_applied must be False (was True — labelling lie caught by Lu W6-01)"
+        )
 
         # Chain-linked
         assert r["prev_event_hash"] != "", (

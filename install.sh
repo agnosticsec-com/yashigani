@@ -10666,14 +10666,61 @@ try:
     print('[onboard] MANIFEST_ONBOARD audit event written (operator=%s sha256=%.16s...)' % (
         _operator, _manifest_sha256))
 except Exception as _audit_exc:
-    # Belt-and-suspenders: the onboard itself already succeeded.
-    # Audit write failure is logged but does NOT abort the operation
-    # (the primary artifact writes are already durable).
-    print('[onboard] WARN: MANIFEST_ONBOARD audit write failed: %s' % _audit_exc, file=sys.stderr)
+    # FIX-03 (YCS-...-W6-03): onboard audit-write must NOT be silent.
+    # A change-management control (AU-2 / CM-3 / CC8.1) applied with NO
+    # Merkle event is a control failure. The operator and auditor MUST see it.
+    # Artifacts are already durable — we do NOT un-apply them.
+    import datetime as _dt, json as _json2, os as _os2
+    # Fallbacks: these locals may be unset if the exception fired before
+    # they were assigned (e.g., import error at the top of the try block).
+    _operator = locals().get('_operator', _os2.environ.get('YSG_OPERATOR_IDENTITY', 'unknown') or 'unknown')
+    _audit_log_path = locals().get('_audit_log_path', _os2.path.join(output_root, 'docker', 'var', 'audit.log'))
+    # (1) LOUD operator-facing error to stderr.
+    print('', file=sys.stderr)
+    print('=' * 72, file=sys.stderr)
+    print('[onboard] ERROR: MANIFEST_ONBOARD audit event write FAILED', file=sys.stderr)
+    print('[onboard] ERROR: The ring-fence artifacts were applied but the', file=sys.stderr)
+    print('[onboard] ERROR: Merkle audit record could NOT be written.', file=sys.stderr)
+    print('[onboard] ERROR: This is a change-management control failure.', file=sys.stderr)
+    print('[onboard] ERROR: Agent=%s  Operator=%s' % (agent_name, _operator), file=sys.stderr)
+    print('[onboard] ERROR: Cause: %s' % _audit_exc, file=sys.stderr)
+    print('[onboard] ERROR: Action required: investigate audit volume, then', file=sys.stderr)
+    print('[onboard] ERROR:   manually add a MANIFEST_ONBOARD record or', file=sys.stderr)
+    print('[onboard] ERROR:   re-run onboard once the audit volume is healthy.', file=sys.stderr)
+    print('=' * 72, file=sys.stderr)
+    # (2) Fallback breadcrumb — write a minimal JSON record next to the audit log
+    # so the failure is recorded somewhere even if the main audit volume is broken.
+    _breadcrumb = {
+        'event_type': 'MANIFEST_ONBOARD_AUDIT_WRITE_FAILED',
+        'timestamp': _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        'agent_name': agent_name,
+        'operator_identity': _operator,
+        'cause': str(_audit_exc),
+    }
+    try:
+        _bc_dir = _os2.path.dirname(_audit_log_path)
+        _bc_path = _os2.path.join(
+            _bc_dir,
+            'audit-write-failed-%s.json' % agent_name.replace('/', '_'),
+        )
+        _os2.makedirs(_bc_dir, exist_ok=True)
+        with open(_bc_path, 'w', encoding='utf-8') as _bc_f:
+            _bc_f.write(_json2.dumps(_breadcrumb) + '\n')
+        print('[onboard] ERROR: breadcrumb written to %s' % _bc_path, file=sys.stderr)
+    except Exception as _bc_exc:
+        print('[onboard] ERROR: breadcrumb write also failed: %s' % _bc_exc, file=sys.stderr)
+    # (3) Advisory non-zero exit so the shell caller signals the failure.
+    sys.exit(1)
 PYEOF
 
   if [[ "$_codegen_rc" -ne 0 ]]; then
-    log_error "Onboard failed (codegen exit ${_codegen_rc})"
+    # FIX-03: codegen exit non-zero covers both real codegen errors AND
+    # the audit-write failure path above. Artifacts are applied in both cases;
+    # the operator must investigate the audit volume.
+    log_error "Onboard completed but audit event write FAILED (exit ${_codegen_rc})"
+    log_error "  Merkle audit record is missing — this is a control failure."
+    log_error "  Check stderr above and the breadcrumb file in the audit log directory."
+    log_error "  Investigate and restore the audit record before considering this onboard complete."
     exit 1
   fi
 
