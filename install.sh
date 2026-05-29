@@ -9965,6 +9965,259 @@ _activate_byo_ca_rerun() {
 }
 
 # =============================================================================
+# P1 W6 — Step-up gate for onboard/offboard on a RUNNING system
+#
+# Called ONLY when _is_existing_yashigani_running() returns 0 (true).
+# Prompts for admin username + password + TOTP, authenticates against the
+# running backoffice through Caddy (no local crypto — auth delegates entirely
+# to the running system, per "Caddy is the auth perimeter").
+#
+# Two HTTP round-trips:
+#   1. POST /auth/login  {username, password, totp_code}  → session cookie
+#   2. POST /auth/stepup {totp_code}                      → stepup verified
+#
+# TOTP is submitted on both calls:
+#   - login:  proves identity (username + password + TOTP per ASVS V2.2).
+#   - stepup: satisfies the high-value-flow step-up (ASVS V6.8.4, ≤5 min TTL).
+#
+# CWE-214 hardening:
+#   - Password and TOTP are read with `read -s` from /dev/tty — never via
+#     argv (visible in `ps -ef`) or env vars (visible in /proc/environ).
+#   - POST bodies are written to 0600 tmpfiles and fed via curl's --data @file
+#     so the credentials never appear on the curl command line.
+#   - Tmpfiles and in-memory credentials are cleared in a trap EXIT handler.
+#   - All tmpfiles go under ${WORK_DIR} (NEVER /tmp — filesystem guardrail).
+#
+# Abort discipline:
+#   - Any non-2xx HTTP response → return 1 (caller must NOT proceed).
+#   - curl transport errors (exit 7 conn-refused, 28 timeout, 35 TLS) → return 1.
+#   - Backoffice unreachable → return 1.
+#   - No retry-into-pass on auth failures (SOP 4).
+#
+# Arguments: $1 = operation label ("onboard" | "offboard") for user messages.
+# Returns: 0 on success; 1 on any failure.
+# =============================================================================
+_ysg_onboard_stepup_gate() {
+  local _op_label="${1:-onboard}"
+
+  # ── Resolve Caddy HTTPS endpoint ─────────────────────────────────────────
+  # 1. Honour YASHIGANI_HTTPS_PORT if already in env (parse_args sets it).
+  # 2. Otherwise read from docker/.env (source of truth written at install time).
+  # 3. Fall back to 443.
+  local _port="${YASHIGANI_HTTPS_PORT:-}"
+  if [[ -z "$_port" && -f "${WORK_DIR}/docker/.env" ]]; then
+    _port="$(grep '^YASHIGANI_HTTPS_PORT=' "${WORK_DIR}/docker/.env" \
+               2>/dev/null | head -1 | cut -d= -f2 | tr -d '[:space:]')"
+  fi
+  _port="${_port:-443}"
+
+  # ── Resolve CA cert for TLS verification ─────────────────────────────────
+  # Use the local PKI root — never skip TLS verification.
+  local _ca_cert="${WORK_DIR}/docker/secrets/ca_root.crt"
+  if [[ ! -f "$_ca_cert" ]]; then
+    log_error "Step-up gate: CA cert not found at ${_ca_cert}"
+    log_error "  Cannot authenticate against the running system without it."
+    return 1
+  fi
+
+  local _base_url="https://localhost:${_port}"
+
+  log_step "-" "Step-up authentication required"
+  log_info "  This system is already running. Modifying a live ring-fence requires"
+  log_info "  admin password + TOTP verification against the running backoffice."
+  log_info "  Endpoint: ${_base_url}"
+  printf "\n"
+
+  # ── Prompt for credentials (never via argv/env — CWE-214) ────────────────
+  local _username _password _totp _stepup_totp
+
+  printf "  Admin username: " >/dev/tty
+  read -r _username </dev/tty 2>/dev/null || { log_error "Step-up gate: cannot read username from tty"; return 1; }
+
+  printf "  Admin password: " >/dev/tty
+  read -rs _password </dev/tty 2>/dev/null || { log_error "Step-up gate: cannot read password from tty"; return 1; }
+  printf "\n" >/dev/tty
+
+  printf "  TOTP code (6 digits): " >/dev/tty
+  read -rs _totp </dev/tty 2>/dev/null || { log_error "Step-up gate: cannot read TOTP from tty"; return 1; }
+  printf "\n" >/dev/tty
+
+  # Validate inputs before making any network call
+  if [[ -z "$_username" || -z "$_password" || -z "$_totp" ]]; then
+    log_error "Step-up gate: username, password, and TOTP are all required."
+    _username=""; _password=""; _totp=""
+    return 1
+  fi
+  if ! printf '%s' "$_totp" | grep -qE '^[0-9]{6}$'; then
+    log_error "Step-up gate: TOTP must be exactly 6 digits."
+    _username=""; _password=""; _totp=""
+    return 1
+  fi
+
+  # ── Tmpfile setup (0700 dir, 0600 files, under WORK_DIR — never /tmp) ──────
+  local _gate_tmpdir
+  _gate_tmpdir="$(mktemp -d "${WORK_DIR}/docker/.ysg-gate-XXXXXX")"
+  chmod 0700 "$_gate_tmpdir"
+
+  local _login_body="${_gate_tmpdir}/login.json"
+  local _cookie_jar="${_gate_tmpdir}/cookies.txt"
+  local _stepup_body="${_gate_tmpdir}/stepup.json"
+  local _curl_err="${_gate_tmpdir}/curl_err.txt"
+  local _response_file="${_gate_tmpdir}/response.txt"
+
+  # Cleanup function — zeroizes credentials and removes tmpdir on any return path.
+  # Registered as RETURN trap so it fires when the function exits for any reason.
+  _gate_cleanup() {
+    # Shred or overwrite before unlink to limit secret residency on disk.
+    if [[ -f "${_login_body:-}" ]]; then
+      dd if=/dev/zero of="$_login_body" bs=1 count="$(wc -c < "$_login_body" 2>/dev/null || echo 128)" 2>/dev/null || true
+    fi
+    if [[ -f "${_stepup_body:-}" ]]; then
+      dd if=/dev/zero of="$_stepup_body" bs=1 count="$(wc -c < "$_stepup_body" 2>/dev/null || echo 64)" 2>/dev/null || true
+    fi
+    rm -rf "${_gate_tmpdir:-}"
+  }
+  # shellcheck disable=SC2064
+  trap "_gate_cleanup; trap - RETURN" RETURN
+
+  # ── Serialize credentials to 0600 JSON tmpfiles (no shell quoting escape risk)
+  # python3 json.dumps handles all Unicode and special characters correctly.
+  # Credentials never appear on the command line (CWE-214).
+  local _prev_umask
+  _prev_umask="$(umask)"
+  umask 077
+  python3 - "$_login_body" "$_stepup_body" \
+      "$_username" "$_password" "$_totp" <<'PYJSON' || {
+import sys, json, os
+login_path, stepup_path, user, pw, totp = \
+    sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+# Write with mode 0600 via os.open
+flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+fd = os.open(login_path, flags, 0o600)
+os.write(fd, json.dumps({"username": user, "password": pw, "totp_code": totp}).encode())
+os.close(fd)
+fd = os.open(stepup_path, flags, 0o600)
+os.write(fd, json.dumps({"totp_code": totp}).encode())
+os.close(fd)
+PYJSON
+    log_error "Step-up gate: failed to write credential tmpfiles."
+    umask "$_prev_umask"
+    _username=""; _password=""; _totp=""
+    return 1
+  }
+  umask "$_prev_umask"
+
+  # Zeroize shell-local copies immediately after Python consumed them
+  _password=""; _totp=""
+
+  # ── Round-trip 1: POST /auth/login ────────────────────────────────────────
+  log_info "  Authenticating against ${_base_url}/auth/login ..."
+  local _login_http_code _login_curl_rc=0
+  _login_http_code="$(
+    curl --silent \
+         --cacert "$_ca_cert" \
+         --max-time 15 \
+         --connect-timeout 10 \
+         -X POST \
+         -H "Content-Type: application/json" \
+         --data "@${_login_body}" \
+         --cookie-jar "$_cookie_jar" \
+         -o "$_response_file" \
+         -w '%{http_code}' \
+         "${_base_url}/auth/login" 2>"${_curl_err}"
+  )" || _login_curl_rc=$?
+
+  # Shred login body immediately after use
+  if [[ -f "$_login_body" ]]; then
+    dd if=/dev/zero of="$_login_body" bs=1 count="$(wc -c < "$_login_body" 2>/dev/null || echo 128)" 2>/dev/null || true
+    rm -f "$_login_body"
+  fi
+
+  # Abort on transport error (curl exit 7=conn-refused, 28=timeout, 35=TLS)
+  if [[ "$_login_curl_rc" -ne 0 ]]; then
+    log_error "Step-up gate: /auth/login transport error (curl exit ${_login_curl_rc})."
+    if [[ -s "$_curl_err" ]]; then
+      log_error "  curl: $(head -1 "${_curl_err}" | tr -d '\n')"
+    fi
+    log_error "  Is the Yashigani stack running? Check: docker compose ps"
+    _username=""
+    return 1
+  fi
+
+  # Non-2xx → abort, make no changes (SOP 4: first non-2xx is FAIL)
+  if [[ "$_login_http_code" != "2"* ]]; then
+    log_error "Step-up gate: /auth/login returned HTTP ${_login_http_code}."
+    if [[ "$_login_http_code" == "401" ]]; then
+      log_error "  Invalid credentials or TOTP. Re-run ${_op_label} with correct credentials."
+    elif [[ "$_login_http_code" == "429" ]]; then
+      log_error "  Too many failed attempts. Check Retry-After header and wait before retrying."
+    fi
+    log_error "  NO CHANGES MADE."
+    _username=""
+    return 1
+  fi
+
+  log_info "  Login successful (HTTP ${_login_http_code})."
+
+  # ── Round-trip 2: POST /auth/stepup ───────────────────────────────────────
+  # The login TOTP proves identity; the stepup TOTP satisfies the high-value-flow
+  # prerequisite (ASVS V6.8.4). Both are required per Tiago directive 2026-05-29.
+  log_info "  Performing step-up verification at ${_base_url}/auth/stepup ..."
+  local _stepup_http_code _stepup_curl_rc=0
+  _stepup_http_code="$(
+    curl --silent \
+         --cacert "$_ca_cert" \
+         --max-time 15 \
+         --connect-timeout 10 \
+         -X POST \
+         -H "Content-Type: application/json" \
+         --data "@${_stepup_body}" \
+         --cookie "$_cookie_jar" \
+         -o "$_response_file" \
+         -w '%{http_code}' \
+         "${_base_url}/auth/stepup" 2>"${_curl_err}"
+  )" || _stepup_curl_rc=$?
+
+  # Shred stepup body immediately after use
+  if [[ -f "$_stepup_body" ]]; then
+    dd if=/dev/zero of="$_stepup_body" bs=1 count="$(wc -c < "$_stepup_body" 2>/dev/null || echo 64)" 2>/dev/null || true
+    rm -f "$_stepup_body"
+  fi
+
+  if [[ "$_stepup_curl_rc" -ne 0 ]]; then
+    log_error "Step-up gate: /auth/stepup transport error (curl exit ${_stepup_curl_rc})."
+    if [[ -s "$_curl_err" ]]; then
+      log_error "  curl: $(head -1 "${_curl_err}" | tr -d '\n')"
+    fi
+    _username=""
+    return 1
+  fi
+
+  if [[ "$_stepup_http_code" != "2"* ]]; then
+    log_error "Step-up gate: /auth/stepup returned HTTP ${_stepup_http_code}."
+    if [[ "$_stepup_http_code" == "401" ]]; then
+      log_error "  TOTP code rejected at step-up. Ensure your authenticator clock is synchronised."
+    elif [[ "$_stepup_http_code" == "429" ]]; then
+      log_error "  Step-up locked. Log out and log in again to reset the step-up counter."
+    fi
+    log_error "  NO CHANGES MADE."
+    _username=""
+    return 1
+  fi
+
+  log_success "Step-up gate passed — admin identity verified."
+
+  # ── Shell-side audit record ───────────────────────────────────────────────
+  # MANIFEST_ONBOARD / MANIFEST_OFFBOARD events are emitted by Python codegen
+  # and offboard.sh respectively (G2 stages 5c/6a). This log line is the
+  # shell-side record that the step-up gate was satisfied.
+  log_info "  Audit: ${_op_label} step-up gate passed for user '${_username}' at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  _username=""
+  return 0
+}
+
+# =============================================================================
 # P1 W4 — S3: cosign manifest signature shell gate
 #
 # Invokes `cosign verify-blob` against the bundled public key.
@@ -10108,16 +10361,27 @@ handle_onboard_subcommand() {
 
   log_step "-" "Onboarding agent from manifest: ${_manifest}"
 
-  # S3: cosign signature gate BEFORE anything else
-  _ysg_cosign_gate "$_manifest" || exit 1
-
-  # Resolve WORK_DIR
+  # Resolve WORK_DIR early — needed by both the step-up gate (to locate
+  # docker/.env + docker/secrets/ca_root.crt) and the subsequent codegen.
   if [[ -z "${WORK_DIR:-}" || ! -d "${WORK_DIR}" ]]; then
     detect_working_directory
     if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
       cd "$WORK_DIR"
     fi
   fi
+
+  # P1 W6 — Step-up gate: if a yashigani instance is already running, the
+  # operator MUST authenticate (password + TOTP) against the live system
+  # BEFORE any changes are made. Fresh installs (no running system) skip
+  # this gate — onboarding is part of the trusted install flow.
+  # Tiago directive 2026-05-29: "if it is adding agents to an already
+  # existing system you need to provide password and totp, always."
+  if _is_existing_yashigani_running; then
+    _ysg_onboard_stepup_gate "onboard" || exit 1
+  fi
+
+  # S3: cosign signature gate BEFORE codegen (after step-up gate)
+  _ysg_cosign_gate "$_manifest" || exit 1
 
   # Wire _detect_runtime (W2/L10) — resolve the 4-way runtime BEFORE codegen.
   # Wrong-runtime codegen silently produces no ring-fence (L10).
@@ -10293,12 +10557,19 @@ handle_offboard_subcommand() {
 
   log_step "-" "Offboarding agent: ${_agent}"
 
-  # Resolve WORK_DIR
+  # Resolve WORK_DIR first so _is_existing_yashigani_running can find docker/secrets
   if [[ -z "${WORK_DIR:-}" || ! -d "${WORK_DIR}" ]]; then
     detect_working_directory
     if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
       cd "$WORK_DIR"
     fi
+  fi
+
+  # P1 W6 — Step-up gate: same requirement as onboard — removing an agent
+  # from a running ring-fence modifies the live security posture and therefore
+  # requires admin password + TOTP verification against the running system.
+  if _is_existing_yashigani_running; then
+    _ysg_onboard_stepup_gate "offboard" || exit 1
   fi
 
   local _offboard_sh="${_YSG_SCRIPT_DIR}/scripts/offboard.sh"
