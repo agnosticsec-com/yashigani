@@ -1651,6 +1651,8 @@ run_preflight() {
 # compose container is currently running under either Docker or Podman.
 # Used by run_preflight (skip port check) and check_existing_installation
 # (skip contaminated-volume check on additive re-run).
+# NOTE: do NOT use this for the onboard/offboard AUTH gate — use
+# _is_installed_or_running() instead (residuals-based, fail-closed).
 _is_existing_yashigani_running() {
   local _secrets_dir="${WORK_DIR}/docker/secrets"
   # Secrets dir must exist and contain the root CA cert (written by PKI bootstrap;
@@ -1678,6 +1680,43 @@ _is_existing_yashigani_running() {
     return 0
   fi
   if podman compose -f "$_compose_file" ps 2>/dev/null | grep -qE "Up|running"; then
+    return 0
+  fi
+  return 1
+}
+
+# _is_installed_or_running — FIX-2: residuals-based install detection for the
+# onboard/offboard AUTH gate.
+#
+# Returns 0 (true) when install RESIDUALS are present — compose file AND at
+# least one file under docker/secrets/ — INDEPENDENT of whether containers are
+# currently running and INDEPENDENT of which specific secret file is present.
+#
+# Design rationale (Laura F1/F2):
+#   _is_existing_yashigani_running() is affirmative-only: if the specific
+#   ca_root.crt check fails (file removed/renamed) OR all containers are
+#   stopped, it returns false and the auth gate is skipped. Both states are
+#   trivially achievable by an attacker with host access.
+#
+#   This function is fail-closed: ANY install residuals (compose file +
+#   secrets dir non-empty) imply a prior install and therefore require auth,
+#   even if containers are down or the PKI files have been tampered with.
+#
+# Used exclusively by the onboard/offboard step-up gate decision.
+# Never used for port-check or volume-contamination logic (those stay with
+# _is_existing_yashigani_running which correctly requires running containers).
+_is_installed_or_running() {
+  local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
+  local _secrets_dir="${WORK_DIR}/docker/secrets"
+
+  # Compose file must be present (written by install.sh; indicates a completed
+  # or partially-completed install).
+  [[ -f "$_compose_file" ]] || return 1
+
+  # Secrets dir must exist AND contain at least one file (any file — not a
+  # specific named file, so removal/rename of ca_root.crt does not bypass).
+  [[ -d "$_secrets_dir" ]] || return 1
+  if find "$_secrets_dir" -maxdepth 1 -type f 2>/dev/null | grep -q .; then
     return 0
   fi
   return 1
@@ -5283,11 +5322,27 @@ _verify_gateway_healthz() {
 
   log_info "Convergence gate: polling gateway /healthz (timeout ${_timeout_s}s) — BUG-INSTALL-ON-CONTAMINATED-VOLUMES"
 
+  # FIX-3 (defence-in-depth): use --cacert instead of --insecure/-k.
+  # No credentials on these polls, but consistent TLS verification prevents
+  # a rogue cert on the loopback from going unnoticed (Laura F2 hardening).
+  # ca_root.crt is present here: PKI bootstrap (step 9b) ran before compose_up.
+  local _ca_cert_healthz="${WORK_DIR}/docker/secrets/ca_root.crt"
+  local _curl_tls_opt
+  if [[ -f "$_ca_cert_healthz" ]]; then
+    _curl_tls_opt="--cacert ${_ca_cert_healthz}"
+  else
+    # CA not yet present (e.g. DRY_RUN path that somehow reached here).
+    # Log a warning and fall back to --insecure rather than block polling.
+    log_warn "_verify_gateway_healthz: ca_root.crt absent — TLS verification skipped for healthz poll"
+    _curl_tls_opt="--insecure"
+  fi
+
   local _deadline=$(( $(date +%s) + _timeout_s ))
   local _gateway_ok=0
 
   while [[ "$(date +%s)" -lt "$_deadline" ]]; do
-    if curl -sk --max-time 5 \
+    # shellcheck disable=SC2086  # intentional word-splitting for _curl_tls_opt
+    if curl --silent $_curl_tls_opt --max-time 5 \
          --resolve "${_domain}:${_https_port}:127.0.0.1" \
          "https://${_domain}:${_https_port}/healthz" \
          -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q "^200$"; then
@@ -5320,7 +5375,8 @@ _verify_gateway_healthz() {
   local _backoffice_ok=0
 
   while [[ "$(date +%s)" -lt "$_deadline2" ]]; do
-    if curl -sk --max-time 5 \
+    # shellcheck disable=SC2086  # intentional word-splitting for _curl_tls_opt
+    if curl --silent $_curl_tls_opt --max-time 5 \
          --resolve "${_domain}:${_https_port}:127.0.0.1" \
          "https://${_domain}:${_https_port}/login" \
          -o /dev/null -w "%{http_code}" 2>/dev/null | grep -q "^200$"; then
@@ -9972,13 +10028,20 @@ _activate_byo_ca_rerun() {
 # running backoffice through Caddy (no local crypto — auth delegates entirely
 # to the running system, per "Caddy is the auth perimeter").
 #
-# Two HTTP round-trips:
+# Two HTTP round-trips, each with a DISTINCT TOTP code:
 #   1. POST /auth/login  {username, password, totp_code}  → session cookie
 #   2. POST /auth/stepup {totp_code}                      → stepup verified
 #
-# TOTP is submitted on both calls:
+# FIX-1: login and stepup use DIFFERENT TOTP codes (_totp vs _stepup_totp).
+# The backoffice used_totp_codes replay cache rejects an already-consumed code
+# on the second call (→ 401). The operator must wait for the NEXT authenticator
+# window (new 30-second code) before entering the step-up TOTP.
 #   - login:  proves identity (username + password + TOTP per ASVS V2.2).
 #   - stepup: satisfies the high-value-flow step-up (ASVS V6.8.4, ≤5 min TTL).
+#
+# NOTE: live login→stepup flow requires two distinct codes from the operator.
+# bats tests can only assert distinct field serialisation (no live auth server).
+# Real login→stepup interaction is smoke-verified before tag on the live VM.
 #
 # CWE-214 hardening:
 #   - Password and TOTP are read with `read -s` from /dev/tty — never via
@@ -10038,19 +10101,34 @@ _ysg_onboard_stepup_gate() {
   read -rs _password </dev/tty 2>/dev/null || { log_error "Step-up gate: cannot read password from tty"; return 1; }
   printf "\n" >/dev/tty
 
-  printf "  TOTP code (6 digits): " >/dev/tty
+  printf "  TOTP code for login (6 digits): " >/dev/tty
   read -rs _totp </dev/tty 2>/dev/null || { log_error "Step-up gate: cannot read TOTP from tty"; return 1; }
   printf "\n" >/dev/tty
 
+  # FIX-1: prompt for a second, distinct TOTP for the step-up call.
+  # The backoffice replay cache (used_totp_codes) rejects an already-consumed
+  # code on the second round-trip — the operator must enter the NEXT code from
+  # their authenticator (a fresh 30-second window).
+  log_info "  Wait for the NEXT code in your authenticator (new 30-second window),"
+  log_info "  then enter it below for the step-up verification."
+  printf "  TOTP code for step-up (6 digits, NEXT window): " >/dev/tty
+  read -rs _stepup_totp </dev/tty 2>/dev/null || { log_error "Step-up gate: cannot read step-up TOTP from tty"; _username=""; _password=""; _totp=""; _stepup_totp=""; return 1; }
+  printf "\n" >/dev/tty
+
   # Validate inputs before making any network call
-  if [[ -z "$_username" || -z "$_password" || -z "$_totp" ]]; then
-    log_error "Step-up gate: username, password, and TOTP are all required."
-    _username=""; _password=""; _totp=""
+  if [[ -z "$_username" || -z "$_password" || -z "$_totp" || -z "$_stepup_totp" ]]; then
+    log_error "Step-up gate: username, password, login TOTP, and step-up TOTP are all required."
+    _username=""; _password=""; _totp=""; _stepup_totp=""
     return 1
   fi
   if ! printf '%s' "$_totp" | grep -qE '^[0-9]{6}$'; then
-    log_error "Step-up gate: TOTP must be exactly 6 digits."
-    _username=""; _password=""; _totp=""
+    log_error "Step-up gate: login TOTP must be exactly 6 digits."
+    _username=""; _password=""; _totp=""; _stepup_totp=""
+    return 1
+  fi
+  if ! printf '%s' "$_stepup_totp" | grep -qE '^[0-9]{6}$'; then
+    log_error "Step-up gate: step-up TOTP must be exactly 6 digits."
+    _username=""; _password=""; _totp=""; _stepup_totp=""
     return 1
   fi
 
@@ -10086,29 +10164,31 @@ _ysg_onboard_stepup_gate() {
   local _prev_umask
   _prev_umask="$(umask)"
   umask 077
+  # FIX-1: pass _stepup_totp as a distinct 6th argument so login.json and
+  # stepup.json carry different codes — the replay cache rejects a reused code.
   python3 - "$_login_body" "$_stepup_body" \
-      "$_username" "$_password" "$_totp" <<'PYJSON' || {
+      "$_username" "$_password" "$_totp" "$_stepup_totp" <<'PYJSON' || {
 import sys, json, os
-login_path, stepup_path, user, pw, totp = \
-    sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+login_path, stepup_path, user, pw, totp, stepup_totp = \
+    sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
 # Write with mode 0600 via os.open
 flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
 fd = os.open(login_path, flags, 0o600)
 os.write(fd, json.dumps({"username": user, "password": pw, "totp_code": totp}).encode())
 os.close(fd)
 fd = os.open(stepup_path, flags, 0o600)
-os.write(fd, json.dumps({"totp_code": totp}).encode())
+os.write(fd, json.dumps({"totp_code": stepup_totp}).encode())
 os.close(fd)
 PYJSON
     log_error "Step-up gate: failed to write credential tmpfiles."
     umask "$_prev_umask"
-    _username=""; _password=""; _totp=""
+    _username=""; _password=""; _totp=""; _stepup_totp=""
     return 1
   }
   umask "$_prev_umask"
 
   # Zeroize shell-local copies immediately after Python consumed them
-  _password=""; _totp=""
+  _password=""; _totp=""; _stepup_totp=""
 
   # ── Round-trip 1: POST /auth/login ────────────────────────────────────────
   log_info "  Authenticating against ${_base_url}/auth/login ..."
@@ -10370,13 +10450,17 @@ handle_onboard_subcommand() {
     fi
   fi
 
-  # P1 W6 — Step-up gate: if a yashigani instance is already running, the
-  # operator MUST authenticate (password + TOTP) against the live system
-  # BEFORE any changes are made. Fresh installs (no running system) skip
-  # this gate — onboarding is part of the trusted install flow.
+  # P1 W6 — Step-up gate: if install residuals are present (compose file +
+  # any secrets), the operator MUST authenticate (password + TOTP) against
+  # the live system BEFORE any changes are made.
+  # FIX-2: use _is_installed_or_running (residuals-based, fail-closed) NOT
+  # _is_existing_yashigani_running (affirmative-only — bypassed by cert
+  # removal or stopped containers; Laura F1/F2).
+  # Fresh installs (no residuals) skip this gate — onboarding is part of
+  # the trusted install flow.
   # Tiago directive 2026-05-29: "if it is adding agents to an already
   # existing system you need to provide password and totp, always."
-  if _is_existing_yashigani_running; then
+  if _is_installed_or_running; then
     _ysg_onboard_stepup_gate "onboard" || exit 1
   fi
 
@@ -10566,9 +10650,11 @@ handle_offboard_subcommand() {
   fi
 
   # P1 W6 — Step-up gate: same requirement as onboard — removing an agent
-  # from a running ring-fence modifies the live security posture and therefore
-  # requires admin password + TOTP verification against the running system.
-  if _is_existing_yashigani_running; then
+  # from a ring-fence with install residuals modifies the live security
+  # posture and therefore requires admin password + TOTP verification.
+  # FIX-2: use _is_installed_or_running (residuals-based, fail-closed);
+  # see onboard comment above (Laura F1/F2).
+  if _is_installed_or_running; then
     _ysg_onboard_stepup_gate "offboard" || exit 1
   fi
 
@@ -11217,12 +11303,19 @@ main() {
     # Step 11c: Auto-configure SIEM sink when Wazuh is installed
     if [[ "$INSTALL_WAZUH" == "true" ]] || echo "${COMPOSE_PROFILES[*]+"${COMPOSE_PROFILES[*]}"}" | grep -q "wazuh"; then
       log_info "Configuring audit SIEM sink for Wazuh..."
-      # v2.23.1: reach backoffice via Caddy (host port → :443 in container).
-      # Caddy uses a self-signed cert in demo; -k tolerates it. Admin auth is
-      # the session cookie minted during admin bootstrap.
+      # FIX-3: use --cacert to verify the local PKI root; never --insecure/-k.
+      # This call carries the admin session cookie + Wazuh API password —
+      # disabling TLS verification here allows a loopback MITM to harvest
+      # both (Laura F2 / HIGH — admin cookie replay + wazuh credential).
       local _bo_url="https://localhost:${YASHIGANI_HTTPS_PORT:-443}"
       local _siem_config='{"backend":"wazuh","wazuh_url":"https://wazuh-manager:55000","wazuh_username":"wazuh-wui","wazuh_password":"'"${GEN_WAZUH_API_PASSWORD:-}"'","enabled":true}'
-      if curl -skf -X PUT "${_bo_url}/admin/alerts/sinks" -H "Content-Type: application/json" -d "$_siem_config" -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" >/dev/null 2>&1; then
+      if curl --silent --fail \
+              --cacert "${WORK_DIR}/docker/secrets/ca_root.crt" \
+              -X PUT "${_bo_url}/admin/alerts/sinks" \
+              -H "Content-Type: application/json" \
+              -d "$_siem_config" \
+              -b "$(cat "${WORK_DIR}/docker/secrets/admin1_session_cookie" 2>/dev/null || echo '')" \
+              >/dev/null 2>&1; then
         log_success "Wazuh SIEM sink auto-configured"
       else
         log_warn "Wazuh SIEM sink auto-configuration failed — configure manually via admin UI"
