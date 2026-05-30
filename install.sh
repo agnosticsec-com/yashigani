@@ -10687,8 +10687,17 @@ if src_dir not in sys.path:
 try:
     from yashigani.manifest import (
         parse_manifest, validate_manifest, verify_manifest_signature,
-        CodegenEngine, reset_codegen_registry,
+        CodegenEngine, reset_codegen_registry, is_shape_c,
     )
+    # FIX-SHAPE-C-DISPATCH (Ava 2026-05-30): import Shape-C engine so
+    # manifests with mcp-b posture / mcp_server category get the correct
+    # codegen path (isolated-container + bridge artifacts) instead of the
+    # Shape-A LLM-agent path.
+    try:
+        from yashigani.manifest import CodegenEngineShapeC
+        _SHAPE_C_ENGINE_AVAILABLE = True
+    except ImportError:
+        _SHAPE_C_ENGINE_AVAILABLE = False
 except ImportError as e:
     print('[onboard] ERROR: yashigani.manifest package not found: %s' % e, file=sys.stderr)
     print('[onboard] Ensure the package is installed or run from the repo root.', file=sys.stderr)
@@ -10721,9 +10730,20 @@ except Exception as e:
     sys.exit(1)
 
 # Codegen — write artifacts to output_root
+# FIX-SHAPE-C-DISPATCH: dispatch to correct engine based on manifest shape.
+# Shape-C manifests (mcp_server category / mcp-b posture) generate an
+# isolated-container compose override with the first-party bridge; they must
+# NOT use CodegenEngine which generates Shape-A LLM-agent artifacts.
 reset_codegen_registry()
 try:
-    engine = CodegenEngine(parsed, runtime)
+    _manifest_is_shape_c = is_shape_c(parsed) if callable(is_shape_c) else False
+    if _manifest_is_shape_c and _SHAPE_C_ENGINE_AVAILABLE:
+        print('[onboard] Shape-C manifest detected — using CodegenEngineShapeC')
+        engine = CodegenEngineShapeC(parsed, runtime)
+    else:
+        if _manifest_is_shape_c and not _SHAPE_C_ENGINE_AVAILABLE:
+            print('[onboard] WARN: Shape-C manifest but CodegenEngineShapeC not importable — falling back to CodegenEngine', file=sys.stderr)
+        engine = CodegenEngine(parsed, runtime)
     artifacts = engine.render(output_root=Path(output_root), dry_run=False)
     print('[onboard] Codegen complete. Artifacts written:')
     for rel_path in sorted(artifacts.keys()):
