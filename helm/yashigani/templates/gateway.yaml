@@ -116,6 +116,26 @@ spec:
               value: {{ $gwEnv.agentTokenMinLength | quote }}
             - name: YASHIGANI_DEPLOYMENT_STREAM
               value: {{ $gwEnv.deploymentStream | quote }}
+            {{- /*
+              Fix-6 (Captain): YASHIGANI_MCP_SERVERS — JSON array of onboarded MCP
+              servers.  Read by build_registry_from_env() at gateway startup.
+              Set gateway.mcpServers in values.yaml (default: empty list = no MCP).
+              Example values.yaml entry:
+                gateway:
+                  mcpServers:
+                    - agent_name: filesystem-mcp
+                      upstream_url: http://filesystem-mcp:8000
+                      tenant_id: acme
+                      is_filesystem_agent: true
+            */}}
+            - name: YASHIGANI_MCP_SERVERS
+              value: {{ .Values.gateway.mcpServers | default list | toJson | quote }}
+            # Iris F-2: MCP broker OPA AsyncClient reads this CA path
+            # (src/yashigani/mcp/_opa.py:_make_opa_http_client).  Without it on
+            # K8s, OPA HTTPS verify falls through to system trust store and
+            # every tools/call fails closed.  Companion to docker-compose.yml.
+            - name: YASHIGANI_CA_CERT
+              value: "/run/secrets/ca_root.crt"
             {{- if .Values.mtls.enabled }}
             # M-01 fix: mTLS OTLP endpoint (grpcs://). Gateway presents its
             # leaf cert. Python OTEL exporter goes through Python ssl —
@@ -283,6 +303,20 @@ spec:
               subPath: license_key
               readOnly: true
             {{- end }}
+            {{- if .Values.agentBundles.filesystemMcp.enabled }}
+            {{- if .Values.gateway.mcpSigningKey.existingSecretName }}
+            # K8s SB-2 fix: mount MCP identity signing key from a standalone Secret.
+            # Logically separate from mTLS PKI — distinct key-management lifecycle
+            # (JWT signing key rotation is independent of TLS cert rotation).
+            # subPath mount lands at /run/secrets/mcp_identity_signing_key —
+            # the default path expected by _jwt.py (YASHIGANI_MCP_SIGNING_KEY_PATH).
+            # Does NOT interfere with the PKI Secret already at /run/secrets/.
+            - name: mcp-signing-key
+              mountPath: /run/secrets/mcp_identity_signing_key
+              subPath: {{ .Values.gateway.mcpSigningKey.secretKey | quote }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -320,6 +354,17 @@ spec:
         - name: license
           secret:
             secretName: yashigani-license
+            defaultMode: 0440
+        {{- end }}
+        {{- if and .Values.agentBundles.filesystemMcp.enabled .Values.gateway.mcpSigningKey.existingSecretName }}
+        # K8s SB-2 fix: standalone MCP identity signing key volume.
+        # Only rendered when filesystemMcp is enabled AND existingSecretName is set.
+        # The operator must pre-create this Secret before running helm install/upgrade:
+        #   kubectl create secret generic yashigani-mcp-signing-key -n <ns> \
+        #     --from-literal=mcp_identity_signing_key="$(openssl rand -hex 32)"
+        - name: mcp-signing-key
+          secret:
+            secretName: {{ .Values.gateway.mcpSigningKey.existingSecretName }}
             defaultMode: 0440
         {{- end }}
 ---

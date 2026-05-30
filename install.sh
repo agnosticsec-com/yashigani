@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# last-updated: 2026-05-29T00:00:00+01:00 (feat(p3): MCP bridge-join + P-384 signing key generation — YSG-P3-MCP-SIGKEY / YSG-P3-MCP-BRIDGE-JOIN)
 # last-updated: 2026-05-28T00:00:00+01:00 (fix(backup): DRIFT-B5-COMPOSE-AGENT-BACKUP — snapshot langflow_data/letta_data/openclaw_data named volumes in _backup_existing_data; warn-only on absent volume; Docker+Podman parity via alpine tar pattern; 0600 tarballs; K8s-gated)
 # last-updated: 2026-05-23T00:00:00+00:00 (fix(install): BYOCA-BUG-001/002/003/004 — _fp init + podman unshare BYO staging + EC key gate + podman unshare YAML update)
 # last-updated: 2026-05-19T00:00:00+01:00 (fix(install): inject X-SPIFFE-ID on POST /admin/agents — close ISSUE-019)
@@ -7350,6 +7351,39 @@ generate_secrets() {
       log_info "pgbouncer_authenticator_password already present — preserving (upgrade path)"
     fi
 
+    # BEGIN YSG-P3-MCP-SIGKEY-UPGRADE
+    # MCP signing key — generate if absent on upgrade path (same idempotency as caddy_internal_hmac above).
+    # This covers upgrades from pre-v2.25.0 where the key did not yet exist.
+    local _mcp_key_file_up="${secrets_dir}/mcp_identity_signing_key"
+    local _env_file_up="${WORK_DIR}/docker/.env"
+
+    if [[ ! -s "$_mcp_key_file_up" ]]; then
+      log_info "Generating MCP P-384 signing key (upgrade path) → ${_mcp_key_file_up}"
+      (
+        umask 077
+        if ! openssl ecparam -name secp384r1 -genkey -noout 2>/dev/null \
+             | openssl ec -out "${_mcp_key_file_up}" 2>/dev/null; then
+          printf 'ERROR: Failed to generate MCP P-384 signing key (upgrade path)\n' >&2
+          rm -f "${_mcp_key_file_up}" 2>/dev/null || true
+          exit 1
+        fi
+        chmod 0600 "${_mcp_key_file_up}"
+      ) || {
+        log_error "MCP P-384 signing key generation failed (upgrade path) — aborting"
+        return 1
+      }
+      log_info "MCP P-384 signing key generated (mode 0600, upgrade path)"
+    else
+      log_info "mcp_identity_signing_key already present — preserving (upgrade path)"
+    fi
+
+    # No .env sync needed — the gateway reads the key from
+    # /run/secrets/mcp_identity_signing_key (file-tier in _jwt.py), which is
+    # exposed via the existing docker-compose bind-mount `./secrets:/run/secrets:ro`.
+    # Storing the raw private key in .env is wider exposure (docker inspect,
+    # backup tools, process env) and is intentionally avoided.
+    # END YSG-P3-MCP-SIGKEY-UPGRADE
+
     return 0
   fi
 
@@ -7613,6 +7647,94 @@ generate_secrets() {
   else
     echo "YASHIGANI_VERSION=${YASHIGANI_VERSION}" >> "$env_file"
   fi
+
+  # BEGIN YSG-P3-MCP-SIGKEY
+  # --- MCP identity signing key (P-384 / ES384) — Nico ship-blocker ---
+  # The MCP JWT issuer (src/yashigani/mcp/_jwt.py) performs a 3-tier key lookup:
+  #   1. YASHIGANI_MCP_SIGNING_KEY_PEM env var (base64-encoded PEM, testing only)
+  #   2. PEM file at $YASHIGANI_MCP_SIGNING_KEY_PATH
+  #      (default /run/secrets/mcp_identity_signing_key — bind-mounted into the
+  #      gateway container by the existing compose pattern ./secrets:/run/secrets:ro)
+  #   3. Ephemeral key — REFUSED in production/staging (RuntimeError)
+  #
+  # Install.sh owns path #2: generate a P-384 EC private key and write it to
+  # ${secrets_dir}/mcp_identity_signing_key (0600); the existing compose
+  # bind-mount exposes it at /run/secrets/mcp_identity_signing_key inside the
+  # gateway container, where _jwt.py reads it. No .env env-var sync —
+  # storing the raw private key in .env is wider exposure (docker inspect,
+  # backup tools, process env) and is intentionally avoided.
+  #
+  # Idempotent: if the key file already exists, preserve it.
+  # Rotation: use scripts/rotate-secret.sh (separate documented operation).
+  # Backup: the file lands in ${secrets_dir}/ which is captured by
+  #   _backup_existing_data → bundle.enc (YSG-RISK-050/051 dual-wrap).
+  # Uninstall: wipe of docker/secrets/* in uninstall.sh --remove-volumes covers this.
+  local _mcp_key_file="${secrets_dir}/mcp_identity_signing_key"
+
+  if [[ ! -s "$_mcp_key_file" ]]; then
+    log_info "Generating MCP P-384 signing key → ${_mcp_key_file}"
+    umask 077
+    # Generate a P-384 (secp384r1) EC private key in unencrypted PEM format.
+    # openssl ecparam + openssl ec produces a PKCS#8-compatible PEM that the
+    # Python cryptography library reads via load_pem_private_key().
+    # Use a subshell to scope umask 077 tightly to the key file write.
+    (
+      umask 077
+      if ! openssl ecparam -name secp384r1 -genkey -noout 2>/dev/null \
+           | openssl ec -out "${_mcp_key_file}" 2>/dev/null; then
+        printf 'ERROR: Failed to generate MCP P-384 signing key\n' >&2
+        rm -f "${_mcp_key_file}" 2>/dev/null || true
+        exit 1
+      fi
+      chmod 0600 "${_mcp_key_file}"
+    ) || {
+      log_error "MCP P-384 signing key generation failed — aborting"
+      return 1
+    }
+    log_info "MCP P-384 signing key generated (mode 0600)"
+  else
+    log_info "mcp_identity_signing_key already present — preserving (use scripts/rotate-secret.sh to rotate)"
+  fi
+
+  # S1 invariant check: the key file must be 0600 — never world or group readable.
+  if [[ -f "$_mcp_key_file" ]]; then
+    local _mcp_key_mode
+    _mcp_key_mode="$(stat -c '%a' "${_mcp_key_file}" 2>/dev/null \
+                     || stat -f '%p' "${_mcp_key_file}" 2>/dev/null | tail -c 4 || echo "???")";
+    if [[ "${_mcp_key_mode}" != "600" ]]; then
+      log_warn "mcp_identity_signing_key mode is ${_mcp_key_mode} — enforcing 0600 (CWE-732 guard)"
+      chmod 0600 "${_mcp_key_file}" || true
+    fi
+  fi
+
+  # FIX-MCP-SIGKEY-PERM: chown the signing key to UID 1001 (gateway container user).
+  #
+  # The key is generated as 0600 owned by the installer user (UID 1000 = max).
+  # The gateway container runs as UID 1001 (maxine on the VM host = uid=1001).
+  # Docker rootful bind-mounts expose host UID/GID directly — 0600 uid=1000 is
+  # unreadable by the gateway (uid=1001), causing PermissionError at startup.
+  #
+  # Fix: use _do_chown (V240-002 helper) to set ownership to 1001:1001.  When
+  # the installer runs as a non-root user (typical Docker install), bare chown
+  # fails silently (EPERM); _do_chown falls through to the docker_run path
+  # (alpine container with bind-mount) which succeeds because Docker is rootful.
+  # The 0600 mode is preserved — only the owner changes.  This mirrors the
+  # convention for other private key files in docker/secrets/ (e.g.
+  # gateway_client.key is 0600 1001:1001).
+  #
+  # P3 broker E2E gate — J8/J9/J10 gateway PermissionError fix (2026-05-30).
+  # ASVS V2.6.3: key generation and storage must follow least-privilege.
+  if [[ -f "$_mcp_key_file" ]]; then
+    _do_chown "1001:1001" "${_mcp_key_file}" "mcp_identity_signing_key" "" "${secrets_dir}" \
+      || log_warn "mcp_identity_signing_key: _do_chown 1001:1001 failed — gateway may fail to start"
+  fi
+
+  # No .env sync needed — the gateway reads the key from
+  # /run/secrets/mcp_identity_signing_key (file-tier in _jwt.py), which is
+  # exposed via the existing docker-compose bind-mount `./secrets:/run/secrets:ro`.
+  # Storing the raw private key in .env is wider exposure (docker inspect,
+  # backup tools, process env) and is intentionally avoided.
+  # END YSG-P3-MCP-SIGKEY
 
   log_success "All passwords and 2FA secrets generated (${secrets_dir}/)"
 }
@@ -10810,6 +10932,300 @@ PYEOF
     log_error "  Check stderr above and the breadcrumb file in the audit log directory."
     log_error "  Investigate and restore the audit record before considering this onboard complete."
     exit 1
+  fi
+
+  # BEGIN YSG-P3-MCP-BRIDGE-JOIN
+  # Shape-C (MCP server) post-onboard bridge wiring.
+  #
+  # After codegen lands the compose-override.yml for a Shape-C agent, the GATEWAY
+  # container must join the new ringfence_<agent> bridge so it can reach the bridge
+  # on TCP/8000.  The codegen emits an operator-instruction comment; this block
+  # mechanises that step.
+  #
+  # Detection: fast-grep the manifest YAML for category:mcp_server.  We do NOT
+  # re-invoke Python here — grep on the already-validated manifest is sufficient
+  # and avoids a second Python startup in a potentially slow CI environment.
+  #
+  # Input validation: agent_name is extracted from the ALREADY-VALIDATED manifest
+  # (the Python codegen above rejected it on any invalid character set).  We still
+  # guard against shell injection by validating the extracted value against a strict
+  # pattern before using it in a shell word.
+  #
+  # K8s: NetworkPolicy handles gateway↔MCP-server routing; no docker network connect
+  # needed.  This block is skipped on K8s runtime.
+  #
+  # Rootless Podman: podman network connect works but the L1 egress gap (internal:true
+  # may not block DNS on rootless) is pre-existing and documented in codegen
+  # (_ROOTLESS_L1_GAP_WARNING).  The connect itself still succeeds.
+
+  local _manifest_is_shape_c=false
+  if grep -qE '^[[:space:]]*category:[[:space:]]*mcp_server' "${_manifest}" 2>/dev/null; then
+    _manifest_is_shape_c=true
+  fi
+
+  if [[ "$_manifest_is_shape_c" == "true" ]] && \
+     [[ "${YSG_RUNTIME_4WAY:-docker}" != "k8s" ]]; then
+
+    # Extract agent_name from the manifest (already Python-validated — but we
+    # validate again for shell safety: only [a-zA-Z0-9_-] permitted).
+    local _agent_name_raw
+    _agent_name_raw="$(grep -E '^[[:space:]]*name:[[:space:]]*' "${_manifest}" 2>/dev/null \
+                        | head -1 | sed 's/.*name:[[:space:]]*//' | tr -d '[:space:]"'"'"'' || true)"
+
+    # Extract tenant_id similarly
+    local _tenant_id_raw
+    _tenant_id_raw="$(grep -E '^[[:space:]]*tenant_id:[[:space:]]*' "${_manifest}" 2>/dev/null \
+                       | head -1 | sed 's/.*tenant_id:[[:space:]]*//' | tr -d '[:space:]"'"'"'' || true)"
+
+    # SECURITY: validate agent_name against strict allowlist before use in any
+    # shell expansion or docker/podman command argument.
+    # Pattern: alphanumeric + hyphen + underscore, 1-64 chars.
+    # Reject anything else — this prevents injection via a crafted manifest name.
+    if [[ -z "$_agent_name_raw" ]] || ! [[ "$_agent_name_raw" =~ ^[a-zA-Z0-9_-]{1,64}$ ]]; then
+      log_error "Shape-C bridge-join: could not extract a safe agent name from manifest"
+      log_error "  Extracted value: '${_agent_name_raw}'"
+      log_error "  Expected: alphanumeric + hyphen + underscore, 1-64 chars"
+      log_error "  Bridge-join SKIPPED — run operator action manually:"
+      log_error "    docker network connect ringfence_<agent> <gateway-container>"
+      log_error "    docker compose -f docker/docker-compose.yml up --no-deps -d gateway"
+    else
+      # Safe to use in shell words from here.
+      local _ringfence_net="ringfence_${_agent_name_raw}"
+      local _compose_file="${WORK_DIR}/docker/docker-compose.yml"
+
+      # Determine the gateway container name.
+      # Compose names containers as <project>-<service>-<index>; the project
+      # defaults to the directory name of the compose file.
+      #
+      # We CANNOT use `compose ps -q gateway` here because docker-compose.yml
+      # declares YASHIGANI_UPSTREAM_URL: ${UPSTREAM_MCP_URL:?set UPSTREAM_MCP_URL}
+      # — the :? makes it required, so compose errors out when UPSTREAM_MCP_URL
+      # is empty (e.g. non-interactive install without --upstream-url).
+      # Instead we resolve the container name via `docker/podman ps --filter`
+      # which needs no compose-file interpolation.  YSG-P3-MCP-BRIDGE-JOIN-FIX.
+      local _gw_container=""
+      local _runtime_bin_ps="${COMPOSE_CMD[0]:-docker}"
+      # strip -compose suffix: "docker-compose" → "docker", "podman-compose" → "podman"
+      _runtime_bin_ps="${_runtime_bin_ps%%-compose}"
+
+      # Derive the compose project name from the compose-file directory name
+      # (same logic Docker Compose v2 uses by default).
+      local _compose_project
+      _compose_project="$(basename "$(dirname "$_compose_file")")"
+
+      # Primary: docker/podman ps --filter label (set by compose v2 on every container)
+      _gw_container="$(
+        "$_runtime_bin_ps" ps \
+          --filter "label=com.docker.compose.project=${_compose_project}" \
+          --filter "label=com.docker.compose.service=gateway" \
+          --format "{{.Names}}" 2>/dev/null \
+        | head -1 || true
+      )"
+
+      # Fallback: match by deterministic compose-v2 name pattern <project>-gateway-1
+      if [[ -z "$_gw_container" ]]; then
+        _gw_container="$(
+          "$_runtime_bin_ps" ps \
+            --filter "name=^${_compose_project}-gateway-" \
+            --format "{{.Names}}" 2>/dev/null \
+          | head -1 || true
+        )"
+      fi
+
+      # Last resort: any running container whose name contains "gateway"
+      if [[ -z "$_gw_container" ]]; then
+        _gw_container="$(
+          "$_runtime_bin_ps" ps \
+            --filter "name=gateway" \
+            --format "{{.Names}}" 2>/dev/null \
+          | head -1 || true
+        )"
+      fi
+
+      if [[ -z "$_gw_container" ]]; then
+        log_warn "Shape-C bridge-join: gateway container not found via docker ps."
+        log_warn "  Tried: label filter (project=${_compose_project},service=gateway),"
+        log_warn "         name pattern ${_compose_project}-gateway-*, name=gateway."
+        log_warn "  Ensure the stack is running before --onboard for Shape-C agents."
+        log_warn "  After starting the stack, rerun:"
+        log_warn "    bash install.sh --onboard <manifest> --runtime ${YSG_RUNTIME_4WAY:-docker}"
+      else
+        log_step "-" "YSG-P3-MCP-BRIDGE-JOIN: joining gateway to ${_ringfence_net}"
+
+        # Use the runtime binary we already derived above (_runtime_bin_ps).
+        # For network connect we always use the base container runtime (docker/podman).
+        local _runtime_bin="$_runtime_bin_ps"
+
+        # Check if gateway is already connected to the ringfence bridge (idempotent).
+        local _already_connected=false
+        if "$_runtime_bin" network inspect "${_ringfence_net}" \
+             --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null \
+           | grep -qF "$_gw_container"; then
+          _already_connected=true
+        fi
+
+        if [[ "$_already_connected" == "true" ]]; then
+          log_info "Gateway already connected to ${_ringfence_net} — idempotent, no action."
+        else
+          log_info "Connecting gateway container (${_gw_container}) to ${_ringfence_net}..."
+          if "$_runtime_bin" network connect "${_ringfence_net}" "${_gw_container}" 2>/dev/null; then
+            log_success "Gateway connected to ${_ringfence_net}"
+          else
+            local _nc_rc=$?
+            log_error "docker/podman network connect failed (exit ${_nc_rc})."
+            log_error "  Container: ${_gw_container}"
+            log_error "  Network:   ${_ringfence_net}"
+            log_error "  Recovery: run manually after the ringfence-init container completes:"
+            log_error "    ${_runtime_bin} network connect ${_ringfence_net} ${_gw_container}"
+            log_error "    ${COMPOSE_CMD[*]} -f ${_compose_file} up --no-deps -d gateway"
+            log_warn "Continuing — bridge-join failure is not fatal at onboard time."
+            log_warn "The gateway WILL NOT reach the MCP server until the network connect succeeds."
+          fi
+        fi
+
+        # ── YASHIGANI_MCP_SERVERS env update + gateway recreate ──────────────
+        # The gateway reads YASHIGANI_MCP_SERVERS (JSON array) at startup.
+        # We append the new agent's descriptor, then recreate the gateway
+        # container with the updated env (compose up --no-deps gateway).
+        #
+        # Tenant ID: validated against the same allowlist as agent_name.
+        local _tenant_id_safe=""
+        if [[ -n "$_tenant_id_raw" ]] && [[ "$_tenant_id_raw" =~ ^[a-zA-Z0-9_-]{1,128}$ ]]; then
+          _tenant_id_safe="$_tenant_id_raw"
+        else
+          _tenant_id_safe="unknown"
+          log_warn "Shape-C: tenant_id '${_tenant_id_raw}' contains unsafe chars — using 'unknown'"
+        fi
+
+        local _env_file="${WORK_DIR}/docker/.env"
+        local _bridge_port=8000   # _SC_BRIDGE_PORT from codegen.py:1319
+
+        # Build the new descriptor JSON.
+        # _agent_name_raw and _tenant_id_safe are already validated against
+        # [a-zA-Z0-9_-] — safe for inline expansion here.
+        # python3 json.dumps handles any residual escaping needs.
+        local _new_descriptor
+        _new_descriptor="$(python3 -c "
+import json
+agent = '${_agent_name_raw}'
+tenant = '${_tenant_id_safe}'
+port = ${_bridge_port}
+desc = {
+    'agent_name': agent,
+    # FIX-UPSTREAM-URL-DOUBLE-MCP (2026-05-30): McpHttpTransport.forward() always
+    # appends path="/mcp" to upstream_url.  Do NOT include /mcp in upstream_url —
+    # the base URL only (http://filesystem:8000).  Adding /mcp here causes
+    # double-path: http://filesystem:8000/mcp/mcp → HTTP 404.
+    'upstream_url': 'http://%s:%d' % (agent, port),
+    'tenant_id': tenant,
+    'is_filesystem_agent': True,
+}
+print(json.dumps(desc))
+" 2>/dev/null || echo "")"
+
+        if [[ -z "$_new_descriptor" ]]; then
+          log_warn "Shape-C: failed to build MCP server descriptor JSON — YASHIGANI_MCP_SERVERS not updated"
+          log_warn "  Add manually to docker/.env:"
+          log_warn "    YASHIGANI_MCP_SERVERS=[{\"agent_name\":\"${_agent_name_raw}\",..."
+        else
+          # Read current YASHIGANI_MCP_SERVERS value from .env (may be absent or empty).
+          local _current_servers=""
+          if grep -q "^YASHIGANI_MCP_SERVERS=" "$_env_file" 2>/dev/null; then
+            _current_servers="$(grep "^YASHIGANI_MCP_SERVERS=" "$_env_file" | head -1 | cut -d= -f2-)"
+          fi
+
+          # Append descriptor to the JSON array (or create a new array).
+          local _new_servers
+          _new_servers="$(python3 -c "
+import json, sys
+current_raw = '''${_current_servers}'''.strip()
+new_desc = json.loads('''${_new_descriptor}''')
+try:
+    arr = json.loads(current_raw) if current_raw and current_raw != '[]' else []
+except json.JSONDecodeError:
+    arr = []
+# Idempotent: remove existing entry for the same agent_name before appending.
+arr = [e for e in arr if isinstance(e, dict) and e.get('agent_name') != new_desc['agent_name']]
+arr.append(new_desc)
+print(json.dumps(arr))
+" 2>/dev/null || echo "[]")"
+
+          if [[ "$_new_servers" == "[]" ]] || [[ -z "$_new_servers" ]]; then
+            log_warn "Shape-C: YASHIGANI_MCP_SERVERS update produced empty array — check manually"
+          else
+            # Write to .env (atomic replace)
+            if grep -q "^YASHIGANI_MCP_SERVERS=" "$_env_file" 2>/dev/null; then
+              local _tmp_env_mcp; _tmp_env_mcp="$(mktemp "${WORK_DIR}/docker/.env-mcp-XXXXXX")"
+              # Use python3 for the replacement — avoids sed special-char issues in JSON values.
+              python3 - "$_env_file" "$_tmp_env_mcp" "$_new_servers" <<'PYREPLACE' || {
+import sys, re
+src, dst, new_val = sys.argv[1], sys.argv[2], sys.argv[3]
+content = open(src, encoding='utf-8').read()
+new_content = re.sub(r'^YASHIGANI_MCP_SERVERS=.*', 'YASHIGANI_MCP_SERVERS=' + new_val, content, flags=re.MULTILINE)
+with open(dst, 'w', encoding='utf-8') as f:
+    f.write(new_content)
+PYREPLACE
+                log_warn "Shape-C: could not update YASHIGANI_MCP_SERVERS in .env — update manually"
+                rm -f "${_tmp_env_mcp}" 2>/dev/null || true
+              }
+              if [[ -f "$_tmp_env_mcp" ]]; then
+                mv "$_tmp_env_mcp" "$_env_file"
+              fi
+            else
+              printf 'YASHIGANI_MCP_SERVERS=%s\n' "$_new_servers" >> "$_env_file"
+            fi
+            log_success "YASHIGANI_MCP_SERVERS updated in docker/.env"
+            log_info "  Added: ${_new_descriptor}"
+          fi
+
+          # Recreate the gateway container with the updated env.
+          # Uses `compose up --no-deps gateway` (Captain spec — restarts only gateway,
+          # not the entire stack).  Fail-loud: if this fails, the operator gets
+          # explicit recovery instructions.
+          #
+          # FIX-COMPOSE-CMD: when invoked via `install.sh --onboard`, COMPOSE_CMD is
+          # not set by the main install flow.  Resolve it on-demand here so the
+          # gateway recreate can proceed in both install-time and standalone --onboard
+          # invocations.
+          # P3 broker E2E gate — J8/J9 gateway-not-reloaded fix (2026-05-30).
+          if [[ ${#COMPOSE_CMD[@]} -eq 0 ]]; then
+            resolve_compose_cmd 2>/dev/null || true
+          fi
+          log_step "-" "Shape-C: recreating gateway with updated YASHIGANI_MCP_SERVERS env"
+          if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+            local _gw_up_rc=0
+            "${COMPOSE_CMD[@]}" -f "$_compose_file" up --no-deps -d gateway 2>&1 || _gw_up_rc=$?
+            if [[ "$_gw_up_rc" -ne 0 ]]; then
+              log_error "Gateway recreate failed (exit ${_gw_up_rc})."
+              log_error "  The YASHIGANI_MCP_SERVERS env change requires a gateway restart to take effect."
+              log_error "  Recovery:"
+              log_error "    ${COMPOSE_CMD[*]} -f ${_compose_file} up --no-deps -d gateway"
+              log_error "  If the gateway fails to start, check: docker compose logs gateway"
+            else
+              log_success "Gateway recreated with updated MCP server list."
+            fi
+          else
+            log_warn "Shape-C: COMPOSE_CMD not resolved — cannot recreate gateway automatically."
+            log_warn "  Run manually: docker compose -f docker/docker-compose.yml up --no-deps -d gateway"
+          fi
+        fi
+      fi
+    fi
+  fi
+  # END YSG-P3-MCP-BRIDGE-JOIN
+
+  # Production/staging guard: after onboarding a Shape-C MCP agent, verify the
+  # MCP signing key file exists.  The gateway will refuse to start if it doesn't
+  # (Tom's McpJwtIssuer RuntimeError guard in _jwt.py).
+  if [[ "${YASHIGANI_ENV:-}" == "production" || "${YASHIGANI_ENV:-}" == "staging" ]]; then
+    local _mcp_key_check="${WORK_DIR}/docker/secrets/mcp_identity_signing_key"
+    if [[ ! -f "$_mcp_key_check" ]]; then
+      log_error "PRODUCTION GUARD: mcp_identity_signing_key not found at ${_mcp_key_check}"
+      log_error "  The gateway will REFUSE to start in ${YASHIGANI_ENV} without a persistent MCP signing key."
+      log_error "  Run: ./install.sh (or --pki-action=bootstrap) to generate the key."
+      exit 1
+    fi
+    log_info "Production guard: mcp_identity_signing_key present at ${_mcp_key_check} — OK"
   fi
 
   log_success "Agent onboarded. Next step: ./install.sh --pki-action=rotate-leaves"

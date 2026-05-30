@@ -10,7 +10,9 @@ Implements Nico's locked crypto spec (mcp-identity-jwt-spec-20260529.md):
   - Clock-skew tolerance: ±5 seconds (per RFC 7519 §4.1.4).
   - Gateway pre-validates chain depth before signing (belt-and-suspenders).
   - JWKS Cache-Control: max-age=300 (see _jwks.py).
-  - KMS-backed key in production; PEM file in dev (./secrets/mcp_identity_signing_key).
+  - KMS-backed key in production; PEM file at /run/secrets/mcp_identity_signing_key
+    (mounted by install.sh from docker/secrets/, overridable via
+    YASHIGANI_MCP_SIGNING_KEY_PATH env var).
 
 Startup self-test:
   At import time, McpJwtIssuer performs a startup self-test:
@@ -56,7 +58,19 @@ _AUDIENCE = "yashigani-mcp-upstream"
 _JWT_TTL_SECONDS = int(os.environ.get("YASHIGANI_MCP_JWT_TTL_SECONDS", "60"))
 _CLOCK_SKEW_SECONDS = 5
 _DEFAULT_CHAIN_MAX_DEPTH = 3
-_DEV_KEY_PATH = Path("./secrets/mcp_identity_signing_key")
+_DEFAULT_SIGNING_KEY_PATH = "/run/secrets/mcp_identity_signing_key"
+
+
+def _get_signing_key_path() -> Path:
+    """Return the MCP signing key path, reading YASHIGANI_MCP_SIGNING_KEY_PATH at call time.
+
+    Deliberately NOT evaluated at module import so that tests can monkeypatch
+    YASHIGANI_MCP_SIGNING_KEY_PATH without requiring importlib.reload().
+    Laura SB-1 fix.
+    """
+    return Path(
+        os.environ.get("YASHIGANI_MCP_SIGNING_KEY_PATH", _DEFAULT_SIGNING_KEY_PATH)
+    )
 
 
 def _b64url_no_pad(data: bytes) -> str:
@@ -76,10 +90,14 @@ class McpJwtIssuer:
     """
     Issues ES384-signed MCP identity JWTs per Nico spec §1-§5.
 
-    Key loading order (dev mode, no KMS):
+    Key loading order:
       1. YASHIGANI_MCP_SIGNING_KEY_PEM env var (base64-encoded PEM, for testing)
-      2. ./secrets/mcp_identity_signing_key (0600, PEM file)
-      3. Generates a new ephemeral key (WARN: not persisted, for unit tests only)
+      2. PEM file at the path in YASHIGANI_MCP_SIGNING_KEY_PATH
+         (default /run/secrets/mcp_identity_signing_key — docker secret bind-mount;
+         install.sh writes docker/secrets/mcp_identity_signing_key which appears
+         at that path inside the gateway container, 0600).
+      3. Generates a new ephemeral key (WARN: not persisted, for unit tests only;
+         REFUSED in production/staging — Fix-5).
 
     Production: key is KMS-backed (Vault Transit, AWS KMS, etc.).
     The KMS abstraction is a drop-in replacement for this class that implements
@@ -103,12 +121,27 @@ class McpJwtIssuer:
         self._chain_max_depth = chain_max_depth
         self._ttl = jwt_ttl_seconds
 
+        # Nico ship-blocker: FIPS provider assertion.
+        # If FIPS_MODE=1, verify that the OpenSSL FIPS provider is actually
+        # loaded before accepting any crypto work.  Fail loudly if absent —
+        # never silently degrade to a non-FIPS OpenSSL configuration.
+        # Mirrors the shell guard _fips_assert_provider_loaded in
+        # lib/yashigani-fips.sh:60.
+        self._assert_fips_provider_if_required()
+
         if private_key is not None:
             self._key = private_key
+            # When key is injected directly (tests / KMS wrapper), use the
+            # caller-supplied key_generated_at or fall back to now().
+            stable_generated_at: Optional[int] = None
         else:
-            self._key = self._load_or_generate_key()
+            self._key, stable_generated_at = self._load_or_generate_key()
 
-        self._generated_at = key_generated_at or int(time.time())
+        # Nico kid-stability fix: prefer (in order):
+        #   1. caller-supplied key_generated_at (explicit override / tests)
+        #   2. stable_generated_at from _load_or_generate_key() (file mtime for path #2)
+        #   3. int(time.time()) fallback (env-var PEM path #1, ephemeral path #3)
+        self._generated_at = key_generated_at or stable_generated_at or int(time.time())
         self._kid = f"mcp-{tenant_id}-{self._generated_at}"
 
         # Derive the JWK for JWKS publication
@@ -117,13 +150,79 @@ class McpJwtIssuer:
         # Startup self-test (Nico FIPS checklist §7)
         self._startup_self_test()
 
-    def _load_or_generate_key(self) -> EllipticCurvePrivateKey:
+    @staticmethod
+    def _assert_fips_provider_if_required() -> None:
+        """
+        Nico ship-blocker: FIPS provider assertion.
+
+        If FIPS_MODE=1, check that the OpenSSL FIPS provider is loaded via
+        `openssl list -providers`.  Raises RuntimeError immediately if the
+        FIPS provider is absent — never silently degrades to non-FIPS crypto.
+
+        Mirrors the shell guard `_fips_assert_provider_loaded` in
+        lib/yashigani-fips.sh:60.
+
+        In non-FIPS deployments (FIPS_MODE unset or not "1") this is a no-op.
+        """
+        fips_mode = os.environ.get("FIPS_MODE", "").strip()
+        if fips_mode != "1":
+            return  # Non-FIPS deployment — skip assertion
+
+        try:
+            import subprocess as _subprocess
+            result = _subprocess.run(
+                ["openssl", "list", "-providers"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+            output = result.stdout + result.stderr
+        except FileNotFoundError:
+            raise RuntimeError(
+                "McpJwtIssuer: FIPS_MODE=1 but 'openssl' binary not found. "
+                "Cannot verify FIPS provider status. "
+                "Install openssl or disable FIPS_MODE."
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"McpJwtIssuer: FIPS_MODE=1 but 'openssl list -providers' failed: {exc}. "
+                "Cannot verify FIPS provider status."
+            ) from exc
+
+        # The FIPS provider shows as "fips" in the providers list.
+        # We check for the case-insensitive string "fips" in the output.
+        if "fips" not in output.lower():
+            raise RuntimeError(
+                "McpJwtIssuer: FIPS_MODE=1 but the OpenSSL FIPS provider is NOT loaded. "
+                "Output of 'openssl list -providers':\n"
+                f"{output.strip()}\n"
+                "Ensure the FIPS provider is installed and configured in openssl.cnf. "
+                "The gateway MUST NOT operate in FIPS mode without a validated FIPS "
+                "provider. Failing startup to prevent non-compliant operation. "
+                "See lib/yashigani-fips.sh:60 for the install procedure."
+            )
+
+        logger.info(
+            "mcp-broker: FIPS_MODE=1 — OpenSSL FIPS provider confirmed loaded"
+        )
+
+    def _load_or_generate_key(self) -> tuple[EllipticCurvePrivateKey, Optional[int]]:
         """
         Load the signing key from env, secrets file, or generate ephemeral.
+
+        Returns (key, stable_generated_at) where stable_generated_at is:
+          - None  for path #1 (env-var PEM; caller uses int(time.time()) fallback)
+          - int   derived from the file's mtime for path #2 — ensures all replicas
+                  holding the SAME file produce the SAME kid (Nico kid-stability fix)
+          - None  for path #3 (ephemeral; kid will differ per process — dev only)
 
         WARNING: ephemeral key generation means the JWKS changes on restart —
         downstream verifiers caching the JWKS will reject tokens after restart.
         Only acceptable for unit tests.
+
+        Laura SB-1: YASHIGANI_MCP_SIGNING_KEY_PATH is read HERE (at call time),
+        not at module import, so monkeypatching the env var takes effect without
+        importlib.reload().
         """
         # 1. Env var (base64-encoded PEM — for test injection)
         pem_b64 = os.environ.get("YASHIGANI_MCP_SIGNING_KEY_PEM", "")
@@ -139,16 +238,20 @@ class McpJwtIssuer:
                         "Nico spec §1: ES384 only."
                     )
                 logger.info("mcp-broker: loaded MCP signing key from env var")
-                return key
+                # Path #1: no stable file mtime — return None so __init__ uses its
+                # key_generated_at parameter (or falls back to int(time.time())).
+                return key, None
             except Exception as exc:
                 raise RuntimeError(
                     f"YASHIGANI_MCP_SIGNING_KEY_PEM is set but invalid: {exc}"
                 ) from exc
 
-        # 2. Dev-mode PEM file
-        if _DEV_KEY_PATH.exists():
+        # 2. PEM file (docker secret bind-mount in prod; arbitrary path in dev)
+        # Read YASHIGANI_MCP_SIGNING_KEY_PATH at call time (Laura SB-1 fix).
+        signing_key_path = _get_signing_key_path()
+        if signing_key_path.exists():
             try:
-                pem = _DEV_KEY_PATH.read_bytes()
+                pem = signing_key_path.read_bytes()
                 key = serialization.load_pem_private_key(pem, password=None)
                 if not isinstance(key, EllipticCurvePrivateKey):
                     raise ValueError("MCP signing key must be an EC private key")
@@ -159,23 +262,52 @@ class McpJwtIssuer:
                     )
                 logger.info(
                     "mcp-broker: loaded MCP signing key from %s (DEV MODE — not KMS-backed)",
-                    _DEV_KEY_PATH,
+                    signing_key_path,
                 )
-                return key
+                # Path #2 (Nico kid-stability fix): derive stable_generated_at from
+                # the file's mtime so that all replicas mounting the SAME file produce
+                # the SAME kid, regardless of when they start.
+                file_mtime = int(signing_key_path.stat().st_mtime)
+                return key, file_mtime
             except Exception as exc:
                 raise RuntimeError(
-                    f"Failed to load MCP signing key from {_DEV_KEY_PATH}: {exc}"
+                    f"Failed to load MCP signing key from {signing_key_path}: {exc}"
                 ) from exc
 
-        # 3. Ephemeral key (unit tests only)
+        # 3. Ephemeral key (unit tests only) — FAIL-CLOSED in production/staging.
+        #
+        # Fix-5 (HA-correctness): an ephemeral key is NOT acceptable in production
+        # or staging because:
+        #   - Each gateway replica generates a DIFFERENT key → JWTs from replica A
+        #     are rejected by replica B's verifier (mismatched public key in JWKS).
+        #   - A gateway restart rotates the key → upstream verifiers caching the
+        #     JWKS will reject tokens until the JWKS cache expires (up to 60s).
+        #
+        # If YASHIGANI_ENV is "production" or "staging", REFUSE to start.
+        # Point the operator at the correct setup (secrets file or env var).
+        # dev/test environments continue to allow ephemeral keys (unchanged).
+        _env = os.environ.get("YASHIGANI_ENV", "").strip().lower()
+        signing_key_path_str = str(_get_signing_key_path())
+        if _env in {"production", "staging"}:
+            raise RuntimeError(
+                f"McpJwtIssuer: YASHIGANI_ENV={_env!r} but no persistent MCP signing key "
+                "was found. An ephemeral key is NOT acceptable in production/staging "
+                "(multi-replica JWKS mismatch + restart key rotation risk). "
+                f"Set YASHIGANI_MCP_SIGNING_KEY_PEM (base64 PEM) or mount the key at "
+                f"{signing_key_path_str} (0600, PEM format). "
+                "See install.sh for key generation. "
+                "Nico spec §2: KMS-backed persistent key required in production."
+            )
+
         logger.warning(
             "mcp-broker: generating EPHEMERAL MCP signing key "
-            "(NOT PERSISTED — unit test mode only). "
+            "(NOT PERSISTED — dev/test mode only). "
             "Set YASHIGANI_MCP_SIGNING_KEY_PEM or provide %s for persistent key. "
             "Nico spec §2: KMS-backed key required in production.",
-            _DEV_KEY_PATH,
+            signing_key_path_str,
         )
-        return ec.generate_private_key(SECP384R1())
+        # Path #3: ephemeral — no stable generated_at; kid will differ per process.
+        return ec.generate_private_key(SECP384R1()), None
 
     def _startup_self_test(self) -> None:
         """

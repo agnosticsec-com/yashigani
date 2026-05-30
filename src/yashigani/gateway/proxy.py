@@ -133,6 +133,8 @@ def create_gateway_app(
     extra_routers=None,  # v2.0 — additional routers to mount BEFORE catch-all
     ddos_protector=None,  # v2.2 — DDoSProtector | None
     pii_detector=None,   # v2.2 — PiiDetector | None
+    mcp_broker_registry=None,  # v2.25.0 P3 — McpBrokerRegistry | None
+    mcp_jwks_store=None,       # v2.25.0 P3 — JwksStore | None
 ) -> FastAPI:
     """
     Create the Yashigani gateway FastAPI application.
@@ -157,6 +159,8 @@ def create_gateway_app(
         "anomaly_detector": anomaly_detector,
         "ddos_protector": ddos_protector,  # v2.2
         "pii_detector": pii_detector,      # v2.2
+        "mcp_broker_registry": mcp_broker_registry,  # v2.25.0 P3
+        "mcp_jwks_store": mcp_jwks_store,             # v2.25.0 P3
         "http_client": None,
     }
 
@@ -696,6 +700,32 @@ async def _proxy_request_body(
                 headers=resp_headers,
                 media_type="application/json",
             )
+
+    # 4c. MCP broker routing — intercept /mcp/<agent_name> AFTER rate-limiter,
+    # DDoSProtector, JWT introspection, body-size check, and OPA policy (steps
+    # 0–4 above).  This ensures every MCP call is subject to the same protection
+    # pipeline as any other gateway request.
+    #
+    # Fix-1 (Laura ship-blocker): the mcp_call_router was previously mounted as an
+    # extra_router, which caused /mcp/* to bypass steps 0–4 entirely.  The router
+    # is no longer mounted — instead we dispatch here via dispatch_mcp_call().
+    #
+    # Only /mcp/<agent_name> (POST) is intercepted.  The mcp_info_router
+    # (JWKS at /.well-known/yashigani-mcp-jwks.json + /mcp/health) remains mounted
+    # as an extra_router because those endpoints are intentionally public (upstream
+    # verifiers fetch JWKS without auth; rate-limiting them would break key rotation).
+    mcp_broker_registry = state.get("mcp_broker_registry")
+    if mcp_broker_registry is not None and norm_path.startswith("/mcp/"):
+        _mcp_suffix = norm_path[len("/mcp/"):]   # e.g. "filesystem-mcp"
+        if _mcp_suffix and "/" not in _mcp_suffix:
+            # Valid single-segment agent_name — dispatch to the MCP handler
+            from yashigani.gateway.mcp_router_runtime import dispatch_mcp_call
+            return await dispatch_mcp_call(
+                agent_name=_mcp_suffix,
+                request=request,
+                registry=mcp_broker_registry,
+            )
+        # Multi-segment or empty suffix falls through to generic upstream forwarding
 
     # 5. Forward to upstream MCP server
     client: httpx.AsyncClient = state["http_client"]
