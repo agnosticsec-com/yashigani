@@ -11104,12 +11104,25 @@ PYEOF
         # _agent_name_raw and _tenant_id_safe are already validated against
         # [a-zA-Z0-9_-] — safe for inline expansion here.
         # python3 json.dumps handles any residual escaping needs.
+        # Detect agent type from manifest subprocess command.
+        # git-mcp uses /usr/local/bin/git-mcp-launcher; filesystem-mcp uses the
+        # mcp-server-filesystem binary.  grep the already-validated manifest to set
+        # the correct is_* flag in the YASHIGANI_MCP_SERVERS descriptor.
+        # FIX-GIT-AGENT-FLAG (Ava 2026-05-30): previously always emitted
+        # is_filesystem_agent=True for all Shape-C agents; git agents must emit
+        # is_git_agent=True so broker.py routes to git_tool_allowed OPA gate.
+        local _is_git_agent_flag=false
+        if grep -qE 'git-mcp-launcher' "${_manifest}" 2>/dev/null; then
+          _is_git_agent_flag=true
+        fi
+
         local _new_descriptor
         _new_descriptor="$(python3 -c "
 import json
 agent = '${_agent_name_raw}'
 tenant = '${_tenant_id_safe}'
 port = ${_bridge_port}
+is_git = '${_is_git_agent_flag}' == 'true'
 desc = {
     'agent_name': agent,
     # FIX-UPSTREAM-URL-DOUBLE-MCP (2026-05-30): McpHttpTransport.forward() always
@@ -11118,7 +11131,8 @@ desc = {
     # double-path: http://filesystem:8000/mcp/mcp → HTTP 404.
     'upstream_url': 'http://%s:%d' % (agent, port),
     'tenant_id': tenant,
-    'is_filesystem_agent': True,
+    'is_git_agent': is_git,
+    'is_filesystem_agent': not is_git,
 }
 print(json.dumps(desc))
 " 2>/dev/null || echo "")"
