@@ -363,7 +363,7 @@ class TestGenOpaGitBundle:
         assert "git_log" in content
         assert "git_diff_unstaged" in content
         assert "git_show" in content
-        assert "git_branch" in content
+        assert "git_init" in content
 
     def test_readonly_posture_contains_write_tools_set(self) -> None:
         from yashigani.manifest.codegen import _gen_opa_git_bundle

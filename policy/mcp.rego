@@ -787,7 +787,7 @@ _git_read_tools := {
     "git_diff",
     "git_log",
     "git_show",
-    "git_branch",
+    "git_init",
 }
 
 # Mutating tools — denied by default; permitted only with write_posture=readwrite

@@ -2087,7 +2087,7 @@ def _gen_opa_git_bundle(
             "git_diff",
             "git_log",
             "git_show",
-            "git_branch",
+            "git_init",
         }}
 
         _git_write_tools := {{
