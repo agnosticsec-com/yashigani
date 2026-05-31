@@ -3004,17 +3004,26 @@ PYEOF
     exit 1
   fi
 
-  if ! $_runtime_cmd_local cp "$backup_dir/." "${_crypto_container}:${_container_staging}/" 2>/dev/null; then
-    log_error "YSG-RISK-050: Failed to copy staging data into container ${_crypto_container}"
+  # Stream staging IN via tar-over-exec, then chmod as the owner. NOT `docker cp`: it
+  # refuses any container with ReadonlyRootfs=true even when the target is a writable
+  # tmpfs (Docker 29) — gateway/backoffice run read_only with tmpfs /tmp, so docker cp
+  # fails closed there ("Failed to copy staging data"). `exec` writes through the running
+  # process into the tmpfs; the container umask leaves the exec-created dirs mode 000, so
+  # the crypto (same app user) must be granted access to the staging it just received.
+  # Transport + perms only — the LOCKED fail-closed crypto / no-plaintext-fallback below
+  # are unchanged. (Validated against the live read_only backoffice container, 2026-05-31.)
+  if ! tar -cf - -C "$backup_dir" . | $_runtime_cmd_local exec -i "$_crypto_container" tar -xf - -C "$_container_staging" 2>/dev/null \
+     || ! $_runtime_cmd_local exec "$_crypto_container" sh -c "chmod -R u+rwX '$_container_work'" 2>/dev/null; then
+    log_error "YSG-RISK-050: Failed to stream staging data into container ${_crypto_container}"
     $_runtime_cmd_local exec "$_crypto_container" rm -rf "$_container_work" 2>/dev/null || true
     rm -f "$_py_script_path"
     rm -rf "$backup_dir"
     exit 1
   fi
 
-  # Copy the Python script into the container
-  if ! $_runtime_cmd_local cp "$_py_script_path" "${_crypto_container}:${_container_work}/backup_crypto.py" 2>/dev/null; then
-    log_error "YSG-RISK-050: Failed to copy crypto script into container ${_crypto_container}"
+  # Write the Python script IN via exec stdin (same read_only-rootfs reason as above).
+  if ! $_runtime_cmd_local exec -i "$_crypto_container" sh -c "cat > '${_container_work}/backup_crypto.py'" < "$_py_script_path" 2>/dev/null; then
+    log_error "YSG-RISK-050: Failed to write crypto script into container ${_crypto_container}"
     $_runtime_cmd_local exec "$_crypto_container" rm -rf "$_container_work" 2>/dev/null || true
     rm -f "$_py_script_path"
     rm -rf "$backup_dir"
@@ -3086,8 +3095,11 @@ PYEOF
   # Pull the results back from the container.
   local _tmp_results_dir
   _tmp_results_dir=$(mktemp -d "${backup_dir}/.ysg_results_XXXXXX")
-  if ! $_runtime_cmd_local cp "${_crypto_container}:${_container_output}/." "$_tmp_results_dir/" 2>/dev/null; then
-    log_error "YSG-RISK-050: Failed to copy encrypted bundle from container"
+  # Stream results OUT via tar-over-exec — `docker cp` refuses read_only-rootfs containers
+  # in BOTH directions (Docker 29), so cp-out fails too even though the crypto wrote
+  # bundle.enc successfully inside the container. exec reads the tmpfs; untar on the host.
+  if ! $_runtime_cmd_local exec "$_crypto_container" tar -cf - -C "$_container_output" . | tar -xf - -C "$_tmp_results_dir" 2>/dev/null; then
+    log_error "YSG-RISK-050: Failed to stream encrypted bundle from container"
     $_runtime_cmd_local exec "$_crypto_container" rm -rf "$_container_work" 2>/dev/null || true
     rm -rf "$_tmp_results_dir" "$_py_script_path"
     rm -rf "$backup_dir"
@@ -3097,6 +3109,21 @@ PYEOF
   # Verify bundle.enc and backup-meta.json are present.
   if [[ ! -f "${_tmp_results_dir}/bundle.enc" || ! -f "${_tmp_results_dir}/backup-meta.json" ]]; then
     log_error "YSG-RISK-050: bundle.enc or backup-meta.json missing from container output"
+    $_runtime_cmd_local exec "$_crypto_container" rm -rf "$_container_work" 2>/dev/null || true
+    rm -rf "$_tmp_results_dir" "$_py_script_path"
+    rm -rf "$backup_dir"
+    exit 1
+  fi
+
+  # Integrity: tar-streaming (unlike per-file docker cp) is not atomic — a truncated but
+  # parseable archive could otherwise pass the existence check and be installed as the
+  # canonical backup. Verify the streamed bundle.enc matches the in-container original by
+  # sha256 (computed via the container's python3, which the crypto step already requires).
+  local _in_sha _host_sha
+  _in_sha="$($_runtime_cmd_local exec "$_crypto_container" python3 -c "import hashlib;print(hashlib.sha256(open('${_container_output}/bundle.enc','rb').read()).hexdigest())" 2>/dev/null || true)"
+  _host_sha="$(sha256sum "${_tmp_results_dir}/bundle.enc" 2>/dev/null | cut -d' ' -f1)"
+  if [[ -z "$_in_sha" || "$_in_sha" != "$_host_sha" ]]; then
+    log_error "YSG-RISK-050: bundle.enc integrity check failed (in-container sha256 != host) — possible truncated stream; refusing to install an incomplete backup"
     $_runtime_cmd_local exec "$_crypto_container" rm -rf "$_container_work" 2>/dev/null || true
     rm -rf "$_tmp_results_dir" "$_py_script_path"
     rm -rf "$backup_dir"
