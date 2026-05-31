@@ -468,6 +468,43 @@ async def lifespan(app: FastAPI):
 
         logging.getLogger(__name__).warning("Could not start backoffice scheduler: %s", exc)
 
+    # v2.25.1 (OPA-PERSIST): re-sync OPA from the durable Redis-backed RBAC store at the END of
+    # lifespan startup — NOT in _bootstrap(), which runs at module import before the internal-PKI
+    # client is ready (it fails with "no bootstrap_token_sha256 in the manifest"). OPA holds the
+    # RBAC document in memory ONLY, so an OPA (or upgrade) restart drops it even though the store
+    # persists to Redis db/3 — leaving OPA empty until the next mutation. Re-pushing here recovers
+    # OPA's view from the durable store on every deploy/upgrade/restart. Best-effort with retries;
+    # groups are safe in Redis, so a transient OPA-not-ready never blocks backoffice startup.
+    try:
+        _rbac_store = backoffice_state.rbac_store
+        if _rbac_store is not None:
+            from yashigani.rbac.opa_push import push_rbac_data
+            _osync_log = _logging.getLogger("yashigani.backoffice.lifespan")
+            _grp_n = len(_rbac_store.list_groups())
+            for _attempt in range(1, 4):
+                try:
+                    push_rbac_data(
+                        _rbac_store,
+                        backoffice_state.opa_url,
+                        agent_registry=backoffice_state.agent_registry,
+                    )
+                    _osync_log.info(
+                        "OPA-PERSIST: re-synced OPA from RBAC store on startup (%d group(s))", _grp_n
+                    )
+                    break
+                except Exception as _push_exc:
+                    if _attempt < 3:
+                        await asyncio.sleep(2)
+                    else:
+                        _osync_log.warning(
+                            "OPA-PERSIST: startup re-sync failed after 3 attempts (%s) — groups "
+                            "remain in Redis; OPA will sync on next mutation", _push_exc
+                        )
+    except Exception as _outer_exc:
+        _logging.getLogger("yashigani.backoffice.lifespan").warning(
+            "OPA-PERSIST: startup re-sync skipped (%s)", _outer_exc
+        )
+
     yield
 
     # Shutdown
