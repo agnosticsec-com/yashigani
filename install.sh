@@ -2314,11 +2314,7 @@ run_wizard() {
       [[ -n "$UPSTREAM_URL" ]] && log_info "Reusing existing UPSTREAM_MCP_URL from .env (upgrade)"
     fi
     export YASHIGANI_TLS_DOMAIN="$DOMAIN"
-    # ADMIN-USERNAME-VAR-OVERLOAD fix: the admin LOGIN username is the generated codename
-    # written to .env by _gen_admin_usernames (NOT the email). Export the email under its
-    # own var (ACME consumes it) so it does not shadow the codename at compose-up and seed
-    # the primary admin as the email. The email is also persisted to .env via _env_set.
-    export YASHIGANI_ADMIN_EMAIL="$ADMIN_EMAIL"
+    export YASHIGANI_ADMIN_USERNAME="$ADMIN_EMAIL"
     export UPSTREAM_MCP_URL="$UPSTREAM_URL"
     export YASHIGANI_TLS_MODE="$TLS_MODE"
     return 0
@@ -2361,10 +2357,7 @@ run_inline_wizard() {
   fi
 
   export YASHIGANI_TLS_DOMAIN="$DOMAIN"
-  # ADMIN-USERNAME-VAR-OVERLOAD fix: export the email under its own var (ACME consumes it),
-  # NOT as YASHIGANI_ADMIN_USERNAME — else it shadows the generated codename in .env at
-  # compose-up and the primary admin is seeded as the email instead of the codename.
-  export YASHIGANI_ADMIN_EMAIL="$ADMIN_EMAIL"
+  export YASHIGANI_ADMIN_USERNAME="$ADMIN_EMAIL"
   export UPSTREAM_MCP_URL="$UPSTREAM_URL"
   export YASHIGANI_TLS_MODE="$TLS_MODE"
 }
