@@ -77,6 +77,19 @@ def test_provision_wazuh_mtls_verifies_indexer_san(install_sh: str) -> None:
     assert "grep -q 'DNS:wazuh-indexer'" in install_sh
 
 
+def test_wazuh_indexer_http_tls13_floor(install_sh: str) -> None:
+    """The SIEM link must match the internal-mesh 1.3-min (#156): _provision_wazuh_mtls must
+    rewrite the indexer HTTP listener to TLSv1.3 (the Wazuh stock config pins TLSv1.2) and
+    fail closed if the floor isn't applied. Validated end-to-end on the clean-slate stack:
+    indexer serves 1.3-only, refuses 1.2; filebeat (Go) + dashboard (Node) negotiate 1.3."""
+    # the rewrite that flips http.enabled_protocols to 1.3
+    assert 'plugins\\.security\\.ssl\\.http\\.enabled_protocols' in install_sh
+    assert '"TLSv1.3"' in install_sh
+    assert "TLS_AES_256_GCM_SHA384" in install_sh, "TLS 1.3 ciphers not provisioned"
+    # fail-closed guard: install aborts if the 1.3 floor didn't land
+    assert "TLS 1.3 floor not applied to indexer HTTP listener" in install_sh
+
+
 def test_wazuh_overlay_is_clean_delta(overlay: str) -> None:
     """The overlay must be a DELTA onto the main compose: it must NOT redeclare security_opt
     (that duplicated the list on merge and broke `docker compose config`), and it MUST add

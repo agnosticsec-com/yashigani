@@ -4677,16 +4677,33 @@ _provision_wazuh_mtls() {
     -e 's#ssl.http.pemkey_filepath: .*#ssl.http.pemkey_filepath: /usr/share/wazuh-indexer/config/certs/http-indexer-key.pem#' \
     -e 's#ssl.http.pemtrustedcas_filepath: .*#ssl.http.pemtrustedcas_filepath: /usr/share/wazuh-indexer/config/certs/http-ca-bundle.pem#' \
     "${wp}/opensearch.yml"
-  python3 - "${wp}/opensearch.yml" <<'PYEOF'
-import sys,re
+  if ! python3 - "${wp}/opensearch.yml" <<'PYEOF'
+import sys,re,yaml
 p=sys.argv[1]; t=open(p).read()
+# admin_dn -> the internal-CA admin cert CN (securityadmin authenticates as this)
 t=re.sub(r'plugins\.security\.authcz\.admin_dn:\n((?:[ \t]*- ".*"\n)+)',
          'plugins.security.authcz.admin_dn:\n- "CN=wazuh-admin,O=Agnostic Security"\n', t)
+# TLS 1.3 floor on the HTTP listener — match the internal-mesh 1.3-min (#156). The Wazuh
+# stock config pins enabled_protocols to TLSv1.2 with 1.2-only ciphers; rewrite to 1.3.
+# wazuh-indexer 4.14.5 (JDK 21) serves 1.3; filebeat (Go) + dashboard (Node) negotiate it
+# with NO client change and 1.2 is refused (validated on the clean-slate stack). Transport
+# (single node, internal) is intentionally left at the image default.
+t,np=re.subn(r'(plugins\.security\.ssl\.http\.enabled_protocols:\n)(?:[ \t]*-[ \t]*"[^"]*"\n)+',
+             r'\g<1>  - "TLSv1.3"\n', t)
+t,nc=re.subn(r'(plugins\.security\.ssl\.http\.enabled_ciphers:\n)(?:[ \t]*-[ \t]*"[^"]*"\n)+',
+             r'\g<1>  - "TLS_AES_256_GCM_SHA384"\n  - "TLS_AES_128_GCM_SHA256"\n  - "TLS_CHACHA20_POLY1305_SHA256"\n', t)
+if np != 1:
+    sys.stderr.write("opensearch.yml: http.enabled_protocols block not found (!=1) — cannot enforce TLS 1.3 floor\n"); sys.exit(1)
+yaml.safe_load(t)   # fail-closed: rewrite must remain valid YAML or the indexer crash-loops
 open(p,'w').write(t)
 PYEOF
-  # fail-closed: the admin_dn rewrite must have landed, else securityadmin can't authenticate
+  then log_error "opensearch.yml rewrite (admin_dn + TLS 1.3 floor) failed — aborting"; return 1; fi
+  # fail-closed: admin_dn must have landed (else securityadmin can't authenticate) AND the
+  # HTTP listener must now be TLS 1.3 (the mesh 1.3-min must extend to the SIEM link)
   grep -q 'CN=wazuh-admin,O=Agnostic Security' "${wp}/opensearch.yml" \
     || { log_error "admin_dn substitution failed in opensearch.yml — aborting"; return 1; }
+  grep -A1 'plugins.security.ssl.http.enabled_protocols:' "${wp}/opensearch.yml" | grep -q '"TLSv1.3"' \
+    || { log_error "TLS 1.3 floor not applied to indexer HTTP listener — aborting"; return 1; }
 
   # 5. internal_users.yml: admin + kibanaserver = bcrypt(real generated passwords).
   #    Password is passed via the container ENV (never interpolated into a shell string),
