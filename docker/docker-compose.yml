@@ -154,7 +154,9 @@ services:
       - "8445"
     environment:
       YASHIGANI_TLS_DOMAIN: ${YASHIGANI_TLS_DOMAIN:?set YASHIGANI_TLS_DOMAIN}
-      CADDY_ACME_EMAIL: ${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}
+      # ACME email is its own var — NOT YASHIGANI_ADMIN_USERNAME (which is the admin LOGIN
+      # codename). Overloading the two seeded the primary admin as the email (ADMIN-USERNAME-VAR-OVERLOAD).
+      CADDY_ACME_EMAIL: ${YASHIGANI_ADMIN_EMAIL:-${YASHIGANI_ADMIN_USERNAME:-admin@yashigani.local}}
       PROMETHEUS_BASICAUTH_USER: ${PROMETHEUS_BASICAUTH_USER:-prometheus}
       PROMETHEUS_BASICAUTH_HASH: ${PROMETHEUS_BASICAUTH_HASH:?run bootstrap to get this value}
       # EX-231-10 Layer B — per-install HMAC shared secret.

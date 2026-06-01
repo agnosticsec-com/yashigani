@@ -39,6 +39,13 @@ def overlay() -> str:
     return WAZUH_OVERLAY.read_text()
 
 
+@pytest.fixture(scope="module")
+def compose() -> str:
+    p = _ROOT / "docker" / "docker-compose.yml"
+    assert p.is_file(), f"compose not found at {p}"
+    return p.read_text()
+
+
 def test_contaminated_volume_check_is_project_aware(install_sh: str) -> None:
     """The check must scope to COMPOSE_PROJECT_NAME, not a hardcoded 'docker' prefix —
     else a parallel/renamed-project install false-positives on another project's volumes."""
@@ -99,6 +106,18 @@ def test_pki_manifest_token_self_heal(install_sh: str) -> None:
     assert "_bootstrap_token" in install_sh
     # the explicit fail-closed action-item gate
     assert "0 populated bootstrap_token_sha256 fields after issuance (ISSUE-009)" in install_sh
+
+
+def test_admin_username_not_overloaded_with_acme_email(install_sh: str, compose: str) -> None:
+    """ADMIN-USERNAME-VAR-OVERLOAD: the admin LOGIN username (a generated codename in .env)
+    must not be shadowed by the ACME email. install.sh must NOT export the email as
+    YASHIGANI_ADMIN_USERNAME (that seeded the primary admin as the email, mismatching the
+    admin1_username file); ACME must read its own YASHIGANI_ADMIN_EMAIL var."""
+    assert 'export YASHIGANI_ADMIN_USERNAME="$ADMIN_EMAIL"' not in install_sh, \
+        "email still exported as the admin username (overload regressed)"
+    assert 'export YASHIGANI_ADMIN_EMAIL="$ADMIN_EMAIL"' in install_sh
+    assert "CADDY_ACME_EMAIL: ${YASHIGANI_ADMIN_EMAIL" in compose, \
+        "ACME email must source YASHIGANI_ADMIN_EMAIL, not the admin-username var"
 
 
 def test_wazuh_overlay_is_clean_delta(overlay: str) -> None:
