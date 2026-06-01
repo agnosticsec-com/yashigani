@@ -92,7 +92,7 @@ fi
 #   ./install.sh --mode k8s --namespace yashigani
 # =============================================================================
 
-YASHIGANI_VERSION="2.24.0"
+YASHIGANI_VERSION="2.25.2"
 YASHIGANI_REPO_URL="${YASHIGANI_REPO_URL:-https://github.com/agnosticsec-com/yashigani.git}"
 YASHIGANI_TARBALL_URL="${YASHIGANI_TARBALL_URL:-https://github.com/agnosticsec-com/yashigani/archive/refs/tags/v${YASHIGANI_VERSION}.tar.gz}"
 YSG_INSTALL_DIR="${YSG_INSTALL_DIR:-$HOME/.yashigani}"
@@ -3353,7 +3353,10 @@ _check_contaminated_volumes() {
   # (Docker + Podman both installed), auto-detect can pick the wrong store.
   # RUNTIME is set in the call site from COMPOSE_CMD[0] / YSG_RUNTIME.
   local _runtime="${RUNTIME:-${YSG_RUNTIME:-docker}}"
-  local _project_prefix="docker"
+  # Project-aware: the contaminated-volume check must scope to THIS install's compose
+  # project, not a hardcoded "docker" — otherwise a parallel/renamed-project install
+  # false-positives on an unrelated project's volumes (e.g. a live stack alongside).
+  local _project_prefix="${COMPOSE_PROJECT_NAME:-docker}"
   local _found_volumes=()
 
   for _vol in "${_INSTALL_CANONICAL_VOLUMES[@]}"; do
@@ -4628,7 +4631,15 @@ _provision_wazuh_mtls() {
   require_cmd openssl
   umask 077   # private keys are born owner-only; relaxed selectively in step 7
   log_info "Provisioning Wazuh full-mTLS material (internal-CA admin cert + real-password internal_users)..."
-  rm -rf "${wp}"   # clear any half-provisioned remnant from a prior aborted run
+  # Clear any prior wazuh-mtls dir. A previous successful run chowns it to the container UID
+  # (step 7), so a non-root install user may be unable to remove/recurse it — fall back to a
+  # root container so re-runs (re-install / upgrade) are idempotent rather than aborting with
+  # a misleading downstream error (e.g. a failed cp surfacing as "lacks SAN").
+  if [[ -e "${wp}" ]]; then
+    rm -rf "${wp}" 2>/dev/null \
+      || "$rt" run --rm -u 0 -v "${WORK_DIR}/docker":/d "$idx_img" rm -rf /d/wazuh-mtls 2>/dev/null \
+      || true
+  fi
   mkdir -p "${wp}/certs" "${wp}/opensearch-security"
 
   # 1. CA bundle (intermediate + root) — HTTP-layer trust anchor
@@ -5351,6 +5362,13 @@ echo '[postgres-ssl-upgrade] pg_hba.conf updated'
       _digest_stripped_compose="$(mktemp "${WORK_DIR}/docker/docker-compose.tmp.XXXXXX.yml")"
       sed 's|@sha256:[a-f0-9]\{64\}||g' "${compose_file}" > "$_digest_stripped_compose"
       _compose_files_up=("-f" "$_digest_stripped_compose")
+      # Preserve override files (wazuh/podman/gpu overlays) after the base compose — the
+      # digest-strip applies only to the base; dropping overlays means profile services
+      # defined ONLY in an overlay (e.g. wazuh-security-init) never start.
+      local _cf_i
+      for ((_cf_i=2; _cf_i<${#compose_files[@]}; _cf_i++)); do
+        _compose_files_up+=("${compose_files[$_cf_i]}")
+      done
       log_info "  temp compose file: $(basename "$_digest_stripped_compose")"
     fi
     "${COMPOSE_CMD[@]}" "${_compose_files_up[@]}" ${profile_args[@]+"${profile_args[@]}"} up ${_pull_flag[@]+"${_pull_flag[@]}"} -d --remove-orphans || true
@@ -5371,6 +5389,13 @@ echo '[postgres-ssl-upgrade] pg_hba.conf updated'
       _digest_stripped_compose2="$(mktemp "${WORK_DIR}/docker/docker-compose.tmp.XXXXXX.yml")"
       sed 's|@sha256:[a-f0-9]\{64\}||g' "${compose_file}" > "$_digest_stripped_compose2"
       _compose_files_up2=("-f" "$_digest_stripped_compose2")
+      # Preserve override files (wazuh/podman/gpu overlays) — see note above; without this
+      # the wazuh-security-init sidecar (overlay-only) never starts → indexer never gets
+      # securityadmin'd → whole SIEM chain stalls on a fresh pre-seeded install.
+      local _cf2_i
+      for ((_cf2_i=2; _cf2_i<${#compose_files[@]}; _cf2_i++)); do
+        _compose_files_up2+=("${compose_files[$_cf2_i]}")
+      done
       log_info "  temp compose file: $(basename "$_digest_stripped_compose2")"
     fi
     "${COMPOSE_CMD[@]}" "${_compose_files_up2[@]}" ${profile_args[@]+"${profile_args[@]}"} up ${_pull_flag[@]+"${_pull_flag[@]}"} -d || true
@@ -5485,7 +5510,7 @@ echo '[postgres-ssl-upgrade] pg_hba.conf updated'
 #   YSG_HEALTHZ_TIMEOUT_S   (default: 60)
 #   YSG_HEALTHZ_POLL_S      (default: 2)
 _verify_gateway_healthz() {
-  local _timeout_s="${YSG_HEALTHZ_TIMEOUT_S:-180}"   # was 60 — too tight: on a fresh-image first boot + migrations the gateway converges just after 60s, so the gate false-failed a healthy stack. Override with YSG_HEALTHZ_TIMEOUT_S.
+  local _timeout_s="${YSG_HEALTHZ_TIMEOUT_S:-300}"   # 60→180→300: a FULL fresh install (all services + DB migrations + agent/SIEM bringup) can take >180s for the gateway to converge while healthy (observed on a clean --wazuh install; gateway does NOT depend on wazuh, it's just overall bringup time). The gate still fail-closes after this. Override with YSG_HEALTHZ_TIMEOUT_S.
   local _poll_s="${YSG_HEALTHZ_POLL_S:-2}"
   local _https_port="${YASHIGANI_HTTPS_PORT:-443}"
   local _domain="${DOMAIN:-localhost}"
