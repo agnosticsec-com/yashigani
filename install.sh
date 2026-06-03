@@ -4778,6 +4778,12 @@ compose_up() {
     compose_files+=("-f" "$_gpu_overlay")
     log_info "Applying GPU overlay (docker-compose.gpu.yml) — ollama on NVIDIA device ${YSG_GPU_UUID:-all}"
   fi
+  # Podman GPU: CDI devices (nvidia.com/gpu=N), not the docker `runtime: nvidia` path.
+  local _gpu_overlay_podman="${WORK_DIR}/docker/docker-compose.gpu-podman.yml"
+  if [[ "${YSG_GPU_TYPE:-none}" == "nvidia" ]] && [[ "${YSG_PODMAN_RUNTIME:-false}" == "true" ]] && [[ -f "$_gpu_overlay_podman" ]]; then
+    compose_files+=("-f" "$_gpu_overlay_podman")
+    log_info "Applying Podman GPU overlay (docker-compose.gpu-podman.yml) — ollama on CDI ${YSG_GPU_CDI:-nvidia.com/gpu=all}"
+  fi
   if [[ "$YSG_PODMAN_RUNTIME" == "true" ]]; then
     log_info "Podman detected — configuring rootless deployment"
 

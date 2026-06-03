@@ -1,0 +1,13 @@
+# GPU overlay (Podman runtime) — wire the host NVIDIA GPU into ollama via CDI.
+#
+# Podman does not use the Docker `runtime: nvidia` path; it consumes CDI devices
+# (nvidia.com/gpu=N) directly — which also works with the host's `no-cgroups=true`
+# rootless config (verified: `podman run --device nvidia.com/gpu=1` sees the card).
+# install.sh adds this overlay (instead of docker-compose.gpu.yml) when an NVIDIA GPU
+# is detected on the Podman runtime. Pin a card with YSG_GPU_CDI (default all).
+services:
+  ollama:
+    devices:
+      - "${YSG_GPU_CDI:-nvidia.com/gpu=all}"
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
