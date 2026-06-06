@@ -235,6 +235,15 @@ USAGE
 
 OPTIONS
   --deploy         demo|production|enterprise  Deployment mode (interactive if omitted)
+                                          Picks the deployment SUBSTRATE:
+                                            demo, production -> Docker/Podman Compose
+                                            enterprise       -> Kubernetes via Helm
+                                          So --deploy enterprise REQUIRES a Kubernetes
+                                          cluster (--runtime k8s). Combining
+                                          --deploy enterprise with --runtime docker/podman
+                                          is rejected up-front. For a single-host
+                                          Docker/Podman install use --deploy production
+                                          (or demo) with --runtime docker|podman.
   --mode           compose|k8s|vm         Legacy deployment mode (prefer --deploy)
   --domain         DOMAIN                 TLS domain, e.g. yashigani.example.com
   --tls-mode       acme|ca|selfsigned     TLS provisioning mode (default: acme)
@@ -299,6 +308,10 @@ OPTIONS
                                           --non-interactive mode if both Docker and
                                           Podman are installed. Default in interactive
                                           mode: prompt with Podman pre-selected.
+                                          MUST agree with --deploy: k8s pairs with
+                                          --deploy enterprise; docker/podman pair with
+                                          --deploy demo|production. A mismatch is rejected
+                                          before any install step runs.
   --http-port  <N>                        Host port to bind for HTTP (default: 80; or 8080
                                           on macOS / rootless Podman). Use a higher port if
                                           80 is not externally reachable in your network
@@ -1802,6 +1815,45 @@ _apply_deploy_defaults() {
       log_info "Offline mode: TLS set to self-signed, image pull skipped"
     fi
   fi
+
+  # F3/F9: fail FAST on a deploy-mode ↔ runtime mismatch.
+  # The deploy mode determines the deployment substrate:
+  #   demo, production → Docker/Podman Compose   (MODE=compose)
+  #   enterprise       → Kubernetes via Helm     (MODE=k8s)
+  # Previously, `--deploy enterprise --runtime docker` silently resolved to
+  # MODE=k8s and ran 8 steps before aborting at "kubernetes cluster unreachable".
+  # We only enforce this when the operator set --runtime / YSG_RUNTIME EXPLICITLY
+  # (YSG_RUNTIME_EXPLICIT=true) — the natural enterprise→k8s default still works
+  # untouched. We also respect an explicit --mode override (MODE_EXPLICIT): if the
+  # operator deliberately set --mode compose with --deploy enterprise, that is a
+  # conscious override and the runtime check below uses the resolved MODE.
+  if [[ "${YSG_RUNTIME_EXPLICIT:-false}" == "true" ]]; then
+    case "$MODE" in
+      k8s)
+        if [[ "${YSG_RUNTIME:-}" == "docker" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+          log_error "Incompatible options: --deploy ${DEPLOY_MODE} resolves to Kubernetes (MODE=k8s),"
+          log_error "but --runtime ${YSG_RUNTIME} selects a Compose container runtime."
+          log_error ""
+          log_error "  Enterprise deployments run on Kubernetes via Helm. They do NOT use"
+          log_error "  Docker/Podman Compose. Choose ONE of:"
+          log_error "    • Kubernetes  : --deploy enterprise --runtime k8s"
+          log_error "    • Compose     : --deploy production  --runtime ${YSG_RUNTIME}"
+          log_error "                    (or --deploy demo --runtime ${YSG_RUNTIME})"
+          exit 1
+        fi
+        ;;
+      compose)
+        if [[ "${YSG_RUNTIME:-}" == "k8s" ]]; then
+          log_error "Incompatible options: --deploy ${DEPLOY_MODE} resolves to Docker/Podman Compose"
+          log_error "(MODE=compose), but --runtime k8s selects Kubernetes."
+          log_error ""
+          log_error "  demo / production deployments run on Compose. For Kubernetes use:"
+          log_error "    --deploy enterprise --runtime k8s"
+          exit 1
+        fi
+        ;;
+    esac
+  fi
 }
 
 # =============================================================================
@@ -2195,28 +2247,128 @@ print(bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode())
 " 2>/dev/null || echo "")"
   fi
 
-  # Method 3: python3 stdlib bcrypt via hashlib (no external deps)
-  # Caddy requires bcrypt ($2a$/$2b$) — PBKDF2 is incompatible
+  # Method 3 (F1): GENUINE pure-Python bcrypt — zero host prerequisites.
+  # Works on a fresh host with NEITHER `htpasswd` (apache2-utils) NOR the python
+  # `bcrypt` module — only python3 stdlib is required. Implements the Eksblowfish
+  # key schedule + the 64-round "OrpheanBeholderScryDoubt" encryption that defines
+  # the bcrypt $2b$ hash. Blowfish init constants are computed from the fractional
+  # hex digits of pi at runtime (no embedded data table). Validated byte-for-byte
+  # against reference bcrypt 5.0.0 (cost 4/6/10/12, ASCII + symbol + utf-8 + 36-char
+  # passwords) — produces identical output and reference checkpw() verifies it.
+  # NOTE: cost-12 Eksblowfish in pure Python takes ~30s on a typical host; this
+  # path is only reached when both faster methods are unavailable.
+  # The password is passed via the environment (never interpolated into the script
+  # body) so any password charset is injection-safe. The heredoc is single-quoted
+  # ('PYEOF') so the shell performs NO expansion on the Python source.
   if [[ -z "$prom_hash" ]] && command -v python3 >/dev/null 2>&1; then
-    prom_hash="$(YASHIGANI_PROM_PW="$prom_password" python3 -c "
-import os, hashlib, base64, struct
-pw = os.environ['YASHIGANI_PROM_PW'].encode()
-# bcrypt via subprocess htpasswd or fail
-import subprocess, sys
-try:
-    r = subprocess.run(['htpasswd', '-nbBC', '12', '', pw.decode()], capture_output=True, text=True)
-    if r.returncode == 0:
-        print(r.stdout.strip().lstrip(':'))
-        sys.exit(0)
-except FileNotFoundError:
-    pass
-# No bcrypt available — cannot generate compatible hash
-sys.exit(1)
-" 2>/dev/null || echo "")"
+    log_info "Generating Prometheus basic-auth hash via pure-Python bcrypt (no htpasswd/bcrypt module found; may take ~30s)..."
+    prom_hash="$(YASHIGANI_PROM_PW="$prom_password" python3 - <<'PYEOF' 2>/dev/null || echo ""
+import os, sys
+from decimal import Decimal, getcontext
+
+_B64 = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+def _b64encode(data):
+    out = []; i = 0; n = len(data)
+    while i < n:
+        c1 = data[i]; i += 1
+        out.append(_B64[(c1 >> 2) & 0x3F]); c1 = (c1 & 0x03) << 4
+        if i >= n: out.append(_B64[c1 & 0x3F]); break
+        c2 = data[i]; i += 1; c1 |= (c2 >> 4) & 0x0F
+        out.append(_B64[c1 & 0x3F]); c1 = (c2 & 0x0F) << 2
+        if i >= n: out.append(_B64[c1 & 0x3F]); break
+        c3 = data[i]; i += 1; c1 |= (c3 >> 6) & 0x03
+        out.append(_B64[c1 & 0x3F]); out.append(_B64[c3 & 0x3F])
+    return "".join(out)
+
+def _init_words():
+    n = 18 + 4 * 256; need_hex = n * 8 + 16
+    getcontext().prec = int(need_hex * 1.25) + 120
+    C = 426880 * Decimal(10005).sqrt()
+    K = Decimal(6); M = Decimal(1); X = Decimal(1); L = Decimal(13591409); S = L; i = 1
+    limit = Decimal(10) ** (-(int(need_hex * 1.25) + 30))
+    while True:
+        M = M * (K**3 - 16 * K) / (Decimal(i) ** 3)
+        L += 545140134; X *= -262537412640768000
+        term = M * L / X; S += term; K += 12
+        if abs(term) < limit: break
+        i += 1
+    pi = C / S; frac = pi - 3
+    h = format(int(frac * (Decimal(16) ** need_hex)), "x").rjust(need_hex, "0")
+    return [int(h[j * 8:j * 8 + 8], 16) for j in range(n)]
+
+_W = _init_words()
+
+class _BF:
+    def __init__(self):
+        self.P = list(_W[:18])
+        self.S = [list(_W[18 + s * 256:18 + (s + 1) * 256]) for s in range(4)]
+    def _F(self, x):
+        a = (x >> 24) & 0xFF; b = (x >> 16) & 0xFF; c = (x >> 8) & 0xFF; d = x & 0xFF
+        y = (self.S[0][a] + self.S[1][b]) & 0xFFFFFFFF
+        y = (y ^ self.S[2][c]) & 0xFFFFFFFF
+        return (y + self.S[3][d]) & 0xFFFFFFFF
+    def enc(self, xl, xr):
+        for i in range(16):
+            xl ^= self.P[i]; xr ^= self._F(xl); xl, xr = xr, xl
+        xl, xr = xr, xl
+        xr ^= self.P[16]; xl ^= self.P[17]
+        return xl & 0xFFFFFFFF, xr & 0xFFFFFFFF
+    @staticmethod
+    def _s2w(data, off):
+        w = 0
+        for _ in range(4):
+            w = ((w << 8) | data[off % len(data)]) & 0xFFFFFFFF; off += 1
+        return w, off
+    def expand(self, key):
+        off = 0
+        for i in range(18):
+            w, off = self._s2w(key, off); self.P[i] ^= w
+        xl = xr = 0
+        for i in range(0, 18, 2):
+            xl, xr = self.enc(xl, xr); self.P[i] = xl; self.P[i + 1] = xr
+        for s in range(4):
+            for i in range(0, 256, 2):
+                xl, xr = self.enc(xl, xr); self.S[s][i] = xl; self.S[s][i + 1] = xr
+    def expand_salt(self, data, key):
+        off = 0
+        for i in range(18):
+            w, off = self._s2w(key, off); self.P[i] ^= w
+        xl = xr = 0; soff = 0
+        for i in range(0, 18, 2):
+            s1, soff = self._s2w(data, soff); s2, soff = self._s2w(data, soff)
+            xl ^= s1; xr ^= s2; xl, xr = self.enc(xl, xr); self.P[i] = xl; self.P[i + 1] = xr
+        for s in range(4):
+            for i in range(0, 256, 2):
+                s1, soff = self._s2w(data, soff); s2, soff = self._s2w(data, soff)
+                xl ^= s1; xr ^= s2; xl, xr = self.enc(xl, xr); self.S[s][i] = xl; self.S[s][i + 1] = xr
+
+def hashpw(password, cost, salt16):
+    key = password[:72] + b"\x00"
+    bf = _BF(); bf.expand_salt(salt16, key)
+    for _ in range(1 << cost):
+        bf.expand(key); bf.expand(salt16)
+    ct = list(b"OrpheanBeholderScryDoubt")
+    cd = [(ct[i] << 24) | (ct[i + 1] << 16) | (ct[i + 2] << 8) | ct[i + 3] for i in range(0, 24, 4)]
+    for _ in range(64):
+        for i in range(0, 6, 2):
+            cd[i], cd[i + 1] = bf.enc(cd[i], cd[i + 1])
+    out = bytearray()
+    for w in cd:
+        out += bytes([(w >> 24) & 0xFF, (w >> 16) & 0xFF, (w >> 8) & 0xFF, w & 0xFF])
+    return "$2b$%02d$%s%s" % (cost, _b64encode(salt16), _b64encode(bytes(out[:23])))
+
+pw = os.environ["YASHIGANI_PROM_PW"].encode()
+sys.stdout.write(hashpw(pw, 12, os.urandom(16)))
+PYEOF
+)"
   fi
 
   if [[ -z "$prom_hash" ]]; then
-    log_error "Failed to generate Prometheus basic-auth hash. Install htpasswd (brew install httpd) or ensure python3 is available."
+    log_error "Failed to generate Prometheus basic-auth hash."
+    log_error "python3 is required for the built-in pure-Python bcrypt fallback."
+    log_error "Install python3, OR install htpasswd (apache2-utils / 'brew install httpd'),"
+    log_error "OR 'pip install bcrypt' — then re-run install.sh."
     exit 1
   fi
   # Escape $ to $$ for Docker Compose — bcrypt hashes contain $ delimiters
@@ -8201,6 +8353,7 @@ print_completion_summary() {
   printf "  ${C_YELLOW}║${C_RESET}    Username:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN1_USERNAME}"
   printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN1_PASSWORD}"
   printf "  ${C_YELLOW}║${C_RESET}    TOTP secret:  %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN1_TOTP_SECRET}"
+  printf "  ${C_YELLOW}║${C_RESET}    TOTP algo:    %-44s ${C_YELLOW}║${C_RESET}\n" "HMAC-SHA-256 (NOT SHA-1) — set on manual entry"
   if [[ -n "$GEN_ADMIN1_TOTP_URI" ]]; then
   printf "  ${C_YELLOW}║${C_RESET}    TOTP URI (paste into authenticator app):                     ${C_YELLOW}║${C_RESET}\n"
   printf "  ${C_YELLOW}║${C_RESET}    %s\n" "${GEN_ADMIN1_TOTP_URI}"
@@ -8210,6 +8363,7 @@ print_completion_summary() {
   printf "  ${C_YELLOW}║${C_RESET}    Username:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN2_USERNAME}"
   printf "  ${C_YELLOW}║${C_RESET}    Password:     %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN2_PASSWORD}"
   printf "  ${C_YELLOW}║${C_RESET}    TOTP secret:  %-44s ${C_YELLOW}║${C_RESET}\n" "${GEN_ADMIN2_TOTP_SECRET}"
+  printf "  ${C_YELLOW}║${C_RESET}    TOTP algo:    %-44s ${C_YELLOW}║${C_RESET}\n" "HMAC-SHA-256 (NOT SHA-1) — set on manual entry"
   if [[ -n "$GEN_ADMIN2_TOTP_URI" ]]; then
   printf "  ${C_YELLOW}║${C_RESET}    TOTP URI (paste into authenticator app):                     ${C_YELLOW}║${C_RESET}\n"
   printf "  ${C_YELLOW}║${C_RESET}    %s\n" "${GEN_ADMIN2_TOTP_URI}"
@@ -8342,6 +8496,17 @@ print_completion_summary() {
 # STEP 7 (k8s): helm dependency update
 k8s_helm_dep_update() {
   set_step "7" "helm dependency update"
+
+  # F2: helm is a Kubernetes-only dependency. A Docker/Podman compose operator
+  # must never be forced to install helm. This step (and every other k8s_* step)
+  # only runs inside the `MODE == k8s` branch of main(); this guard is
+  # defence-in-depth so that if the flow is ever reached with a compose runtime
+  # (e.g. a future refactor), helm is skipped instead of aborting the install.
+  if [[ "${MODE:-compose}" != "k8s" || "${YSG_RUNTIME:-}" == "docker" || "${YSG_RUNTIME:-}" == "podman" ]]; then
+    log_info "Skipping Helm chart dependencies (compose runtime — helm not required)"
+    return 0
+  fi
+
   log_step "7/${TOTAL_STEPS}" "Updating Helm chart dependencies..."
 
   require_cmd "helm"

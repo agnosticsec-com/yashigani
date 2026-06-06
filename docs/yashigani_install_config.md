@@ -85,6 +85,8 @@ sudo dnf install -y git       # RHEL/Fedora
 
 > **Shell compatibility (since v0.8.4):** The installer runs on macOS default bash (3.2) without errors. No need to install bash 4+ via Homebrew. The preflight check reports your login shell (`$SHELL`, typically zsh on modern macOS) rather than the script executor.
 
+> **Prometheus basic-auth hash — no extra prerequisites:** The installer generates the bcrypt hash that protects the internal Prometheus scrape endpoint. It uses `htpasswd` (apache2-utils) or the python `bcrypt` module if either is present; otherwise it falls back to a **built-in pure-Python bcrypt** that needs only `python3` (stdlib). You do **not** need to install `apache2-utils` or `pip install bcrypt` on a fresh host. The pure-Python fallback is slower (~30 s at cost 12) and the installer prints a one-line notice while it runs. If `python3` itself is absent, the installer aborts early with a precise message listing the three ways to satisfy the requirement.
+
 > **Verify your environment before installing:** Run `bash scripts/test-installer.sh` for a 28-check automated verification of your setup (platform detection, GPU, runtime, bash compatibility, file integrity).
 
 **Verify your environment:**
@@ -271,6 +273,27 @@ Alternatively, supply the flag non-interactively:
 **Demo mode** is intentionally minimal: it defaults to `localhost`, `selfsigned` TLS, auto-generates all secrets, and starts the stack with 1–2 prompts (upstream URL and optional license key). No KMS, SIEM, or SSO configuration is asked. Suitable for evaluations and local development.
 
 **Production mode** and **Enterprise mode** prompt through the full configuration wizard described in steps 3–12 below.
+
+#### Deployment mode determines the substrate (`--deploy` ↔ `--runtime`)
+
+The deployment mode is **not** just a configuration preset — it selects the
+deployment substrate, and therefore which container runtime is valid:
+
+| `--deploy`     | Substrate                     | Compatible `--runtime`     |
+|----------------|-------------------------------|----------------------------|
+| `demo`         | Docker / Podman **Compose**   | `docker`, `podman`         |
+| `production`   | Docker / Podman **Compose**   | `docker`, `podman`         |
+| `enterprise`   | **Kubernetes** via Helm       | `k8s`                      |
+
+`--deploy enterprise` requires a reachable Kubernetes cluster (with `kubectl`
+configured) and runs the Helm install path — it does **not** use Docker/Podman
+Compose. For a single-host Docker/Podman install, use `--deploy production`
+(or `--deploy demo`), **not** `--deploy enterprise --runtime docker`.
+
+The installer rejects an incompatible combination **before any install step
+runs** (e.g. `--deploy enterprise --runtime docker` aborts immediately with a
+corrective message, rather than executing eight steps and then failing at
+"kubernetes cluster unreachable").
 
 ### 3.2 Full Wizard (Production / Enterprise)
 
@@ -703,6 +726,16 @@ These passwords are stored in `docker/secrets/`. You should:
 2. Log in to the admin panel at `https://your-domain/admin`.
 3. Navigate to Admin → Account → Change Password to set a memorable password (or SSO once configured).
 4. Enroll TOTP (Admin → Account → Two-Factor Authentication) before sharing admin access with anyone else.
+
+> **TOTP uses HMAC-SHA-256, not SHA-1.** Yashigani's TOTP is configured for the
+> SHA-256 digest (per the project's SHA-256-minimum crypto policy). The
+> provisioning URI printed at install time carries `algorithm=SHA256`, so apps
+> that honour the URI (Authy, 1Password, Aegis, KeePassXC) work automatically.
+> If you enter the secret **manually** instead of scanning the URI, you MUST set
+> the algorithm to **SHA-256** — apps that default to SHA-1 (some versions of
+> Google Authenticator) will silently generate wrong codes that never verify.
+> The installer's credentials block states the algorithm next to each TOTP
+> secret for this reason.
 
 > **Warning:** The credentials are printed to logs only once. If you lose them before saving, you can retrieve each value from the corresponding file in `docker/secrets/` on the host filesystem. However, treat those files as sensitive — ensure they are readable only by the Docker daemon user.
 
