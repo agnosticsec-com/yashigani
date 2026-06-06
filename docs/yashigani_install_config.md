@@ -900,7 +900,7 @@ Yashigani stores all sensitive credentials (API keys, passwords, tokens) through
 
 No configuration required. Secrets are stored as files in `docker/secrets/` on the host and mounted read-only into containers at `/run/secrets/`. The backoffice bootstrap manages creation and rotation.
 
-**PostgreSQL credential posture (YSG-RISK-049):** The default non-KMS deployment stores the PostgreSQL application password as cleartext in `docker/secrets/postgres_password` (mode 0600). PgBouncer's edoburu entrypoint writes a cleartext `userlist.txt` at startup from the `DATABASE_URL` environment variable. This is the dev/standalone posture (YSG-RISK-049 accepted LOW for non-KMS deployments). Production deployments should configure a KMS provider (`YASHIGANI_KMS_PROVIDER=vault|azure|aws|gcp|keeper`); KMS-configured deployments fetch credentials at runtime via `src/yashigani/kms/` and do not rely on the on-disk cleartext userlist path.
+**PostgreSQL credential posture:** The default non-KMS deployment stores the PostgreSQL application password as cleartext in `docker/secrets/postgres_password` (mode 0600). PgBouncer's edoburu entrypoint writes a cleartext `userlist.txt` at startup from the `DATABASE_URL` environment variable. This is the dev/standalone posture (accepted LOW risk for non-KMS deployments). Production deployments should configure a KMS provider (`YASHIGANI_KMS_PROVIDER=vault|azure|aws|gcp|keeper`); KMS-configured deployments fetch credentials at runtime via `src/yashigani/kms/` and do not rely on the on-disk cleartext userlist path.
 
 Verify secrets are present after first run:
 
@@ -1170,7 +1170,7 @@ The SAML Service Provider (SP) private key **must** be RSA. Yashigani enforces
 this at runtime and refuses to enable SAML if the SP key is EC, DSA, or any
 other algorithm.
 
-**Rationale (YSG-RISK-044 / CVE-2026-41989):** libgcrypt contains a
+**Rationale (CVE-2026-41989):** libgcrypt contains a
 heap-buffer-overflow in `gcry_pk_decrypt` on the ECDH decryption path (CVSS 7.5).
 This path is only exercised when the SP key is EC-type and the IdP sends an
 EncryptedAssertion with ECDH-ES key transport. RSA SP keys route through a
@@ -1194,7 +1194,7 @@ a non-RSA key is supplied.
 
 **Future:** When post-quantum (PQR) key algorithms (ML-KEM / Kyber) are
 supported across the SAML 2.0 + xmlsec + IdP ecosystem, this requirement will
-be revisited (YSG-RISK-044 forward-tracking note).
+be revisited.
 
 **Step 1.** Configure your IdP with the following ACS URL:
 
@@ -3280,7 +3280,7 @@ Removal of a BYO CA (reverting to a Yashigani-generated PKI) is **not supported 
 
 ---
 
-## 30. FIPS mode (v2.24.4, Nico N-001)
+## 30. FIPS mode (v2.24.4)
 
 ### 30.1 What FIPS mode does
 

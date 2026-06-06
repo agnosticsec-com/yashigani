@@ -137,7 +137,7 @@ explicit SHA-256 support.
 
 **argon2id note.** argon2id is a memory-hard function, not a FIPS-approved KDF.
 Under `FIPS_MODE=1`, the admin password wrap#1 (argon2id path) is absent by design
-(Nico ruling 2026-05-28). Only PBKDF2-HMAC-SHA384 wrap#2 is written. This is
+Only PBKDF2-HMAC-SHA384 wrap#2 is written. This is
 documented in `install.sh` lines 2729-2790.
 
 ---
@@ -152,7 +152,7 @@ When `YASHIGANI_FIPS=1`:
 
 - `signatures.py::verify_manifest_signature` raises `ManifestSignatureError` if
   `spec.signature.algorithm = cosign-bundled-key` is present in any manifest (FIX-2,
-  NICO-005 gate, `signatures.py` lines 367-377).
+  `signatures.py` lines 367-377).
 - This check fires before the `YSG_REQUIRE_SIGNED_MANIFEST` enforcement level — it
   cannot be bypassed with `=warn` or `=skip`.
 - Manifest verification routes exclusively to the RSA-PSS-3072/SHA-384 path
@@ -193,13 +193,7 @@ SHA-384). This is FIPS-assertable via the OpenSSL FIPS Provider when the gateway
 starts with the environment in §2.
 
 The full signing key spec, claim set, TTL, nonce dedup, JWKS format, and chain
-construction rules are in the canonical design authority document:
-
-```
-Agnostic Security/Products/Yashigani/mcp-identity-jwt-spec-20260529.md
-```
-
-FIPS-specific facts from that spec:
+construction rules follow the MCP identity JWT specification. FIPS-specific facts:
 
 - Key type: EC P-384, generated at install time via `openssl ecparam -genkey -name
   secp384r1` with FIPS Provider active.
@@ -421,7 +415,7 @@ and the name of the operator completing each check.
 ```
 [ ] Manifest with cosign-bundled-key algorithm rejected in FIPS mode:
       YASHIGANI_FIPS=1 yashigani validate test-cosign-manifest.yaml
-      Expected: ManifestSignatureError citing NICO-005/FIX-2
+      Expected: ManifestSignatureError (FIPS-incompatible algorithm)
 
 [ ] Manifest with rsa-pss-3072-sha384 algorithm accepted:
       YASHIGANI_FIPS=1 yashigani validate signed-manifest.yaml \
@@ -523,7 +517,7 @@ base image and retry.
 
 **`ManifestSignatureError: FIPS mode requires algorithm rsa-pss-3072-sha384`**
 A manifest with `algorithm: cosign-bundled-key` was submitted in FIPS mode. This is
-the NICO-005/FIX-2 gate. Re-sign the manifest with the RSA-PSS-3072 key and update
+the FIPS-mode signature gate. Re-sign the manifest with the RSA-PSS-3072 key and update
 `spec.signature.algorithm` to `rsa-pss-3072-sha384`.
 
 **`ManifestSignatureError: FIPS RSA key must be exactly 3072 bits`**
@@ -541,5 +535,5 @@ is not FIPS-validated. Upgrade to Vault Enterprise FIPS build.
 
 ---
 
-*Document owner: Nico (crypto / FIPS / attestation). CMVP #4985 re-fetch due 2026-06-28.*
+*CMVP #4985 re-fetch due 2026-06-28.*
 *Cross-references: `mcp-identity-jwt-spec-20260529.md` (ES384 spec); `signatures.py` (RSA-PSS implementation); `lib/yashigani-fips.sh` (shell FIPS helpers); `install.sh` (FIPS_MODE flag, CMVP_CERT, wrap#1 absence); `docker/docker-compose.yml` line 108 (FIPS_MODE propagation); `helm/yashigani/values.yaml` line 1577 (fips block).*
