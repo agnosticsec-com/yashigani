@@ -3,7 +3,7 @@
 **Product:** Yashigani  
 **Version:** v2.24.1+  
 **Audience:** Operators with an existing enterprise PKI  
-**Design authority:** `internal-docs/yashigani/iris-v240-byo-internal-ca-design.md`
+**Design authority:** BYO-CA internal PKI design specification
 
 ---
 

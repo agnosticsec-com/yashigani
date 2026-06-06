@@ -47,4 +47,3 @@ The `allowed_signers` format supports multiple keys per principal; both old and 
 | SOC 2 CC8.1 | Change management | Release tag signing provides tamper-evident record of release commits |
 | SLSA Level 3 | Build provenance — release artifact signing | Maintainer-signed tags; key is hardware-backed (Yubikey); rotation process documented |
 
-Risk register entry: YSG-RISK-069.

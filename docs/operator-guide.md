@@ -14,7 +14,7 @@ inline in `docker-compose.yml` or `docker-compose.override.yml`.
 
 ## 2. Enabling OPA + Response Inspection Pairing (Compliance Customers)
 
-> **Authority:** YSG-RISK-057 (risk-register.yml, accepted 2026-05-24, Tiago).
+> **Authority:** Accepted design decision (2026-05-24).
 > **Controls:** ASVS V14.1.1, CMMC SC.L2-3.13.10, ISO 27001 A.8.3.
 
 ### 2.1 What the pairing does
@@ -171,7 +171,7 @@ Setting `YASHIGANI_PASSWORD_MAX_AGE_DAYS=pci` raises `ValueError: invalid litera
 
 ## 5. Admin / User Account Separation
 
-**MANDATORY — Tiago directive 2026-05-25 / Iris #96 / NIST AC-5 / SOC 2 CC6.3 / ISO 27001 A.5.16 / CMMC AC.L2-3.1.4.**
+**MANDATORY — NIST AC-5 / SOC 2 CC6.3 / ISO 27001 A.5.16 / CMMC AC.L2-3.1.4.**
 
 ### 5.1 Core principle
 
@@ -230,8 +230,7 @@ If your SSO IdP (OIDC or SAML) uses the same email address for both admin and us
 
 ## 6. PoolManager — Per-Identity Pod Spawning in Kubernetes
 
-> **Authority:** YSG-RISK-070 (risk-register.yml, accepted 2026-05-25, Tiago).
-> **Closes:** Tom #56 commit `7e653b1` option (b) — K8s API backend.
+> **Authority:** Accepted design decision (2026-05-25) — K8s API backend.
 
 ### 6.1 What the K8s backend does
 
