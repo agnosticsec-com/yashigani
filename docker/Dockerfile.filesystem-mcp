@@ -42,8 +42,8 @@
 # For single-arch local builds pass --build-arg TARGETARCH=amd64 or arm64.
 ARG TARGETARCH=amd64
 
-FROM node:22-slim@sha256:32b9e321f262db540d55ac10dc529667cf4737546e097cdd36a843c62bcbf423 AS node-amd64
-FROM node:22-slim@sha256:6710aea4dbb47f7d74f6b604b5e9e86ef39627121be69407b2c3552605f2033d AS node-arm64
+FROM node:26-slim@sha256:aa27a5fbf5acb298116a38133794f080406c6f8dfe52e2e2836bb55dc7cae8f0 AS node-amd64
+FROM node:26-slim@sha256:aa27a5fbf5acb298116a38133794f080406c6f8dfe52e2e2836bb55dc7cae8f0 AS node-arm64
 
 # Select the correct node stage based on TARGETARCH
 FROM node-${TARGETARCH} AS node-base
