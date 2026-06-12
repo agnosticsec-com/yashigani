@@ -182,6 +182,21 @@ Yashigani publishes per-control compliance evidence under `docs/compliance-repor
 
 For a more detailed explanation, see the [Compliance Reports](docs/compliance-reports/README.md).
 
+### Static analysis & secure-SDLC tooling
+
+Yashigani is gated by a layered static-analysis toolchain, and the configuration for each tool is committed in-repo — public and auditable, so you can see exactly what is (and isn't) enforced:
+
+| Tool | Config in repo | Scope |
+|---|---|---|
+| **Bandit** | `.bandit` | Python security linting (CWE patterns) |
+| **Checkov** | `.checkov.yml` | IaC / Dockerfile / Helm misconfiguration |
+| **Gitleaks** | `.gitleaks.toml` | Secret scanning |
+| **Hadolint** | `.hadolint.yaml` | Dockerfile best-practice + security |
+| **Trivy** | `trivy-agent-allowlist.json` | Container image CVE scanning, with an explicit reviewed allowlist |
+| **opengrep** | `opengrep-rules/` | Bespoke AST rules (e.g. PKI/TLS anchors) |
+
+These run alongside the supply-chain controls in §5 (SHA-pinned GitHub Actions, `pip` removed from runtime images, Sigstore-signed SBOMs, cosign image signatures).
+
 ---
 
 ## 7. Current Release Highlights
