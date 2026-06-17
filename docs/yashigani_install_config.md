@@ -490,7 +490,7 @@ The following tables document every significant variable, grouped by category.
 | `YASHIGANI_INSPECTION_FALLBACK_CHAIN` | No | comma-separated backends | e.g., `ollama,gemini,fail_closed` |
 | `OLLAMA_MODEL` | No | any Ollama model tag | Default: `qwen2.5:3b` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP gRPC URL | Default: `http://otel-collector:4317` |
-| `YASHIGANI_CLASSIFIER_MODEL_PATH` | No | file path | Default: `/app/models/sensitivity_classifier.joblib` (baked into image) |
+| `SKLEARN_MODEL_PATH` | No | file path | Default: `/app/models/sensitivity_classifier.joblib` (baked into image) |
 
 ---
 
