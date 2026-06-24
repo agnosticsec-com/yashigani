@@ -717,6 +717,9 @@ services:
       # Yashigani session cookie and redirects to /login.  Fixes the "no working
       # end-user logout" trap.
       WEBUI_AUTH_SIGNOUT_REDIRECT_URL: "/auth/logout-redirect"
+      # Default new users to role "user" so accounts after the first don't
+      # get stuck at "Account Activation Pending" when WEBUI_AUTH is false.
+      WEBUI_DEFAULT_USER_ROLE: "user"
       ENABLE_SIGNUP: "true"
       # Track C (F-B): forward the authenticated OWUI user to the gateway on
       # every upstream call. OWUI v0.9.2 then emits X-OpenWebUI-User-Email /
@@ -763,6 +766,10 @@ services:
       # network) removes the dependency entirely.
       RAG_EMBEDDING_ENGINE: "ollama"
       RAG_OLLAMA_BASE_URL: "http://ollama:11434"
+      # Embedding model for RAG (file upload / retrieval). Must match what
+      # ollama-init pulls below; without this, file-upload RAG returns
+      # "No sources found" because the Ollama embed endpoint returns HTTP 404.
+      RAG_EMBEDDING_MODEL: "nomic-embed-text"
       # HuggingFace/external model offline flags — prevent startup download
       # attempts that time out against NetworkPolicy-blocked hosts.
       HF_HUB_OFFLINE: "1"
@@ -1119,6 +1126,13 @@ services:
           fi
         fi
         echo "Model pull complete: ${OLLAMA_MODEL:-qwen2.5:3b}"
+        # RAG embedding model: Open WebUI uses nomic-embed-text for file-upload
+        # retrieval (RAG_EMBEDDING_MODEL on the open-webui service). Without this
+        # model present, file uploads fail with "No sources found" because the
+        # Ollama embed endpoint returns HTTP 404. Small (~274 MB), idempotent.
+        echo "Pulling RAG embedding model: nomic-embed-text"
+        OLLAMA_HOST=http://ollama:11434 ollama pull nomic-embed-text
+        echo "RAG embedding model pull complete: nomic-embed-text"
     depends_on:
       ollama:
         condition: service_healthy
@@ -1363,7 +1377,10 @@ services:
       # "Created" — they never start. On a loaded host that 50s window is routinely
       # exceeded. During start_period a failing probe keeps the status "starting"
       # (compose waits) and the first success marks it healthy immediately.
-      start_period: 180s
+      # 300s: on a heavily loaded host with SIEM/agents/OWUI all starting in
+      # parallel, 180s was routinely exceeded, causing compose to abort the
+      # app tier (gateway/backoffice) to "Created" before postgres was ready.
+      start_period: 300s
     # YSG-RISK-008 (v2.23.4): read_only skipped on compose path for postgres.
     # postgres needs writable /var/run/postgresql (unix-domain socket + PID lock file)
     # owned by uid 999 (postgres-in-container) with restrictive perms (e.g. 0755 or 0700).
