@@ -347,7 +347,7 @@ The installer prompts for API keys immediately if you select a cloud backend, an
 
 **Step 14 — Optional services.** The installer prompts for optional service add-ons:
 
-- **Open WebUI:** `Enable Open WebUI chat interface? [y/N]` — deploys the Open WebUI container at `/chat/*` with trusted header authentication. Equivalent to `--with-openwebui` flag.
+- **Open WebUI:** `Enable Open WebUI chat interface? [y/N]` — deploys the Open WebUI container served at the root path `/`, authenticated by Caddy `forward_auth` with trusted-header identity propagation. Equivalent to `--with-openwebui` flag.
 - **Internal CA:** `Enable Internal CA (Smallstep step-ca)? [y/N]` — deploys an internal Certificate Authority for mTLS between services. Equivalent to `--with-internal-ca` flag.
 - **Wazuh SIEM:** If SIEM mode is `wazuh`, Wazuh is auto-enabled. Can also be enabled with the `--wazuh` flag.
 
@@ -2445,24 +2445,29 @@ All credentials are also written to `docker/secrets/` with chmod 600. On upgrade
 
 ---
 
-## 21. Open WebUI Configuration (since v2.0)
+## 21. Open WebUI Configuration
 
-v2.0 integrates Open WebUI as the primary chat interface, served at `/chat/*` behind Caddy. Open WebUI uses trusted headers injected by the gateway for seamless identity propagation.
+Open WebUI is the optional human chat interface, served by Caddy at the **site root (`/`)** and enabled with the `--with-openwebui` install flag (the `openwebui` compose profile). All Open WebUI traffic is authenticated by Caddy `forward_auth` against the gateway *before* it reaches the container, and every LLM call still flows through the gateway — so OPA policy and identity-binding apply to chat exactly as they do to the API.
+
+> **Serving-path history:** Open WebUI moved to the root path in **v2.25.5** — OpenWebUI v0.9.x hard-codes its SvelteKit asset base to the root, so a sub-path never renders. Earlier builds served it under a sub-path.
 
 ### 21.1 Routing
 
-Caddy routes all `/chat/*` requests to the Open WebUI container. Authentication is handled by the gateway before the request reaches Open WebUI — the gateway injects trusted headers (`X-Yashigani-User-Id`, `X-Yashigani-User-Kind`, `X-Yashigani-Groups`) that Open WebUI consumes for session establishment.
+Caddy's root catch-all proxies to the Open WebUI container behind `forward_auth → /auth/verify-user` (user-tier sessions only; admin sessions are bounced to `/admin/`). On success Caddy injects the trusted identity headers `X-Forwarded-User`, `X-Forwarded-Name`, and `X-Forwarded-Email`, which Open WebUI consumes for session establishment. Inbound copies of these headers are stripped first (anti-spoofing).
 
-### 21.2 `.env` Settings
+### 21.2 Settings (set automatically in compose)
 
 ```dotenv
-YASHIGANI_OPENWEBUI_ENABLED=true              # Enable Open WebUI (default: true in v2.0)
-YASHIGANI_OPENWEBUI_TRUSTED_HEADER=X-Yashigani-User-Id   # Header containing authenticated user identity
+WEBUI_AUTH=false                                  # Caddy/gateway is the auth boundary
+WEBUI_AUTH_TRUSTED_EMAIL_HEADER=X-Forwarded-User
+WEBUI_AUTH_TRUSTED_NAME_HEADER=X-Forwarded-Name
+WEBUI_DEFAULT_USER_ROLE=user                      # new users land active (not "pending")
+RAG_EMBEDDING_MODEL=nomic-embed-text              # file-upload RAG embeddings (pulled on install)
 ```
 
 ### 21.3 Disabling Open WebUI
 
-Set `YASHIGANI_OPENWEBUI_ENABLED=false` in `.env` and restart Caddy. The `/chat/*` routes will return 404.
+Install **without** `--with-openwebui` (the `openwebui` compose profile stays off and the container is not deployed).
 
 ### 21.4 Populating the model picker — `gateway.models.service_account_full_list`
 
